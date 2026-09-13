@@ -49,6 +49,33 @@ pub fn inherit(
     return map;
 }
 
+/// An environment with *only* the named variables in it, as a map the caller
+/// owns.
+///
+/// The `env -i` shape, and the other half of what a program spawning a child
+/// needs: `inherit` is this process's environment with changes, and this is no
+/// inheritance at all. A child started with it sees exactly what is listed and
+/// nothing else -- no `PATH`, no credentials in an agent socket, nothing left
+/// over from whatever started *this* process.
+///
+/// An override with a `null` value is skipped rather than being an error:
+/// "remove it" and "it was never there" are the same thing in an environment
+/// built from nothing, which makes one list usable with both functions.
+///
+/// With `Child.SpawnOptions.path_search` left at its default, a child with no
+/// `PATH` also means a bare `argv[0]` is not found. `.parent_environ` is the
+/// setting for a scrubbed environment whose program should still be looked up
+/// the ordinary way.
+pub fn only(
+    allocator: Allocator,
+    variables: []const Override,
+) Allocator.Error!std.process.Environ.Map {
+    var map: std.process.Environ.Map = .init(allocator);
+    errdefer map.deinit();
+    try apply(&map, variables);
+    return map;
+}
+
 /// Applies `overrides` to a map that already exists.
 ///
 /// The same rules as `inherit`, for a caller that built the map some other
@@ -99,6 +126,21 @@ test "an override sets, replaces and removes" {
 
     try std.testing.expectEqualStrings("second", map.get("CONDUIT_TEST_ONE").?);
     try std.testing.expect(!map.contains("CONDUIT_TEST_TWO"));
+}
+
+test "only builds an environment with nothing inherited" {
+    const gpa = std.testing.allocator;
+    var map = try only(gpa, &.{
+        .{ .name = "CONDUIT_TEST_ONLY", .value = "alone" },
+        .{ .name = "CONDUIT_TEST_GONE", .value = null },
+    });
+    defer map.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), map.count());
+    try std.testing.expectEqualStrings("alone", map.get("CONDUIT_TEST_ONLY").?);
+    // Whatever this process has, the child would not: PATH is the one every
+    // system sets and the one a scrubbed environment most conspicuously lacks.
+    try std.testing.expect(!map.contains("PATH"));
 }
 
 test "removing something that was never there is not an error" {

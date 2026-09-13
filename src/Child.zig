@@ -186,6 +186,15 @@ pub const SpawnOptions = struct {
     /// root module builds one of these from the parent's with overrides.
     environ: ?*const std.process.Environ.Map = null,
     stdio: Stdio = .inherit,
+    /// Which `PATH` a bare program name is looked up in.
+    ///
+    /// This only matters when `environ` is set *and* `argv[0]` has no
+    /// separator, and it is the sort of thing that is a silent surprise either
+    /// way round, so it is a decision rather than a default nobody wrote down.
+    /// The standard library resolves from the parent's environment always; a
+    /// shell resolves from the environment it is handing over. Both are
+    /// defensible and they find different programs.
+    path_search: PathSearch = .child_environ,
     /// Put the child out of reach of signals aimed at the parent's process
     /// group, such as the `SIGINT` a terminal sends on Ctrl-C.
     ///
@@ -218,6 +227,27 @@ pub const SpawnOptions = struct {
     /// child's standard handles. On POSIX the two compose, because there the
     /// terminal is a descriptor like any other.
     stderr_to: ?std.Io.File = null,
+};
+
+/// Where the `PATH` that resolves a bare `argv[0]` comes from.
+///
+/// Windows resolves the program itself, inside `CreateProcessW`, from the
+/// environment the child is being given -- so `.child_environ` is what that
+/// system does and the other two are `error.Unsupported` there rather than a
+/// promise this package cannot keep.
+pub const PathSearch = enum {
+    /// The `PATH` in `SpawnOptions.environ`, or the parent's when that is
+    /// `null`. What a shell does: the program is looked for where the child
+    /// would look for it.
+    child_environ,
+    /// The `PATH` this process has, whatever the child is being given. What
+    /// `std.process.spawn` does, and what a caller who is scrubbing the
+    /// environment usually means -- an empty `PATH` for the child should not
+    /// also mean this spawn cannot find its program.
+    parent_environ,
+    /// No search. `argv[0]` is a path, and a bare name is `error.FileNotFound`
+    /// rather than whatever happens to be on a search path.
+    none,
 };
 
 pub const SpawnError = error{
@@ -267,9 +297,9 @@ pub const SpawnError = error{
     ControllingTerminalFailed,
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
-    /// The combination asked for has no meaning on this system. Windows only,
-    /// and so far only `stderr_to` together with `.pty`; the option that
-    /// cannot be honoured says so.
+    /// The combination asked for has no meaning on this system: `stderr_to`
+    /// together with `.pty` on Windows, or a `path_search` other than
+    /// `.child_environ` there. The option that cannot be honoured says so.
     Unsupported,
 } || std.Io.UnexpectedError;
 

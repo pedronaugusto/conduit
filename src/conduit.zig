@@ -134,12 +134,14 @@ pub const Shell = shell.Shell;
 pub const ShellOptions = shell.Options;
 pub const SpawnShellError = shell.SpawnShellError;
 
-/// Building a child's environment out of this process's own.
+/// Building a child's environment, from this process's own or from nothing.
 ///
 /// `environ.inherit(allocator, &.{.{ .name = "TERM", .value = "xterm-256color" }})`
-/// is the whole of it: a `std.process.Environ.Map` the caller owns, ready for
-/// `Child.SpawnOptions.environ`, with the named variables set or — for a
-/// `null` value — removed.
+/// is this process's environment with the named variables set or — for a
+/// `null` value — removed. `environ.only` is the same list with nothing
+/// inherited at all, which is the `env -i` shape. Either way the result is a
+/// `std.process.Environ.Map` the caller owns, ready for
+/// `Child.SpawnOptions.environ`.
 pub const environ = environ_impl;
 
 /// Puts a terminal into raw mode and returns what to pass to `restore`.

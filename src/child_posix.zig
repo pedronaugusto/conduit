@@ -37,11 +37,17 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         break :envp block.slice.ptr;
     } else @ptrCast(c.environ);
 
-    const path_value: ?[]const u8 = if (options.environ) |map|
-        map.get("PATH")
-    else
-        environPath();
-    const candidates = try searchPath(arena, options.argv[0], path_value);
+    const path_value: ?[]const u8 = switch (options.path_search) {
+        .child_environ => if (options.environ) |map| map.get("PATH") else environPath(),
+        .parent_environ => environPath(),
+        .none => null,
+    };
+    const candidates = try searchPath(
+        arena,
+        options.argv[0],
+        path_value,
+        options.path_search != .none,
+    );
 
     const cwd_z: ?[*:0]const u8 = if (options.cwd) |dir| (try arena.dupeZ(u8, dir)).ptr else null;
 
@@ -358,8 +364,17 @@ fn bail(report: posix.fd_t, stage: Failure.Stage) noreturn {
 /// else is joined onto each entry of `path`, an empty entry meaning the current
 /// directory, exactly as a shell would. Entries that would make an
 /// over-long path are skipped rather than failing the spawn.
-fn searchPath(arena: Allocator, program: []const u8, path: ?[]const u8) Allocator.Error![]const [*:0]const u8 {
-    if (std.mem.indexOfScalar(u8, program, '/') != null) {
+///
+/// With `search` false there is no list: a bare name is its own only
+/// candidate, and the `execve` of a name with no separator fails the way a
+/// missing file does, which is what `PathSearch.none` promises.
+fn searchPath(
+    arena: Allocator,
+    program: []const u8,
+    path: ?[]const u8,
+    search: bool,
+) Allocator.Error![]const [*:0]const u8 {
+    if (!search or std.mem.indexOfScalar(u8, program, '/') != null) {
         const one = try arena.alloc([*:0]const u8, 1);
         one[0] = (try arena.dupeZ(u8, program)).ptr;
         return one;
@@ -367,10 +382,10 @@ fn searchPath(arena: Allocator, program: []const u8, path: ?[]const u8) Allocato
 
     // The fallback matches what `confstr(_CS_PATH)` reports on the systems this
     // package supports, and is what a shell falls back to for the same reason.
-    const search = path orelse "/usr/local/bin:/usr/bin:/bin";
+    const directories = path orelse "/usr/local/bin:/usr/bin:/bin";
 
     var list: std.ArrayList([*:0]const u8) = .empty;
-    var it = std.mem.splitScalar(u8, search, ':');
+    var it = std.mem.splitScalar(u8, directories, ':');
     while (it.next()) |dir| {
         const prefix = if (dir.len == 0) "." else dir;
         if (prefix.len + 1 + program.len >= std.fs.max_path_bytes) continue;
@@ -442,7 +457,7 @@ test "searchPath returns the program itself when it is a path" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const one = try searchPath(arena, "/bin/sh", "/usr/bin:/bin");
+    const one = try searchPath(arena, "/bin/sh", "/usr/bin:/bin", true);
     try std.testing.expectEqual(@as(usize, 1), one.len);
     try std.testing.expectEqualStrings("/bin/sh", std.mem.span(one[0]));
 }
@@ -452,7 +467,7 @@ test "searchPath joins a bare name onto every entry, and an empty entry is the c
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const many = try searchPath(arena, "sh", "/usr/bin::/bin");
+    const many = try searchPath(arena, "sh", "/usr/bin::/bin", true);
     try std.testing.expectEqual(@as(usize, 3), many.len);
     try std.testing.expectEqualStrings("/usr/bin/sh", std.mem.span(many[0]));
     try std.testing.expectEqualStrings("./sh", std.mem.span(many[1]));

@@ -715,6 +715,91 @@ test "the child's environment and working directory are the ones asked for" {
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
 }
 
+test "a scrubbed environment is the only thing the child sees" {
+    // POSIX only for the fixture, not for the feature: `cmd.exe` cannot be run
+    // without the environment Windows starts it with, so a child with nothing
+    // but one variable has nothing to report it with.
+    if (is_windows) return error.SkipZigTest;
+
+    var environ = try conduit.environ.only(gpa, &.{
+        .{ .name = "CONDUIT_TEST_VALUE", .value = "present" },
+    });
+    defer environ.deinit();
+
+    // `HOME`, because a shell invents a `PATH` for itself when it is handed
+    // none and would make this test pass for the wrong reason. Nothing invents
+    // a `HOME`.
+    try testing.expect(std.c.getenv("HOME") != null);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "sh", "-c", "printf '%s|%s' \"$CONDUIT_TEST_VALUE\" \"$HOME\"" },
+        .environ = &environ,
+        // The child has no PATH, so the program has to be looked up in this
+        // process's -- which is what this setting is for and the reason the
+        // two features are tested together.
+        .path_search = .parent_environ,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+
+    // The variable that was asked for, and nothing else: not this process's
+    // `HOME`, and not the `PATH` the spawn itself searched.
+    try testing.expectEqualStrings("present|", result.stdout);
+    try testing.expect(conduit.succeeded(result.term));
+}
+
+test "path_search decides which PATH a bare program name is looked up in" {
+    if (is_windows) return error.SkipZigTest;
+
+    var empty_path = try conduit.environ.inherit(gpa, &.{
+        .{ .name = "PATH", .value = "/conduit-no-such-directory" },
+    });
+    defer empty_path.deinit();
+
+    // The child's PATH, which is the default and what a shell does: the
+    // program is looked for where the child would look for it, and it is not
+    // there.
+    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+        .argv = &.{"sh"},
+        .environ = &empty_path,
+        .stdio = .ignore,
+    }));
+
+    // This process's PATH, whatever the child is being handed. Same arguments,
+    // different answer, which is the whole reason the option is written down.
+    var found = try Child.spawn(io, gpa, .{
+        .argv = &.{ "sh", "-c", "exit 0" },
+        .environ = &empty_path,
+        .path_search = .parent_environ,
+        .stdio = .ignore,
+    });
+    defer found.deinit(io);
+    errdefer _ = found.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&found));
+
+    // And no search at all: a bare name is not a path, so there is nothing to
+    // execute.
+    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+        .argv = &.{"sh"},
+        .path_search = .none,
+        .stdio = .ignore,
+    }));
+
+    // A full path is still a full path under that setting.
+    var direct = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "exit 0" },
+        .path_search = .none,
+        .stdio = .ignore,
+    });
+    defer direct.deinit(io);
+    errdefer _ = direct.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&direct));
+}
+
 test "a program that is not there is an error, not a child that exits 127" {
     try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
         .argv = &.{"conduit-no-such-program-anywhere"},

@@ -30,6 +30,13 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // and quietly dropping it.
     if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
 
+    // The program is resolved by `CreateProcessW`, from the environment the
+    // child is being given -- see the note on `lpApplicationName` below. That
+    // is exactly `.child_environ`, and there is no argument to ask it for
+    // anything else, so the other two are refused rather than accepted and
+    // quietly not done.
+    if (options.path_search != .child_environ) return error.Unsupported;
+
     // `CreateProcessW` writes to the command line it is given, so it must be a
     // mutable buffer. `lpApplicationName` is left null on purpose: the system
     // then resolves the program from the command line, searching the
