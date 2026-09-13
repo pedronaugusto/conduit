@@ -4,6 +4,70 @@ Each entry says what the release makes possible, so a reader has the reason and
 not only the diff. Versions follow [semantic versioning](https://semver.org);
 before 1.0 the minor is the breaking one.
 
+## 0.2.0
+
+Windows, through ConPTY, behind the same API — and the API changed shape to be
+honest about it. Requires Zig 0.16.0.
+
+### Breaking
+
+- `Pty` no longer has one `master` descriptor. It has `read` and `write`, which
+  are the same descriptor on POSIX and the two ends of two different pipes on
+  Windows, because that is what a pseudoconsole is. `masterFile()` is gone;
+  `readFile()`, `writeFile()` and `master()` replace it. Every end is now an
+  optional and is `null` once closed, rather than a `-1` sentinel a `HANDLE`
+  cannot hold.
+- `Pty.slave` is a descriptor on POSIX and an `HPCON` on Windows, and
+  `Pty.slaveFile` is a compile error on Windows: a pseudoconsole is an object a
+  process is attached to, not a stream. `setWinSize` and `ttyName` are compile
+  errors there too, for the same kind of reason, and each says which.
+- `Child.pid` is `Child.id`: a process id on POSIX, a process `HANDLE` on
+  Windows. `Child.pty` is now both master files rather than one.
+- `Child.kill` takes a `Child.Signal` — `.interrupt`, `.terminate`, `.kill` —
+  instead of a POSIX signal number. Those three are what both systems can
+  honour; a program wanting another POSIX signal can send it with
+  `std.posix.kill` and `child.id`.
+- The module no longer refuses to compile on Windows, and no longer requires
+  libc there. `build.zig` decides from the target.
+
+### Added
+
+- `Child.output` runs a child to the end and collects what it wrote, with a
+  size cap, a timeout, and a bounded drain for the case where something the
+  child started still holds its pipe. Both streams are read on their own tasks,
+  because a child that fills one pipe while the parent reads the other
+  deadlocks — and because, on Darwin, a child on a pseudo-terminal whose output
+  nobody reads can block inside its own exit. `Child.wait` now says so.
+- `Child.stdinFile`, `Child.stdoutFile`, `Child.stdinWriter` and
+  `Child.stdoutReader` find the child's streams wherever they are: the pipes
+  for a child on pipes, the master for a child on a pair.
+- `zpty.environ.inherit` builds a child's environment from this process's own
+  with overrides applied; a `null` value removes a variable rather than
+  emptying it.
+- `spawnShell` starts the user's shell on a new pair with a terminal emulator's
+  defaults, and absorbs the one place POSIX and Windows want different timing.
+- `Proxy` forwards the window size. It installs no signal handler — it reads
+  the size on a task of its own, and takes an optional `ticket` a program's own
+  `SIGWINCH` handler can bump so a change is picked up at once. The module doc
+  also explains why Ctrl-C and Ctrl-Z need no code at all: in raw mode they are
+  bytes, and the child's terminal turns them back into signals.
+- `ci/linux.sh` runs the whole suite on Linux in Docker, on glibc and on musl,
+  in Debug and ReleaseSafe. musl is there because `ptsname_r` reports failure
+  differently on the three libcs this package supports, and that claim deserves
+  an image rather than a comment.
+
+### Windows notes
+
+- Windows 10 version 1809 or newer: `CreatePseudoConsole` is imported
+  statically rather than looked up.
+- `detach` is `CREATE_NEW_PROCESS_GROUP` and means only half what it means on
+  POSIX: a pseudoconsole is the child's console either way, and Windows starts
+  a new process group with Ctrl-C disabled. `spawnShell` therefore does not
+  detach on Windows.
+- `.bat` and `.cmd` are refused with `error.UnsupportedBatchFile` rather than
+  handed to `cmd.exe`, whose re-parsing makes any argument serialisation
+  unsafe.
+
 ## 0.1.0
 
 First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
