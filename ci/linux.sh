@@ -4,10 +4,11 @@
 #
 # A pseudo-terminal is a kernel object and a process group is a kernel concept,
 # so "it compiles for Linux" is not the same claim as "it works on Linux". This
-# runs the whole suite there, on a real kernel, in Debug and in ReleaseSafe:
+# runs the whole suite there, on a real kernel, in all four optimization modes:
 # Debug because its safety checks are the ones that catch a bad enum or a bad
-# index, and ReleaseSafe because the code between `fork` and `execve` is the
-# kind an inlining decision can change.
+# index, and the three release modes because the code between `fork` and
+# `execve` is the kind a different inlining decision can change. The native
+# suite runs all four too; a Linux kernel is the reason to run them again.
 #
 # Usage: ci/linux.sh           # glibc (Debian)
 #        ci/linux.sh --musl    # musl (Alpine), where ptsname_r differs
@@ -22,7 +23,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 readonly zig_version=0.16.0
-readonly modes=(Debug ReleaseSafe)
+readonly modes=(Debug ReleaseSafe ReleaseFast ReleaseSmall)
 
 usage() {
     sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
