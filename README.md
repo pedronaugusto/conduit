@@ -1,6 +1,6 @@
-# zpty
+# conduit
 
-[![CI](https://github.com/pedronaugusto/zpty/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/zpty/actions/workflows/ci.yml)
+[![CI](https://github.com/pedronaugusto/conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/conduit/actions/workflows/ci.yml)
 
 Child processes and pseudo-terminals for Zig — spawn a program on a pty or on
 pipes, in its own session or process group, with a window size, raw mode,
@@ -48,12 +48,12 @@ something executes.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh -->
 ```zig
-const zpty = @import("zpty");
+const conduit = @import("conduit");
 
 // The user's shell on a new pseudo-terminal, 24 rows by 80 columns, with
 // `TERM` set and — on POSIX — the pair as its controlling terminal, so a
 // Ctrl-C written to the master would arrive as `SIGINT`.
-var shell = try zpty.spawnShell(io, gpa, .{
+var shell = try conduit.spawnShell(io, gpa, .{
     .size = .{ .rows = 24, .cols = 80 },
     .args = shell_arguments,
 });
@@ -80,18 +80,18 @@ and ended: .{ .exited = 0 }
 ## Install
 
 ```sh
-zig fetch --save git+https://github.com/pedronaugusto/zpty
+zig fetch --save git+https://github.com/pedronaugusto/conduit
 ```
 
 ```zig
-const zpty = b.dependency("zpty", .{ .target = target, .optimize = optimize });
-exe.root_module.addImport("zpty", zpty.module("zpty"));
+const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("conduit", conduit.module("conduit"));
 ```
 
 The module links libc on POSIX and not on Windows, and decides that itself from
 the target. The POSIX pseudo-terminal interface is a libc interface on every
 supported system, and Darwin has no stable system-call ABI to reach past it;
-`src/zpty.zig` refuses to compile without libc there rather than failing at link
+`src/conduit.zig` refuses to compile without libc there rather than failing at link
 time. On Windows every call this package makes is a `kernel32` import, so no C
 runtime is involved.
 
@@ -174,7 +174,7 @@ terminal still holds output it has written blocks *inside exit* until the master
 is read, so a parent that waits first and reads afterwards waits forever.
 `child.output` reads and waits at once; `Proxy` keeps reading.
 
-### `zpty.environ` — a child's environment
+### `conduit.environ` — a child's environment
 
 `environ.inherit(allocator, &.{ .{ .name = "TERM", .value = "xterm-256color" } })`
 is this process's environment with those changes, as a map the caller owns. A

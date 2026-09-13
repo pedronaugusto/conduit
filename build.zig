@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
 
     // libc is linked here rather than left to the consumer, and only where it
     // is needed: the POSIX pseudo-terminal interface is a libc interface, and
-    // src/zpty.zig refuses to compile without it there. On Windows every call
+    // src/conduit.zig refuses to compile without it there. On Windows every call
     // this package makes is a kernel32 import, so linking a C runtime would
     // only be a dependency to explain.
     const link_libc = target.result.os.tag != .windows;
@@ -15,8 +15,8 @@ pub fn build(b: *std.Build) void {
     // The module.
     //=====================================================================
 
-    const module = b.addModule("zpty", .{
-        .root_source_file = b.path("src/zpty.zig"),
+    const module = b.addModule("conduit", .{
+        .root_source_file = b.path("src/conduit.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
@@ -32,16 +32,16 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
 
     const tests = b.addTest(.{
-        .name = "zpty-tests",
+        .name = "conduit-tests",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zpty.zig"),
+            .root_source_file = b.path("src/conduit.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = link_libc,
         }),
     });
 
-    const test_step = b.step("test", "Run the zpty tests");
+    const test_step = b.step("test", "Run the conduit tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
 
     //=====================================================================
@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .link_libc = link_libc,
-                .imports = &.{.{ .name = "zpty", .module = module }},
+                .imports = &.{.{ .name = "conduit", .module = module }},
             }),
         });
         const run = b.addRunArtifact(example);

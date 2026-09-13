@@ -41,7 +41,7 @@ honest about it. Requires Zig 0.16.0.
 - `Child.stdinFile`, `Child.stdoutFile`, `Child.stdinWriter` and
   `Child.stdoutReader` find the child's streams wherever they are: the pipes
   for a child on pipes, the master for a child on a pair.
-- `zpty.environ.inherit` builds a child's environment from this process's own
+- `conduit.environ.inherit` builds a child's environment from this process's own
   with overrides applied; a `null` value removes a variable rather than
   emptying it.
 - `spawnShell` starts the user's shell on a new pair with a terminal emulator's

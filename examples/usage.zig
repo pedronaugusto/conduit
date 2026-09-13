@@ -7,7 +7,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const zpty = @import("zpty");
+const conduit = @import("conduit");
 
 /// What to have the shell do. The only platform-dependent thing in this file,
 /// and it is the shell's language, not this package's API.
@@ -34,7 +34,7 @@ pub fn main() !void {
     // The user's shell on a new pseudo-terminal, 24 rows by 80 columns, with
     // `TERM` set and — on POSIX — the pair as its controlling terminal, so a
     // Ctrl-C written to the master would arrive as `SIGINT`.
-    var shell = try zpty.spawnShell(io, gpa, .{
+    var shell = try conduit.spawnShell(io, gpa, .{
         .size = .{ .rows = 24, .cols = 80 },
         .args = shell_arguments,
     });

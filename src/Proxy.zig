@@ -13,7 +13,7 @@
 //! Nothing, here — and that is the design, not an omission.
 //!
 //! A program that proxies a terminal puts its own terminal into raw mode
-//! first, with `zpty.rawMode`. Raw mode is precisely the state in which the
+//! first, with `conduit.rawMode`. Raw mode is precisely the state in which the
 //! terminal stops turning control characters into signals: Ctrl-C arrives at a
 //! read as the byte `0x03` and Ctrl-Z as `0x1a`, the same as any other byte.
 //! This loop forwards them, the child's terminal — which is *not* in raw mode
@@ -23,7 +23,7 @@
 //! `ENABLE_PROCESSED_INPUT` is off, so Ctrl-C is a byte rather than a control
 //! event, and the pseudoconsole turns it back into one for the client.
 //!
-//! So: call `zpty.rawMode` on your standard input, `defer zpty.restore`, and
+//! So: call `conduit.rawMode` on your standard input, `defer conduit.restore`, and
 //! Ctrl-C reaches the child and only the child. Without raw mode the signal
 //! goes to your process instead, and no amount of byte-pumping can change
 //! that.

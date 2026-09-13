@@ -85,14 +85,14 @@ comptime {
         .illumos,
         => {},
         else => @compileError(
-            "zpty supports Linux, macOS, the BSDs and Windows. Every other " ++
+            "conduit supports Linux, macOS, the BSDs and Windows. Every other " ++
                 "system either has no pseudo-terminal or no way to start a " ++
                 "process, and this package would rather not compile than " ++
                 "pretend otherwise.",
         ),
     }
     if (!is_windows and !builtin.link_libc) @compileError(
-        "zpty requires libc on POSIX: the pseudo-terminal interface is a libc " ++
+        "conduit requires libc on POSIX: the pseudo-terminal interface is a libc " ++
             "interface there. Set `link_libc = true` on the module that " ++
             "imports it. Windows needs no libc.",
     );

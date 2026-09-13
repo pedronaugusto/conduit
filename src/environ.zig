@@ -90,20 +90,20 @@ test "inherit copies the process environment" {
 test "an override sets, replaces and removes" {
     const gpa = std.testing.allocator;
     var map = try inherit(gpa, &.{
-        .{ .name = "ZPTY_TEST_ONE", .value = "first" },
-        .{ .name = "ZPTY_TEST_ONE", .value = "second" },
-        .{ .name = "ZPTY_TEST_TWO", .value = "here" },
-        .{ .name = "ZPTY_TEST_TWO", .value = null },
+        .{ .name = "CONDUIT_TEST_ONE", .value = "first" },
+        .{ .name = "CONDUIT_TEST_ONE", .value = "second" },
+        .{ .name = "CONDUIT_TEST_TWO", .value = "here" },
+        .{ .name = "CONDUIT_TEST_TWO", .value = null },
     });
     defer map.deinit();
 
-    try std.testing.expectEqualStrings("second", map.get("ZPTY_TEST_ONE").?);
-    try std.testing.expect(!map.contains("ZPTY_TEST_TWO"));
+    try std.testing.expectEqualStrings("second", map.get("CONDUIT_TEST_ONE").?);
+    try std.testing.expect(!map.contains("CONDUIT_TEST_TWO"));
 }
 
 test "removing something that was never there is not an error" {
     const gpa = std.testing.allocator;
-    var map = try inherit(gpa, &.{.{ .name = "ZPTY_TEST_ABSENT", .value = null }});
+    var map = try inherit(gpa, &.{.{ .name = "CONDUIT_TEST_ABSENT", .value = null }});
     defer map.deinit();
-    try std.testing.expect(!map.contains("ZPTY_TEST_ABSENT"));
+    try std.testing.expect(!map.contains("CONDUIT_TEST_ABSENT"));
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# zpty — the suite on Linux, in Docker, from a machine that is not Linux.
+# conduit — the suite on Linux, in Docker, from a machine that is not Linux.
 #
 # A pseudo-terminal is a kernel object and a process group is a kernel concept,
 # so "it compiles for Linux" is not the same claim as "it works on Linux". This
@@ -91,10 +91,10 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 if [ "$glibc" = 1 ]; then
-    run_in glibc ci/linux.Dockerfile "zpty-linux-glibc-$zig_version"
+    run_in glibc ci/linux.Dockerfile "conduit-linux-glibc-$zig_version"
 fi
 if [ "$musl" = 1 ]; then
-    run_in musl ci/linux.alpine.Dockerfile "zpty-linux-musl-$zig_version"
+    run_in musl ci/linux.alpine.Dockerfile "conduit-linux-musl-$zig_version"
 fi
 
 echo "==> all green"

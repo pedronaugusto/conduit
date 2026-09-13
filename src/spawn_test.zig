@@ -22,9 +22,9 @@ const builtin = @import("builtin");
 const std = @import("std");
 const posix = std.posix;
 
-const zpty = @import("zpty.zig");
-const Child = zpty.Child;
-const Pty = zpty.Pty;
+const conduit = @import("conduit.zig");
+const Child = conduit.Child;
+const Pty = conduit.Pty;
 
 const io = std.testing.io;
 const gpa = std.testing.allocator;
@@ -49,7 +49,7 @@ const script = if (is_windows) struct {
     const read_then_exit_5 = [_][]const u8{ "cmd.exe", "/c", "set /p line=& exit 5" };
     const say_on_terminal = [_][]const u8{ "cmd.exe", "/c", "echo on the terminal" };
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
-    const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %ZPTY_TEST_VALUE% %CD%" };
+    const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %CONDUIT_TEST_VALUE% %CD%" };
     const working_directory = "C:\\Windows";
     const working_directory_mark = "Windows";
     const shell_arguments = [_][]const u8{ "/c", "echo hi" };
@@ -60,7 +60,7 @@ const script = if (is_windows) struct {
     const read_then_exit_5 = [_][]const u8{ "/bin/sh", "-c", "read line; exit 5" };
     const say_on_terminal = [_][]const u8{ "/bin/sh", "-c", "printf 'on the terminal\\n'" };
     const sleep_forever = [_][]const u8{ "/bin/sh", "-c", "sleep 100" };
-    const report_environment = [_][]const u8{ "sh", "-c", "printf '%s %s' \"$ZPTY_TEST_VALUE\" \"$PWD\"" };
+    const report_environment = [_][]const u8{ "sh", "-c", "printf '%s %s' \"$CONDUIT_TEST_VALUE\" \"$PWD\"" };
     const working_directory = "/tmp";
     const working_directory_mark = "/tmp";
     const shell_arguments = [_][]const u8{ "-c", "printf 'hi'" };
@@ -249,7 +249,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
     });
     defer child.deinit(io);
 
-    var reaper: zpty.Reaper = .init(&child);
+    var reaper: conduit.Reaper = .init(&child);
     try reaper.start(io);
     defer reaper.deinit(io);
 
@@ -548,8 +548,8 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
 //======================================================================
 
 test "the child's environment and working directory are the ones asked for" {
-    var environ = try zpty.environ.inherit(gpa, &.{
-        .{ .name = "ZPTY_TEST_VALUE", .value = "present" },
+    var environ = try conduit.environ.inherit(gpa, &.{
+        .{ .name = "CONDUIT_TEST_VALUE", .value = "present" },
     });
     defer environ.deinit();
 
@@ -572,7 +572,7 @@ test "the child's environment and working directory are the ones asked for" {
 
 test "a program that is not there is an error, not a child that exits 127" {
     try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
-        .argv = &.{"zpty-no-such-program-anywhere"},
+        .argv = &.{"conduit-no-such-program-anywhere"},
         .stdio = .ignore,
     }));
     try testing.expectError(error.InvalidArgv, Child.spawn(io, gpa, .{
@@ -583,9 +583,9 @@ test "a program that is not there is an error, not a child that exits 127" {
 
 test "a working directory that is not there is an error" {
     const missing = if (is_windows)
-        "C:\\zpty-no-such-directory\\at-all"
+        "C:\\conduit-no-such-directory\\at-all"
     else
-        "/nonexistent/zpty-no-such-directory";
+        "/nonexistent/conduit-no-such-directory";
     try testing.expectError(error.BadWorkingDirectory, Child.spawn(io, gpa, .{
         .argv = &script.sleep_forever,
         .cwd = missing,
@@ -598,9 +598,9 @@ test "a program at a path that is not there is an error" {
     // such file is `ERROR_FILE_NOT_FOUND` all the same; the POSIX side goes
     // through a different branch of the search, which is why both are here.
     const missing = if (is_windows)
-        "C:\\zpty-no-such-directory\\program.exe"
+        "C:\\conduit-no-such-directory\\program.exe"
     else
-        "/nonexistent/zpty-no-such-program";
+        "/nonexistent/conduit-no-such-program";
     try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
         .argv = &.{missing},
         .stdio = .ignore,
@@ -610,7 +610,7 @@ test "a program at a path that is not there is an error" {
 test "a batch file is refused rather than handed to cmd.exe" {
     if (!is_windows) return error.SkipZigTest;
     try testing.expectError(error.UnsupportedBatchFile, Child.spawn(io, gpa, .{
-        .argv = &.{ "C:\\zpty-no-such-script.bat", "arg" },
+        .argv = &.{ "C:\\conduit-no-such-script.bat", "arg" },
         .stdio = .ignore,
     }));
 }
@@ -620,7 +620,7 @@ test "a batch file is refused rather than handed to cmd.exe" {
 //======================================================================
 
 test "spawnShell starts the user's shell on a pair" {
-    var shell = try zpty.spawnShell(io, gpa, .{
+    var shell = try conduit.spawnShell(io, gpa, .{
         .args = &script.shell_arguments,
         .size = .{ .rows = 40, .cols = 132 },
     });

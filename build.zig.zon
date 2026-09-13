@@ -1,8 +1,8 @@
 .{
-    .name = .zpty,
+    .name = .conduit,
     .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
-    .fingerprint = 0x13bd82de85f90300,
+    .fingerprint = 0xfdbb5281ef00b2e2,
     .paths = .{
         "build.zig",
         "build.zig.zon",
