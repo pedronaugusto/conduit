@@ -152,23 +152,19 @@ const Plan = struct {
         switch (options.stdio) {
             // Attached through the attribute list, not through handles.
             .pty => {},
-            .inherit => {
-                // The process parameters rather than `GetStdHandle`, so a
-                // program whose standard streams were redirected by its own
-                // parent passes on what it actually has.
-                const parameters = windows.peb().ProcessParameters;
-                plan.child = .{
-                    parameters.hStdInput,
-                    parameters.hStdOutput,
-                    parameters.hStdError,
-                };
-            },
+            .inherit => plan.child = inheritedHandles(),
             .ignore => {
                 const nul = try openNul();
                 plan.child = @splat(nul);
                 plan.owned[0] = nul;
             },
             .pipes => |which| {
+                // A stream that is not piped is the parent's, which needs
+                // saying here: `STARTF_USESTDHANDLES` is all or nothing, so
+                // leaving a slot null would hand the child no handle at all
+                // rather than this process's -- the same option meaning two
+                // different things on the two systems.
+                plan.child = inheritedHandles();
                 if (which.stdin) {
                     const ends = try makePipe(.to_child);
                     plan.child[0] = ends.child;
@@ -235,6 +231,21 @@ const Plan = struct {
         }
     }
 };
+
+/// This process's three standard handles, as a child inheriting them gets
+/// them.
+///
+/// The process parameters rather than `GetStdHandle`, so a program whose own
+/// standard streams were redirected by *its* parent passes on what it actually
+/// has.
+fn inheritedHandles() [3]?windows.HANDLE {
+    const parameters = windows.peb().ProcessParameters;
+    return .{
+        parameters.hStdInput,
+        parameters.hStdOutput,
+        parameters.hStdError,
+    };
+}
 
 const PipeDirection = enum { to_child, from_child };
 

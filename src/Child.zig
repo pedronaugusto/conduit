@@ -137,8 +137,8 @@ pub fn signalName(term: Term) ?[]const u8 {
 
 /// Which of the child's three standard streams get pipes.
 ///
-/// A stream that is not piped is inherited from the parent. Piping only what
-/// is read avoids the deadlock of a full pipe nobody drains.
+/// A stream that is not piped is inherited from the parent, on both systems.
+/// Piping only what is read avoids the deadlock of a full pipe nobody drains.
 pub const PipeOptions = struct {
     stdin: bool = true,
     stdout: bool = true,
