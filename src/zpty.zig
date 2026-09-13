@@ -17,8 +17,9 @@
 //!
 //! `Reaper` puts a wait on a background task so a program can poll for a
 //! child's death, `Proxy` is the two-direction byte pump between a master and
-//! a pair of files, and `environ` builds a child's environment out of this
-//! process's own.
+//! a pair of files — and the thing that keeps the child's terminal the same
+//! size as the program's own — and `environ` builds a child's environment out
+//! of this process's own.
 //!
 //! # Platforms
 //!
@@ -103,7 +104,8 @@ pub const Pty = @import("Pty.zig");
 pub const Child = @import("Child.zig");
 /// A background wait, so a caller can poll for a child's death.
 pub const Reaper = @import("Reaper.zig");
-/// A byte pump between a pseudo-terminal master and a pair of files.
+/// A byte pump, and a window-size forwarder, between a pseudo-terminal master
+/// and a pair of files.
 pub const Proxy = @import("Proxy.zig");
 
 /// How a child process ended. An alias for `std.process.Child.Term`.
