@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  # The suite on every host it supports. Windows is absent on purpose: zpty
+  # opens pseudo-terminals with posix_openpt and starts children with fork and
+  # execve, so src/zpty.zig is a deliberate compile error there and there is
+  # nothing on that runner to build, not even partially. See "What this package
+  # does not do" in README.md.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Formatting
+        run: zig fmt --check src examples build.zig
+
+      # All four modes: every test here starts a real child process, and what
+      # runs between `fork` and `execve` is the kind of code a different
+      # inlining decision can change.
+      - name: Test — Debug
+        run: zig build test -Doptimize=Debug
+
+      - name: Test — ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Test — ReleaseFast
+        run: zig build test -Doptimize=ReleaseFast
+
+      - name: Test — ReleaseSmall
+        run: zig build test -Doptimize=ReleaseSmall
+
+      # Built AND run. An example that only compiles proves the names resolve;
+      # running it is what proves the library works.
+      - name: Examples
+        run: zig build examples
+
+      # README.md's Usage block is a region of examples/usage.zig. This is what
+      # keeps the snippet a reader copies the same thing CI executes.
+      - name: README Usage block matches the example
+        run: ci/readme_usage.sh --check
+
+  # Compile-only coverage of the targets the suite cannot execute on. These
+  # prove the sources are portable across the systems the package claims; the
+  # `test` job above is what proves behaviour.
+  cross-compile:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - x86_64-linux-musl
+          - x86_64-macos
+          - aarch64-macos
+          - x86_64-freebsd
+          - x86_64-netbsd
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build -Dtarget=${{ matrix.target }}

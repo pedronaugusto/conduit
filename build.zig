@@ -1,0 +1,83 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    //=====================================================================
+    // The module.
+    //
+    // libc is linked here rather than left to the consumer: the POSIX
+    // pseudo-terminal interface is a libc interface, and src/zpty.zig refuses
+    // to compile without it.
+    //=====================================================================
+
+    const module = b.addModule("zpty", .{
+        .root_source_file = b.path("src/zpty.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    //=====================================================================
+    // Tests.
+    //
+    // Every test here starts a real child process, so the suite is run in all
+    // four optimization modes in CI rather than only in Debug: the code that
+    // runs between `fork` and `execve` is the kind that a different inlining
+    // decision can change.
+    //=====================================================================
+
+    const tests = b.addTest(.{
+        .name = "zpty-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zpty.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+
+    const test_step = b.step("test", "Run the zpty tests");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+
+    //=====================================================================
+    // Examples
+    //
+    // Built AND run, against the module a consumer gets. An example that is
+    // only compiled proves the names still resolve; running it is what proves
+    // the library works. examples/usage.zig is also where README.md's Usage
+    // block comes from -- see ci/readme_usage.sh -- so the snippet a reader
+    // copies cannot drift from code CI executes.
+    //=====================================================================
+
+    const examples_step = b.step("examples", "Build and run the examples");
+    for (example_sources) |source| {
+        const example = b.addExecutable(.{
+            .name = std.fs.path.stem(source),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(source),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{.{ .name = "zpty", .module = module }},
+            }),
+        });
+        const run = b.addRunArtifact(example);
+        examples_step.dependOn(&run.step);
+        // Compiled by a bare `zig build` too, so a cross-compilation check
+        // covers the examples and not only the library.
+        b.getInstallStep().dependOn(&example.step);
+    }
+    test_step.dependOn(examples_step);
+
+    // `zig build` with no step compiles everything, so a cross-compilation
+    // check needs no step name of its own.
+    b.getInstallStep().dependOn(&tests.step);
+}
+
+/// Every example, listed rather than globbed: a build graph that scans a
+/// directory is not reproducible from the manifest alone.
+const example_sources = [_][]const u8{
+    "examples/usage.zig",
+};
