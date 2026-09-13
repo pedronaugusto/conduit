@@ -113,7 +113,7 @@ test "every term survives the round trip through the atomic" {
         .{ .exited = 0 },
         .{ .exited = 255 },
         .{ .signal = .TERM },
-        .{ .stopped = .STOP },
+        .{ .stopped = .INT },
         .{ .unknown = 0xdeadbeef },
     };
     for (cases) |term| {

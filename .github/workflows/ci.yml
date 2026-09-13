@@ -17,15 +17,17 @@ env:
   ZIG_VERSION: 0.16.0
 
 jobs:
-  # The suite on every host it supports. Windows gets its own job below, for
-  # the little there is to check there.
+  # The whole suite on every host it supports, Windows included. A
+  # pseudo-terminal is a kernel object and a process group is a kernel concept,
+  # so a cross-compilation check proves nothing about either: this job is where
+  # the claims are tested.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,32 +58,15 @@ jobs:
       - name: Examples
         run: zig build examples
 
-      # README.md's Usage block is a region of examples/usage.zig. This is what
-      # keeps the snippet a reader copies the same thing CI executes.
-      - name: README Usage block matches the example
-        run: ci/readme_usage.sh --check
-
-  # Windows has no pseudo-terminal device and no fork, so src/zpty.zig is a
-  # deliberate compile error there -- see "The Windows seam" in its module doc
-  # comment -- and there is no library, no test and no example on that runner
-  # to build, not even partially. What can still be checked on a Windows host
-  # is everything that is not the library: that the sources stay formatted with
-  # the line endings .gitattributes pins, and that build.zig, which `zig build`
-  # compiles and runs before it compiles any module, stays portable. The rest
-  # is skipped for the reason above, and will stop being skipped when there is
-  # a ConPTY implementation behind the same API.
-  windows:
-    name: windows (what compiles)
-    runs-on: windows-latest
+  # README.md's Usage block is a region of examples/usage.zig, which the job
+  # above runs. This is what keeps the snippet a reader copies the same text as
+  # the code CI executes.
+  docs:
+    name: documented usage
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - name: Formatting
-        run: zig fmt --check src examples build.zig
-      - name: build.zig compiles and its graph resolves
-        run: zig build --help
+      - run: ci/readme_usage.sh --check
 
   # Compile-only coverage of the targets the suite cannot execute on. These
   # prove the sources are portable across the systems the package claims; the
@@ -98,6 +83,9 @@ jobs:
           - x86_64-linux-musl
           - x86_64-macos
           - aarch64-macos
+          - x86_64-windows-gnu
+          - x86_64-windows-msvc
+          - aarch64-windows-gnu
           - x86_64-freebsd
           - x86_64-netbsd
     steps:

@@ -11,9 +11,15 @@
 //! process-wide state, and a library that installed one would be taking
 //! something from the program that owns it. The program should install its own
 //! and call `Pty.resize` with `zpty.winSize` of its own terminal; that is a
-//! single ioctl and is safe to call while `run` is in flight.
+//! single call and is safe to make while `run` is in flight.
 
+const builtin = @import("builtin");
 const std = @import("std");
+
+const Pty = @import("Pty.zig");
+const tty = @import("tty.zig");
+
+const is_windows = builtin.os.tag == .windows;
 
 /// The files to move bytes between, and the buffers to move them in.
 ///
@@ -21,17 +27,18 @@ const std = @import("std");
 /// alias, and must outlive the call. A few kilobytes each is plenty; a buffer
 /// smaller than a terminal's line is merely slower, not wrong.
 pub const Options = struct {
-    /// The master end of the pair the child is running on.
-    master: std.Io.File,
+    /// The master end of the pair the child is running on. `Pty.master` or
+    /// `Child.pty` is where this comes from.
+    master: Pty.Master,
     /// Where the child's input comes from, usually the program's own standard
     /// input in raw mode.
     input: std.Io.File,
     /// Where the child's output goes, usually the program's own standard
     /// output.
     output: std.Io.File,
-    /// Carries `input` to `master`.
+    /// Carries `input` to the master.
     input_buffer: []u8,
-    /// Carries `master` to `output`.
+    /// Carries the master to `output`.
     output_buffer: []u8,
 };
 
@@ -41,7 +48,8 @@ pub const RunError = error{
     ConcurrencyUnavailable,
     /// `output` could not be written.
     WriteFailed,
-    /// `master` could not be read, for a reason other than the child leaving.
+    /// The master could not be read, for a reason other than the child
+    /// leaving.
     ReadFailed,
 } || std.Io.Cancelable;
 
@@ -54,15 +62,16 @@ pub const RunError = error{
 /// complete does not hold the call open.
 ///
 /// A child that has exited does not by itself end this: bytes it wrote are
-/// still in the terminal, and the master reports end of file only once the
-/// slave end is closed everywhere. `Pty.closeSlave` in the parent, right after
-/// `Child.spawn`, is what makes that happen.
+/// still in the terminal, and on POSIX the master reports end of file only
+/// once the slave end is closed everywhere. `Pty.closeSlave` in the parent,
+/// right after `Child.spawn`, is what makes that happen; on Windows the
+/// pseudoconsole ends the stream when the client does.
 pub fn run(io: std.Io, options: Options) RunError!void {
     var input_error: ?RunError = null;
     var group: std.Io.Group = .init;
     try group.concurrent(io, inputTask, .{ io, options, &input_error });
 
-    const result = pump(io, options.master, options.output, options.output_buffer);
+    const result = pump(io, options.master.read, options.output, options.output_buffer);
 
     // Unconditional, and before the result is examined: the group owns
     // resources either way, and the direction carrying `input` is blocked on a
@@ -78,7 +87,7 @@ pub fn run(io: std.Io, options: Options) RunError!void {
 /// `std.Io.Group` tasks may fail only with `error.Canceled`, so anything else
 /// is left in `out_error` for `run` to return once the group has joined.
 fn inputTask(io: std.Io, options: Options, out_error: *?RunError) std.Io.Cancelable!void {
-    pump(io, options.input, options.master, options.input_buffer) catch |err| switch (err) {
+    pump(io, options.input, options.master.write, options.input_buffer) catch |err| switch (err) {
         error.Canceled => return error.Canceled,
         else => out_error.* = err,
     };
@@ -104,25 +113,59 @@ fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!v
     }
 }
 
+//======================================================================
+// Tests.
+//======================================================================
+
+const testing = std.testing;
+const Child = @import("Child.zig");
+
+/// `run` under a `std.Io.Group`, which accepts only `error.Canceled`.
+fn runQuietly(io: std.Io, options: Options) std.Io.Cancelable!void {
+    run(io, options) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => {},
+    };
+}
+
+/// Reads from `file` until `want` has arrived or the budget runs out.
+///
+/// Polled rather than read straight, so a pump that never delivers fails the
+/// test it is in instead of stopping the run.
+fn expectWithin(io: std.Io, file: std.Io.File, seen: []u8, want: []const u8) !void {
+    var filled: usize = 0;
+    while (filled < want.len) {
+        var fds = [_]std.posix.pollfd{.{
+            .fd = file.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        if (try std.posix.poll(&fds, 5000) == 0) return error.TestPumpDeliveredNothing;
+        filled += try file.readStreaming(io, &.{seen[filled..]});
+    }
+    try testing.expectEqualStrings(want, seen[0..filled]);
+}
+
 test "bytes written to one terminal reach the program on the other, and back" {
-    const std_testing = std.testing;
-    const io = std_testing.io;
-    const gpa = std_testing.allocator;
-    const Pty = @import("Pty.zig");
-    const Child = @import("Child.zig");
-    const tty = @import("tty.zig");
+    // POSIX only: the test stands up a second pseudo-terminal to play the part
+    // of the user's own, which a pseudoconsole cannot do -- there is nothing on
+    // Windows that both is a console and can be read from.
+    if (is_windows) return error.SkipZigTest;
+
+    const io = testing.io;
+    const gpa = testing.allocator;
 
     // The terminal the "user" is at. Raw, so nothing it is sent is echoed
     // back and confused with the child's output.
     var user = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer user.close(io);
-    _ = try tty.rawMode(user.slave);
+    _ = try tty.rawMode(user.slave.?);
 
     // The terminal the child runs on, also raw: `cat` is doing the echoing
     // here, and the terminal doing it too would double every line.
     var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
-    _ = try tty.rawMode(terminal.slave);
+    _ = try tty.rawMode(terminal.slave.?);
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "cat" },
@@ -136,7 +179,7 @@ test "bytes written to one terminal reach the program on the other, and back" {
     var output_buffer: [256]u8 = undefined;
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
-        .master = terminal.masterFile(),
+        .master = terminal.master(),
         .input = user.slaveFile(),
         .output = user.slaveFile(),
         .input_buffer = &input_buffer,
@@ -144,33 +187,12 @@ test "bytes written to one terminal reach the program on the other, and back" {
     } });
     defer group.cancel(io);
 
-    const user_master = user.masterFile();
-    try user_master.writeStreamingAll(io, "round trip\n");
+    try user.writeFile().writeStreamingAll(io, "round trip\n");
 
-    // Polled rather than read straight, so a pump that never delivers fails
-    // this test instead of stopping the run.
     var seen: [64]u8 = undefined;
-    var filled: usize = 0;
-    while (filled < "round trip\n".len) {
-        var fds = [_]std.posix.pollfd{.{
-            .fd = user.master,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        }};
-        if (try std.posix.poll(&fds, 5000) == 0) return error.TestPumpDeliveredNothing;
-        filled += try user_master.readStreaming(io, &.{seen[filled..]});
-    }
-    try std_testing.expectEqualStrings("round trip\n", seen[0..filled]);
+    try expectWithin(io, user.readFile(), &seen, "round trip\n");
 
     // Ending the child closes the last descriptor for its terminal, which is
     // what makes `run` return.
     _ = try child.killWait(io, 500);
-}
-
-/// `run` under a `std.Io.Group`, which accepts only `error.Canceled`.
-fn runQuietly(io: std.Io, options: Options) std.Io.Cancelable!void {
-    run(io, options) catch |err| switch (err) {
-        error.Canceled => return error.Canceled,
-        else => {},
-    };
 }

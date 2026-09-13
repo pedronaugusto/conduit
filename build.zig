@@ -4,19 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // libc is linked here rather than left to the consumer, and only where it
+    // is needed: the POSIX pseudo-terminal interface is a libc interface, and
+    // src/zpty.zig refuses to compile without it there. On Windows every call
+    // this package makes is a kernel32 import, so linking a C runtime would
+    // only be a dependency to explain.
+    const link_libc = target.result.os.tag != .windows;
+
     //=====================================================================
     // The module.
-    //
-    // libc is linked here rather than left to the consumer: the POSIX
-    // pseudo-terminal interface is a libc interface, and src/zpty.zig refuses
-    // to compile without it.
     //=====================================================================
 
     const module = b.addModule("zpty", .{
         .root_source_file = b.path("src/zpty.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
+        .link_libc = link_libc,
     });
 
     //=====================================================================
@@ -34,7 +37,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/zpty.zig"),
             .target = target,
             .optimize = optimize,
-            .link_libc = true,
+            .link_libc = link_libc,
         }),
     });
 
@@ -59,7 +62,7 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = b.path(source),
                 .target = target,
                 .optimize = optimize,
-                .link_libc = true,
+                .link_libc = link_libc,
                 .imports = &.{.{ .name = "zpty", .module = module }},
             }),
         });
