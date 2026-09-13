@@ -1,6 +1,6 @@
 //! Child processes and pseudo-terminals, on POSIX and on Windows.
 //!
-//! Three things the standard library has no answer for, and one it does:
+//! Four things the standard library has no answer for, and one it does:
 //!
 //! * `Pty` opens a pseudo-terminal pair and sets and reads its window size.
 //! * `Child` spawns a program on that pair — which is what makes the child
@@ -9,13 +9,16 @@
 //!   device. It kills, reaps, waits, and collects what the child wrote.
 //! * `rawMode`, `winSize` and the rest are the terminal calls a full-screen
 //!   program needs on its own standard streams.
+//! * `spawnShell` is the user's shell on a pair, with the defaults every
+//!   terminal program would otherwise write out itself.
 //! * `wait` is the standard library's: `Child.wait` hands the process on to
 //!   `std.process.Child.wait`, so it is a cancelation point and uses whatever
 //!   the `std.Io` implementation has for waiting on a process.
 //!
 //! `Reaper` puts a wait on a background task so a program can poll for a
-//! child's death, and `Proxy` is the two-direction byte pump between a master
-//! and a pair of files.
+//! child's death, `Proxy` is the two-direction byte pump between a master and
+//! a pair of files, and `environ` builds a child's environment out of this
+//! process's own.
 //!
 //! # Platforms
 //!
@@ -42,7 +45,8 @@
 //! * **`Pty.closeSlave` is wanted at different moments.** On POSIX, right
 //!   after `Child.spawn`, or a read of the master never finishes. On Windows
 //!   it is `ClosePseudoConsole`, which ends the child, so it is called when the
-//!   program is done. `Pty.closeSlave` documents it.
+//!   program is done. `spawnShell` absorbs that difference; `Pty.closeSlave`
+//!   documents it.
 //!
 //! Three declarations exist only on POSIX, because what they name exists only
 //! there: `setWinSize` (a console's window belongs to its host), `ttyName` (a
@@ -57,6 +61,8 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const tty = @import("tty.zig");
+const environ_impl = @import("environ.zig");
+const shell = @import("shell.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -109,6 +115,23 @@ pub const Saved = tty.Saved;
 /// A stream handle: `std.posix.fd_t` on POSIX, `HANDLE` on Windows.
 pub const Handle = tty.Handle;
 
+/// The user's shell on a new pseudo-terminal, with a terminal program's
+/// defaults.
+pub const spawnShell = shell.spawnShell;
+/// What `spawnShell` returns: the pair, and the shell running on it.
+pub const Shell = shell.Shell;
+/// The options `spawnShell` takes.
+pub const ShellOptions = shell.Options;
+pub const SpawnShellError = shell.SpawnShellError;
+
+/// Building a child's environment out of this process's own.
+///
+/// `environ.inherit(allocator, &.{.{ .name = "TERM", .value = "xterm-256color" }})`
+/// is the whole of it: a `std.process.Environ.Map` the caller owns, ready for
+/// `Child.SpawnOptions.environ`, with the named variables set or — for a
+/// `null` value — removed.
+pub const environ = environ_impl;
+
 /// Puts a terminal into raw mode and returns what to pass to `restore`.
 pub const rawMode = tty.rawMode;
 pub const RawModeError = tty.RawModeError;
@@ -140,5 +163,7 @@ test {
     _ = Reaper;
     _ = Proxy;
     _ = tty;
+    _ = environ_impl;
+    _ = shell;
     _ = @import("spawn_test.zig");
 }

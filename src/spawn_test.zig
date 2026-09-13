@@ -52,6 +52,7 @@ const script = if (is_windows) struct {
     const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %ZPTY_TEST_VALUE% %CD%" };
     const working_directory = "C:\\Windows";
     const working_directory_mark = "Windows";
+    const shell_arguments = [_][]const u8{ "/c", "echo hi" };
 } else struct {
     const greeting = [_][]const u8{ "/bin/sh", "-c", "printf 'hello from the child'; exit 3" };
     const echo_stdin = [_][]const u8{ "/bin/sh", "-c", "read line; printf '%s' \"$line\"" };
@@ -62,6 +63,7 @@ const script = if (is_windows) struct {
     const report_environment = [_][]const u8{ "sh", "-c", "printf '%s %s' \"$ZPTY_TEST_VALUE\" \"$PWD\"" };
     const working_directory = "/tmp";
     const working_directory_mark = "/tmp";
+    const shell_arguments = [_][]const u8{ "-c", "printf 'hi'" };
 };
 
 //======================================================================
@@ -546,11 +548,10 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
 //======================================================================
 
 test "the child's environment and working directory are the ones asked for" {
-    var environ: std.process.Environ.Map = .init(gpa);
+    var environ = try zpty.environ.inherit(gpa, &.{
+        .{ .name = "ZPTY_TEST_VALUE", .value = "present" },
+    });
     defer environ.deinit();
-    try environ.put("ZPTY_TEST_VALUE", "present");
-    try environ.put("PATH", if (is_windows) "C:\\Windows\\System32" else "/usr/bin:/bin");
-    if (is_windows) try environ.put("SystemRoot", "C:\\Windows");
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.report_environment,
@@ -612,6 +613,27 @@ test "a batch file is refused rather than handed to cmd.exe" {
         .argv = &.{ "C:\\zpty-no-such-script.bat", "arg" },
         .stdio = .ignore,
     }));
+}
+
+//======================================================================
+// The shell.
+//======================================================================
+
+test "spawnShell starts the user's shell on a pair" {
+    var shell = try zpty.spawnShell(io, gpa, .{
+        .args = &script.shell_arguments,
+        .size = .{ .rows = 40, .cols = 132 },
+    });
+    defer shell.deinit(io);
+
+    try testing.expectEqual(@as(u16, 40), (try shell.pty.size()).rows);
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(shell.pty.readFile());
+
+    try sink.expect("hi");
+    _ = try shell.child.killWait(io, budget_ms);
 }
 
 /// `getpgid` is not declared in `std.c`, and two of the tests above are about
