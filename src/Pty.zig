@@ -118,6 +118,11 @@ pub const OpenError = error{
 ///
 /// On success the caller owns every end and must eventually call `close`, or
 /// `closeSlave` and `closeMaster` separately. On failure nothing is leaked.
+///
+/// On POSIX both ends are close-on-exec, so a pair held open while some
+/// unrelated child is spawned is not handed to it. `Child.spawn` puts the
+/// slave on the child's standard streams with `dup2`, which clears the flag on
+/// the copies, so the child it *is* for still gets its terminal.
 pub fn open(options: OpenOptions) OpenError!Pty {
     if (is_windows) return openWindows(options);
     return openPosix(options);
@@ -243,9 +248,18 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
 
 /// Closes both master ends.
 ///
-/// On POSIX the child sees end of file on its terminal, and a subsequent write
-/// from the child raises `SIGHUP`. On Windows the child's console loses the
-/// pipes behind it; the client learns when it next reads or writes.
+/// **On POSIX this hangs the terminal up.** Dropping the last master descriptor
+/// is the pseudo-terminal spelling of a modem dropping the line: the kernel
+/// sends `SIGHUP` to the session leader of the terminal's session, which for a
+/// child spawned with `detach` and `.pty` is the child itself. Its default
+/// action ends the process, so a child that does not handle the signal is gone
+/// shortly after this returns -- and a child that does handle it sees a read of
+/// its terminal report end of file, and a write fail with `EIO`. A child
+/// spawned without `detach` has no controlling terminal here and so is not
+/// signalled; it only meets the closed stream.
+///
+/// On Windows the child's console loses the pipes behind it; the client learns
+/// when it next reads or writes.
 pub fn closeMaster(pty: *Pty, io: std.Io) void {
     // The same handle twice on POSIX, so it is closed once.
     const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
@@ -274,6 +288,17 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
     // an operation `std.Io` abstracts.
     errdefer _ = c.close(master_fd);
 
+    // Close-on-exec, and not as an afterthought: a master this process is
+    // holding while it spawns some unrelated child would otherwise be
+    // inherited by that child, which would then be keeping the terminal open
+    // -- so a read of the master never finishes even after the child that was
+    // meant to have it exits. POSIX has no flag for `posix_openpt` to carry
+    // (it takes `O_RDWR` and `O_NOCTTY` and nothing else is portable), so it
+    // is a second call, and the window between the two is the one a concurrent
+    // `fork` on another thread could slip through. The slave below has no such
+    // window: `open` takes the flag.
+    setCloseOnExec(master_fd);
+
     // `grantpt` fixes the ownership and mode of the slave device and
     // `unlockpt` clears the lock that keeps it unopenable until then. Both are
     // required before the slave path may be opened, and both are no-ops on
@@ -290,7 +315,7 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
 
     // NOCTTY: opening the slave here must not make it this process's
     // controlling terminal. The child asks for that explicitly, after `setsid`.
-    const slave_fd = c.open(name, .{ .ACCMODE = .RDWR, .NOCTTY = true });
+    const slave_fd = c.open(name, .{ .ACCMODE = .RDWR, .NOCTTY = true, .CLOEXEC = true });
     if (slave_fd < 0) return openErrno();
     errdefer _ = c.close(slave_fd);
 
@@ -305,6 +330,13 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
         .slave = slave_fd,
         .remembered_size = {},
     };
+}
+
+/// Best effort: a descriptor that could not be marked close-on-exec is still
+/// a working descriptor, and there is nothing a caller could usefully do about
+/// it.
+fn setCloseOnExec(fd: posix.fd_t) void {
+    _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
 }
 
 /// The current `errno`, as one of `OpenError`. Everything `openPosix` calls
@@ -471,4 +503,20 @@ test "raw mode round-trips on the terminal end of a POSIX pair" {
     try testing.expectEqual(before.lflag, after.lflag);
     try testing.expectEqual(before.iflag, after.iflag);
     try testing.expectEqual(before.oflag, after.oflag);
+}
+
+test "both ends of a POSIX pair are close-on-exec" {
+    // The claim is about what an unrelated child does *not* inherit. A pair
+    // held open while some other program is started must not reach it: a
+    // grandchild holding the slave keeps the terminal open, and a read of the
+    // master then never finishes even after the child it was opened for has
+    // gone.
+    if (is_windows) return error.SkipZigTest;
+    const io = testing.io;
+    var pty = try Pty.open(.{});
+    defer pty.close(io);
+
+    const FD_CLOEXEC: c_int = c.FD_CLOEXEC;
+    try testing.expectEqual(FD_CLOEXEC, c.fcntl(pty.read.?, c.F.GETFD, @as(c_int, 0)) & FD_CLOEXEC);
+    try testing.expectEqual(FD_CLOEXEC, c.fcntl(pty.slave.?, c.F.GETFD, @as(c_int, 0)) & FD_CLOEXEC);
 }

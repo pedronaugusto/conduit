@@ -413,8 +413,7 @@ fn makePipe() SpawnError![2]posix.fd_t {
 /// Best effort: a descriptor that could not be marked close-on-exec is still a
 /// working descriptor, and there is no useful way for a caller to react.
 fn setCloseOnExec(fd: posix.fd_t) void {
-    const FD_CLOEXEC: c_int = 1;
-    _ = c.fcntl(fd, c.F.SETFD, FD_CLOEXEC);
+    _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
 }
 
 fn file(fd: posix.fd_t) std.Io.File {
