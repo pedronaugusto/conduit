@@ -18,6 +18,32 @@ const gpa = std.testing.allocator;
 /// exactly what it reports.
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 
+/// How long any one test will wait for a child to say or do something before
+/// it gives up. Generous, because it is a failure budget and not a timing
+/// assertion: nothing here should come near it.
+const budget_ms = 5000;
+
+/// Reads whatever is available, waiting at most `budget_ms` for the first
+/// byte. Zero means end of stream.
+///
+/// Every read in this file goes through here. A test that blocks forever on a
+/// child that never speaks is worse than a failing test: it stops the run
+/// instead of reporting anything.
+fn readWithin(file: std.Io.File, buffer: []u8) !usize {
+    var fds = [_]posix.pollfd{.{
+        .fd = file.handle,
+        .events = posix.POLL.IN,
+        .revents = 0,
+    }};
+    if (try posix.poll(&fds, budget_ms) == 0) return error.TestChildSaidNothing;
+    return file.readStreaming(io, &.{buffer}) catch |err| switch (err) {
+        // A pseudo-terminal master whose slave is gone reports this on Linux
+        // where a pipe reports end of stream.
+        error.EndOfStream, error.InputOutput => 0,
+        else => err,
+    };
+}
+
 /// Reads a file to the end into an owned slice, so a test can assert on what a
 /// child wrote.
 fn drain(file: std.Io.File) ![]u8 {
@@ -25,16 +51,53 @@ fn drain(file: std.Io.File) ![]u8 {
     errdefer out.deinit(gpa);
     var buffer: [512]u8 = undefined;
     while (true) {
-        const n = file.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
-            // A pseudo-terminal master whose slave is gone reports this on
-            // Linux where a pipe reports end of file.
-            error.EndOfStream, error.InputOutput => break,
-            else => return err,
-        };
+        const n = try readWithin(file, &buffer);
         if (n == 0) break;
         try out.appendSlice(gpa, buffer[0..n]);
     }
     return out.toOwnedSlice(gpa);
+}
+
+/// Waits for the child to end, and kills it if it will not within
+/// `budget_ms`.
+///
+/// This is what every test uses instead of `Child.wait`: a wait that cannot
+/// outlast the test, so a child that misbehaves produces a failure rather than
+/// a run that never finishes.
+fn waitWithin(child: *Child) !Child.Term {
+    var waited: u32 = 0;
+    while (true) {
+        if (try child.tryWait()) |term| return term;
+        if (waited >= budget_ms) break;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        waited += 2;
+    }
+    _ = child.killWait(io, 0) catch {};
+    return error.TestChildDidNotExit;
+}
+
+/// Asserts that the next non-empty line the terminal produces is `want`.
+///
+/// `pending` carries the bytes read past the end of one line into the next
+/// call. The carriage return a terminal puts before every newline is trimmed,
+/// and empty lines -- the echo of a newline written to the master -- are
+/// skipped.
+fn expectLine(master: std.Io.File, pending: *std.ArrayList(u8), want: []const u8) !void {
+    while (true) {
+        if (std.mem.indexOfScalar(u8, pending.items, '\n')) |newline| {
+            const line = std.mem.trimEnd(u8, pending.items[0..newline], "\r");
+            if (line.len == 0) {
+                try pending.replaceRange(gpa, 0, newline + 1, &.{});
+                continue;
+            }
+            defer pending.replaceRange(gpa, 0, newline + 1, &.{}) catch {};
+            return std.testing.expectEqualStrings(want, line);
+        }
+        var buffer: [256]u8 = undefined;
+        const n = try readWithin(master, &buffer);
+        if (n == 0) return error.TestChildSaidNothing;
+        try pending.appendSlice(gpa, buffer[0..n]);
+    }
 }
 
 test "a child on pipes: its output is captured and its exit code is seen" {
@@ -49,7 +112,7 @@ test "a child on pipes: its output is captured and its exit code is seen" {
     defer gpa.free(output);
     try std.testing.expectEqualStrings("hello from the child", output);
 
-    try std.testing.expectEqual(Child.Term{ .exited = 3 }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .exited = 3 }, try waitWithin(&child));
 }
 
 test "a child on pipes can be written to" {
@@ -67,7 +130,7 @@ test "a child on pipes can be written to" {
     const output = try drain(child.stdout.?);
     defer gpa.free(output);
     try std.testing.expectEqualStrings("a line", output);
-    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
 }
 
 test "a child on a pty sees a terminal" {
@@ -83,7 +146,7 @@ test "a child on a pty sees a terminal" {
     errdefer _ = child.killWait(io, 0) catch {};
     pty.closeSlave(io);
 
-    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
 }
 
 test "a child on a pty reports the window size it was given, and the one it is resized to" {
@@ -102,29 +165,17 @@ test "a child on a pty reports the window size it was given, and the one it is r
     pty.closeSlave(io);
 
     const master = pty.masterFile();
+    var pending: std.ArrayList(u8) = .empty;
+    defer pending.deinit(gpa);
 
-    var buffer: [256]u8 = undefined;
-    var reader = master.readerStreaming(io, &buffer);
-    try std.testing.expectEqualStrings("30 100", try line(&reader.interface));
+    try expectLine(master, &pending, "30 100");
 
     try pty.resize(.{ .rows = 41, .cols = 121 });
     try master.writeStreamingAll(io, "\n");
 
-    // The terminal echoes the newline just written, so the next non-empty line
-    // is the one the resize produced.
-    try std.testing.expectEqualStrings("41 121", try line(&reader.interface));
+    try expectLine(master, &pending, "41 121");
 
-    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
-}
-
-/// The next non-empty line, without the carriage return a terminal puts before
-/// every newline.
-fn line(reader: *std.Io.Reader) ![]const u8 {
-    while (true) {
-        const raw = (try reader.takeDelimiter('\n')) orelse return error.EndOfStream;
-        const trimmed = std.mem.trimEnd(u8, raw, "\r");
-        if (trimmed.len != 0) return trimmed;
-    }
+    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
 }
 
 test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
@@ -142,12 +193,12 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
     pty.closeSlave(io);
 
     // The interrupt character of a terminal in its default mode. Turning it
-    // into a signal is the line discipline's job, and it only has a process
-    // group to send it to because the child claimed the pair as its
-    // controlling terminal.
+    // into a signal is the line discipline's job, and it has a process group
+    // to send it to only because the child claimed the pair as its controlling
+    // terminal.
     try pty.masterFile().writeStreamingAll(io, "\x03");
 
-    try std.testing.expectEqual(Child.Term{ .signal = .INT }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .signal = .INT }, try waitWithin(&child));
 }
 
 test "the same Ctrl-C does not reach a child that has no controlling terminal" {
@@ -181,7 +232,8 @@ test "killWait ends a child that would otherwise outlive the test, and says how"
 
     const term = try child.killWait(io, 200);
     try std.testing.expectEqual(Child.Term{ .signal = .TERM }, term);
-    // Reaped once: the second call answers from what the first learned.
+    // Reaped once: `wait` answers from what `killWait` learned, and so cannot
+    // block here.
     try std.testing.expectEqual(term, try child.wait(io));
 }
 
@@ -242,7 +294,7 @@ test "tryWait is null while the child runs and a term once it has ended" {
     child.stdin.?.close(io);
     child.stdin = null;
 
-    try std.testing.expectEqual(Child.Term{ .exited = 7 }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
     try std.testing.expectEqual(Child.Term{ .exited = 7 }, (try child.tryWait()).?);
 }
 
@@ -262,12 +314,15 @@ test "Reaper.exit becomes non-null once the child has ended" {
     child.stdin.?.close(io);
     child.stdin = null;
 
-    // The wait is on another task, so the result arrives when it arrives.
-    const term = while (true) {
+    // The wait is on another task, so the result arrives when it arrives --
+    // but not later than the budget every other wait in this file obeys.
+    var waited: u32 = 0;
+    const term = while (waited < budget_ms) : (waited += 1) {
         if (reaper.exit()) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(1), .awake);
-    };
+    } else return error.TestChildDidNotExit;
     try std.testing.expectEqual(Child.Term{ .exited = 5 }, term);
+    // The reaper's task did the reaping, so this answers from the same term.
     try std.testing.expectEqual(term, try child.wait(io));
 }
 
@@ -287,10 +342,10 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
 
     // The stderr pipe was not created, because the file replaced it.
     try std.testing.expectEqual(@as(?std.Io.File, null), child.stderr);
-    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
 
     var buffer: [64]u8 = undefined;
-    const n = try pipe_pty.masterFile().readStreaming(io, &.{&buffer});
+    const n = try readWithin(pipe_pty.masterFile(), &buffer);
     try std.testing.expectEqualStrings("to stderr", buffer[0..n]);
 }
 
@@ -312,7 +367,7 @@ test "the child's environment and working directory are the ones asked for" {
     const output = try drain(child.stdout.?);
     defer gpa.free(output);
     try std.testing.expect(std.mem.startsWith(u8, output, "present /"));
-    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+    try std.testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
 }
 
 test "a program that is not there is an error, not a child that exits 127" {

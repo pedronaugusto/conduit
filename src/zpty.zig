@@ -1,6 +1,6 @@
 //! Child processes and pseudo-terminals on POSIX.
 //!
-//! Three things the standard library does not do, and one it does:
+//! Three things the standard library has no answer for, and one it does:
 //!
 //! * `Pty` opens a pseudo-terminal pair and sets and reads its window size.
 //! * `Child` spawns a program on that pair, in its own session, with the pair
@@ -72,7 +72,7 @@ comptime {
         "zpty is POSIX-only: it opens pseudo-terminals with posix_openpt and " ++
             "starts children with fork and execve, neither of which Windows has. " ++
             "A Windows port would go behind the same API through ConPTY; see the " ++
-            "`windows` declaration in src/zpty.zig.",
+            "\"The Windows seam\" in this file's module doc comment.",
     );
     if (!builtin.link_libc) @compileError(
         "zpty requires libc: the POSIX pseudo-terminal interface is a libc " ++
@@ -98,16 +98,21 @@ pub const Saved = tty.Saved;
 
 /// Puts a terminal into raw mode and returns what to pass to `restore`.
 pub const rawMode = tty.rawMode;
+pub const RawModeError = tty.RawModeError;
 /// Puts back the attributes `rawMode` captured.
 pub const restore = tty.restore;
+pub const RestoreError = tty.RestoreError;
 /// Reads a terminal's window size.
 pub const winSize = tty.winSize;
+pub const WinSizeError = tty.WinSizeError;
 /// Sets a terminal's window size.
 pub const setWinSize = tty.setWinSize;
+pub const SetWinSizeError = tty.SetWinSizeError;
 /// Whether a descriptor is a terminal.
 pub const isTty = tty.isTty;
 /// The `/dev` pathname of a terminal descriptor.
 pub const ttyName = tty.ttyName;
+pub const TtyNameError = tty.TtyNameError;
 
 test {
     _ = Pty;

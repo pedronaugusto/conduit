@@ -13,8 +13,6 @@
 //! and call `Pty.resize` with `zpty.winSize` of its own terminal; that is a
 //! single ioctl and is safe to call while `run` is in flight.
 
-const Proxy = @This();
-
 const std = @import("std");
 
 /// The files to move bytes between, and the buffers to move them in.
@@ -149,9 +147,17 @@ test "bytes written to one terminal reach the program on the other, and back" {
     const user_master = user.masterFile();
     try user_master.writeStreamingAll(io, "round trip\n");
 
+    // Polled rather than read straight, so a pump that never delivers fails
+    // this test instead of stopping the run.
     var seen: [64]u8 = undefined;
     var filled: usize = 0;
     while (filled < "round trip\n".len) {
+        var fds = [_]std.posix.pollfd{.{
+            .fd = user.master,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        }};
+        if (try std.posix.poll(&fds, 5000) == 0) return error.TestPumpDeliveredNothing;
         filled += try user_master.readStreaming(io, &.{seen[filled..]});
     }
     try std_testing.expectEqualStrings("round trip\n", seen[0..filled]);

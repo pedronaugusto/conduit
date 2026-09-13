@@ -44,10 +44,6 @@ pub const OpenOptions = struct {
 };
 
 pub const OpenError = error{
-    /// The pair was opened but its geometry could not be set. Only a
-    /// descriptor that stopped being a terminal between the two calls can
-    /// produce this, which is to say: never.
-    NotATerminal,
     /// The per-process descriptor limit was reached.
     ProcessFdQuotaExceeded,
     /// The system-wide descriptor limit was reached.
@@ -65,47 +61,47 @@ pub const OpenError = error{
 /// descriptor is leaked.
 pub fn open(options: OpenOptions) OpenError!Pty {
     const master = posix_openpt(.{ .ACCMODE = .RDWR, .NOCTTY = true });
-    if (master < 0) switch (posix.errno(@as(c_int, -1))) {
+    if (master < 0) switch (lastErrno()) {
         .MFILE => return error.ProcessFdQuotaExceeded,
         .NFILE => return error.SystemFdQuotaExceeded,
         .AGAIN, .NOSPC, .NXIO => return error.NoDevice,
         .ACCES, .PERM => return error.PermissionDenied,
         else => |err| return posix.unexpectedErrno(err),
     };
+    // Raw closes: `open` has no `std.Io` to hand, because nothing it does is
+    // an operation `std.Io` abstracts.
     errdefer _ = c.close(master);
 
     // `grantpt` fixes the ownership and mode of the slave device and
     // `unlockpt` clears the lock that keeps it unopenable until then. Both are
     // required before the slave path may be opened, and both are no-ops on
     // systems that do not need them.
-    if (grantpt(master) != 0) return error.PermissionDenied;
-    if (unlockpt(master) != 0) return error.PermissionDenied;
+    if (grantpt(master) != 0) return openErrno();
+    if (unlockpt(master) != 0) return openErrno();
 
+    // `ptsname_r` does not agree with itself across libcs: glibc returns the
+    // error number, musl and Darwin return -1. All three set `errno`, so that
+    // is what is read, and the return value is only tested against zero.
     var name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    switch (@as(posix.E, @enumFromInt(ptsname_r(master, &name_buffer, name_buffer.len)))) {
-        .SUCCESS => {},
-        else => |err| return posix.unexpectedErrno(err),
-    }
+    if (ptsname_r(master, &name_buffer, name_buffer.len) != 0) return openErrno();
     const name: [*:0]const u8 = @ptrCast(&name_buffer);
 
     // NOCTTY: opening the slave here must not make it this process's
     // controlling terminal. The child asks for that explicitly, after `setsid`.
     const slave = c.open(name, .{ .ACCMODE = .RDWR, .NOCTTY = true });
-    if (slave < 0) switch (posix.errno(@as(c_int, -1))) {
-        .MFILE => return error.ProcessFdQuotaExceeded,
-        .NFILE => return error.SystemFdQuotaExceeded,
-        .ACCES, .PERM => return error.PermissionDenied,
-        else => |err| return posix.unexpectedErrno(err),
-    };
+    if (slave < 0) return openErrno();
     errdefer _ = c.close(slave);
 
-    var pty: Pty = .{ .master = master, .slave = slave };
-    try pty.resize(.{
+    const pty: Pty = .{ .master = master, .slave = slave };
+    // The descriptor is a pseudo-terminal master, opened two calls ago, so the
+    // only failure this can report is one no caller could tell apart from the
+    // open itself failing.
+    tty.setWinSize(master, .{
         .rows = options.rows,
         .cols = options.cols,
         .x_pixel = options.x_pixel,
         .y_pixel = options.y_pixel,
-    });
+    }) catch return error.Unexpected;
     return pty;
 }
 
@@ -176,6 +172,22 @@ pub fn closeMaster(pty: *Pty, io: std.Io) void {
     if (pty.master == closed) return;
     pty.masterFile().close(io);
     pty.master = closed;
+}
+
+/// The current `errno`, as one of `OpenError`. Everything `open` calls
+/// reports failure the same way, so they all land here.
+fn openErrno() OpenError {
+    return switch (lastErrno()) {
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .AGAIN, .NOSPC, .NXIO => error.NoDevice,
+        .ACCES, .PERM => error.PermissionDenied,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+fn lastErrno() posix.E {
+    return c.errno(@as(c_int, -1));
 }
 
 // These four are the POSIX 98 pseudo-terminal interface. None of them is

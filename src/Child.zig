@@ -70,9 +70,11 @@ pub const Stdio = union(enum) {
     /// terminal: `isatty` is true for it, it can ask for the window size, and
     /// with `detach` it receives the signals the line discipline generates.
     ///
-    /// The `Pty` is borrowed, not owned. After `spawn` returns, the parent
-    /// should call `Pty.closeSlave` so that reading the master reports end of
-    /// file when the child exits.
+    /// The `Pty` is borrowed, not owned: `deinit` does not close it. As soon
+    /// as `spawn` returns, the parent should call `Pty.closeSlave`. Until it
+    /// does, the terminal still has a reader in this process, so reading the
+    /// master blocks forever instead of reporting end of file when the child
+    /// exits.
     pty: *Pty,
     /// The selected streams get pipes, which `spawn` creates and the `Child`
     /// owns.
@@ -155,8 +157,12 @@ pub const SpawnError = error{
 ///
 /// `allocator` is used only for the duration of the call, to build the
 /// argument, environment and search-path arrays that must exist before the
-/// fork; nothing is retained. `io` is used to close the descriptors the parent
-/// does not keep.
+/// fork; nothing is retained. `io` closes every descriptor the parent opened
+/// here and does not keep.
+///
+/// This is not a cancelation point. Between the `fork` and the return there is
+/// a child process that only this function knows about, so there is nowhere in
+/// the middle it could stop without leaking one.
 ///
 /// On success the caller owns the returned `Child` and must eventually reap it
 /// (`wait`, `tryWait`, `killWait` or a `Reaper`) and call `deinit`. A `Child`
@@ -204,22 +210,15 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     var plan: Plan = try .init(io, options);
     errdefer plan.closeAll(io);
 
-    // How the fork child reports a failure that happens after the fork. Both
-    // ends are close-on-exec, so a successful `execve` closes the write end and
-    // the parent's read returns end of file.
-    var report: [2]posix.fd_t = undefined;
-    if (c.pipe(&report) != 0) switch (c.errno(@as(c_int, -1))) {
-        .MFILE => return error.ProcessFdQuotaExceeded,
-        .NFILE => return error.SystemFdQuotaExceeded,
-        else => |err| return posix.unexpectedErrno(err),
-    };
-    setCloseOnExec(report[0]);
-    setCloseOnExec(report[1]);
+    // How the fork child reports a failure that happens after the fork. The
+    // write end is close-on-exec, so a successful `execve` closes it and the
+    // parent's read below returns end of file instead of a record.
+    const report = try makePipe();
 
     const pid = c.fork();
     if (pid < 0) {
-        _ = c.close(report[0]);
-        _ = c.close(report[1]);
+        file(report[0]).close(io);
+        file(report[1]).close(io);
         switch (c.errno(@as(c_int, -1))) {
             .AGAIN => return error.ResourceLimitReached,
             .NOMEM => return error.SystemResources,
@@ -228,15 +227,18 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     }
     if (pid == 0) childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1]);
 
-    _ = c.close(report[1]);
-    plan.closeChildSide();
+    file(report[1]).close(io);
+    plan.closeChildSide(io);
 
     // One report or end of file. A short read cannot happen: the child writes
     // the whole record with one `write` to a pipe, and eight bytes is far below
-    // `PIPE_BUF`.
+    // `PIPE_BUF`. The read is the raw one rather than `std.Io`'s because
+    // `spawn` is not a cancelation point: a child exists from the `fork` above
+    // until this function returns it, and there is no point in between at
+    // which it would be safe to stop.
     var record: Failure = undefined;
     const n = readAll(report[0], std.mem.asBytes(&record));
-    _ = c.close(report[0]);
+    file(report[0]).close(io);
 
     if (n == @sizeOf(Failure)) {
         // The child is about to exit, if it has not already; reap it so it does
@@ -458,7 +460,7 @@ const Plan = struct {
             // A stderr pipe that was planned is undone: the caller asked for
             // the file instead, and the file is theirs, not this `Plan`'s.
             if (plan.owned[2]) |fd| {
-                _ = c.close(fd);
+                file(fd).close(io);
                 plan.owned[2] = null;
             }
             if (plan.parent[2]) |pipe_end| {
@@ -473,10 +475,10 @@ const Plan = struct {
 
     /// Closes the descriptors that exist only for the child. Called in the
     /// parent once the fork has copied them.
-    fn closeChildSide(plan: *Plan) void {
+    fn closeChildSide(plan: *Plan, io: std.Io) void {
         for (&plan.owned) |*slot| {
             const fd = slot.* orelse continue;
-            _ = c.close(fd);
+            file(fd).close(io);
             slot.* = null;
         }
     }
@@ -484,7 +486,7 @@ const Plan = struct {
     /// Closes everything this `Plan` opened, on the path where no child was
     /// started or the child failed before `execve`.
     fn closeAll(plan: *Plan, io: std.Io) void {
-        plan.closeChildSide();
+        plan.closeChildSide(io);
         for (&plan.parent) |*slot| {
             const f = slot.* orelse continue;
             f.close(io);
@@ -688,6 +690,13 @@ fn environPath() ?[]const u8 {
     return null;
 }
 
+/// A pipe whose two ends are both close-on-exec.
+///
+/// That is what both kinds of pipe here want. A standard stream is put on 0, 1
+/// or 2 with `dup2`, which clears the flag on the copy, so the original goes
+/// away at the `execve` and the parent's end never reaches an unrelated child.
+/// The report pipe wants the write end to close at a successful `execve`,
+/// which is exactly how the parent learns the exec happened.
 fn makePipe() SpawnError![2]posix.fd_t {
     var ends: [2]posix.fd_t = undefined;
     if (c.pipe(&ends) != 0) switch (c.errno(@as(c_int, -1))) {
@@ -695,10 +704,6 @@ fn makePipe() SpawnError![2]posix.fd_t {
         .NFILE => return error.SystemFdQuotaExceeded,
         else => |err| return posix.unexpectedErrno(err),
     };
-    // Close-on-exec on both ends: the child puts the end it wants on 0, 1 or 2
-    // with `dup2`, which clears the flag on the copy, and everything else goes
-    // away at the `execve`. This also keeps the parent's end out of unrelated
-    // children.
     setCloseOnExec(ends[0]);
     setCloseOnExec(ends[1]);
     return ends;

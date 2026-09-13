@@ -54,13 +54,11 @@ pub const Saved = struct {
     termios: posix.termios,
 };
 
-pub const RawModeError = error{
-    /// The descriptor is not a terminal.
-    NotATerminal,
-    /// The process is in an orphaned process group and cannot change the
-    /// attributes of its controlling terminal.
-    ProcessOrphaned,
-} || std.posix.UnexpectedError;
+/// The union of the two standard library sets this is built from: a
+/// descriptor that is not a terminal is `error.NotATerminal`, and a process in
+/// an orphaned process group that tries to change the attributes of its
+/// controlling terminal is `error.ProcessOrphaned`.
+pub const RawModeError = std.posix.TermiosGetError || std.posix.TermiosSetError;
 
 /// Puts the terminal into raw mode and returns the attributes it had before,
 /// which `restore` puts back.
@@ -102,7 +100,8 @@ pub fn rawMode(fd: posix.fd_t) RawModeError!Saved {
     return .{ .termios = saved };
 }
 
-pub const RestoreError = RawModeError;
+/// The same set as `RawModeError`, minus the read that `restore` does not do.
+pub const RestoreError = std.posix.TermiosSetError;
 
 /// Puts back the attributes `rawMode` captured.
 ///
@@ -113,16 +112,16 @@ pub fn restore(fd: posix.fd_t, saved: Saved) RestoreError!void {
 }
 
 pub const WinSizeError = error{
-    /// The descriptor is not a terminal, or is a terminal with no size.
+    /// The descriptor is not a terminal.
     NotATerminal,
 } || std.posix.UnexpectedError;
 
 /// Reads the terminal's window size.
 pub fn winSize(fd: posix.fd_t) WinSizeError!Size {
     var ws: posix.winsize = undefined;
-    switch (posix.errno(c.ioctl(fd, T.GWINSZ, @intFromPtr(&ws)))) {
+    switch (c.errno(c.ioctl(fd, T.GWINSZ, @intFromPtr(&ws)))) {
         .SUCCESS => return .fromWinsize(ws),
-        .NOTTY, .INVAL => return error.NotATerminal,
+        .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
         .FAULT => unreachable, // `ws` is on this stack.
         else => |err| return posix.unexpectedErrno(err),
@@ -140,9 +139,9 @@ pub const SetWinSizeError = WinSizeError;
 /// controlling terminal (see `Child.SpawnOptions.detach`).
 pub fn setWinSize(fd: posix.fd_t, size: Size) SetWinSizeError!void {
     const ws = size.toWinsize();
-    switch (posix.errno(c.ioctl(fd, T.SWINSZ, @intFromPtr(&ws)))) {
+    switch (c.errno(c.ioctl(fd, T.SWINSZ, @intFromPtr(&ws)))) {
         .SUCCESS => return,
-        .NOTTY, .INVAL => return error.NotATerminal,
+        .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
         .FAULT => unreachable, // `ws` is on this stack.
         else => |err| return posix.unexpectedErrno(err),
@@ -172,16 +171,24 @@ pub const TtyNameError = error{
 /// buffer of `std.fs.max_path_bytes` is always enough.
 pub fn ttyName(fd: posix.fd_t, buffer: []u8) TtyNameError![]const u8 {
     if (buffer.len == 0) return error.NameTooLong;
-    switch (@as(posix.E, @enumFromInt(ttyname_r(fd, buffer.ptr, buffer.len)))) {
-        .SUCCESS => return std.mem.sliceTo(buffer, 0),
-        .NOTTY, .BADF, .INVAL => return error.NotATerminal,
-        .RANGE => return error.NameTooLong,
-        else => |err| return posix.unexpectedErrno(err),
-    }
+    const rc = ttyname_r(fd, buffer.ptr, buffer.len);
+    if (rc == 0) return std.mem.sliceTo(buffer, 0);
+    // POSIX has this one return the error number rather than set `errno`; a
+    // libc that returns -1 instead is covered by reading `errno` for the
+    // negative case.
+    const err: posix.E = if (rc < 0)
+        c.errno(@as(c_int, -1))
+    else
+        @enumFromInt(@as(u16, @truncate(@as(u32, @intCast(rc)))));
+    return switch (err) {
+        .NOTTY, .BADF, .INVAL => error.NotATerminal,
+        .RANGE => error.NameTooLong,
+        else => posix.unexpectedErrno(err),
+    };
 }
 
-/// `ttyname_r` returns the error number directly rather than through `errno`,
-/// and is not declared in `std.c`.
+/// Not declared in `std.c`. Returns the error number directly on the systems
+/// that follow POSIX here, and -1 with `errno` set on the ones that do not.
 extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 
 /// The ioctl request numbers this package issues.
