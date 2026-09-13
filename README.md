@@ -144,18 +144,22 @@ will not start on anything older.
 | `Child.spawn(io, allocator, options)` | Start it. The allocator is used for the call only; nothing is retained. |
 | `child.id`, `child.pgid` | The process id (POSIX) or handle (Windows), and the process group when `detach` asked for one. |
 | `child.stdin`, `child.stdout`, `child.stderr` | `std.Io.File`s for the pipes `spawn` created, owned by the `Child`. |
+| `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
 | `child.pty` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
 | `child.stdinFile()`, `child.stdoutFile()` | The child's input and output wherever they are: the pipes, or the master. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
 | `child.wait(io)` | Blocks; delegates to `std.process.Child.wait`. Read the child's output while you wait — see below. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
+| `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`. The process group of a detached child, the child alone otherwise. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
 
+| `conduit.succeeded(term)`, `exitCode(term)`, `signalName(term)` | What a `Term` says, without matching on it. `signalName` is POSIX in practice. |
+
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
-`stdio`, `detach`, `stderr_to`.
+`stdio`, `detach`, `stderr_to`, `path_search`.
 
 `stdio` is one of `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit` or `.ignore`.
@@ -179,6 +183,14 @@ is read, so a parent that waits first and reads afterwards waits forever.
 `environ.inherit(allocator, &.{ .{ .name = "TERM", .value = "xterm-256color" } })`
 is this process's environment with those changes, as a map the caller owns. A
 `null` value removes the variable rather than emptying it.
+`environ.only(allocator, …)` takes the same list and inherits nothing — the
+`env -i` shape, for a child that should not see an agent socket or a token.
+
+A child with no `PATH` is also a child a bare `argv[0]` cannot be found for, so
+`SpawnOptions.path_search` says which `PATH` resolves the program:
+`.child_environ` (the default, what a shell does), `.parent_environ` (what
+`std.process.spawn` does, and what a scrubbed environment usually wants) or
+`.none`.
 
 ### `spawnShell` — the user's shell on a pair
 
@@ -205,7 +217,10 @@ and the child's terminal turns back into signals. The module doc explains both.
 ### Terminal helpers
 
 `rawMode(handle)`, `restore(handle, saved)`, `winSize(handle)`, `isTty(handle)`,
-and — POSIX only — `setWinSize(handle, size)` and `ttyName(handle, buffer)`.
+and — POSIX only — `setWinSize(handle, size)`, `ttyName(handle, buffer)` and
+`foregroundGroup(handle)`, which is the question `isTty` cannot answer: whether
+anything is running *on* that terminal, and which process group the signals it
+generates would reach.
 They take a handle, not a `std.Io.File`, because none of these is one of the
 operations `std.Io` abstracts.
 
@@ -237,6 +252,21 @@ wants the output handle, because that is what has a size.
 - **Report which signal killed a Windows child.** There is no such notion
   there: a terminated process reports the exit code it was terminated with, and
   `killWait` uses 1. `Term.signal` is POSIX-only in practice.
+- **Wait for a pattern and answer it.** There is no `expect` here yet: reading
+  the master until some bytes appear, with a deadline, and then writing a reply.
+  `Proxy` moves bytes and `output` collects them; a conversation is neither.
+- **Set a child's credentials.** No `uid`, `gid`, `umask` or resource limit at
+  spawn, and no pre-exec callback to do it with — that callback runs where only
+  async-signal-safe calls are legal, and this package would rather not hand one
+  out. Named options for the first four are the shape it should take.
+- **Name each stream separately.** `stdio` is one choice for all three, plus
+  `stderr_to` for the common exception. Giving a child the pty's slave as its
+  input only, or a pipe on one stream and an open file on another, is not
+  expressible yet.
+- **Kill a process tree on Windows.** `detach` there is
+  `CREATE_NEW_PROCESS_GROUP`, which a console control event can address; what
+  it is not is a job object, so `killWait` ends the child and not what the child
+  started. On POSIX the process group does reach the tree.
 - **Thread safety.** One task at a time per `Child` or `Pty`, except
   `Pty.resize`, which is one call, `Reaper`, which exists precisely so a wait
   can be in flight while another task works, and `Child.output`, which reads two

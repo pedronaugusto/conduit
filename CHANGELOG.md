@@ -4,6 +4,64 @@ Each entry says what the release makes possible, so a reader has the reason and
 not only the diff. Versions follow [semantic versioning](https://semver.org);
 before 1.0 the minor is the breaking one.
 
+## 0.3.0
+
+A pass over the package asking, feature by feature, what a caller of a process
+and pseudo-terminal library expects to find here — and the small things that
+pass found missing.
+
+### Fixed
+
+- **Neither end of a pseudo-terminal was close-on-exec.** A program holding a
+  pair open while it spawned some unrelated child handed both ends to it, and a
+  grandchild that has no idea it is holding a terminal keeps that terminal open
+  — so a read of the master never reports end of file, even after the child the
+  pair was for has exited. It is the failure `Pty.closeSlave` exists to prevent
+  in the parent, arriving by a route the parent cannot see. The slave takes the
+  flag in its `open`; the master takes it in a second call, because
+  `posix_openpt` portably accepts nothing else.
+- **`.pipes` meant two different things on the two systems.** A stream that was
+  not piped inherited the parent's on POSIX and gave the child *nothing* on
+  Windows, because `STARTF_USESTDHANDLES` is all or nothing and a null slot is
+  not "leave it alone". It inherits on both now.
+
+### Added
+
+- `Child.closeStdin` is the half-close a child reading to end of file is waiting
+  for. Closing the pipe was possible before, in two steps that had to agree with
+  `deinit`.
+- `Child.waitTimeout` reaps the child if it ends in time and leaves it alone if
+  it does not — the wait that does not also kill, which is what a policy is
+  built on. It was already here behind `output`.
+- `succeeded`, `exitCode` and `signalName` answer what a `Term` says. `Term` is
+  the standard library's type rather than a parallel one, so nothing can be a
+  method on it. `signalName` is null on Windows, where a terminated process
+  reports the code it was terminated with.
+- `foregroundGroup` is the question `isTty` cannot answer: not whether a handle
+  is a terminal, but whether anything is running *on* it, and which process
+  group the signals it generates would reach. POSIX only, and a compile error on
+  Windows that says why. A terminal nobody has claimed is
+  `error.NoForegroundGroup`, worked out from whether a signal sent there would
+  reach anything rather than from each system's sentinel.
+- `environ.only` is the `env -i` shape: exactly the named variables and nothing
+  inherited, for a child that should not see an agent socket or a token.
+- `Child.SpawnOptions.path_search` says which `PATH` resolves a bare `argv[0]`:
+  the child's (the default, and what a shell does), the parent's (what
+  `std.process.spawn` does, and what a scrubbed environment usually wants), or
+  none. It was a silent choice before. On Windows the program is resolved inside
+  `CreateProcessW` from the child's environment, so the other two are
+  `error.Unsupported` there rather than accepted and not honoured.
+- `Pty.closeMaster` documents what it has always done and now has a test for:
+  dropping the last master descriptor hangs the terminal up, and the session
+  leader — the child, when `detach` and `.pty` made it one — gets `SIGHUP`.
+
+### Known gaps
+
+Named in README.md's "What this package does not do", each of them real and
+none of them small: an `expect` helper, per-stream stdio, per-child credentials
+and `setrlimit` at spawn, and Windows job objects so `detach` there kills a
+tree.
+
 ## 0.2.0
 
 Windows, through ConPTY, behind the same API — and the API changed shape to be
