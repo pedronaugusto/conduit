@@ -46,6 +46,9 @@ const script = if (is_windows) struct {
     const greeting = [_][]const u8{ "cmd.exe", "/c", "echo hello from the child& exit 3" };
     const echo_stdin = [_][]const u8{ "cmd.exe", "/v:on", "/c", "set /p line=& echo !line!" };
     const read_then_exit_7 = [_][]const u8{ "cmd.exe", "/c", "set /p line=& exit 7" };
+    // Reads standard input to end of file, rather than to the first line:
+    // what a half-close, and only a half-close, finishes.
+    const drain_then_exit_7 = [_][]const u8{ "cmd.exe", "/c", "sort > nul & exit 7" };
     const read_then_exit_5 = [_][]const u8{ "cmd.exe", "/c", "set /p line=& exit 5" };
     const say_on_terminal = [_][]const u8{ "cmd.exe", "/c", "echo on the terminal" };
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
@@ -57,6 +60,7 @@ const script = if (is_windows) struct {
     const greeting = [_][]const u8{ "/bin/sh", "-c", "printf 'hello from the child'; exit 3" };
     const echo_stdin = [_][]const u8{ "/bin/sh", "-c", "read line; printf '%s' \"$line\"" };
     const read_then_exit_7 = [_][]const u8{ "/bin/sh", "-c", "read line; exit 7" };
+    const drain_then_exit_7 = [_][]const u8{ "/bin/sh", "-c", "cat > /dev/null; exit 7" };
     const read_then_exit_5 = [_][]const u8{ "/bin/sh", "-c", "read line; exit 5" };
     const say_on_terminal = [_][]const u8{ "/bin/sh", "-c", "printf 'on the terminal\\n'" };
     const sleep_forever = [_][]const u8{ "/bin/sh", "-c", "sleep 100" };
@@ -181,8 +185,7 @@ test "a child on pipes can be written to" {
     errdefer _ = child.killWait(io, 0) catch {};
 
     try child.stdin.?.writeStreamingAll(io, "a line\n");
-    child.stdin.?.close(io);
-    child.stdin = null;
+    child.closeStdin(io);
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
@@ -235,8 +238,7 @@ test "tryWait is null while the child runs and a term once it has ended" {
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
 
     // Closing its standard input ends the read, and with it the shell.
-    child.stdin.?.close(io);
-    child.stdin = null;
+    child.closeStdin(io);
 
     try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
     try testing.expectEqual(Child.Term{ .exited = 7 }, (try child.tryWait()).?);
@@ -255,8 +257,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
 
     try testing.expectEqual(@as(?Child.Term, null), reaper.exit());
 
-    child.stdin.?.close(io);
-    child.stdin = null;
+    child.closeStdin(io);
 
     // The wait is on another task, so the result arrives when it arrives --
     // but not later than the budget every other wait in this file obeys.
@@ -282,8 +283,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     var writer = child.stdinWriter(io, &write_buffer).?;
     try writer.interface.writeAll("a line\n");
     try writer.interface.flush();
-    child.stdin.?.close(io);
-    child.stdin = null;
+    child.closeStdin(io);
 
     // The same file the reader would come from, so the two agree.
     try testing.expectEqual(child.stdout.?.handle, child.stdoutFile().?.handle);
@@ -291,6 +291,81 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "a line") != null);
+}
+
+test "closeStdin is the half-close a child reading to end of file waits for" {
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.drain_then_exit_7,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    // Written, but not finished: the child is still reading, because this
+    // process is still a writer.
+    try child.stdin.?.writeStreamingAll(io, "a line\n");
+    try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, 50));
+
+    child.closeStdin(io);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stdin);
+    // Idempotent, which is what makes it safe to pair with `deinit`.
+    child.closeStdin(io);
+
+    try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
+}
+
+test "waitTimeout gives up without ending the child" {
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .detach = true,
+    });
+    defer child.deinit(io);
+
+    // The difference from `killWait`: the child is still there afterwards, and
+    // deciding what to do about that is the caller's.
+    try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, 50));
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+
+    _ = try child.killWait(io, 0);
+    // And once it has ended, the same call answers at once.
+    try testing.expect((try child.waitTimeout(io, 0)) != null);
+}
+
+test "succeeded, exitCode and signalName say how a child ended" {
+    var ok_child = try Child.spawn(io, gpa, .{
+        .argv = &script.drain_then_exit_7,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer ok_child.deinit(io);
+    errdefer _ = ok_child.killWait(io, 0) catch {};
+    ok_child.closeStdin(io);
+
+    const term = try waitWithin(&ok_child);
+    try testing.expect(!conduit.succeeded(term));
+    try testing.expectEqual(@as(?u8, 7), conduit.exitCode(term));
+    try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(term));
+
+    try testing.expect(conduit.succeeded(.{ .exited = 0 }));
+    try testing.expect(!conduit.succeeded(.{ .exited = 1 }));
+
+    // A signal is not a status, and this is where the two systems part: only
+    // POSIX has a name to give.
+    var killed = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .detach = true,
+    });
+    defer killed.deinit(io);
+    const killed_term = try killed.killWait(io, 0);
+    if (is_windows) {
+        try testing.expectEqual(@as(?u8, 1), conduit.exitCode(killed_term));
+        try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(killed_term));
+    } else {
+        try testing.expect(!conduit.succeeded(killed_term));
+        try testing.expectEqual(@as(?u8, null), conduit.exitCode(killed_term));
+        try testing.expectEqualStrings("KILL", conduit.signalName(killed_term).?);
+    }
 }
 
 //======================================================================

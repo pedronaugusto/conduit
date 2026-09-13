@@ -110,6 +110,14 @@ pub const Proxy = @import("Proxy.zig");
 
 /// How a child process ended. An alias for `std.process.Child.Term`.
 pub const Term = Child.Term;
+/// Whether a `Term` is the one a program that did its job ends with: exited,
+/// with a status of zero.
+pub const succeeded = Child.succeeded;
+/// The status a child exited with, or `null` if a signal ended it instead.
+pub const exitCode = Child.exitCode;
+/// The name of the signal that ended a child, without the `SIG`. POSIX in
+/// practice: a terminated Windows process reports an exit code, not a signal.
+pub const signalName = Child.signalName;
 /// The dimensions of a terminal.
 pub const Size = tty.Size;
 /// The terminal attributes `rawMode` captured, to give back to `restore`.

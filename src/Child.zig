@@ -94,6 +94,47 @@ term: ?Term,
 /// process that is terminated reports the exit code it was terminated with.
 pub const Term = std.process.Child.Term;
 
+/// Whether the child ended the way a program that did its job ends: exited,
+/// with a status of zero.
+///
+/// Every other end is false, and they are not the same as each other: a
+/// non-zero status is the program saying something went wrong, and a signal is
+/// the program not getting to say anything. `exitCode` and `signalName` are
+/// for telling them apart.
+///
+/// This is the one question almost every caller has, and `Term` is a tagged
+/// union of the standard library's rather than a type of this package's own,
+/// so it cannot be a method on it. A function it is.
+pub fn succeeded(term: Term) bool {
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+/// The status the child exited with, or `null` if it did not exit -- which on
+/// POSIX means a signal ended it.
+pub fn exitCode(term: Term) ?u8 {
+    return switch (term) {
+        .exited => |code| code,
+        else => null,
+    };
+}
+
+/// The name of the signal that ended the child, without the `SIG`: `"INT"`,
+/// `"TERM"`, `"KILL"`. `null` if a signal did not end it.
+///
+/// Always `null` on Windows, where `Term.signal` is never produced: a
+/// terminated process there reports the exit code it was terminated with, and
+/// `killWait` uses 1. A portable program that wants to say why a child stopped
+/// has to accept that the Windows answer is a number.
+pub fn signalName(term: Term) ?[]const u8 {
+    return switch (term) {
+        .signal, .stopped => |signal| @tagName(signal),
+        else => null,
+    };
+}
+
 /// Which of the child's three standard streams get pipes.
 ///
 /// A stream that is not piped is inherited from the parent. Piping only what
@@ -285,6 +326,28 @@ pub fn deinit(child: *Child, io: std.Io) void {
     }
 }
 
+/// Closes the child's standard input, and nothing else.
+///
+/// This is half-close, and for a great many children it is the only way the
+/// conversation ends: a program that reads until end of file keeps reading
+/// while any writer remains, and the parent is one. Writing everything and
+/// then waiting, without this, is the shape of a parent and a child waiting
+/// for each other.
+///
+/// Only the pipe `.pipes` created is closed. A child on a pseudo-terminal has
+/// no separate input to close -- the master carries both directions, and
+/// closing it hangs the terminal up on the child rather than ending its input
+/// (`Pty.closeMaster` says what that does). The way to say "no more input" on
+/// a terminal is to write the end-of-file character the line discipline turns
+/// into one, which is `\x04` on a terminal in its default mode.
+///
+/// Idempotent, and safe after the child has been reaped.
+pub fn closeStdin(child: *Child, io: std.Io) void {
+    const f = child.stdin orelse return;
+    child.stdin = null;
+    f.close(io);
+}
+
 pub const WaitError = std.process.Child.WaitError;
 
 /// Blocks until the child ends, and returns how.
@@ -317,6 +380,36 @@ pub fn wait(child: *Child, io: std.Io) WaitError!Term {
     if (is_windows) child.handles_open = false;
     child.term = term;
     return term;
+}
+
+pub const WaitTimeoutError = TryWaitError || std.Io.Cancelable;
+
+/// Reaps the child if it ends within `timeout_ms`, and returns `null` if it
+/// does not.
+///
+/// Unlike `killWait` this does nothing to the child when the time runs out:
+/// it is still running, and still needs reaping. That is what makes it the
+/// call to build a policy on -- ask again, ask the user, then `killWait`.
+///
+/// **Read the child's output while you wait**, for the reasons `wait` gives:
+/// a child blocked on a pipe nobody drains will not exit within any timeout,
+/// and reporting that as "it took too long" would be this call believing its
+/// own deadlock.
+///
+/// The wait is polled rather than slept through in one piece, so a child that
+/// exits promptly is noticed promptly. The poll interval grows to a few
+/// milliseconds, which is the resolution of the timeout.
+pub fn waitTimeout(child: *Child, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
+    var waited_ms: u32 = 0;
+    var interval_ms: u32 = 1;
+    while (true) {
+        if (try child.tryWait()) |term| return term;
+        if (waited_ms >= timeout_ms) return null;
+        const step = @min(interval_ms, timeout_ms - waited_ms);
+        try std.Io.sleep(io, .fromMilliseconds(step), .awake);
+        waited_ms += step;
+        interval_ms = @min(interval_ms * 2, 4);
+    }
 }
 
 pub const TryWaitError = std.Io.UnexpectedError;
@@ -576,7 +669,7 @@ pub const OutputError = error{
     /// The `std.Io` implementation cannot run the readers alongside the wait.
     /// Two streams have to be read at once or a full pipe deadlocks the child.
     ConcurrencyUnavailable,
-} || WaitError || TryWaitError || KillError || std.Io.Cancelable;
+} || WaitError || TryWaitError || WaitTimeoutError || KillError || std.Io.Cancelable;
 
 /// Runs the child to the end and collects what it wrote.
 ///
@@ -621,7 +714,7 @@ pub fn output(
     var timed_out = false;
     const term = term: {
         const timeout_ms = options.timeout_ms orelse break :term try child.wait(io);
-        if (try waitWithin(child, io, timeout_ms)) |term| break :term term;
+        if (try child.waitTimeout(io, timeout_ms)) |term| break :term term;
         timed_out = true;
         break :term try child.killWait(io, options.grace_ms);
     };
@@ -703,20 +796,6 @@ fn collect(
             into.failed = true;
             return;
         };
-    }
-}
-
-/// `tryWait` on a deadline, without the kill `killWait` would do.
-fn waitWithin(child: *Child, io: std.Io, timeout_ms: u32) (TryWaitError || std.Io.Cancelable)!?Term {
-    var waited_ms: u32 = 0;
-    var interval_ms: u32 = 1;
-    while (true) {
-        if (try child.tryWait()) |term| return term;
-        if (waited_ms >= timeout_ms) return null;
-        const step = @min(interval_ms, timeout_ms - waited_ms);
-        try std.Io.sleep(io, .fromMilliseconds(step), .awake);
-        waited_ms += step;
-        interval_ms = @min(interval_ms * 2, 4);
     }
 }
 
