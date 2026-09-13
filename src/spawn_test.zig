@@ -514,6 +514,76 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     try testing.expectEqual(Child.Term{ .signal = .TERM }, try child.killWait(io, 500));
 }
 
+test "a detached pty child is the terminal's foreground process group, and an attached one is not" {
+    // POSIX only: the claim is about the group a line discipline sends its
+    // generated signals to, which is not a thing a console has.
+    if (is_windows) return error.SkipZigTest;
+
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
+        .stdio = .{ .pty = &pty },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    pty.closeSlave(io);
+
+    // `exec`, so the group the shell made is now the one `sleep` is in, and
+    // the child's process id is that group's id.
+    try testing.expectEqual(child.id, try conduit.foregroundGroup(pty.read.?));
+
+    // The other half of the claim, and the reason this is worth asking at all:
+    // a child on a pair without `detach` sees a terminal that has no
+    // foreground group, so nothing typed at the master will ever become a
+    // signal for it.
+    var quiet = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer quiet.close(io);
+
+    var attached = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
+        .stdio = .{ .pty = &quiet },
+        .detach = false,
+    });
+    defer attached.deinit(io);
+    defer _ = attached.killWait(io, 0) catch {};
+    quiet.closeSlave(io);
+
+    try testing.expectError(
+        error.NoForegroundGroup,
+        conduit.foregroundGroup(quiet.read.?),
+    );
+}
+
+test "closing the master hangs the terminal up, and a detached child gets SIGHUP" {
+    // POSIX only: there is no Windows counterpart. Closing a pseudoconsole is
+    // `ClosePseudoConsole`, which ends the client outright rather than
+    // signalling it, and that is `Pty.closeSlave`, not this.
+    if (is_windows) return error.SkipZigTest;
+
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
+        .stdio = .{ .pty = &pty },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    pty.closeSlave(io);
+
+    // Dropping the last master descriptor is the pseudo-terminal spelling of a
+    // modem dropping the line. The child is the session leader here -- that is
+    // what `detach` with `.pty` made it -- so the kernel sends it `SIGHUP`,
+    // whose default action it has not changed.
+    pty.closeMaster(io);
+
+    try testing.expectEqual(Child.Term{ .signal = .HUP }, try waitWithin(&child));
+}
+
 test "stderr_to sends the child's standard error to a file of the caller's" {
     // POSIX only, for want of a fixture rather than for want of the feature:
     // the sink here is the terminal end of a second pair, which is the one

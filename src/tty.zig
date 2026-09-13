@@ -295,6 +295,59 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
     };
 }
 
+pub const ForegroundGroupError = error{
+    /// The handle is not a terminal.
+    NotATerminal,
+    /// The terminal has no foreground process group: nothing has claimed it as
+    /// a controlling terminal, or the session that had it is gone.
+    NoForegroundGroup,
+} || UnexpectedError;
+
+/// The process group the terminal will send its generated signals to. POSIX
+/// only.
+///
+/// This is the question `isTty` cannot answer. A descriptor can be a terminal
+/// without being anybody's *controlling* terminal, and that is exactly the
+/// state of a pair whose child was spawned without `Child.SpawnOptions.detach`:
+/// the child sees a terminal, can read the window size, and will never receive
+/// the `SIGINT` a Ctrl-C on that terminal generates, because there is no
+/// foreground group for the line discipline to send it to. Asking the master
+/// end of a pair is how a program tells the two apart -- and, for a child that
+/// did claim the terminal, it is how a program learns which group is currently
+/// in the foreground, which is not always the child it started: a shell moves
+/// that group around as it runs jobs.
+///
+/// Referring to this declaration on Windows is a compile error: a console has
+/// no foreground process group, and the nearest thing -- which process gets a
+/// Ctrl-C -- is decided per process group by `CREATE_NEW_PROCESS_GROUP` rather
+/// than held by the console.
+pub const foregroundGroup = if (is_windows)
+    @compileError("foregroundGroup is POSIX-only: a console has no foreground process group")
+else
+    foregroundGroupPosix;
+
+fn foregroundGroupPosix(handle: Handle) ForegroundGroupError!posix.pid_t {
+    const group = tcgetpgrp(handle);
+    if (group < 0) return switch (c.errno(@as(c_int, -1))) {
+        .NOTTY => error.NoForegroundGroup,
+        .BADF, .INVAL => error.NotATerminal,
+        else => |err| posix.unexpectedErrno(err),
+    };
+
+    // A terminal nobody has claimed does not report that as a failure, and the
+    // two systems do not report the same thing: Linux answers zero, Darwin a
+    // sentinel above the range a process can be given. Rather than know that
+    // number, the answer is tested for what the caller actually wants to know
+    // -- whether a signal sent here would reach anything. A group that exists
+    // but may not be signalled by this process answers `EPERM`, which is still
+    // an existing group.
+    if (group <= 0) return error.NoForegroundGroup;
+    if (c.kill(-group, @enumFromInt(0)) != 0 and c.errno(@as(c_int, -1)) == .SRCH) {
+        return error.NoForegroundGroup;
+    }
+    return group;
+}
+
 //======================================================================
 // Windows.
 //======================================================================
@@ -362,6 +415,11 @@ fn termiosError(err: TermiosError) RawModeError {
 /// Not declared in `std.c`. Returns the error number directly on the systems
 /// that follow POSIX here, and -1 with `errno` set on the ones that do not.
 extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
+
+/// `TIOCGPGRP` by its POSIX name. Not declared in `std.c` either, and the
+/// function is the portable spelling: the ioctl request number differs between
+/// Linux and Darwin the way the window-size ones below do.
+extern "c" fn tcgetpgrp(fd: posix.fd_t) posix.pid_t;
 
 /// The ioctl request numbers this package issues.
 ///

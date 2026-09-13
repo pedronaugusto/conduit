@@ -152,6 +152,14 @@ else
 pub const SetWinSizeError = tty.SetWinSizeError;
 /// Whether a handle is a terminal.
 pub const isTty = tty.isTty;
+/// The process group a terminal sends its generated signals to. POSIX only,
+/// and the way to tell a child that merely *sees* a terminal from one that is
+/// running on it.
+pub const foregroundGroup = if (is_windows)
+    @compileError("foregroundGroup is POSIX-only: a console has no foreground process group")
+else
+    tty.foregroundGroup;
+pub const ForegroundGroupError = tty.ForegroundGroupError;
 /// The `/dev` pathname of a terminal descriptor. POSIX only.
 pub const ttyName = if (is_windows)
     @compileError("ttyName is POSIX-only: a Windows console has no pathname")
