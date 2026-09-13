@@ -58,9 +58,21 @@ jobs:
       - name: Examples
         run: zig build examples
 
-  # README.md's Usage block is a region of examples/usage.zig, which the job
-  # above runs. This is what keeps the snippet a reader copies the same text as
-  # the code CI executes.
+  # The same suite on musl, which is not what ubuntu-latest gives. `ptsname_r`
+  # reports failure differently on glibc and on musl, and this package reads
+  # `errno` on both rather than trusting the return value -- a claim worth a
+  # container to hold honest. ci/linux.sh is the same script a developer runs
+  # from a Mac.
+  linux-musl:
+    name: test (alpine, musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/linux.sh --musl
+
+  # README.md's Usage block is a region of examples/usage.zig, which the test
+  # job builds and runs. This is what keeps the snippet a reader copies the
+  # same text as the code CI executes.
   docs:
     name: documented usage
     runs-on: ubuntu-latest
