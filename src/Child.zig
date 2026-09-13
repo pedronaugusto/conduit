@@ -170,6 +170,12 @@ pub const SpawnOptions = struct {
     /// Send the child's standard error to this file, whatever `stdio` says
     /// about the other two streams. The file is borrowed: `deinit` does not
     /// close it, and it must stay open until `spawn` returns.
+    ///
+    /// Not available together with `.pty` on Windows, where it is
+    /// `error.Unsupported`: a pseudoconsole is attached through an attribute
+    /// list, and Windows documents that as incompatible with naming the
+    /// child's standard handles. On POSIX the two compose, because there the
+    /// terminal is a descriptor like any other.
     stderr_to: ?std.Io.File = null,
 };
 
@@ -220,6 +226,10 @@ pub const SpawnError = error{
     ControllingTerminalFailed,
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
+    /// The combination asked for has no meaning on this system. Windows only,
+    /// and so far only `stderr_to` together with `.pty`; the option that
+    /// cannot be honoured says so.
+    Unsupported,
 } || std.Io.UnexpectedError;
 
 /// Starts `options.argv` as a child process.
@@ -597,12 +607,16 @@ pub fn output(
     // drain below is for.
     defer group.cancel(io);
 
+    // A stream this process does not hold -- an inherited one, or the standard
+    // error of a child on a pseudo-terminal, which has none -- is finished
+    // before it starts. Saying so here is what keeps the drain below from
+    // waiting out its budget and then calling an empty stream truncated.
     if (child.stdoutFile()) |f| {
         try group.concurrent(io, collect, .{ io, allocator, f, options.max_bytes, &out });
-    }
+    } else out.done.store(true, .release);
     if (child.stderr) |f| {
         try group.concurrent(io, collect, .{ io, allocator, f, options.max_bytes, &err });
-    }
+    } else err.done.store(true, .release);
 
     var timed_out = false;
     const term = term: {

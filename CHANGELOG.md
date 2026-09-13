@@ -67,6 +67,9 @@ honest about it. Requires Zig 0.16.0.
 - `.bat` and `.cmd` are refused with `error.UnsupportedBatchFile` rather than
   handed to `cmd.exe`, whose re-parsing makes any argument serialisation
   unsafe.
+- `stderr_to` together with `.pty` is `error.Unsupported`: a pseudoconsole is
+  attached through an attribute list, which Windows documents as incompatible
+  with naming the child's standard handles. On POSIX the two compose.
 
 ## 0.1.0
 

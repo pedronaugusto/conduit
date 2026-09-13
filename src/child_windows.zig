@@ -24,6 +24,12 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     if (isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
 
+    // A pseudoconsole is attached through the attribute list, and Windows
+    // documents `STARTF_USESTDHANDLES` as unsupported alongside it -- so there
+    // is nowhere to put the caller's file. Refusing beats accepting the option
+    // and quietly dropping it.
+    if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
+
     // `CreateProcessW` writes to the command line it is given, so it must be a
     // mutable buffer. `lpApplicationName` is left null on purpose: the system
     // then resolves the program from the command line, searching the
