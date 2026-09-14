@@ -6,24 +6,37 @@ before 1.0 the minor is the breaking one.
 
 ## Unreleased
 
+## 0.3.2
+
+Three Windows faults that 0.3.1 shipped, every one of them a wait with no end.
+
 ### Fixed
 
-- **`spawnShell` could overrun a buffer reading a long `COMSPEC` or `SHELL`.**
-  The value was read into an array of WTF-16 units and converted into an array
-  of the same length in bytes, and a WTF-16 unit is worth up to three bytes of
-  WTF-8 — so a value past a third of the buffer wrote past the end of it. Both
-  are sized for the same number of units now, the byte one three times over,
-  and a value longer than that is declined rather than truncated. A pathname
-  that long is nobody's shell, but the arithmetic was wrong either way.
-- **Stopping a reader on Windows worked about two times in three.**
-  `CancelIoEx` reaches only the reads that are pending when it is called, and a
-  reader spends part of its time between reads with the bytes it just got — so
-  asking once left the task to start another read that nothing would end, since
-  a pseudoconsole's output pipe has a writer for as long as the console does.
-  `Expect.deinit` asks again until the task says it has stopped, and tells it
-  not to start another read in the meantime. The suite's own reader does the
-  same. This is what hung `spawnShell starts the user's shell on a pair` about
-  one Windows run in two, with nothing to say for itself.
+- **`Pty.close` could never return on Windows.** `ClosePseudoConsole` waits for
+  the console host to go, and the host does not go until it has flushed what
+  the client last wrote into a pipe this process holds the reading end of — so
+  with nothing reading, the host waits on a write that cannot complete and the
+  caller waits on the host. `close` now reads the master itself while the
+  console closes: a drain started before and joined after, ended by the host's
+  own exit. The terminal end goes first on both systems again, and a caller no
+  longer has to keep a reader alive across its own teardown.
+- **`Expect.deinit` could never return on Windows**, after a child on a
+  pseudoconsole had exited on its own. The task is inside a read, and that read
+  ends when the far end finishes, when the handle goes away, or when the
+  operating system is told to abandon it — and for a pseudoconsole none of the
+  first two happen while the console host holds the pipe. The asking was
+  `CancelIoEx`, which reaches only the reads pending at the moment it is
+  called, so it landed when the task was inside one and missed when the task
+  was between two, leaving it to start another read that nothing would end. It
+  is asked again now until the task says it has stopped, and a flag tells a
+  reader between reads not to start another.
+- **`spawnShell` wrote past a buffer for a long `COMSPEC` or `SHELL`.** The
+  value was read into an array of WTF-16 units and then converted into an array
+  of the same length in bytes, and one unit is worth up to three bytes of
+  WTF-8: a value longer than a third of the path limit overran the second
+  array. Both are sized in units now, the byte one three times over, and a
+  value longer than that is declined rather than truncated — the fall-back
+  shell is used instead.
 
 ## 0.3.1
 
