@@ -232,9 +232,14 @@ fn slaveFilePosix(pty: Pty) std.Io.File {
 ///
 /// So `close` reads the master itself: a drain that throws away what it gets,
 /// started before the console is closed and joined after, which the host's own
-/// exit ends by closing its end of the pipe. A caller with a reader of its own
-/// still on the master should stop it before calling this, or the two will
-/// divide the last of the output between them.
+/// exit ends by closing its end of the pipe.
+///
+/// A caller may leave a reader of its own running across this, and that is the
+/// easier order: closing the pair is what ends the stream, so the caller's
+/// read comes back on its own afterwards with nothing to cancel. The two
+/// readers divide the last of the output between them, which matters only to a
+/// caller that wanted those final bytes — and one that does should read until
+/// it has them before calling this.
 pub fn close(pty: *Pty, io: std.Io) void {
     if (is_windows) return pty.closeWindows(io);
     pty.closeSlave(io);

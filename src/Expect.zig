@@ -78,6 +78,11 @@ consumed: usize,
 ended: bool,
 /// The reading task could not read, for a reason other than the end.
 failed: bool,
+/// The reading task has stopped, for either of those reasons. Atomic and not
+/// under `mutex`: `deinit` waits on it while the task is inside a read, and a
+/// wait that took a lock the task also takes would be a wait on the task
+/// rather than on the read.
+finished: std.atomic.Value(bool),
 /// Guards the four fields above: the reading task appends to them, and the
 /// caller's task consumes from them.
 mutex: std.Io.Mutex,
@@ -123,6 +128,7 @@ pub fn init(master: Pty.Master, buffer: []u8) Expect {
         .arrived = .unset,
         .group = .init,
         .stopping = .init(false),
+        .finished = .init(false),
     };
 }
 
@@ -151,11 +157,16 @@ pub fn start(expect: *Expect, io: std.Io) StartError!void {
 /// reaches only what is pending when it is called, so it is asked again until
 /// the task says it has stopped. A reader between reads is told by `stopping`
 /// not to start another.
+///
+/// **`Pty.close` first is the order that needs none of that.** Closing the
+/// pair ends the stream, and a read of a stream that has ended comes back on
+/// its own; the asking above is for a caller who lets the `Expect` go while
+/// the pair stays open.
 pub fn deinit(expect: *Expect, io: std.Io) void {
     expect.stopping.store(true, .release);
     if (is_windows) {
         var waited_ms: u32 = 0;
-        while (waited_ms < stop_budget_ms and !expect.stopped(io)) : (waited_ms += 2) {
+        while (waited_ms < stop_budget_ms and !expect.finished.load(.acquire)) : (waited_ms += 2) {
             _ = win32.CancelIoEx(expect.master.read.handle, null);
             std.Io.sleep(io, .fromMilliseconds(2), .awake) catch break;
         }
@@ -164,15 +175,9 @@ pub fn deinit(expect: *Expect, io: std.Io) void {
 }
 
 /// How long `deinit` will keep asking before it joins anyway. Generous: the
-/// first ask is usually the one that lands.
+/// first ask is usually the one that lands, and closing the pair first means
+/// there is nothing to ask for at all.
 const stop_budget_ms: u32 = 2000;
-
-/// Whether the reading task has stopped, for `deinit`'s wait.
-fn stopped(expect: *Expect, io: std.Io) bool {
-    expect.mutex.lockUncancelable(io);
-    defer expect.mutex.unlock(io);
-    return expect.ended or expect.failed;
-}
 
 pub const WaitError = error{
     /// The deadline passed with the pattern still not there. The bytes that
@@ -377,6 +382,9 @@ fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
 }
 
 /// Records why the reading stopped, and wakes whoever is waiting.
+///
+/// `finished` is stored last and outside the lock, so `deinit` can see that
+/// the task has gone without taking anything the task holds.
 fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
     {
         expect.mutex.lockUncancelable(io);
@@ -386,6 +394,7 @@ fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
             .failed => expect.failed = true,
         }
     }
+    expect.finished.store(true, .release);
     expect.arrived.set(io);
 }
 
