@@ -220,7 +220,7 @@ const Failure = extern struct {
     stage: Stage,
     errno: u32,
 
-    const Stage = enum(u32) { detach, controlling_terminal, descriptors, chdir, exec };
+    const Stage = enum(u32) { detach, controlling_terminal, descriptors, credentials, chdir, exec };
 
     fn toError(record: Failure) SpawnError {
         const err: posix.E = @enumFromInt(record.errno);
@@ -232,6 +232,7 @@ const Failure = extern struct {
                 .NFILE => error.SystemFdQuotaExceeded,
                 else => posix.unexpectedErrno(err),
             },
+            .credentials => error.CredentialsFailed,
             .chdir => switch (err) {
                 .ACCES => error.AccessDenied,
                 .NOENT, .NOTDIR => error.BadWorkingDirectory,
@@ -332,6 +333,20 @@ fn childMain(
             if (pty.slave.? > 2) _ = c.close(pty.slave.?);
         },
         else => {},
+    }
+
+    // Last of the things that change what this process is, and before the
+    // `chdir` below, so a working directory the new user may not enter is an
+    // error rather than a child running somewhere it could not have reached.
+    // `umask` returns the old mask and cannot fail.
+    if (options.credentials.umask) |mask| _ = c.umask(mask);
+    // The group before the user: once the user has been lowered there may be
+    // no privilege left to change the group with.
+    if (options.credentials.gid) |gid| {
+        if (c.setgid(gid) != 0) bail(report, .credentials);
+    }
+    if (options.credentials.uid) |uid| {
+        if (c.setuid(uid) != 0) bail(report, .credentials);
     }
 
     if (cwd) |dir| if (c.chdir(dir) != 0) bail(report, .chdir);

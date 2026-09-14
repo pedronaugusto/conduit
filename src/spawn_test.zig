@@ -807,6 +807,82 @@ test "the older stdio shapes are the per-stream ones under another name" {
 }
 
 //======================================================================
+// Credentials.
+//======================================================================
+
+test "a child's file-creation mask is the one it was given" {
+    // POSIX only: a Windows process has no umask, and `credentials` there is
+    // `error.Unsupported`, which the test below this one checks.
+    if (is_windows) return error.SkipZigTest;
+
+    // `umask` with no argument prints the mask, and 0077 is not a default
+    // anywhere, so seeing it means this package set it and not the shell.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "umask" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .credentials = .{ .umask = 0o077 },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "77") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+}
+
+test "a uid and gid this process may take are taken, and one it may not is an error" {
+    if (is_windows) return error.SkipZigTest;
+
+    // The ids this process already has. Changing to them is allowed without
+    // privilege, so what this proves is that the calls are made and that the
+    // child really runs under what they set -- which is the part a caller
+    // cannot check any other way.
+    const uid = std.c.getuid();
+    const gid = std.c.getgid();
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "id -u; id -g" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .credentials = .{ .uid = uid, .gid = gid },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+
+    var wanted: [64]u8 = undefined;
+    try testing.expect(std.mem.indexOf(
+        u8,
+        result.stdout,
+        try std.fmt.bufPrint(&wanted, "{d}", .{uid}),
+    ) != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+
+    // And a change this process is not allowed to make is an error from
+    // `spawn`, not a child that started anyway with the credentials it had.
+    // Only asked where it is true: a suite running as root may become anyone.
+    if (uid != 0) {
+        try testing.expectError(error.CredentialsFailed, Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "exit 0" },
+            .stdio = .ignore,
+            .credentials = .{ .uid = 0 },
+        }));
+    }
+}
+
+test "credentials are refused on Windows rather than quietly not applied" {
+    if (!is_windows) return error.SkipZigTest;
+    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .credentials = .{ .umask = 0o077 },
+    }));
+}
+
+//======================================================================
 // Environment, working directory, and failure.
 //======================================================================
 

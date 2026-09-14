@@ -18,6 +18,18 @@ before 1.0 the minor is the breaking one.
   as well — no descriptor at that number at all, which is the one of the five a
   caller should think twice about and whose doc comment says why. The five
   names are the standard library's.
+- `Child.SpawnOptions.credentials` sets a child's `uid`, `gid` and `umask`.
+  They can only be set between `fork` and `execve` — this process changing its
+  own user before a spawn would change it for everything else this process goes
+  on to do — so a library that forks is the only place they can be offered, and
+  this one forks. The group is set before the user, because after the user has
+  been lowered there may be no privilege left to change the group with. A
+  change the process is not allowed to make is `error.CredentialsFailed` from
+  `spawn` rather than a child that started anyway. POSIX only:
+  `error.Unsupported` on Windows, where a process runs as the token it was
+  created with. Supplementary groups are still the parent's, and the doc
+  comment says so: `setgroups` needs the group database, which a fork child may
+  not read.
 - `Child.Stdio.perStream` is what the older shapes lower to, so `.inherit`,
   `.ignore` and `.pipes` are now definitions rather than separate code paths.
 - `Expect` is the conversation `Proxy` and `Child.output` are not: `until` waits

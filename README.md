@@ -159,7 +159,7 @@ will not start on anything older.
 | `conduit.succeeded(term)`, `exitCode(term)`, `signalName(term)` | What a `Term` says, without matching on it. `signalName` is POSIX in practice. |
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
-`stdio`, `detach`, `stderr_to`, `path_search`.
+`stdio`, `detach`, `stderr_to`, `path_search`, `credentials`.
 
 `stdio` is one of `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` — each
@@ -172,6 +172,12 @@ group. On POSIX with `.pty` it means `setsid` plus `TIOCSCTTY`, so the pair
 becomes the child's controlling terminal; otherwise `setpgid(0, 0)`. On Windows
 it is `CREATE_NEW_PROCESS_GROUP`, which means only half as much — the doc
 comment says which half.
+
+`credentials` is `uid`, `gid` and `umask`, set in the fork child between the
+`fork` and the `execve` because that is the only place they can be set without
+changing this process too. POSIX only: anything set there is
+`error.Unsupported` on Windows. Supplementary groups are the parent's —
+`setgroups` needs the group database, which a fork child may not read.
 
 `Term` is `std.process.Child.Term`, not a parallel type of this package's own.
 

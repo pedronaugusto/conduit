@@ -298,6 +298,47 @@ pub const SpawnOptions = struct {
     /// child's standard handles. On POSIX the two compose, because there the
     /// terminal is a descriptor like any other.
     stderr_to: ?std.Io.File = null,
+    /// The user, group and file-creation mask the child runs with. POSIX
+    /// only: anything set here is `error.Unsupported` on Windows.
+    credentials: Credentials = .{},
+};
+
+/// The user, group and file-creation mask a child starts with. POSIX only.
+///
+/// A field left `null` is not changed, and the child keeps what it inherited.
+/// A `Credentials` with anything set is `error.Unsupported` on Windows, where
+/// a process runs as the token it is created with and changing that is a
+/// different operation with a different shape.
+///
+/// These can only be set between `fork` and `execve`, which is the reason they
+/// are options here rather than something a caller could do around the call:
+/// this process changing its own user before spawning would change it for
+/// everything else this process goes on to do.
+///
+/// **Supplementary groups are the parent's.** Nothing here calls `setgroups`:
+/// deciding which groups a user should have means reading the group database,
+/// which is not something a fork child may do. So `uid` alone lowers a child's
+/// user without lowering the groups that user was in here, and a caller who
+/// needs those dropped too should start the child through a program that does
+/// it — `su`, or one of their own.
+pub const Credentials = struct {
+    /// The user the child runs as. `setuid` in the fork child.
+    uid: ?posix.uid_t = null,
+    /// The child's primary group. `setgid` in the fork child, before `setuid`:
+    /// after the user has been lowered there may be no privilege left to
+    /// change the group with.
+    gid: ?posix.gid_t = null,
+    /// The mode bits taken away from files the child creates. `umask` in the
+    /// fork child, which cannot fail.
+    umask: ?posix.mode_t = null,
+
+    /// Whether any of the three asks for a change. `spawn` does nothing at all
+    /// when this is false, which is what keeps the default free.
+    pub fn any(credentials: Credentials) bool {
+        return credentials.uid != null or
+            credentials.gid != null or
+            credentials.umask != null;
+    }
 };
 
 /// Where the `PATH` that resolves a bare `argv[0]` comes from.
@@ -366,11 +407,16 @@ pub const SpawnError = error{
     /// terminal, usually because it is already the controlling terminal of
     /// another session.
     ControllingTerminalFailed,
+    /// POSIX: `credentials` could not be applied. Almost always because this
+    /// process is not privileged enough to become that user or group; the
+    /// child did not start.
+    CredentialsFailed,
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
     /// The combination asked for has no meaning on this system: `stderr_to`
-    /// together with `.pty` on Windows, or a `path_search` other than
-    /// `.child_environ` there. The option that cannot be honoured says so.
+    /// together with `.pty` on Windows, a `path_search` other than
+    /// `.child_environ` there, or `credentials` anywhere on Windows. The
+    /// option that cannot be honoured says so.
     Unsupported,
 } || std.Io.UnexpectedError;
 

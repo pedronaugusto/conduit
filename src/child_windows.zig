@@ -30,6 +30,13 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // and quietly dropping it.
     if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
 
+    // A Windows process runs as the token it was created with. Changing the
+    // user, the group or the file-creation mask are not steps between a fork
+    // and an exec there -- there is no fork -- and there is nothing here that
+    // could honour the option, so it is refused rather than accepted and
+    // quietly not done.
+    if (options.credentials.any()) return error.Unsupported;
+
     // The program is resolved by `CreateProcessW`, from the environment the
     // child is being given -- see the note on `lpApplicationName` below. That
     // is exactly `.child_environ`, and there is no argument to ask it for
