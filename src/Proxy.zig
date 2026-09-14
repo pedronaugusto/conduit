@@ -229,6 +229,7 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
 
 const testing = std.testing;
 const Child = @import("Child.zig");
+const Watchdog = @import("test_support.zig").Watchdog;
 
 /// `run` under a `std.Io.Group`, which accepts only `error.Canceled`.
 fn runQuietly(io: std.Io, options: Options) std.Io.Cancelable!void {
@@ -263,6 +264,9 @@ test "bytes written to one terminal reach the program on the other, and back" {
     if (is_windows) return error.SkipZigTest;
 
     const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
     const gpa = testing.allocator;
 
     // The terminal the "user" is at. Raw, so nothing it is sent is echoed
@@ -311,6 +315,9 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     if (is_windows) return error.SkipZigTest;
 
     const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
     const gpa = testing.allocator;
 
     // The user's terminal, raw: that is what turns Ctrl-C into a byte instead
@@ -359,6 +366,9 @@ test "the window size is forwarded onto the pair" {
     if (is_windows) return error.SkipZigTest;
 
     const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
 
     // Two pairs again: one stands in for the program's own terminal, whose
     // size the forwarder reads, and one is the child's.

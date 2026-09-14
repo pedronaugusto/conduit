@@ -24,6 +24,10 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # A suite that hangs reports nothing and sits until the run is killed by
+    # hand. Every job here finishes in a couple of minutes; this is the bound
+    # that turns a hang into a failure.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -66,6 +70,7 @@ jobs:
   linux-musl:
     name: test (alpine, musl)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: ci/linux.sh --musl
@@ -76,6 +81,7 @@ jobs:
   docs:
     name: documented usage
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: ci/readme_usage.sh --check
@@ -86,6 +92,7 @@ jobs:
   cross-compile:
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

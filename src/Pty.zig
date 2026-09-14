@@ -142,7 +142,10 @@ pub const ResizeError = error{
 /// signalled, though it still reads the new size if it asks.
 ///
 /// On Windows the pseudoconsole is resized and the attached client learns
-/// through the console API it already uses; there is no signal to miss.
+/// through the console API it already uses; there is no signal to miss. The
+/// console host repaints its viewport into the output pipe as part of it, so
+/// **a program that has stopped reading the master can block here**: a resize
+/// is not a small write, and a pipe nobody drains fills up.
 ///
 /// Safe to call from another task while the master is being read or written.
 /// That is what makes window-size forwarding possible at all — see `Proxy`.
@@ -213,10 +216,24 @@ fn slaveFilePosix(pty: Pty) std.Io.File {
 /// Closes whichever ends are still open.
 ///
 /// Idempotent, and correct after `closeSlave` or `closeMaster`: a closed end
-/// is `null` and is not closed twice. The terminal end goes first on both
-/// platforms, which is the order that lets a reader of the master see the
-/// stream finish.
+/// is `null` and is not closed twice.
+///
+/// The two systems want opposite orders, for opposite reasons. On POSIX the
+/// terminal end goes first, which is what lets a reader of the master see the
+/// stream finish. On Windows the master ends go first: `ClosePseudoConsole`
+/// waits for the console host to flush what the client last wrote, and the
+/// host writes it into a pipe whose other end this process is holding — so a
+/// caller who has stopped reading would wait forever. Dropping that end first
+/// makes the host's write fail rather than block, and it goes.
+///
+/// A program that wants the last of the output rather than the quickest exit
+/// should read the master until it has what it wants and then call this.
 pub fn close(pty: *Pty, io: std.Io) void {
+    if (is_windows) {
+        pty.closeMaster(io);
+        pty.closeSlave(io);
+        return;
+    }
     pty.closeSlave(io);
     pty.closeMaster(io);
 }
@@ -234,8 +251,14 @@ pub fn close(pty: *Pty, io: std.Io) void {
 /// On Windows the pseudoconsole is not a descriptor the child inherited a copy
 /// of — it is the console, and `ClosePseudoConsole` ends the client attached
 /// to it. So this is called when the program is finished with the child, not
-/// straight after spawning it. The call can take a moment: the console drains
-/// what the client last wrote before it goes.
+/// straight after spawning it.
+///
+/// **On Windows, keep reading the master while this runs.** The call does not
+/// return until the console host has flushed what the client last wrote, and
+/// it flushes into a pipe this process holds the reading end of: a program
+/// that has stopped reading waits for a write that cannot complete. `close`
+/// avoids that by dropping the master first; a program calling this on its own
+/// has to either still be reading or accept that it may wait.
 pub fn closeSlave(pty: *Pty, io: std.Io) void {
     const slave = pty.slave orelse return;
     pty.slave = null;
@@ -363,6 +386,15 @@ extern "c" fn ptsname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 // Windows.
 //======================================================================
 
+/// How much the console host may get ahead of a program reading the master.
+///
+/// A hint, not a limit: the system rounds it and a write larger than it still
+/// succeeds in pieces. The default is a few kilobytes, which is less than one
+/// repaint of a large window — and a console host blocked on a full pipe
+/// blocks `ResizePseudoConsole` and `ClosePseudoConsole` with it. This is
+/// enough for a repaint of a window far larger than anyone runs.
+const pipe_bytes: win32.DWORD = 256 * 1024;
+
 fn openWindows(options: OpenOptions) OpenError!Pty {
     // Two pipes. Each has an end for the console and an end for this program,
     // and neither end is inheritable: the console duplicates what it is given,
@@ -370,13 +402,13 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
     // through an inherited handle.
     var input_read: win32.HANDLE = undefined;
     var input_write: win32.HANDLE = undefined;
-    if (win32.CreatePipe(&input_read, &input_write, null, 0) == .FALSE) return lastError();
+    if (win32.CreatePipe(&input_read, &input_write, null, pipe_bytes) == .FALSE) return lastError();
     errdefer windows.CloseHandle(input_write);
     errdefer windows.CloseHandle(input_read);
 
     var output_read: win32.HANDLE = undefined;
     var output_write: win32.HANDLE = undefined;
-    if (win32.CreatePipe(&output_read, &output_write, null, 0) == .FALSE) return lastError();
+    if (win32.CreatePipe(&output_read, &output_write, null, pipe_bytes) == .FALSE) return lastError();
     errdefer windows.CloseHandle(output_write);
     errdefer windows.CloseHandle(output_read);
 
@@ -425,11 +457,51 @@ fn lastError() OpenError {
 //======================================================================
 
 const testing = std.testing;
+const Watchdog = @import("test_support.zig").Watchdog;
+
+/// Reads the master and throws it away, on a task of its own.
+///
+/// A pseudoconsole's host writes into a pipe this process holds the other end
+/// of, and a resize is a repaint. With nobody reading, a large enough one
+/// fills the pipe and the host stops there — taking `ResizePseudoConsole` and
+/// `ClosePseudoConsole` with it. A program that resizes a pair it is not
+/// reading is making a mistake; a test that does it hangs, so this is here.
+const Drain = struct {
+    group: std.Io.Group = .init,
+
+    fn start(drain: *Drain, io: std.Io, f: std.Io.File) !void {
+        try drain.group.concurrent(io, run, .{ io, f });
+    }
+
+    fn deinit(drain: *Drain, io: std.Io) void {
+        drain.group.cancel(io);
+    }
+
+    fn run(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {
+        var buffer: [4096]u8 = undefined;
+        while (true) {
+            const n = f.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return,
+            };
+            if (n == 0) return;
+        }
+    }
+};
 
 test "open gives a pair at the requested size, and resize changes it" {
     const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
     var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
+    // Registered before the close below, so it runs after it: the master is
+    // still being read while the pair goes away.
+    var drain: Drain = .{};
+    defer drain.deinit(io);
     defer pty.close(io);
+    try drain.start(io, pty.readFile());
 
     const opened = try pty.size();
     try testing.expectEqual(@as(u16, 30), opened.rows);
@@ -443,7 +515,14 @@ test "open gives a pair at the requested size, and resize changes it" {
 
 test "close is idempotent and correct after closing one end" {
     const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
     var pty = try Pty.open(.{});
+    // The master ends go first here, which is what makes the terminal end safe
+    // to close on Windows with nothing reading: see `close`.
+    pty.closeMaster(io);
     pty.closeSlave(io);
     try testing.expectEqual(@as(?Slave, null), pty.slave);
     pty.close(io);

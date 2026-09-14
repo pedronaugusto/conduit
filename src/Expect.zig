@@ -399,6 +399,7 @@ fn compact(expect: *Expect, io: std.Io) void {
 const builtin = @import("builtin");
 const testing = std.testing;
 const Child = @import("Child.zig");
+const Watchdog = @import("test_support.zig").Watchdog;
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -408,6 +409,9 @@ const budget_ms = 5000;
 test "a conversation over pipes: wait for what the child echoes, then answer" {
     const io = testing.io;
     const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
     // Both systems. The shell that reads a line and echoes it is the smallest
     // program that can be talked to, and `Child.expect` finds the two pipes.
     const argv: []const []const u8 = if (is_windows)
@@ -438,6 +442,9 @@ test "a conversation over pipes: wait for what the child echoes, then answer" {
 test "a conversation on a pseudo-terminal, one prompt at a time" {
     const io = testing.io;
     const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
     // POSIX only for the fixture, not for the feature: this needs a shell that
     // prompts, reads and prompts again, which is three words of `sh` and no
     // words of `cmd.exe`.
@@ -481,6 +488,9 @@ test "bytes waits for a count, and what follows stays pending" {
     const io = testing.io;
     const gpa = testing.allocator;
     if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
 
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer pty.close(io);
@@ -513,6 +523,9 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
     const io = testing.io;
     const gpa = testing.allocator;
     if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
 
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer pty.close(io);
@@ -540,6 +553,9 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
 test "a buffer that fills says so, and discard makes room" {
     const io = testing.io;
     const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
     // POSIX only for the fixture, not for the feature: this needs a child that
     // writes an exact number of bytes and then waits, which `printf` says in
     // one word and `cmd.exe` cannot say at all.

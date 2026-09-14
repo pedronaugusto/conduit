@@ -6,6 +6,21 @@ before 1.0 the minor is the breaking one.
 
 ## Unreleased
 
+### Fixed
+
+- **A pseudoconsole nobody is reading could block the program that owns it.**
+  The console host writes into a pipe this process holds the reading end of,
+  and both `ResizePseudoConsole` and `ClosePseudoConsole` wait for the host: a
+  resize repaints the viewport, which for a window of any size is more than the
+  few kilobytes a pipe holds by default, so a program that had stopped reading
+  the master stopped there too, with no deadline anywhere to end it. The pipes
+  are now created with room for a repaint of a window far larger than anyone
+  runs, `Pty.close` drops the master ends before the terminal end on Windows so
+  the host's last write fails rather than blocks, and `Pty.resize` and
+  `Pty.closeSlave` say in their doc comments that the master has to be read.
+  The whole suite ran to the end on macOS, Linux and Alpine and hung on
+  Windows; this is what it hung on.
+
 ### Added
 
 - `Child.SpawnOptions.stdio` has a `.streams` shape: each of standard input,
