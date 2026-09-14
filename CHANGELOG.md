@@ -6,6 +6,25 @@ before 1.0 the minor is the breaking one.
 
 ## Unreleased
 
+### Fixed
+
+- **`spawnShell` could overrun a buffer reading a long `COMSPEC` or `SHELL`.**
+  The value was read into an array of WTF-16 units and converted into an array
+  of the same length in bytes, and a WTF-16 unit is worth up to three bytes of
+  WTF-8 — so a value past a third of the buffer wrote past the end of it. Both
+  are sized for the same number of units now, the byte one three times over,
+  and a value longer than that is declined rather than truncated. A pathname
+  that long is nobody's shell, but the arithmetic was wrong either way.
+- **Stopping a reader on Windows worked about two times in three.**
+  `CancelIoEx` reaches only the reads that are pending when it is called, and a
+  reader spends part of its time between reads with the bytes it just got — so
+  asking once left the task to start another read that nothing would end, since
+  a pseudoconsole's output pipe has a writer for as long as the console does.
+  `Expect.deinit` asks again until the task says it has stopped, and tells it
+  not to start another read in the meantime. The suite's own reader does the
+  same. This is what hung `spawnShell starts the user's shell on a pair` about
+  one Windows run in two, with nothing to say for itself.
+
 ## 0.3.1
 
 ### Fixed

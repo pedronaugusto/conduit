@@ -32,7 +32,12 @@ pub const Watchdog = struct {
     /// Generous: this is a failure budget and not a timing assertion. Nothing
     /// in this suite should come within an order of magnitude of it, and a
     /// loaded continuous-integration machine should not either.
-    pub const default_ms = 60_000;
+    ///
+    /// Under the build runner's own `--test-timeout`, which CI sets to 45
+    /// seconds, this has to be the shorter of the two or it never fires: the
+    /// runner's bound names the test but ends the process from outside, and
+    /// this one ends it from inside, after whatever the test has printed.
+    pub const default_ms = 30_000;
 
     pub fn init(source: std.builtin.SourceLocation) Watchdog {
         return .{

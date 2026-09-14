@@ -18,6 +18,16 @@ const tty = @import("tty.zig");
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 
+/// The longest program path `fromEnvironment` will take from the environment,
+/// in WTF-16 units.
+///
+/// Windows allows a path of 32767 units, and `std.fs.max_path_bytes` is three
+/// times that. Reserving it twice over as static buffers for the sake of a
+/// shell's pathname would be a third of a megabyte spent on a case nobody has:
+/// `%COMSPEC%` is twenty-odd characters, and a value longer than this is one
+/// this package declines to run rather than one it truncates.
+const max_program_units = 1024;
+
 /// A shell running on a pseudo-terminal, and the pair it runs on.
 pub const Shell = struct {
     /// The pair. Read it with `pty.readFile()` and write it with
@@ -140,8 +150,11 @@ fn defaultShell() []const u8 {
 fn fromEnvironment(name: []const u8) ?[]const u8 {
     if (is_windows) {
         const State = struct {
-            var value: [std.fs.max_path_bytes]u16 = undefined;
-            var buffer: [std.fs.max_path_bytes]u8 = undefined;
+            var value: [max_program_units]u16 = undefined;
+            /// Three bytes of WTF-8 for every WTF-16 unit is the worst case,
+            /// and this has to hold the worst case: `wtf16LeToWtf8` writes
+            /// what the value needs and does not ask.
+            var buffer: [max_program_units * 3]u8 = undefined;
         };
         var name_w: [64]u16 = undefined;
         if (name.len + 1 > name_w.len) return null;
@@ -153,9 +166,12 @@ fn fromEnvironment(name: []const u8) ?[]const u8 {
             &State.value,
             State.value.len,
         );
-        // Zero is "there is no such variable"; a count at or past the buffer's
-        // length is "it would not fit", which for a program name means it is
-        // not one this package is going to run.
+        // Zero is "there is no such variable" and the fall-back is used
+        // instead. A count at or past the buffer's length is the variable not
+        // fitting, which for a program name means it is not one this package
+        // is going to run; the count `GetEnvironmentVariableW` reports in that
+        // case is what it would have needed, not what it wrote, so nothing has
+        // been written and there is nothing to read.
         if (written == 0 or written >= State.value.len) return null;
         const len = std.unicode.wtf16LeToWtf8(&State.buffer, State.value[0..written]);
         return State.buffer[0..len];

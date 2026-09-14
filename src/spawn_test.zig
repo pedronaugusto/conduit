@@ -97,6 +97,10 @@ const Sink = struct {
     group: std.Io.Group = .init,
     /// The file being read, for `deinit`.
     file: ?std.Io.File = null,
+    /// Set by `deinit`, read by the task before every read it starts, so a
+    /// reader that is between reads when the asking begins does not start
+    /// another one.
+    stopping: std.atomic.Value(bool) = .init(false),
     /// The reading reached the end of the stream. Different from a read that is
     /// simply still waiting, and a failure has to say which of the two it was.
     finished: bool = false,
@@ -114,20 +118,38 @@ const Sink = struct {
     ///
     /// The task is blocked in a read that only the far end finishing, the
     /// handle going away, or the operating system being told to abandon it
-    /// will end. On Windows the last of those is `CancelIoEx`, which ends
-    /// every pending read this process issued on the handle whichever thread
-    /// issued it, and is the one that does not involve closing a handle
-    /// another thread is inside. Without it the join here waits for a read
-    /// that is not coming back.
+    /// will end. On Windows the last of those is `CancelIoEx`, which ends the
+    /// reads this process has pending on the handle whichever thread issued
+    /// them, and is the one that does not involve closing a handle another
+    /// thread is inside.
+    ///
+    /// **Once is not enough.** `CancelIoEx` reaches only what is pending when
+    /// it is called, and a reader spends part of its time between reads, with
+    /// the bytes it just got. Asking once ends the read about two times in
+    /// three and leaves the reader to start another one that nothing will end
+    /// — a pseudoconsole's output pipe has a writer for as long as the console
+    /// does. So it is asked again each time round the wait, until the reader
+    /// says it has stopped.
     fn deinit(sink: *Sink) void {
+        sink.stopping.store(true, .release);
         if (is_windows) {
             if (sink.file) |f| {
-                trace.print("sink: CancelIoEx on the read handle", .{});
-                // The return is not looked at on purpose. `ERROR_NOT_FOUND`
-                // means there was nothing pending, which is the case where the
-                // reader has already finished, and that is a success here.
-                _ = win32.CancelIoEx(f.handle, null);
+                trace.print("sink: asking the read to stop", .{});
+                var waited_ms: u32 = 0;
+                while (waited_ms < budget_ms and !sink.ended()) : (waited_ms += 2) {
+                    // The return is not looked at on purpose. `ERROR_NOT_FOUND`
+                    // means there was nothing pending, which is either the
+                    // reader between reads or the reader already finished.
+                    _ = win32.CancelIoEx(f.handle, null);
+                    std.Io.sleep(io, .fromMilliseconds(2), .awake) catch break;
+                }
             }
+        }
+        // Said out loud rather than traced: a join that is about to block is
+        // the one thing a failure here has to be able to name, and by then
+        // there may be no second chance to print anything.
+        if (is_windows and !sink.ended()) {
+            std.debug.print("\nsink: the read would not stop; joining anyway\n", .{});
         }
         trace.print("sink: joining the reader", .{});
         sink.group.cancel(io);
@@ -138,6 +160,7 @@ const Sink = struct {
     fn read(sink: *Sink, file: std.Io.File) std.Io.Cancelable!void {
         var buffer: [512]u8 = undefined;
         while (true) {
+            if (sink.stopping.load(.acquire)) return sink.stop(null);
             const n = file.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 // A pseudo-terminal whose child is gone reports an I/O error
@@ -1380,14 +1403,20 @@ test "spawnShell starts the user's shell on a pair" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
+    // This one is traced stage by stage. It has hung once on a Windows runner
+    // with nothing to say for itself, and the stages are what a run that does
+    // it again will have to say.
+    trace.print("shell: opening a pair and starting the shell", .{});
     var shell = try conduit.spawnShell(io, gpa, .{
         .args = &script.shell_arguments,
         .size = .{ .rows = 40, .cols = 132 },
     });
     defer shell.deinit(io);
+    if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child)});
 
-    // The order out: see the first test in the pseudo-terminal section. The
-    // shell's own `deinit` closes the pair, so the reader is joined before it.
+    // The order out: end the child, release and join the reader, then close
+    // the pair -- see the first test in the pseudo-terminal section. The
+    // shell's own `deinit` is what closes the pair.
     var sink: Sink = .{};
     defer sink.deinit();
     defer _ = shell.child.killWait(io, 0) catch {};
@@ -1395,9 +1424,19 @@ test "spawnShell starts the user's shell on a pair" {
     try testing.expectEqual(@as(u16, 40), (try shell.pty.size()).rows);
 
     try sink.start(shell.pty.readFile());
+    trace.print("shell: reading the master", .{});
 
     try sink.expect("hi");
+    trace.print("shell: the shell said what it was asked to", .{});
+
     _ = try shell.child.killWait(io, budget_ms);
+    trace.print("shell: reaped", .{});
+}
+
+/// The child's operating-system name as a number, for a trace line that has to
+/// compile on both systems: a process id on POSIX, a handle on Windows.
+fn childId(child: Child) usize {
+    return if (is_windows) @intFromPtr(child.id) else @intCast(child.id);
 }
 
 /// `getpgid` is not declared in `std.c`, and two of the tests above are about

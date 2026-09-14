@@ -49,9 +49,13 @@
 
 const Expect = @This();
 
+const builtin = @import("builtin");
 const std = @import("std");
 
 const Pty = @import("Pty.zig");
+
+const is_windows = builtin.os.tag == .windows;
+const win32 = if (is_windows) @import("win32.zig") else struct {};
 
 /// What the child says, and where a reply goes.
 ///
@@ -83,6 +87,9 @@ mutex: std.Io.Mutex,
 arrived: std.Io.Event,
 /// The task doing the reading.
 group: std.Io.Group,
+/// Set by `deinit`, read by the task before every read it starts, so a reader
+/// that is between reads when `deinit` begins does not start another one.
+stopping: std.atomic.Value(bool),
 
 /// Where a pattern was found, in the bytes that had arrived when it was.
 ///
@@ -115,6 +122,7 @@ pub fn init(master: Pty.Master, buffer: []u8) Expect {
         .mutex = .init,
         .arrived = .unset,
         .group = .init,
+        .stopping = .init(false),
     };
 }
 
@@ -135,8 +143,35 @@ pub fn start(expect: *Expect, io: std.Io) StartError!void {
 /// Idempotent, and safe after the child has gone. Bytes that had arrived and
 /// were never matched are simply forgotten; the buffer is the caller's and is
 /// untouched.
+///
+/// The task is inside a read, and a read ends when the far end finishes, when
+/// the handle goes away, or when the operating system is told to abandon it.
+/// For a pseudo-terminal master whose console is still open the first two do
+/// not happen, so on Windows this asks for the third — `CancelIoEx`, which
+/// reaches only what is pending when it is called, so it is asked again until
+/// the task says it has stopped. A reader between reads is told by `stopping`
+/// not to start another.
 pub fn deinit(expect: *Expect, io: std.Io) void {
+    expect.stopping.store(true, .release);
+    if (is_windows) {
+        var waited_ms: u32 = 0;
+        while (waited_ms < stop_budget_ms and !expect.stopped(io)) : (waited_ms += 2) {
+            _ = win32.CancelIoEx(expect.master.read.handle, null);
+            std.Io.sleep(io, .fromMilliseconds(2), .awake) catch break;
+        }
+    }
     expect.group.cancel(io);
+}
+
+/// How long `deinit` will keep asking before it joins anyway. Generous: the
+/// first ask is usually the one that lands.
+const stop_budget_ms: u32 = 2000;
+
+/// Whether the reading task has stopped, for `deinit`'s wait.
+fn stopped(expect: *Expect, io: std.Io) bool {
+    expect.mutex.lockUncancelable(io);
+    defer expect.mutex.unlock(io);
+    return expect.ended or expect.failed;
 }
 
 pub const WaitError = error{
@@ -306,6 +341,7 @@ pub fn discard(expect: *Expect, io: std.Io) void {
 fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
     var chunk: [512]u8 = undefined;
     while (true) {
+        if (expect.stopping.load(.acquire)) return expect.finish(io, .ended);
         const room = room: {
             expect.mutex.lockUncancelable(io);
             defer expect.mutex.unlock(io);
@@ -396,12 +432,9 @@ fn compact(expect: *Expect, io: std.Io) void {
 // Tests.
 //======================================================================
 
-const builtin = @import("builtin");
 const testing = std.testing;
 const Child = @import("Child.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
-
-const is_windows = builtin.os.tag == .windows;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;

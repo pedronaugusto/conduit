@@ -165,8 +165,12 @@ jobs:
           "-Dtest-filter=resource limits are refused"
           "-Dtest-filter=credentials are refused"
 
+      # Traced: `spawnShell starts the user's shell on a pair` hung here once
+      # with nothing to say, so this step says which stage it reached.
       - name: Debug — spawn, environment, failure and the shell
         timeout-minutes: 4
+        env:
+          CONDUIT_TRACE: "1"
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=environment and working directory"
