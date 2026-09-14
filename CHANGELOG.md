@@ -4,6 +4,24 @@ Each entry says what the release makes possible, so a reader has the reason and
 not only the diff. Versions follow [semantic versioning](https://semver.org);
 before 1.0 the minor is the breaking one.
 
+## Unreleased
+
+### Added
+
+- `Expect` is the conversation `Proxy` and `Child.output` are not: `until` waits
+  for a literal byte pattern on the master, `bytes` waits for a count of them,
+  `send` writes the reply, and every wait takes a deadline, because a program
+  waiting for a line a child will never print should fail rather than stop. The
+  buffer is the caller's and nothing here allocates; a match hands back slices
+  into it, and a buffer that fills with bytes no pattern matched is
+  `error.BufferFull` rather than bytes quietly dropped. A pattern is bytes
+  rather than a pattern language: the standard library has no
+  regular-expression engine, and a second, worse one does not belong in a
+  process package. Reading runs on an `std.Io.Group` task from `start`, so what
+  a child says while the parent is busy elsewhere is there when the parent
+  comes back for it. `Child.expect` builds one over a child's pipes as well as
+  over a pair.
+
 ## 0.3.0
 
 A pass over the package asking, feature by feature, what a caller of a process

@@ -33,6 +33,7 @@ const c = std.c;
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
+const Expect = @import("Expect.zig");
 const Pty = @import("Pty.zig");
 const tty = @import("tty.zig");
 
@@ -635,6 +636,22 @@ pub fn stdinWriter(child: Child, io: std.Io, buffer: []u8) ?std.Io.File.Writer {
 pub fn stdoutReader(child: Child, io: std.Io, buffer: []u8) ?std.Io.File.Reader {
     const f = child.stdoutFile() orelse return null;
     return f.readerStreaming(io, buffer);
+}
+
+/// An `Expect` over the child's streams, for a conversation: wait for what it
+/// says, then answer.
+///
+/// The master for a child on a pseudo-terminal, and the two pipes for a child
+/// on pipes. `null` when this process does not hold both directions — an
+/// inherited stream, or a child given only one pipe — because half a
+/// conversation is not one.
+///
+/// The result must be `start`ed and `deinit`ed, and must not move once it has
+/// been started; `Expect` documents the rest.
+pub fn expect(child: Child, buffer: []u8) ?Expect {
+    const read = child.stdoutFile() orelse return null;
+    const write = child.stdinFile() orelse return null;
+    return .init(.{ .read = read, .write = write }, buffer);
 }
 
 //======================================================================

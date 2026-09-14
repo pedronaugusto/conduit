@@ -214,6 +214,21 @@ the pair the same size as a terminal of yours. Ctrl-C and Ctrl-Z need no code:
 put your own terminal in raw mode and they arrive as bytes, which this forwards
 and the child's terminal turns back into signals. The module doc explains both.
 
+### `Expect` — a conversation with a child
+
+| | |
+|---|---|
+| `Expect.init(master, buffer)` | Over `Child.pty` or `Pty.master()`, with a buffer the caller owns. `child.expect(buffer)` builds one over a child's pipes too. |
+| `expect.start(io)`, `expect.deinit(io)` | The reading task, which runs between calls. The lifetime rules are `Reaper`'s. |
+| `expect.until(io, pattern, timeout_ms)` | Waits for a literal byte pattern and consumes through it: `Match.before` and `Match.found`. |
+| `expect.bytes(io, count, timeout_ms)` | Waits for a count of bytes and consumes them. |
+| `expect.send(io, reply)` | Writes the reply, as if it had been typed at the child's terminal. |
+| `expect.pending(io)`, `expect.discard(io)` | What has arrived and no pattern has matched; and forgetting it. |
+
+A wait ends in `error.Timeout`, `error.EndOfStream`, `error.BufferFull` or
+`error.ReadFailed`. Patterns are bytes: there is no regular-expression engine
+in the standard library and none here.
+
 ### Terminal helpers
 
 `rawMode(handle)`, `restore(handle, saved)`, `winSize(handle)`, `isTty(handle)`,
