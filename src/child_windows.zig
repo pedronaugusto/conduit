@@ -106,14 +106,31 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             const console = pty.slave.?;
             var list = try AttributeList.init(arena, 1);
             try list.setPseudoConsole(console);
-            trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}, last error {d}", .{
-                @intFromPtr(console),
-                @intFromEnum(windows.GetLastError()),
-            });
+            trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)});
             attributes = list;
             startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
             startup.lpAttributeList = list.raw;
             flags.extended_startupinfo_present = true;
+
+            // And no standard handles, said out loud. `CreateProcessW` gives
+            // a child the parent's standard handles even with
+            // `bInheritHandles` false, when those handles are not console
+            // handles: they are duplicated into the child as a special case.
+            // So a program whose own streams are pipes -- which is every
+            // program a build system, a service or a test harness starts --
+            // would hand a child on a pseudoconsole the parent's pipes, and
+            // everything the child wrote would go there rather than to the
+            // console it is attached to. From a terminal it looks right,
+            // because console handles are not duplicated and the child falls
+            // back to its console; everywhere else it is wrong.
+            //
+            // `STARTF_USESTDHANDLES` with all three left null is how a child
+            // is given none, and a child with none uses the console it has,
+            // which is the pseudoconsole. This is not the combination Windows
+            // documents as unsupported alongside a pseudoconsole -- that is
+            // *naming* a handle, which is why `stderr_to` with `.pty` is
+            // refused rather than merged in here.
+            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
         },
         else => {
             startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOW);
@@ -144,11 +161,12 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     };
 
     trace.print(
-        "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, inherit={s}, attributes={s}",
+        "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
         .{
             @tagName(options.stdio),
             startup.StartupInfo.cb,
             @as(u32, @bitCast(flags)),
+            startup.StartupInfo.dwFlags,
             @tagName(inherit_handles),
             if (startup.lpAttributeList == null) "none" else "present",
         },

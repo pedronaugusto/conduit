@@ -123,6 +123,9 @@ const Sink = struct {
         if (is_windows) {
             if (sink.file) |f| {
                 trace.print("sink: CancelIoEx on the read handle", .{});
+                // The return is not looked at on purpose. `ERROR_NOT_FOUND`
+                // means there was nothing pending, which is the case where the
+                // reader has already finished, and that is a success here.
                 _ = win32.CancelIoEx(f.handle, null);
             }
         }

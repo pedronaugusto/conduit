@@ -8,6 +8,25 @@ before 1.0 the minor is the breaking one.
 
 ### Fixed
 
+- **A child on a pseudoconsole wrote to the parent's pipes instead of its
+  terminal**, everywhere the parent's own standard streams were pipes rather
+  than console handles — which is every program a build system, a service or a
+  test harness starts. `CreateProcessW` duplicates the parent's standard
+  handles into the child as a special case when they are not console handles,
+  even with `bInheritHandles` false, so the child was attached to the
+  pseudoconsole and talking past it. From a terminal it looked right, because
+  console handles are not duplicated and the child falls back to the console it
+  has. A `.pty` spawn now sets `STARTF_USESTDHANDLES` with all three handles
+  null, which is how a child is given none and made to use the console it is
+  attached to. Naming a real handle beside a pseudoconsole is still refused —
+  that is the combination Windows documents as unsupported, and it is why
+  `stderr_to` with `.pty` is `error.Unsupported`.
+- **`spawnShell` read the environment by walking the process environment block
+  under the loader's lock.** The standard library's Windows lookup asserts
+  something about every entry it passes on the way, so a single odd entry in a
+  large environment would end the process from inside a lock, where the panic
+  itself has nowhere to go. It is `GetEnvironmentVariableW` now: one call,
+  which is also what the trace uses.
 - **`error.BadWorkingDirectory` meant what it says only on POSIX.**
   `CreateProcessW` reports a working directory that is not there with an error
   code it also uses for a program at a path that is not there, so the two were

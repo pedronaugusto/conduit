@@ -16,6 +16,7 @@ const environ = @import("environ.zig");
 const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
+const win32 = if (is_windows) @import("win32.zig") else struct {};
 
 /// A shell running on a pseudo-terminal, and the pair it runs on.
 pub const Shell = struct {
@@ -133,19 +134,30 @@ fn defaultShell() []const u8 {
 ///
 /// On Windows the environment block moves when it is modified, so the value is
 /// copied into a static buffer rather than pointed at. It is read once, before
-/// any child exists, and the result is used immediately.
+/// any child exists, and the result is used immediately. `GetEnvironmentVariableW`
+/// does the copying: one call, rather than a walk of the process environment
+/// block under the loader's lock with an assertion about every entry it passes.
 fn fromEnvironment(name: []const u8) ?[]const u8 {
     if (is_windows) {
         const State = struct {
+            var value: [std.fs.max_path_bytes]u16 = undefined;
             var buffer: [std.fs.max_path_bytes]u8 = undefined;
         };
         var name_w: [64]u16 = undefined;
         if (name.len + 1 > name_w.len) return null;
         const name_len = std.unicode.wtf8ToWtf16Le(&name_w, name) catch return null;
         name_w[name_len] = 0;
-        const value_w = (std.process.Environ{ .block = .global })
-            .getWindows(name_w[0..name_len :0].ptr) orelse return null;
-        const len = std.unicode.wtf16LeToWtf8(&State.buffer, value_w);
+
+        const written = win32.GetEnvironmentVariableW(
+            name_w[0..name_len :0].ptr,
+            &State.value,
+            State.value.len,
+        );
+        // Zero is "there is no such variable"; a count at or past the buffer's
+        // length is "it would not fit", which for a program name means it is
+        // not one this package is going to run.
+        if (written == 0 or written >= State.value.len) return null;
+        const len = std.unicode.wtf16LeToWtf8(&State.buffer, State.value[0..written]);
         return State.buffer[0..len];
     }
     var index: usize = 0;

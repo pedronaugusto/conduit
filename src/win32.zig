@@ -99,6 +99,18 @@ pub extern "kernel32" fn GetFileAttributesW(
     lpFileName: [*:0]const u16,
 ) callconv(.winapi) DWORD;
 
+/// Looks one variable up in this process's environment.
+///
+/// With a null buffer and a size of zero this reports the room the value would
+/// need and zero when there is no such variable, which is all a presence check
+/// wants. One call, and no walk of the process environment block under the
+/// loader's lock.
+pub extern "kernel32" fn GetEnvironmentVariableW(
+    lpName: [*:0]const u16,
+    lpBuffer: ?[*]u16,
+    nSize: DWORD,
+) callconv(.winapi) DWORD;
+
 /// Ends every pending I/O this process issued on `hFile`, whichever thread
 /// issued it. The way to release a thread blocked in a synchronous read of a
 /// pipe without closing the handle under it.

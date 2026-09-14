@@ -17,6 +17,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const is_windows = builtin.os.tag == .windows;
+const win32 = if (is_windows) @import("win32.zig") else struct {};
 
 /// `0` not looked up yet, `1` off, `2` on.
 var state: std.atomic.Value(u8) = .init(0);
@@ -44,7 +45,7 @@ pub fn print(comptime format: []const u8, args: anytype) void {
 fn look() bool {
     if (is_windows) {
         const name = std.unicode.wtf8ToWtf16LeStringLiteral("CONDUIT_TRACE");
-        return (std.process.Environ{ .block = .global }).getWindows(name) != null;
+        return win32.GetEnvironmentVariableW(name, null, 0) != 0;
     }
     // libc is linked on every POSIX target this package supports, which is
     // what makes this one call rather than a walk of `environ`.
