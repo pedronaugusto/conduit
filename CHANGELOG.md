@@ -40,6 +40,13 @@ before 1.0 the minor is the breaking one.
 
 ### Changed
 
+- **Closing the master is how a task reading it is released, and
+  `Pty.closeMaster` says so.** A read of a pseudo-terminal master ends when the
+  far end finishes or the handle goes away, and for a pair whose console host
+  is still running only the second happens — so a program with a reader on a
+  task should close the master and then join it, not the other way round.
+  `Pty.closeSlave` also says that a Windows pseudoconsole waits for its client,
+  so the child is reaped first.
 - **What `killWait` reports on Windows is written down.** `.kill` there is
   `TerminateProcess` with an exit code of 1, so a child that had to be killed
   reports `.exited = 1` — that number is this package's. `.terminate` is a

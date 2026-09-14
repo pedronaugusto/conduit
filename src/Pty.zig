@@ -253,12 +253,14 @@ pub fn close(pty: *Pty, io: std.Io) void {
 /// to it. So this is called when the program is finished with the child, not
 /// straight after spawning it.
 ///
-/// **On Windows, keep reading the master while this runs.** The call does not
-/// return until the console host has flushed what the client last wrote, and
-/// it flushes into a pipe this process holds the reading end of: a program
-/// that has stopped reading waits for a write that cannot complete. `close`
-/// avoids that by dropping the master first; a program calling this on its own
-/// has to either still be reading or accept that it may wait.
+/// **On Windows, reap the child first and keep reading the master.** The call
+/// does not return until the client attached to the pseudoconsole has gone and
+/// the console host has flushed what it last wrote, and the host flushes into
+/// a pipe this process holds the reading end of. So a program that has stopped
+/// reading waits for a write that cannot complete, and a program whose child
+/// is still running waits for the child. `close` deals with the first by
+/// dropping the master ends before this; the second is the caller's, and
+/// `Child.killWait` is how it is done.
 pub fn closeSlave(pty: *Pty, io: std.Io) void {
     const slave = pty.slave orelse return;
     pty.slave = null;
@@ -283,6 +285,12 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
 ///
 /// On Windows the child's console loses the pipes behind it; the client learns
 /// when it next reads or writes.
+///
+/// **This is also how a task that is reading the master is released.** That
+/// read ends when the far end finishes or the handle goes away, and for a pair
+/// whose console host is still running only the second happens — so a program
+/// that keeps a reader on a task should close the master and then join it,
+/// rather than the other way round.
 pub fn closeMaster(pty: *Pty, io: std.Io) void {
     // The same handle twice on POSIX, so it is closed once.
     const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
