@@ -11,8 +11,7 @@ it.
 ## Usage
 
 The block below is a region of [`examples/usage.zig`](examples/usage.zig),
-which `zig build examples` builds and runs; `ci/readme_usage.sh` extracts it
-and CI compares the two.
+which `zig build examples` builds and runs; CI compares the two.
 
 <!-- BEGIN GENERATED ci/readme_usage.sh -->
 ```zig
@@ -35,9 +34,8 @@ defer result.deinit(gpa);
 ```
 <!-- END GENERATED ci/readme_usage.sh -->
 
-On POSIX, with `shell_arguments` asking the shell for `stty size` and
-`test -t 0`, that prints `24 80` and `is this a terminal? yes`, and ends
-`.{ .exited = 0 }`.
+On POSIX, with `shell_arguments` asking for `stty size` and `test -t 0`, that
+prints `24 80` and `is this a terminal? yes`, and ends `.{ .exited = 0 }`.
 
 ## Install
 
@@ -53,8 +51,7 @@ exe.root_module.addImport("conduit", conduit.module("conduit"));
 One import, and no dependencies beyond the standard library. The module links
 libc on POSIX and not on Windows, and decides that from the target: the POSIX
 pseudo-terminal interface is a libc interface everywhere, and Darwin has no
-stable system-call ABI to reach past it. Every Windows call is a `kernel32`
-import.
+stable ABI to reach past it. Every Windows call is a `kernel32` import.
 
 ## The API
 
@@ -110,14 +107,16 @@ pair for one stream and something else for the others, on POSIX.
 `detach` puts the child out of reach of signals aimed at the parent's process
 group. On POSIX with `.pty` it is `setsid` plus `TIOCSCTTY`, so the pair
 becomes the child's controlling terminal; otherwise `setpgid(0, 0)`. On Windows
-it is `CREATE_NEW_PROCESS_GROUP`, which means less — see Platforms.
+it is `CREATE_NEW_PROCESS_GROUP`, which is what a console control event can be
+addressed to and nothing more — reaching the tree there is the job object's
+doing, not `detach`'s.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
 `std.posix.rlimit_resource` and `std.posix.rlimit` pairs. Both are set in the
 fork child, limits first, so a privileged parent can still raise a hard limit
-for a child it is about to hand to someone else. POSIX only: either of them on
-Windows is `error.Unsupported`. Supplementary groups stay the parent's;
-`setgroups` needs the group database, which a fork child may not read.
+for a child it is handing on. POSIX only: either on Windows is
+`error.Unsupported`. Supplementary groups stay the parent's, since `setgroups`
+needs the group database a fork child may not read.
 
 ### `Expect` — a conversation with a child
 
@@ -140,21 +139,20 @@ is this process's environment with those changes, as a map the caller owns; a
 `null` value removes the variable rather than emptying it.
 `environ.only(allocator, …)` takes the same list and inherits nothing, for a
 child that should not see an agent socket or a token. A child with no `PATH` is
-also a child a bare `argv[0]` cannot be found for, so `path_search` says which
+also one a bare `argv[0]` cannot be found for, so `path_search` says which
 `PATH` resolves the program: `.child_environ` (the default, what a shell does),
 `.parent_environ` (what `std.process.spawn` does, and what a scrubbed
-environment usually wants) or `.none`.
+environment wants) or `.none`.
 
 ### `spawnShell`, `Reaper`, `Proxy`
 
-`spawnShell(io, allocator, options)` returns a `Shell`: a `Pty` and a `Child`.
-The defaults are a terminal emulator's — `$SHELL` or `%COMSPEC%`, 24×80, `TERM`
-set, a controlling terminal on POSIX — and it absorbs the `closeSlave` timing
+`spawnShell(io, allocator, options)` returns a `Shell`: a `Pty` and a `Child`,
+with a terminal emulator's defaults — `$SHELL` or `%COMSPEC%`, 24×80, `TERM`
+set, a controlling terminal on POSIX — absorbing the `closeSlave` timing
 difference below.
 
-`Reaper.init(&child)`, then `start(io)`, then `exit()` for a `?Term` without
-blocking, then `deinit(io)`. The `Child` must outlive it, it must not move once
-started, and `deinit` must run.
+`Reaper.init(&child)`, `start(io)`, `exit()` for a `?Term` without blocking,
+`deinit(io)`. The `Child` must outlive it, it must not move once started.
 
 `Proxy.run(io, .{ .master, .input, .output, .input_buffer, .output_buffer, .resize })`
 moves bytes both ways until the child's end of the terminal closes, and keeps
@@ -174,44 +172,51 @@ output one.
 ## Design
 
 **Why this forks rather than wrapping `std.process.spawn`.** The standard
-library has no hook between `fork` and `execve`, and that is the only place
-`setsid` and `TIOCSCTTY` can be called. Without them a child handed the slave
-end of a pty passes `isatty` and can read the window size but has no
-controlling terminal, so nothing typed at the master ever becomes a signal and
-Ctrl-C does nothing. Credentials and resource limits sit in the same place, for
-the same reason: a process can only set them on itself.
+library has no hook between `fork` and `execve`, the only place `setsid` and
+`TIOCSCTTY` can be called. Without them a child handed the slave end of a pty
+passes `isatty` and can read the window size but has no controlling terminal,
+so nothing typed at the master becomes a signal and Ctrl-C does nothing.
+Credentials and resource limits sit there for the same reason: a process can
+only set them on itself.
 
 **The child gets a clean slate before `execve`.** An empty signal mask, and
 every ignored signal back at its default action. `execve` resets neither, so a
 program started from a shell's background job would otherwise inherit an
-ignored `SIGINT` and be deaf to the Ctrl-C on its own terminal.
+ignored `SIGINT` and be deaf to Ctrl-C on its own terminal.
 
 **No signal handler is installed, ever**, and no disposition in the calling
 process is touched: a `SIGWINCH` or `SIGCHLD` handler is process-wide state
 that belongs to the program. `Proxy` forwards the window size by reading it on
 a task, and takes an optional `ticket` a program's own handler can bump.
-`SIGPIPE` is left alone too — writing to a pipe whose reader is gone raises it,
-and what to do about that is the program's decision.
+`SIGPIPE` too — writing to a pipe whose reader is gone raises it, and what to
+do about that is the program's.
 
 **Read the child's output while you wait for it.** A child that fills a pipe
 nobody drains stops there, and on Darwin a process whose terminal still holds
-output it has written blocks *inside exit* until the master is read — so a
-parent that waits first and reads afterwards waits forever. `child.output`
-reads and waits at once, `Proxy` keeps reading, and `Expect` reads on a task
-from `start`.
+output blocks *inside exit* until the master is read — so a parent that waits
+first and reads afterwards waits forever. `child.output` reads and waits at
+once, `Proxy` keeps reading, and `Expect` reads on a task from `start`.
 
-**`Pty.closeSlave` is wanted at different moments on the two systems.** On
-POSIX, right after `Child.spawn`: until then the terminal still has a reader in
-this process, so a read of the master blocks instead of reporting end of file
-when the child exits. On Windows it is `ClosePseudoConsole`, which ends the
-child, so it is called when the program is done. `spawnShell` absorbs that.
+**`Pty.closeSlave` is wanted at different moments.** On POSIX, right after
+`Child.spawn`: until then the terminal still has a reader in this process, so a
+read of the master blocks instead of reporting end of file when the child
+exits. On Windows it is `ClosePseudoConsole`, which ends the child, so it is
+called when the program is done. `spawnShell` absorbs that.
 
 **On Windows the master has to be read.** The console host writes into a pipe
 this process holds the other end of, and both `ResizePseudoConsole` and
-`ClosePseudoConsole` wait for the host — so a program that has stopped reading
-can block in either. The pipes are created with room for a repaint of a large
-window, and `Pty.close` drops the master ends first so the host's last write
-fails rather than blocks.
+`ClosePseudoConsole` wait for the host, so a program that has stopped reading
+can block in either. The pipes have room for a repaint of a large window, and
+`Pty.close` drops the master ends first so the host's last write fails instead.
+
+**`kill` and `killWait` reach what the child started.** On POSIX that is the
+process group `detach` made, so it takes `detach`. On Windows every child goes
+in a job object of its own before it runs — started suspended, assigned,
+resumed, so nothing is ever outside it — and `.kill` ends the job. The job ends
+what is left in it when its last handle closes, so `deinit` there also ends
+what the child started and left behind; POSIX has no container for that, and a
+grandchild of a reaped child keeps running. A child that cannot be put in its
+job is `error.JobAssignmentFailed`, not a child whose tree `kill` would miss.
 
 **A spawn that cannot run the program is an error**, not a child that exits
 127: the fork child reports the failure over a close-on-exec pipe before
@@ -219,16 +224,15 @@ fails rather than blocks.
 close-on-exec, so a pair held open while an unrelated child starts is not
 handed to it.
 
-**Allocation.** `Child.spawn` and `spawnShell` take an allocator and use it for
-the call only — the argument, environment and search-path arrays that must
-exist before the child does — and retain nothing. `Child.output` allocates the
-bytes it collects, and `environ` the map it returns; both say whose they are.
+**Allocation.** `Child.spawn` and `spawnShell` take an allocator, use it for the
+call only — the argument, environment and search-path arrays that must exist
+before the child does — and retain nothing. `Child.output` allocates the bytes
+it collects and `environ` the map it returns; both say whose they are.
 Everything else works in buffers the caller passes, `Expect` included.
 
-**Thread safety.** One task at a time per `Child` or `Pty`, except
-`Pty.resize`, which is one call; `Reaper`, which exists so a wait can be in
-flight while another task works; and `Child.output`, which reads two streams at
-once on purpose.
+**Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
+which is one call; `Reaper`, which exists so a wait can be in flight while
+another task works; and `Child.output`, which reads two streams at once.
 
 ## Scope
 
@@ -241,9 +245,8 @@ once on purpose.
 - Regular expressions. `Expect` matches byte strings.
 - A pre-exec callback. Only async-signal-safe calls are legal there, so the
   uses people reach for one for are named options instead.
-- Run a `.bat` or `.cmd` script. `spawn` returns
-  `error.UnsupportedBatchFile`, because `cmd.exe` re-parses their command line
-  with rules no argument serialisation survives.
+- Run a `.bat` or `.cmd` script. `spawn` returns `error.UnsupportedBatchFile`:
+  `cmd.exe` re-parses their command line with rules no serialisation survives.
 
 ## Platforms
 
@@ -260,19 +263,15 @@ Every job in that matrix passed on run
 Windows 10 version 1809 is the floor: `CreatePseudoConsole` is imported
 statically rather than looked up.
 
-Pending: a job object on Windows. `detach` is `CREATE_NEW_PROCESS_GROUP`, so
-`killWait` ends the child and not what the child started, where on POSIX the
-process group reaches the tree.
-
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, both Linux libcs on two architectures, both macOS
 architectures, FreeBSD and NetBSD.
 
-Tests whose claim is POSIX-only — a controlling terminal, a process group id
-read back with `getpgid`, Ctrl-C becoming `SIGINT`, `stty size` — say so and
-skip elsewhere. On Windows the program is resolved by `CreateProcessW`, which
-searches the application directory, the current directory, the system
-directories and `PATH` and appends `.exe`; `PATHEXT` is not searched.
+Tests whose claim is POSIX-only — a controlling terminal, `getpgid`, Ctrl-C
+becoming `SIGINT`, `stty size` — say so and skip elsewhere. On Windows the
+program is resolved by `CreateProcessW`, which searches the application
+directory, the current directory, the system directories and `PATH` and appends
+`.exe`; `PATHEXT` is not searched.
 
 ## Testing
 
@@ -287,10 +286,10 @@ Every test starts a real child process and reaps it, and CI runs the suite in
 Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code between `fork` and
 `execve` is the kind an inlining decision can change. CI passes
 `--test-timeout 45s`, which ends the run and names the test that did not
-finish, and a test that starts a child or opens a pair also carries a watchdog
-that panics with its own name after a minute — a wait inside a system call that
-will not return should fail the run rather than stop it. `zig build unit` is
-the suite without the examples, and `-Dtest-filter` runs part of it.
+finish, and a test that starts a child or opens a pair carries a watchdog that
+panics with its own name after a minute. `zig build unit` is the suite without
+the examples, `-Dtest-filter` runs part of it, and `CONDUIT_TRACE` in the
+environment prints what this package asked the operating system for.
 
 ## Requirements
 

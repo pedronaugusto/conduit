@@ -98,6 +98,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         .id = pid,
         .thread = {},
         .handles_open = {},
+        .job = {},
         .pgid = if (options.detach) pid else null,
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],

@@ -160,6 +160,15 @@ const Sink = struct {
         if (err) |e| sink.failed = e;
     }
 
+    /// Whether the reading has stopped, for any reason. A stream nothing is
+    /// writing to any more is the shape of "every process that held it is
+    /// gone".
+    fn ended(sink: *Sink) bool {
+        sink.mutex.lockUncancelable(io);
+        defer sink.mutex.unlock(io);
+        return sink.finished;
+    }
+
     fn contains(sink: *Sink, needle: []const u8) bool {
         sink.mutex.lockUncancelable(io);
         defer sink.mutex.unlock(io);
@@ -517,6 +526,53 @@ test "killWait ends a child that would otherwise outlive the test, and says how"
     // Reaped once: `wait` answers from what `killWait` learned, and so cannot
     // block here.
     try testing.expectEqual(term, try child.wait(io));
+}
+
+test "killWait reaches what the child started, not only the child" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    // Both systems, by different means: a job object on Windows, the child's
+    // process group on POSIX. The fixture is a shell waiting on a program of
+    // its own, so there is a grandchild, and both of them hold the standard
+    // output pipe. The pipe finishing is the two of them being gone, which
+    // needs no way of asking after a process by name.
+    const argv: []const []const u8 = if (is_windows)
+        &.{ "cmd.exe", "/c", "ping -n 30 127.0.0.1" }
+    else
+        // The `;` is what stops the shell replacing itself with `sleep`, which
+        // would leave no grandchild to lose.
+        &.{ "/bin/sh", "-c", "sleep 30; :" };
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = argv,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        // On POSIX a signal is addressed to a process group and `detach` is
+        // what makes one. On Windows the job is there either way.
+        .detach = !is_windows,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try sink.start(child.stdout.?);
+
+    // Both still running, so the pipe still has writers.
+    try std.Io.sleep(io, .fromMilliseconds(200), .awake);
+    try testing.expect(!sink.ended());
+
+    _ = try child.killWait(io, 0);
+
+    // The shell is gone. If what it started were still running it would still
+    // be holding the pipe, and this would wait out the whole budget.
+    var waited: u32 = 0;
+    while (waited < budget_ms) : (waited += 10) {
+        if (sink.ended()) return;
+        try std.Io.sleep(io, .fromMilliseconds(10), .awake);
+    }
+    return error.TestGrandchildOutlivedTheKill;
 }
 
 test "a detached child has a process group of its own and an attached one does not" {

@@ -197,6 +197,27 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         }
     }
 
+    // The child is started suspended and put in its job before it runs, so
+    // there is no moment in which it exists outside one -- a child that got as
+    // far as starting something of its own first would have left that
+    // something outside the job, which is the whole thing the job is for.
+    flags.create_suspended = true;
+
+    const job = win32.CreateJobObjectW(null, null) orelse return createError();
+    errdefer windows.CloseHandle(job);
+    {
+        var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(
+            win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        );
+        limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (win32.SetInformationJobObject(
+            job,
+            win32.JobObjectExtendedLimitInformation,
+            &limits,
+            @sizeOf(win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
+        ) == .FALSE) return createError();
+    }
+
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
         null,
@@ -211,11 +232,27 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         &information,
     ) == .FALSE) return createError();
 
+    // From here the child exists, so a failure has to end it rather than
+    // return and leave it suspended forever.
+    errdefer {
+        _ = win32.TerminateProcess(information.hProcess, 1);
+        windows.CloseHandle(information.hThread);
+        windows.CloseHandle(information.hProcess);
+    }
+
+    if (win32.AssignProcessToJobObject(job, information.hProcess) == .FALSE) {
+        return error.JobAssignmentFailed;
+    }
+    if (win32.ResumeThread(information.hThread) == std.math.maxInt(win32.DWORD)) {
+        return createError();
+    }
+
     plan.closeOwned(io);
 
     return .{
         .id = information.hProcess,
         .thread = information.hThread,
+        .job = job,
         .handles_open = true,
         // `CREATE_NEW_PROCESS_GROUP` makes a group whose id is the process id,
         // which is what `GenerateConsoleCtrlEvent` is addressed to.

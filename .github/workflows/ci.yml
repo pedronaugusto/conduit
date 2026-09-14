@@ -71,7 +71,9 @@ jobs:
   # `--test-timeout`, above and here, is the build runner's own bound on one
   # test: it ends the test binary and names the test that did not finish, so a
   # hang inside a test body fails the step with a message instead of running
-  # out the clock. It cannot see a hang that is not inside a test.
+  # out the clock. It cannot see a hang that is not inside a test. (`CONDUIT_TRACE`
+  # in the environment of a step is the other half, when one is needed; it is
+  # off here because the job is green and a clean log is worth more.)
   #
   # For that, Debug is split: the examples on their own, then the suite one
   # file at a time and `src/spawn_test.zig` in seven groups, each step named
@@ -94,12 +96,8 @@ jobs:
       - name: Formatting
         run: zig fmt --check src examples build.zig
 
-      # With the trace on: this step passes, so its log is always kept, and it
-      # is the shortest run that puts a child on a pseudoconsole.
       - name: Debug — examples
         timeout-minutes: 4
-        env:
-          CONDUIT_TRACE: "1"
         run: zig build examples -Doptimize=Debug --summary all
 
       - name: Debug — Pty
@@ -140,11 +138,10 @@ jobs:
           "-Dtest-filter=killWait ends" "-Dtest-filter=process group of its own"
           "-Dtest-filter=process group is the one" "-Dtest-filter=shares the parent"
           "-Dtest-filter=killWait with no grace"
+          "-Dtest-filter=reaches what the child started"
 
       - name: Debug — spawn, pseudo-terminals
         timeout-minutes: 4
-        env:
-          CONDUIT_TRACE: "1"
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"

@@ -64,6 +64,12 @@ thread: if (is_windows) windows.HANDLE else void,
 /// Reaping a child closes them, and a closed handle must not be closed again.
 /// POSIX has no such thing: a process id is a number.
 handles_open: if (is_windows) bool else void,
+/// Windows only: the job object holding the child and everything it starts.
+///
+/// This is what makes `kill` and `killWait` reach the whole tree there, the
+/// way a signal to a process group does on POSIX. `null` once `deinit` has
+/// closed it, and closing it ends whatever is still in it — see `deinit`.
+job: if (is_windows) ?windows.HANDLE else void,
 /// The child's process group, when `detach` asked for one. `null` means the
 /// child is in the process group it inherited, and a signal is addressed to
 /// the child alone.
@@ -453,6 +459,12 @@ pub const SpawnError = error{
     /// session. With `detach` and `.pty`, the most likely cause is that the
     /// process was already a session leader.
     DetachFailed,
+    /// Windows: the child could not be put into its job object, so `kill`
+    /// could not have reached what the child started. Jobs have nested since
+    /// Windows 8 and this package's floor is Windows 10, so the way to get
+    /// here is a job that forbids it — and rather than start a child whose
+    /// tree it cannot end, `spawn` ends the child it just made and says so.
+    JobAssignmentFailed,
     /// POSIX: the pseudo-terminal could not be made the child's controlling
     /// terminal, usually because it is already the controlling terminal of
     /// another session.
@@ -509,9 +521,18 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
 /// Closes the streams this `Child` owns: the pipes `spawn` created, if any,
 /// and on Windows the process and thread handles when the child was never
-/// reaped.
+/// reaped, and the job object.
 ///
 /// Streams the caller supplied are left alone.
+///
+/// **On Windows this ends whatever is left of the child's tree.** The job is
+/// created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so letting go of the
+/// `Child` lets go of everything the child started — including anything that
+/// outlived the child itself. That is a difference from POSIX, where `deinit`
+/// signals nothing and a grandchild of a reaped child keeps running: Windows
+/// has a container for a tree and POSIX has only an address to send signals
+/// to. A program that wants a grandchild to outlive it on Windows has to
+/// arrange that itself; this package will not leave one behind by accident.
 ///
 /// Safe to call more than once, and safe to call before the child has been
 /// reaped, though closing a pipe the child is still writing to earns it a
@@ -525,6 +546,7 @@ pub fn deinit(child: *Child, io: std.Io) void {
     child.stderr = null;
     if (is_windows) {
         if (child.handles_open) child.closeHandles();
+        child.closeJob();
     }
 }
 
@@ -701,11 +723,17 @@ pub const KillError = error{
 
 /// Asks the child to stop, with `signal`.
 ///
-/// A detached child is signalled through its process group, so the signal
-/// reaches everything it started; an attached one is signalled alone. A child
-/// that has already ended is not signalled, because its name no longer belongs
-/// to it; that case is not an error, and it may reap the child as a side
-/// effect.
+/// On POSIX a detached child is signalled through its process group, so the
+/// signal reaches everything it started; an attached one is signalled alone.
+/// On Windows every child is in a job object of its own, and `.kill` ends the
+/// job — so it reaches the tree whether or not the child was detached, which
+/// is the one place that system gives more than a process group does.
+///
+/// A child that has already ended is not signalled, because its name no longer
+/// belongs to it; that case is not an error, and it may reap the child as a
+/// side effect. On Windows that also means nothing else in its job is ended:
+/// `killWait` on a child that exited on its own leaves what the child started
+/// to `deinit`.
 ///
 /// This does not wait. The child is still a process, and still needs reaping,
 /// when this returns.
@@ -1050,6 +1078,13 @@ fn closeHandles(child: *Child) void {
     child.handles_open = false;
 }
 
+/// Closes the job, which ends anything still in it. Idempotent.
+fn closeJob(child: *Child) void {
+    const job = child.job orelse return;
+    child.job = null;
+    windows.CloseHandle(job);
+}
+
 fn tryWaitWindows(child: *Child) TryWaitError!?Term {
     switch (win32.WaitForSingleObject(child.id, 0)) {
         win32.WAIT_OBJECT_0 => {},
@@ -1091,6 +1126,12 @@ fn killWindows(child: *Child, signal: Signal) KillError!void {
 }
 
 fn terminateWindows(child: *Child) KillError!void {
+    // The job rather than the process, so what the child started goes with it.
+    // `TerminateJobObject` is the same uncatchable end as `TerminateProcess`,
+    // applied to the whole set, and the exit code is the same 1.
+    if (child.job) |job| {
+        if (win32.TerminateJobObject(job, 1) != .FALSE) return;
+    }
     if (win32.TerminateProcess(child.id, 1) != .FALSE) return;
     return switch (windows.GetLastError()) {
         .ACCESS_DENIED => {

@@ -91,6 +91,22 @@ before 1.0 the minor is the breaking one.
 
 ### Added
 
+- **A Windows child and everything it starts are one job object, so `kill` and
+  `killWait` reach the tree.** This was the last thing `detach` meant less of
+  there: `CREATE_NEW_PROCESS_GROUP` is an address for a console control event
+  and nothing more, so ending a child left what the child started running,
+  where on POSIX a signal to the process group reaches all of it. `spawn` now
+  creates a job, starts the child suspended, assigns it, and resumes it, so
+  there is no instant in which the child exists outside its job and could put
+  something beyond it. `.kill` ends the job. The job is created with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so `Child.deinit` also ends whatever
+  the child started and left behind — a difference from POSIX, where `deinit`
+  signals nothing and a grandchild of a reaped child keeps running, and it is
+  written down on `deinit` rather than left to be discovered. A child that
+  cannot be put in its job is `error.JobAssignmentFailed`: jobs have nested
+  since Windows 8 and this package's floor is Windows 10, so the way to reach
+  it is a job that forbids nesting, and a child whose tree `kill` could not
+  reach is not a child this package will hand back.
 - `CONDUIT_TRACE` in the environment turns on a handful of diagnostic lines
   about what this package asked the operating system for: which spawn path
   ran, the flag word and structure size `CreateProcessW` was given, the

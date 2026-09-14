@@ -96,6 +96,78 @@ pub extern "kernel32" fn ResizePseudoConsole(
 pub extern "kernel32" fn ClosePseudoConsole(hPC: HPCON) callconv(.winapi) void;
 
 //======================================================================
+// Job objects.
+//======================================================================
+
+/// A job object is a set of processes the operating system keeps together: a
+/// process assigned to one puts everything it starts in the same job, and the
+/// job can be ended or accounted for as a unit. It is the Windows answer to
+/// the question a POSIX process group answers.
+pub extern "kernel32" fn CreateJobObjectW(
+    lpJobAttributes: ?*SECURITY_ATTRIBUTES,
+    lpName: ?LPCWSTR,
+) callconv(.winapi) ?HANDLE;
+
+pub extern "kernel32" fn AssignProcessToJobObject(
+    hJob: HANDLE,
+    hProcess: HANDLE,
+) callconv(.winapi) BOOL;
+
+/// Ends every process in the job, each with `uExitCode`.
+pub extern "kernel32" fn TerminateJobObject(
+    hJob: HANDLE,
+    uExitCode: UINT,
+) callconv(.winapi) BOOL;
+
+pub extern "kernel32" fn SetInformationJobObject(
+    hJob: HANDLE,
+    JobObjectInformationClass: c_int,
+    lpJobObjectInformation: *anyopaque,
+    cbJobObjectInformationLength: DWORD,
+) callconv(.winapi) BOOL;
+
+/// `JobObjectExtendedLimitInformation` in `JOBOBJECTINFOCLASS`.
+pub const JobObjectExtendedLimitInformation: c_int = 9;
+
+/// Every process still in the job is ended when the last handle to the job is
+/// closed.
+pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
+
+pub const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
+    PerProcessUserTimeLimit: windows.LARGE_INTEGER,
+    PerJobUserTimeLimit: windows.LARGE_INTEGER,
+    LimitFlags: DWORD,
+    MinimumWorkingSetSize: SIZE_T,
+    MaximumWorkingSetSize: SIZE_T,
+    ActiveProcessLimit: DWORD,
+    Affinity: windows.ULONG_PTR,
+    PriorityClass: DWORD,
+    SchedulingClass: DWORD,
+};
+
+pub const IO_COUNTERS = extern struct {
+    ReadOperationCount: u64,
+    WriteOperationCount: u64,
+    OtherOperationCount: u64,
+    ReadTransferCount: u64,
+    WriteTransferCount: u64,
+    OtherTransferCount: u64,
+};
+
+pub const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
+    BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+    IoInfo: IO_COUNTERS,
+    ProcessMemoryLimit: SIZE_T,
+    JobMemoryLimit: SIZE_T,
+    PeakProcessMemoryUsed: SIZE_T,
+    PeakJobMemoryUsed: SIZE_T,
+};
+
+/// Lets a thread `CreateProcessW` started suspended begin running. Returns the
+/// previous suspend count, or `maxInt(DWORD)` on failure.
+pub extern "kernel32" fn ResumeThread(hThread: HANDLE) callconv(.winapi) DWORD;
+
+//======================================================================
 // Handles and pipes.
 //======================================================================
 
