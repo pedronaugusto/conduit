@@ -231,8 +231,6 @@ once on purpose.
 
 ## Scope
 
-Things a package of this kind might do, which conduit does not do:
-
 - Terminal emulation. `Proxy` moves bytes; nothing here parses an escape
   sequence or keeps a screen.
 - Shell-style command splitting. `argv` is a list; turning one string into
