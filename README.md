@@ -252,14 +252,17 @@ once on purpose.
 | Linux (glibc) | `posix_openpt`, `fork` and `execve` | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
 | Linux (musl) | the same | Alpine, in CI and with `ci/linux.sh --musl` |
 | macOS | the same | `macos-latest` |
-| Windows | ConPTY and `CreateProcessW` | compiles; the CI run is pending |
+| Windows | ConPTY and `CreateProcessW` | `windows-latest` |
 | FreeBSD, NetBSD | as Linux | cross-compiled only |
 
-Pending: the first full suite run on the Windows runner, and a job object
-there — `detach` is `CREATE_NEW_PROCESS_GROUP`, so `killWait` ends the child
-and not what the child started, where on POSIX the process group reaches the
-tree. Windows 10 version 1809 is the floor: `CreatePseudoConsole` is imported
+Every job in that matrix passed on run
+[`34806711915`](https://github.com/pedronaugusto/conduit/actions/runs/34806711915).
+Windows 10 version 1809 is the floor: `CreatePseudoConsole` is imported
 statically rather than looked up.
+
+Pending: a job object on Windows. `detach` is `CREATE_NEW_PROCESS_GROUP`, so
+`killWait` ends the child and not what the child started, where on POSIX the
+process group reaches the tree.
 
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, both Linux libcs on two architectures, both macOS
