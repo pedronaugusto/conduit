@@ -148,13 +148,30 @@ fn waitWithin(child: *Child) !Child.Term {
     return error.TestChildDidNotExit;
 }
 
-/// How a child that was killed reports it.
+/// How a child that `killWait` ended with a grace reports it.
 ///
-/// POSIX says which signal ended it. Windows has no such notion: a terminated
-/// process reports the exit code it was terminated with, and this package uses
-/// 1.
+/// POSIX names the signal, and for a child that does not catch it that is
+/// exactly the one this package sent.
+///
+/// Windows has no signal to name and, for this path, no number of this
+/// package's own either. `.terminate` there is a console control event, so a
+/// child that obeys it ends on its own terms and reports whatever status it
+/// chose — the system's control-exit status for one that does not handle the
+/// event, which reaches `Term.exited` as the low byte of an `NTSTATUS`. The
+/// number this package does choose is the one `.kill` terminates with, and
+/// `killWait` with no grace is what asks for it: "succeeded, exitCode and
+/// signalName" below is where that 1 is asserted. Here the claim is the one
+/// that is true on both systems — the child is gone, and it did not end the
+/// way a program that finished its work ends.
 fn expectKilled(term: Child.Term, signal: posix.SIG) !void {
-    if (is_windows) return testing.expectEqual(Child.Term{ .exited = 1 }, term);
+    if (is_windows) {
+        // An exit code and never a signal, because that notion does not exist
+        // there -- and not zero, because the child did not get to finish.
+        try testing.expect(conduit.signalName(term) == null);
+        try testing.expect(conduit.exitCode(term) != null);
+        try testing.expect(!conduit.succeeded(term));
+        return;
+    }
     return testing.expectEqual(Child.Term{ .signal = signal }, term);
 }
 

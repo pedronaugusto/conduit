@@ -91,6 +91,14 @@ pub extern "kernel32" fn CreatePipe(
 
 pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;
 
+/// What `GetFileAttributesW` returns when it could not look at the path.
+pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
+pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x00000010;
+
+pub extern "kernel32" fn GetFileAttributesW(
+    lpFileName: [*:0]const u16,
+) callconv(.winapi) DWORD;
+
 pub extern "kernel32" fn SetHandleInformation(
     hObject: HANDLE,
     dwMask: DWORD,

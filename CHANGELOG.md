@@ -8,6 +8,12 @@ before 1.0 the minor is the breaking one.
 
 ### Fixed
 
+- **`error.BadWorkingDirectory` meant what it says only on POSIX.**
+  `CreateProcessW` reports a working directory that is not there with an error
+  code it also uses for a program at a path that is not there, so the two were
+  indistinguishable afterwards and one of them could come back as the other's
+  error. `spawn` looks at the directory before it starts the child, which is
+  what the fork child's `chdir` does for the same reason on POSIX.
 - **A Windows child inherited every inheritable handle this process held**, not
   only the three it was being given. `bInheritHandles` is all or nothing, and
   `STARTF_USESTDHANDLES` names the child's standard handles without limiting
@@ -31,6 +37,19 @@ before 1.0 the minor is the breaking one.
   `Pty.closeSlave` say in their doc comments that the master has to be read.
   The whole suite ran to the end on macOS, Linux and Alpine and hung on
   Windows; this is what it hung on.
+
+### Changed
+
+- **What `killWait` reports on Windows is written down.** `.kill` there is
+  `TerminateProcess` with an exit code of 1, so a child that had to be killed
+  reports `.exited = 1` — that number is this package's. `.terminate` is a
+  console control event, so a child that obeys it ends on its own terms and
+  reports the status *it* chose; for one that does not handle the event that is
+  the system's control-exit status, which reaches `Term.exited` as its low byte
+  because `Term.exited` is a byte and a Windows exit code is a `DWORD`. The
+  truncation is `std.process.Child.wait`'s and `tryWait` matches it, so the two
+  calls never report a child differently. `Term`, `Signal.terminate` and
+  `killWait` each say the part that belongs to them.
 
 ### Added
 

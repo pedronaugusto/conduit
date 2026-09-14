@@ -93,6 +93,15 @@ term: ?Term,
 /// neither `wait` nor `tryWait` asks for stop notifications, and Windows has
 /// no such state. `.signal` is POSIX-only for the same reason — a Windows
 /// process that is terminated reports the exit code it was terminated with.
+///
+/// **A Windows exit code is a `DWORD` and `Term.exited` is a byte**, so what
+/// arrives there is the low byte of it. That matters because the codes Windows
+/// produces itself are not small: a console process ended by a control event
+/// it does not handle exits with the system's control-exit status, an
+/// `NTSTATUS` in the `0xC000_0000` range, and the byte that reaches `Term` is
+/// the last two digits of it. The truncation is `std.process.Child.wait`'s,
+/// and `tryWait` does the same thing for the same reason: the two calls must
+/// not report a child differently.
 pub const Term = std.process.Child.Term;
 
 /// Whether the child ended the way a program that did its job ends: exited,
@@ -650,6 +659,12 @@ pub const Signal = enum {
     /// group when it has one — and, when it does not, `TerminateProcess`,
     /// which it cannot catch. Windows offers nothing else: there is no
     /// catchable request that reaches a process outside your console.
+    ///
+    /// A child that ends because of the console control event chooses its own
+    /// exit code, and a child that does not handle the event gets the system's
+    /// control-exit status. So `.terminate` on Windows is the one request here
+    /// whose outcome this package does not decide; `Term` says what a byte of
+    /// such a status looks like.
     terminate,
     /// End the child now. POSIX: `SIGKILL`. Windows: `TerminateProcess`.
     /// Neither can be caught.
@@ -725,6 +740,19 @@ pub const KillWaitError = KillError || WaitError || TryWaitError || std.Io.Cance
 /// Windows a console control event fails for a child that shares no console
 /// with this process, and the answer in that case is the `.kill` that follows
 /// anyway.
+///
+/// **What the returned `Term` says differs by system, and by which of the two
+/// requests did it.** On POSIX a child that does not catch `SIGTERM` reports
+/// `.signal = .TERM`, and one that survives the grace reports `.signal =
+/// .KILL`; either way the signal named is the one this package sent. On
+/// Windows only the second is this package's to name: `.kill` is
+/// `TerminateProcess` with an exit code of 1, so a child that had to be killed
+/// reports `.exited = 1`. A child that obeys the `.terminate` before it ends
+/// on its own terms and reports whatever status *it* chose — for one that does
+/// not handle the control event, the system's control-exit status, which
+/// reaches `Term` as its low byte. A caller that wants a number of its own on
+/// that system should pass a `grace_ms` of zero; a caller that wants to know
+/// whether the child ended well should ask `succeeded`.
 ///
 /// The grace is polled rather than slept through in one piece, so the common
 /// case of a child that exits promptly returns promptly. The poll interval

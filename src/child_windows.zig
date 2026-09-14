@@ -68,6 +68,21 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     else
         null;
 
+    // Looked at here rather than left to `CreateProcessW`, which reports a
+    // working directory that is not there with an error code it also uses for
+    // other things -- a program at a path that does not exist is one of them
+    // -- so the two would be indistinguishable afterwards. `spawn` promises
+    // `BadWorkingDirectory` for one and `FileNotFound` for the other on both
+    // systems, and on POSIX the fork child reports which step failed; this is
+    // what keeps that promise here. A directory that goes away between this
+    // and the spawn comes back as whatever `CreateProcessW` makes of it, which
+    // is the ordinary cost of asking first.
+    if (cwd) |dir| {
+        const attributes = win32.GetFileAttributesW(dir);
+        if (attributes == win32.INVALID_FILE_ATTRIBUTES) return error.BadWorkingDirectory;
+        if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY == 0) return error.BadWorkingDirectory;
+    }
+
     var plan: Plan = try .init(options);
     errdefer plan.closeOwned(io);
 
