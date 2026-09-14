@@ -6,6 +6,8 @@ before 1.0 the minor is the breaking one.
 
 ## Unreleased
 
+## 0.3.1
+
 ### Fixed
 
 - **Three places asked a Windows value for a name it did not have.** A
