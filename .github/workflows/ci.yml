@@ -145,8 +145,6 @@ jobs:
       # reached.
       - name: Debug — spawn, pseudo-terminals
         timeout-minutes: 4
-        env:
-          CONDUIT_TRACE: "1"
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"
@@ -174,8 +172,6 @@ jobs:
       # with nothing to say, so this step says which stage it reached.
       - name: Debug — spawn, environment, failure and the shell
         timeout-minutes: 4
-        env:
-          CONDUIT_TRACE: "1"
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=environment and working directory"
