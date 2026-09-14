@@ -8,18 +8,26 @@ before 1.0 the minor is the breaking one.
 
 ## 0.3.2
 
-Three Windows faults that 0.3.1 shipped, every one of them a wait with no end.
+Four Windows faults that 0.3.1 shipped, and three of them the same one: a wait
+with no end.
 
 ### Fixed
 
+- **Stopping a reader could wait on the reader.** The wait that asks a task
+  inside a read to stop took the lock that task takes to put away what it read,
+  so a stop that had not yet asked for anything was waiting on the thing it was
+  trying to stop. Nothing in that path takes the lock now: whether the task has
+  finished is an atomic, stored last and outside it. `Expect.deinit` and this
+  package's own tests had the same shape and both changed.
 - **`Pty.close` could never return on Windows.** `ClosePseudoConsole` waits for
   the console host to go, and the host does not go until it has flushed what
   the client last wrote into a pipe this process holds the reading end of — so
   with nothing reading, the host waits on a write that cannot complete and the
   caller waits on the host. `close` now reads the master itself while the
   console closes: a drain started before and joined after, ended by the host's
-  own exit. The terminal end goes first on both systems again, and a caller no
-  longer has to keep a reader alive across its own teardown.
+  own exit. The terminal end goes first on both systems again. Closing the pair
+  is also what ends a reader of the caller's, which is the order that needs no
+  cancelling at all.
 - **`Expect.deinit` could never return on Windows**, after a child on a
   pseudoconsole had exited on its own. The task is inside a read, and that read
   ends when the far end finishes, when the handle goes away, or when the
@@ -27,9 +35,9 @@ Three Windows faults that 0.3.1 shipped, every one of them a wait with no end.
   first two happen while the console host holds the pipe. The asking was
   `CancelIoEx`, which reaches only the reads pending at the moment it is
   called, so it landed when the task was inside one and missed when the task
-  was between two, leaving it to start another read that nothing would end. It
-  is asked again now until the task says it has stopped, and a flag tells a
-  reader between reads not to start another.
+  was between two. It is asked again now until the task says it has stopped, a
+  flag tells a reader between reads not to start another, and the doc comment
+  says which order needs neither.
 - **`spawnShell` wrote past a buffer for a long `COMSPEC` or `SHELL`.** The
   value was read into an array of WTF-16 units and then converted into an array
   of the same length in bytes, and one unit is worth up to three bytes of
