@@ -8,6 +8,18 @@ before 1.0 the minor is the breaking one.
 
 ### Added
 
+- `Child.SpawnOptions.stdio` has a `.streams` shape: each of standard input,
+  output and error named on its own as `.inherit`, `.{ .file = f }`, `.ignore`,
+  `.pipe` or `.close`. Before this the choice was one choice for all three plus
+  `stderr_to` for the one exception that came up, so a pipe on one stream and
+  the null device on another was not expressible, and neither was the thing a
+  pair makes possible on POSIX: `.{ .file = pty.slaveFile() }` gives a child a
+  terminal for one stream and a pipe or a file for the others. `.close` is new
+  as well — no descriptor at that number at all, which is the one of the five a
+  caller should think twice about and whose doc comment says why. The five
+  names are the standard library's.
+- `Child.Stdio.perStream` is what the older shapes lower to, so `.inherit`,
+  `.ignore` and `.pipes` are now definitions rather than separate code paths.
 - `Expect` is the conversation `Proxy` and `Child.output` are not: `until` waits
   for a literal byte pattern on the master, `bytes` waits for a count of them,
   `send` writes the reply, and every wait takes a deadline, because a program

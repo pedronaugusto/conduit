@@ -146,6 +146,45 @@ pub const PipeOptions = struct {
     stderr: bool = true,
 };
 
+/// What one of the child's three standard streams is connected to.
+///
+/// The five are the standard library's — `std.process.SpawnOptions.StdIo` has
+/// the same ones under the same names — because a caller who already knows
+/// that vocabulary should not have to learn a second one here.
+pub const Stream = union(enum) {
+    /// The parent's own descriptor for that stream.
+    inherit,
+    /// A file the caller opened. Borrowed: `deinit` does not close it, and it
+    /// must stay open until `spawn` returns.
+    ///
+    /// The terminal end of a pair is one of these — `pty.slaveFile()` — which
+    /// is how a child is given a terminal for one stream and a pipe or a file
+    /// for the others. POSIX only for that particular file: a pseudoconsole is
+    /// not a stream, and `Pty.slaveFile` is a compile error on Windows.
+    file: std.Io.File,
+    /// The null device: `/dev/null`, or `NUL` on Windows. One handle serves
+    /// every stream that asks for it.
+    ignore,
+    /// A pipe `spawn` creates and the `Child` owns, reachable afterwards as
+    /// `child.stdin`, `child.stdout` or `child.stderr`.
+    pipe,
+    /// Nothing: the child starts with no descriptor at that number.
+    ///
+    /// A child that writes to it gets `EBADF` on POSIX and an invalid handle
+    /// on Windows, and — worse, and the reason this is never a default — the
+    /// next file such a child opens may be given that number, so its output
+    /// arrives somewhere nobody meant. For the rare program that requires it,
+    /// not for tidiness: `.ignore` is what "I do not want this output" means.
+    close,
+};
+
+/// The child's three standard streams, each named on its own.
+pub const Streams = struct {
+    stdin: Stream = .inherit,
+    stdout: Stream = .inherit,
+    stderr: Stream = .inherit,
+};
+
 /// What the child's standard input, output and error are connected to.
 pub const Stdio = union(enum) {
     /// The child runs on this pseudo-terminal pair, so it sees a terminal:
@@ -169,6 +208,32 @@ pub const Stdio = union(enum) {
     inherit,
     /// All three streams are `/dev/null`, or `NUL` on Windows.
     ignore,
+    /// Each stream named on its own.
+    ///
+    /// The general case. `.inherit`, `.ignore` and `.pipes` are each some
+    /// value of this one, kept because they are the three shapes almost every
+    /// spawn wants and are shorter to write; `perStream` is where they turn
+    /// into it.
+    streams: Streams,
+
+    /// The three streams this shape means, in descriptor order.
+    ///
+    /// `.pty` has no answer and is not asked: a pseudoconsole is attached to a
+    /// process rather than handed to it on a descriptor, so on Windows it is
+    /// not a per-stream choice at all.
+    pub fn perStream(stdio: Stdio) [3]Stream {
+        return switch (stdio) {
+            .pty => unreachable,
+            .inherit => .{ .inherit, .inherit, .inherit },
+            .ignore => .{ .ignore, .ignore, .ignore },
+            .pipes => |which| .{
+                if (which.stdin) .pipe else .inherit,
+                if (which.stdout) .pipe else .inherit,
+                if (which.stderr) .pipe else .inherit,
+            },
+            .streams => |streams| .{ streams.stdin, streams.stdout, streams.stderr },
+        };
+    }
 };
 
 /// Everything `spawn` needs.
@@ -221,6 +286,11 @@ pub const SpawnOptions = struct {
     /// Send the child's standard error to this file, whatever `stdio` says
     /// about the other two streams. The file is borrowed: `deinit` does not
     /// close it, and it must stay open until `spawn` returns.
+    ///
+    /// The one-case version of `Stdio.streams`, kept because it is the case
+    /// that comes up: `.{ .streams = .{ .stderr = .{ .file = f } } }` says the
+    /// same thing about all three streams at once. Applied last, so it wins
+    /// over whatever `stdio` said about standard error.
     ///
     /// Not available together with `.pty` on Windows, where it is
     /// `error.Unsupported`: a pseudoconsole is attached through an attribute

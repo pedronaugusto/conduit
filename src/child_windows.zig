@@ -152,37 +152,45 @@ const Plan = struct {
         switch (options.stdio) {
             // Attached through the attribute list, not through handles.
             .pty => {},
-            .inherit => plan.child = inheritedHandles(),
-            .ignore => {
-                const nul = try openNul();
-                plan.child = @splat(nul);
-                plan.owned[0] = nul;
-            },
-            .pipes => |which| {
-                // A stream that is not piped is the parent's, which needs
-                // saying here: `STARTF_USESTDHANDLES` is all or nothing, so
-                // leaving a slot null would hand the child no handle at all
-                // rather than this process's -- the same option meaning two
-                // different things on the two systems.
-                plan.child = inheritedHandles();
-                if (which.stdin) {
-                    const ends = try makePipe(.to_child);
-                    plan.child[0] = ends.child;
-                    plan.owned[0] = ends.child;
-                    plan.parent[0] = file(ends.parent);
-                }
-                if (which.stdout) {
-                    const ends = try makePipe(.from_child);
-                    plan.child[1] = ends.child;
-                    plan.owned[1] = ends.child;
-                    plan.parent[1] = file(ends.parent);
-                }
-                if (which.stderr) {
-                    const ends = try makePipe(.from_child);
-                    plan.child[2] = ends.child;
-                    plan.owned[2] = ends.child;
-                    plan.parent[2] = file(ends.parent);
-                }
+            else => {
+                const inherited = inheritedHandles();
+                // One `NUL` serves every stream that asked for it.
+                var nul: ?windows.HANDLE = null;
+                for (options.stdio.perStream(), 0..) |stream, slot| switch (stream) {
+                    // "The parent's" has to be said with the parent's handle:
+                    // `STARTF_USESTDHANDLES` is all or nothing, so a null slot
+                    // would hand the child no handle at all -- which is what
+                    // `.close` means and not what `.inherit` does.
+                    .inherit => plan.child[slot] = inherited[slot],
+                    .close => plan.child[slot] = null,
+                    .file => |f| {
+                        // The caller's file has to be inheritable for the child
+                        // to receive it, and this is the only way to say so
+                        // about a handle somebody else opened.
+                        _ = win32.SetHandleInformation(
+                            f.handle,
+                            win32.HANDLE_FLAG_INHERIT,
+                            win32.HANDLE_FLAG_INHERIT,
+                        );
+                        plan.child[slot] = f.handle;
+                    },
+                    .ignore => {
+                        const handle = nul orelse handle: {
+                            const opened = try openNul();
+                            plan.owned[slot] = opened;
+                            nul = opened;
+                            break :handle opened;
+                        };
+                        plan.child[slot] = handle;
+                    },
+                    .pipe => {
+                        // Standard input is the one the child reads.
+                        const ends = try makePipe(if (slot == 0) .to_child else .from_child);
+                        plan.child[slot] = ends.child;
+                        plan.owned[slot] = ends.child;
+                        plan.parent[slot] = file(ends.parent);
+                    },
+                };
             },
         }
 

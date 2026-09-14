@@ -162,7 +162,10 @@ will not start on anything older.
 `stdio`, `detach`, `stderr_to`, `path_search`.
 
 `stdio` is one of `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
-`.inherit` or `.ignore`.
+`.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` — each
+of those three being `.inherit`, `.{ .file = f }`, `.ignore`, `.pipe` or
+`.close`. `.{ .file = pty.slaveFile() }` is how a child is given the terminal
+end of a pair for one stream and something else for the others, on POSIX.
 
 `detach` puts the child out of reach of signals aimed at the parent's process
 group. On POSIX with `.pty` it means `setsid` plus `TIOCSCTTY`, so the pair

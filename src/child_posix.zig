@@ -110,6 +110,16 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     };
 }
 
+/// What the child does with one of its first three descriptors.
+const Target = union(enum) {
+    /// Leave the parent's descriptor in place.
+    keep,
+    /// Put this descriptor there, with `dup2`.
+    place: posix.fd_t,
+    /// Close it, so the child has no descriptor at that number.
+    close,
+};
+
 /// The descriptors involved in a spawn: what the child puts on 0, 1 and 2,
 /// which of those this package opened and must therefore close in the parent
 /// after the fork, and the pipe ends the parent keeps.
@@ -117,11 +127,10 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 /// Every method is idempotent, so the failure path may close twice without
 /// closing a descriptor number that has since been handed to something else.
 const Plan = struct {
-    /// Indexed by descriptor number in the child. `null` leaves the parent's
-    /// descriptor in place.
-    child: [3]?posix.fd_t = @splat(null),
-    /// The subset of `child` this `Plan` opened. A `/dev/null` shared by all
-    /// three appears once.
+    /// Indexed by descriptor number in the child.
+    child: [3]Target = @splat(.keep),
+    /// The subset of `child` this `Plan` opened. A `/dev/null` shared by more
+    /// than one stream appears once, at the slot that opened it.
     owned: [3]?posix.fd_t = @splat(null),
     /// The parent's end of each pipe, by the descriptor number it serves in
     /// the child.
@@ -132,38 +141,36 @@ const Plan = struct {
         errdefer plan.closeAll(io);
 
         switch (options.stdio) {
-            .inherit => {},
-            .pty => |pty| plan.child = @splat(pty.slave.?),
-            .ignore => {
-                const fd = c.open("/dev/null", .{ .ACCMODE = .RDWR });
-                if (fd < 0) switch (c.errno(@as(c_int, -1))) {
-                    .MFILE => return error.ProcessFdQuotaExceeded,
-                    .NFILE => return error.SystemFdQuotaExceeded,
-                    else => return error.NoDevice,
+            // The terminal end on all three, and nothing this `Plan` owns: the
+            // pair is the caller's.
+            .pty => |pty| plan.child = @splat(.{ .place = pty.slave.? }),
+            else => {
+                // One null device serves every stream that asked for it.
+                var null_device: ?posix.fd_t = null;
+                for (options.stdio.perStream(), 0..) |stream, slot| switch (stream) {
+                    .inherit => {},
+                    .close => plan.child[slot] = .close,
+                    .file => |f| plan.child[slot] = .{ .place = f.handle },
+                    .ignore => {
+                        const fd = null_device orelse fd: {
+                            const opened = try openNullDevice();
+                            plan.owned[slot] = opened;
+                            null_device = opened;
+                            break :fd opened;
+                        };
+                        plan.child[slot] = .{ .place = fd };
+                    },
+                    .pipe => {
+                        const ends = try makePipe();
+                        // Standard input is the one the child reads.
+                        const reading = slot == 0;
+                        const child_end = if (reading) ends[0] else ends[1];
+                        const parent_end = if (reading) ends[1] else ends[0];
+                        plan.child[slot] = .{ .place = child_end };
+                        plan.owned[slot] = child_end;
+                        plan.parent[slot] = file(parent_end);
+                    },
                 };
-                setCloseOnExec(fd);
-                plan.child = @splat(fd);
-                plan.owned[0] = fd;
-            },
-            .pipes => |which| {
-                if (which.stdin) {
-                    const ends = try makePipe();
-                    plan.child[0] = ends[0];
-                    plan.owned[0] = ends[0];
-                    plan.parent[0] = file(ends[1]);
-                }
-                if (which.stdout) {
-                    const ends = try makePipe();
-                    plan.child[1] = ends[1];
-                    plan.owned[1] = ends[1];
-                    plan.parent[1] = file(ends[0]);
-                }
-                if (which.stderr) {
-                    const ends = try makePipe();
-                    plan.child[2] = ends[1];
-                    plan.owned[2] = ends[1];
-                    plan.parent[2] = file(ends[0]);
-                }
             },
         }
 
@@ -178,7 +185,7 @@ const Plan = struct {
                 pipe_end.close(io);
                 plan.parent[2] = null;
             }
-            plan.child[2] = f.handle;
+            plan.child[2] = .{ .place = f.handle };
         }
 
         return plan;
@@ -305,10 +312,14 @@ fn childMain(
         }
     }
 
-    for (plan.child, 0..) |maybe_fd, target| {
-        const fd = maybe_fd orelse continue;
-        if (!place(fd, @intCast(target))) bail(report, .descriptors);
-    }
+    for (plan.child, 0..) |target, slot| switch (target) {
+        .keep => {},
+        .place => |fd| if (!place(fd, @intCast(slot))) bail(report, .descriptors),
+        // A close that finds nothing there is not a failure of the spawn: the
+        // child was asked to have no descriptor at that number, and it does
+        // not.
+        .close => _ = c.close(@intCast(slot)),
+    };
 
     switch (options.stdio) {
         // The master end has no business in the child. While a descriptor for
@@ -404,6 +415,20 @@ fn environPath() ?[]const u8 {
         if (std.mem.startsWith(u8, pair, "PATH=")) return pair["PATH=".len..];
     }
     return null;
+}
+
+/// The null device, opened for both directions so one descriptor can serve any
+/// of the three streams, and close-on-exec so the copy `dup2` makes is the only
+/// one the child keeps.
+fn openNullDevice() SpawnError!posix.fd_t {
+    const fd = c.open("/dev/null", .{ .ACCMODE = .RDWR });
+    if (fd < 0) switch (c.errno(@as(c_int, -1))) {
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        else => return error.NoDevice,
+    };
+    setCloseOnExec(fd);
+    return fd;
 }
 
 /// A pipe whose two ends are both close-on-exec.

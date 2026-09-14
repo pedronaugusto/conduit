@@ -51,6 +51,7 @@ const script = if (is_windows) struct {
     const drain_then_exit_7 = [_][]const u8{ "cmd.exe", "/c", "sort > nul & exit 7" };
     const read_then_exit_5 = [_][]const u8{ "cmd.exe", "/c", "set /p line=& exit 5" };
     const say_on_terminal = [_][]const u8{ "cmd.exe", "/c", "echo on the terminal" };
+    const out_and_err = [_][]const u8{ "cmd.exe", "/c", "echo to stdout& echo to stderr 1>&2" };
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
     const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %CONDUIT_TEST_VALUE% %CD%" };
     const working_directory = "C:\\Windows";
@@ -63,6 +64,7 @@ const script = if (is_windows) struct {
     const drain_then_exit_7 = [_][]const u8{ "/bin/sh", "-c", "cat > /dev/null; exit 7" };
     const read_then_exit_5 = [_][]const u8{ "/bin/sh", "-c", "read line; exit 5" };
     const say_on_terminal = [_][]const u8{ "/bin/sh", "-c", "printf 'on the terminal\\n'" };
+    const out_and_err = [_][]const u8{ "/bin/sh", "-c", "printf 'to stdout'; printf 'to stderr' 1>&2" };
     const sleep_forever = [_][]const u8{ "/bin/sh", "-c", "sleep 100" };
     const report_environment = [_][]const u8{ "sh", "-c", "printf '%s %s' \"$CONDUIT_TEST_VALUE\" \"$PWD\"" };
     const working_directory = "/tmp";
@@ -686,6 +688,122 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
 
     try sink.expect("to stderr");
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+}
+
+//======================================================================
+// Per-stream stdio.
+//======================================================================
+
+test "each stream is chosen on its own" {
+    // A pipe for what is wanted and the null device for what is not, which is
+    // the combination `.pipes` cannot say: it pipes a stream or leaves it the
+    // parent's, and leaving standard error the parent's puts the child's
+    // complaints on the test runner's own terminal.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.out_and_err,
+        .stdio = .{ .streams = .{
+            .stdin = .ignore,
+            .stdout = .pipe,
+            .stderr = .ignore,
+        } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    // Only the stream that asked for a pipe has one.
+    try testing.expectEqual(@as(?std.Io.File, null), child.stdin);
+    try testing.expect(child.stdout != null);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stderr);
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "to stdout") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "to stderr") == null);
+    try testing.expectEqualStrings("", result.stderr);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+}
+
+test "the terminal end of a pair can be one stream and a pipe another" {
+    // POSIX only: the claim needs the terminal end to be a file, and on
+    // Windows a pseudoconsole is an object a whole process is attached to.
+    // `Pty.slaveFile` is a compile error there and says so.
+    if (is_windows) return error.SkipZigTest;
+
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+
+    // Standard output is the terminal; standard error is a pipe. The child
+    // reports which of the two it thinks is one, so the answer comes from the
+    // child rather than from this process looking at its own descriptors.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{
+            "/bin/sh",                                                                                "-c",
+            "test -t 1 && printf 'stdout is a terminal\n'; test -t 2 || printf 'stderr is not' 1>&2",
+        },
+        .stdio = .{ .streams = .{
+            .stdin = .ignore,
+            .stdout = .{ .file = pty.slaveFile() },
+            .stderr = .pipe,
+        } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    // The terminal end is the caller's here, and this process is still holding
+    // it: closing it is what lets a read of the master finish.
+    pty.closeSlave(io);
+
+    var on_terminal: Sink = .{};
+    defer on_terminal.deinit();
+    try on_terminal.start(pty.readFile());
+
+    var on_pipe: Sink = .{};
+    defer on_pipe.deinit();
+    try on_pipe.start(child.stderr.?);
+
+    try on_terminal.expect("stdout is a terminal");
+    try on_pipe.expect("stderr is not");
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+}
+
+test "a stream can be closed rather than connected to anything" {
+    // POSIX only: the claim is what a child finds at a descriptor that is not
+    // there, and `cmd.exe` has no way to report it.
+    if (is_windows) return error.SkipZigTest;
+
+    // With nothing on descriptor 1, the write fails and the shell says so with
+    // its status. The same program with the null device there succeeds, which
+    // is what makes this about `.close` and not about the program.
+    var closed = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'x'" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .close, .stderr = .ignore } },
+    });
+    defer closed.deinit(io);
+    errdefer _ = closed.killWait(io, 0) catch {};
+    try testing.expect(!conduit.succeeded(try waitWithin(&closed)));
+
+    var ignored = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'x'" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer ignored.deinit(io);
+    errdefer _ = ignored.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&ignored));
+}
+
+test "the older stdio shapes are the per-stream ones under another name" {
+    try testing.expectEqual(
+        [3]Child.Stream{ .inherit, .inherit, .inherit },
+        (Child.Stdio{ .inherit = {} }).perStream(),
+    );
+    try testing.expectEqual(
+        [3]Child.Stream{ .ignore, .ignore, .ignore },
+        (Child.Stdio{ .ignore = {} }).perStream(),
+    );
+    try testing.expectEqual(
+        [3]Child.Stream{ .pipe, .inherit, .pipe },
+        (Child.Stdio{ .pipes = .{ .stdout = false } }).perStream(),
+    );
 }
 
 //======================================================================
