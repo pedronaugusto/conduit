@@ -53,6 +53,7 @@ run_in() {
             "$image" \
             zig build test \
             -Doptimize="$mode" \
+            --test-timeout 45s \
             --cache-dir /tmp/zc \
             --global-cache-dir /tmp/zg \
             --summary all

@@ -17,10 +17,10 @@ env:
   ZIG_VERSION: 0.16.0
 
 jobs:
-  # The whole suite on every host it supports, Windows included. A
-  # pseudo-terminal is a kernel object and a process group is a kernel concept,
-  # so a cross-compilation check proves nothing about either: this job is where
-  # the claims are tested.
+  # The whole suite on the hosts where it runs to the end. A pseudo-terminal is
+  # a kernel object and a process group is a kernel concept, so a
+  # cross-compilation check proves nothing about either: this job is where the
+  # behaviour is tested. Windows has a job of its own below.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -46,21 +46,143 @@ jobs:
       # runs between `fork` and `execve` is the kind of code a different
       # inlining decision can change.
       - name: Test — Debug
-        run: zig build test -Doptimize=Debug
+        run: zig build test -Doptimize=Debug --test-timeout 45s
 
       - name: Test — ReleaseSafe
-        run: zig build test -Doptimize=ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe --test-timeout 45s
 
       - name: Test — ReleaseFast
-        run: zig build test -Doptimize=ReleaseFast
+        run: zig build test -Doptimize=ReleaseFast --test-timeout 45s
 
       - name: Test — ReleaseSmall
-        run: zig build test -Doptimize=ReleaseSmall
+        run: zig build test -Doptimize=ReleaseSmall --test-timeout 45s
 
       # Built AND run. An example that only compiles proves the names resolve;
       # running it is what proves the library works.
       - name: Examples
         run: zig build examples
+
+  # Windows, in pieces.
+  #
+  # The Debug suite there has hung twice, and a step that runs out of its
+  # `timeout-minutes` has its log discarded — so nothing a hung run prints can
+  # be read afterwards. Two things answer that between them.
+  #
+  # `--test-timeout`, above and here, is the build runner's own bound on one
+  # test: it ends the test binary and names the test that did not finish, so a
+  # hang inside a test body fails the step with a message instead of running
+  # out the clock. It cannot see a hang that is not inside a test.
+  #
+  # For that, Debug is split: the examples on their own, then the suite one
+  # file at a time and `src/spawn_test.zig` in seven groups, each step named
+  # after what it runs and bounded at four minutes. `-Dtest-filter` matches a
+  # substring of a test's fully qualified name, which begins with the file it
+  # is in. Every filter changes the build hash, so each step compiles the test
+  # binary again; that is the cost of the bisection and the reason this job is
+  # allowed longer than the others.
+  test-windows:
+    name: test (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Formatting
+        run: zig fmt --check src examples build.zig
+
+      - name: Debug — examples
+        timeout-minutes: 4
+        run: zig build examples -Doptimize=Debug --summary all
+
+      - name: Debug — Pty
+        timeout-minutes: 4
+        run: zig build unit -Doptimize=Debug "-Dtest-filter=Pty.test" --test-timeout 45s --summary all
+
+      - name: Debug — Child, Reaper, tty, environ, shell
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=Child.test" "-Dtest-filter=child_windows.test"
+          "-Dtest-filter=Reaper.test" "-Dtest-filter=tty.test"
+          "-Dtest-filter=environ.test" "-Dtest-filter=shell.test"
+
+      - name: Debug — Expect
+        timeout-minutes: 4
+        run: zig build unit -Doptimize=Debug "-Dtest-filter=Expect.test" --test-timeout 45s --summary all
+
+      - name: Debug — spawn, pipes and collecting
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=a child on pipes" "-Dtest-filter=max_bytes"
+          "-Dtest-filter=gives up on a child" "-Dtest-filter=tryWait is null"
+          "-Dtest-filter=Reaper.exit"
+
+      - name: Debug — spawn, streams and half-close
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=stdinWriter" "-Dtest-filter=closeStdin is"
+          "-Dtest-filter=waitTimeout gives up" "-Dtest-filter=signalName say how"
+
+      - name: Debug — spawn, killing and process groups
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=killWait ends" "-Dtest-filter=process group of its own"
+          "-Dtest-filter=process group is the one" "-Dtest-filter=shares the parent"
+          "-Dtest-filter=killWait with no grace"
+
+      - name: Debug — spawn, pseudo-terminals
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"
+          "-Dtest-filter=Ctrl-C" "-Dtest-filter=foreground process group"
+          "-Dtest-filter=hangs the terminal up"
+
+      - name: Debug — spawn, per-stream stdio
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=stderr_to sends" "-Dtest-filter=each stream is chosen"
+          "-Dtest-filter=terminal end of a pair" "-Dtest-filter=a stream can be closed"
+          "-Dtest-filter=older stdio shapes"
+
+      - name: Debug — spawn, credentials and limits
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=file-creation mask" "-Dtest-filter=uid and gid"
+          "-Dtest-filter=resource limit set at spawn"
+          "-Dtest-filter=resource limits are refused"
+          "-Dtest-filter=credentials are refused"
+
+      - name: Debug — spawn, environment, failure and the shell
+        timeout-minutes: 4
+        run: >
+          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
+          "-Dtest-filter=environment and working directory"
+          "-Dtest-filter=scrubbed environment" "-Dtest-filter=path_search"
+          "-Dtest-filter=is not there" "-Dtest-filter=batch file"
+          "-Dtest-filter=spawnShell starts"
+
+      # Whole again, once Debug has said where it stands.
+      - name: Test — ReleaseSafe
+        timeout-minutes: 8
+        run: zig build test -Doptimize=ReleaseSafe --test-timeout 45s
+
+      - name: Test — ReleaseFast
+        timeout-minutes: 8
+        run: zig build test -Doptimize=ReleaseFast --test-timeout 45s
+
+      - name: Test — ReleaseSmall
+        timeout-minutes: 8
+        run: zig build test -Doptimize=ReleaseSmall --test-timeout 45s
 
   # The same suite on musl, which is not what ubuntu-latest gives. `ptsname_r`
   # reports failure differently on glibc and on musl, and this package reads

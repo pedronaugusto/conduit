@@ -31,8 +31,19 @@ pub fn build(b: *std.Build) void {
     // decision can change.
     //=====================================================================
 
+    // A filter runs part of the suite: `zig build unit -Dtest-filter=Pty.test`.
+    // Every test's fully qualified name begins with the file it is in, so one
+    // filter per file splits the suite the way it is written -- which is how
+    // CI finds out where a run that produces no output at all stopped.
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Run only the tests whose fully qualified name contains one of these",
+    ) orelse &[0][]const u8{};
+
     const tests = b.addTest(.{
         .name = "conduit-tests",
+        .filters = test_filters,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/conduit.zig"),
             .target = target,
@@ -41,8 +52,13 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // The suite without the examples, so a run that hangs says which of the
+    // two it was.
+    const unit_step = b.step("unit", "Run the conduit tests, without the examples");
+    unit_step.dependOn(&b.addRunArtifact(tests).step);
+
     const test_step = b.step("test", "Run the conduit tests");
-    test_step.dependOn(&b.addRunArtifact(tests).step);
+    test_step.dependOn(unit_step);
 
     //=====================================================================
     // Examples
