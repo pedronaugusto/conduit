@@ -283,10 +283,12 @@ ci/linux.sh --both      # the suite on glibc and musl Linux, in Docker
 
 Every test starts a real child process and reaps it, and CI runs the suite in
 Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code between `fork` and
-`execve` is the kind an inlining decision can change. A test that starts a
-child or opens a pair carries a watchdog that panics with the test's name after
-a minute, so a wait inside a system call that will not return fails the run
-instead of stopping it.
+`execve` is the kind an inlining decision can change. CI passes
+`--test-timeout 45s`, which ends the run and names the test that did not
+finish, and a test that starts a child or opens a pair also carries a watchdog
+that panics with its own name after a minute — a wait inside a system call that
+will not return should fail the run rather than stop it. `zig build unit` is
+the suite without the examples, and `-Dtest-filter` runs part of it.
 
 ## Requirements
 
