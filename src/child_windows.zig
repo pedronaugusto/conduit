@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
 const Pty = @import("Pty.zig");
+const trace = @import("trace.zig");
 const win32 = @import("win32.zig");
 
 const SpawnError = Child.SpawnError;
@@ -102,8 +103,13 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     switch (options.stdio) {
         .pty => |pty| {
+            const console = pty.slave.?;
             var list = try AttributeList.init(arena, 1);
-            try list.setPseudoConsole(pty.slave.?);
+            try list.setPseudoConsole(console);
+            trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}, last error {d}", .{
+                @intFromPtr(console),
+                @intFromEnum(windows.GetLastError()),
+            });
             attributes = list;
             startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
             startup.lpAttributeList = list.raw;
@@ -136,6 +142,36 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         .pty => .FALSE,
         else => .TRUE,
     };
+
+    trace.print(
+        "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, inherit={s}, attributes={s}",
+        .{
+            @tagName(options.stdio),
+            startup.StartupInfo.cb,
+            @as(u32, @bitCast(flags)),
+            @tagName(inherit_handles),
+            if (startup.lpAttributeList == null) "none" else "present",
+        },
+    );
+    if (trace.enabled()) {
+        // Whether this process has a console of its own is the question behind
+        // "where did the child's output go": a console child with no console
+        // flags and no pseudoconsole inherits its parent's, and one whose
+        // parent has none gets a new one nobody can see.
+        const inherited = inheritedHandles();
+        for (inherited, 0..) |slot, index| {
+            const name = ([3][]const u8{ "stdin", "stdout", "stderr" })[index];
+            if (slot) |handle| {
+                trace.print("spawn: parent {s}=0x{x}, console: {s}", .{
+                    name,
+                    @intFromPtr(handle),
+                    if (isConsole(handle)) "yes" else "no",
+                });
+            } else {
+                trace.print("spawn: parent {s} is not there", .{name});
+            }
+        }
+    }
 
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(

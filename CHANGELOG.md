@@ -60,6 +60,15 @@ before 1.0 the minor is the breaking one.
 
 ### Added
 
+- `CONDUIT_TRACE` in the environment turns on a handful of diagnostic lines
+  about what this package asked the operating system for: which spawn path
+  ran, the flag word and structure size `CreateProcessW` was given, the
+  pseudoconsole handle at the two places it appears, this process's own
+  standard handles and whether they are consoles, and how long a close took to
+  come back. Some of what this package does can only be watched on a machine
+  nobody can attach a debugger to, where the log is the whole instrument. Off
+  costs one environment lookup, once; nothing is part of the API and nothing a
+  program does depends on it.
 - `Child.SpawnOptions.stdio` has a `.streams` shape: each of standard input,
   output and error named on its own as `.inherit`, `.{ .file = f }`, `.ignore`,
   `.pipe` or `.close`. Before this the choice was one choice for all three plus

@@ -32,6 +32,7 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
+const trace = @import("trace.zig");
 const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
@@ -265,7 +266,9 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
     const slave = pty.slave orelse return;
     pty.slave = null;
     if (is_windows) {
+        trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)});
         win32.ClosePseudoConsole(slave);
+        trace.print("pty: ClosePseudoConsole returned", .{});
         return;
     }
     file(slave).close(io);
@@ -292,6 +295,8 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
 /// that keeps a reader on a task should close the master and then join it,
 /// rather than the other way round.
 pub fn closeMaster(pty: *Pty, io: std.Io) void {
+    trace.print("pty: closing the master ends", .{});
+    defer trace.print("pty: master ends closed", .{});
     // The same handle twice on POSIX, so it is closed once.
     const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
     if (pty.read) |handle| {
@@ -439,6 +444,12 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
         @as(win32.HRESULT, @bitCast(@as(u32, 0x8007000E))) => return error.SystemResources,
         else => return error.Unexpected,
     }
+
+    trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}", .{
+        @intFromPtr(console),
+        geometry.rows,
+        geometry.cols,
+    });
 
     // The console duplicated both of its ends, so this program's copies of
     // them are now only a way to keep the pipes from ever reporting end of

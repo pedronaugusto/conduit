@@ -94,8 +94,12 @@ jobs:
       - name: Formatting
         run: zig fmt --check src examples build.zig
 
+      # With the trace on: this step passes, so its log is always kept, and it
+      # is the shortest run that puts a child on a pseudoconsole.
       - name: Debug — examples
         timeout-minutes: 4
+        env:
+          CONDUIT_TRACE: "1"
         run: zig build examples -Doptimize=Debug --summary all
 
       - name: Debug — Pty
@@ -139,6 +143,8 @@ jobs:
 
       - name: Debug — spawn, pseudo-terminals
         timeout-minutes: 4
+        env:
+          CONDUIT_TRACE: "1"
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"

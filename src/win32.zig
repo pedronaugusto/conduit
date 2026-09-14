@@ -99,6 +99,14 @@ pub extern "kernel32" fn GetFileAttributesW(
     lpFileName: [*:0]const u16,
 ) callconv(.winapi) DWORD;
 
+/// Ends every pending I/O this process issued on `hFile`, whichever thread
+/// issued it. The way to release a thread blocked in a synchronous read of a
+/// pipe without closing the handle under it.
+pub extern "kernel32" fn CancelIoEx(
+    hFile: HANDLE,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) BOOL;
+
 pub extern "kernel32" fn SetHandleInformation(
     hObject: HANDLE,
     dwMask: DWORD,

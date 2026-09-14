@@ -25,6 +25,7 @@ const posix = std.posix;
 const conduit = @import("conduit.zig");
 const Child = conduit.Child;
 const Pty = conduit.Pty;
+const trace = @import("trace.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
 
 const io = std.testing.io;
@@ -32,6 +33,7 @@ const gpa = std.testing.allocator;
 const testing = std.testing;
 
 const is_windows = builtin.os.tag == .windows;
+const win32 = if (is_windows) @import("win32.zig") else struct {};
 
 /// How long any one test will wait for a child to say or do something before
 /// it gives up. Generous, because it is a failure budget and not a timing
@@ -93,25 +95,40 @@ const Sink = struct {
     mutex: std.Io.Mutex = .init,
     bytes: std.ArrayList(u8) = .empty,
     group: std.Io.Group = .init,
-    /// Why the reading stopped, when it stopped for a reason. A stream that
-    /// ended is `null` and so is one still being read; anything else is the
-    /// difference between "the child said nothing" and "nobody was listening",
-    /// which a failure has to be able to tell apart.
+    /// The file being read, for `deinit`.
+    file: ?std.Io.File = null,
+    /// The reading reached the end of the stream. Different from a read that is
+    /// simply still waiting, and a failure has to say which of the two it was.
+    finished: bool = false,
+    /// Why the reading stopped, when it stopped for a reason other than the
+    /// end. The difference between "the child said nothing" and "nobody was
+    /// listening".
     failed: ?anyerror = null,
 
     fn start(sink: *Sink, file: std.Io.File) !void {
+        sink.file = file;
         try sink.group.concurrent(io, read, .{ sink, file });
     }
 
     /// Stops reading and releases the task.
     ///
-    /// **Close the file first.** The task is blocked in a read that only the
-    /// far end finishing or the handle going away will end, and asking the
-    /// `std.Io` implementation to cancel it is slow where it works at all.
-    /// Every test here closes the pair before it gets to this, which makes the
-    /// blocked read return at once and the join immediate.
+    /// The task is blocked in a read that only the far end finishing, the
+    /// handle going away, or the operating system being told to abandon it
+    /// will end. On Windows the last of those is `CancelIoEx`, which ends
+    /// every pending read this process issued on the handle whichever thread
+    /// issued it, and is the one that does not involve closing a handle
+    /// another thread is inside. Without it the join here waits for a read
+    /// that is not coming back.
     fn deinit(sink: *Sink) void {
+        if (is_windows) {
+            if (sink.file) |f| {
+                trace.print("sink: CancelIoEx on the read handle", .{});
+                _ = win32.CancelIoEx(f.handle, null);
+            }
+        }
+        trace.print("sink: joining the reader", .{});
         sink.group.cancel(io);
+        trace.print("sink: reader joined", .{});
         sink.bytes.deinit(gpa);
     }
 
@@ -122,19 +139,22 @@ const Sink = struct {
                 error.Canceled => return error.Canceled,
                 // A pseudo-terminal whose child is gone reports an I/O error
                 // where a pipe reports end of stream.
-                error.EndOfStream, error.InputOutput => return,
-                else => {
-                    sink.mutex.lockUncancelable(io);
-                    defer sink.mutex.unlock(io);
-                    if (sink.failed == null) sink.failed = err;
-                    return;
-                },
+                error.EndOfStream, error.InputOutput => return sink.stop(null),
+                else => return sink.stop(err),
             };
-            if (n == 0) return;
+            if (n == 0) return sink.stop(null);
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
             sink.bytes.appendSlice(gpa, buffer[0..n]) catch return;
         }
+    }
+
+    /// Records how the reading ended: the end of the stream, or an error.
+    fn stop(sink: *Sink, err: ?anyerror) void {
+        sink.mutex.lockUncancelable(io);
+        defer sink.mutex.unlock(io);
+        sink.finished = true;
+        if (err) |e| sink.failed = e;
     }
 
     fn contains(sink: *Sink, needle: []const u8) bool {
@@ -163,7 +183,12 @@ const Sink = struct {
     fn report(sink: *Sink, needle: []const u8) void {
         sink.mutex.lockUncancelable(io);
         defer sink.mutex.unlock(io);
-        const why: []const u8 = if (sink.failed) |err| @errorName(err) else "no error";
+        const why: []const u8 = if (sink.failed) |err|
+            @errorName(err)
+        else if (sink.finished)
+            "the end of the stream"
+        else
+            "nothing -- it is still waiting in a read";
         std.debug.print("\nwaited {d} ms for \"{s}\"; the read stopped with {s}; {d} bytes arrived:\n  ", .{
             budget_ms,
             needle,
@@ -582,17 +607,17 @@ test "what a child writes to its terminal reaches the master" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    // Declared here so its `deinit` is the last thing that runs. A task
-    // blocked reading a pseudo-terminal master is released by the master being
-    // closed, not by being asked to stop, so the pair has to go first; the
-    // order below is what makes a failed test end in milliseconds instead of
-    // waiting out whatever the `std.Io` implementation does about a read that
-    // will not come back.
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer pty.close(io);
+
+    // The order out, for every test in this section: end the child, release
+    // and join the reader, then close the pair. The child first because
+    // closing a pseudoconsole waits for its client; the reader before the
+    // pair because a handle closed under a thread that is inside a read of it
+    // is a hazard of its own, and `Sink.deinit` has a way to end that read
+    // without closing anything.
+    var sink: Sink = .{};
+    defer sink.deinit();
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.say_on_terminal,
@@ -600,9 +625,6 @@ test "what a child writes to its terminal reaches the master" {
         .detach = !is_windows,
     });
     defer child.deinit(io);
-    // And the child before the pair, on every path: closing a pseudoconsole
-    // waits for its client, so a child that is still running would hold the
-    // close open.
     defer _ = child.killWait(io, 0) catch {};
     // The one place the two systems want different timing, and the reason
     // `Pty.closeSlave` documents it at length.
@@ -647,12 +669,12 @@ test "a child on a pty reports the window size it was given, and the one it is r
     // print; that a pseudoconsole takes the new size is `Pty`'s own test.
     if (is_windows) return error.SkipZigTest;
 
-    // Last out: see the first test in this section.
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
     defer pty.close(io);
+
+    // The order out: see the first test in this section.
+    var sink: Sink = .{};
+    defer sink.deinit();
 
     var child = try Child.spawn(io, gpa, .{
         // Reports the size, waits for a byte, and reports it again: the second
@@ -819,12 +841,12 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     // a pseudoconsole is not a file.
     if (is_windows) return error.SkipZigTest;
 
-    // Last out: see the first test in the pseudo-terminal section.
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var sink_pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer sink_pty.close(io);
+
+    // The order out: see the first test in the pseudo-terminal section.
+    var sink: Sink = .{};
+    defer sink.deinit();
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'to stderr' 1>&2" },
@@ -889,15 +911,15 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // `Pty.slaveFile` is a compile error there and says so.
     if (is_windows) return error.SkipZigTest;
 
-    // Last out, both of them: see the first test in the pseudo-terminal
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+
+    // The order out, both of them: see the first test in the pseudo-terminal
     // section.
     var on_terminal: Sink = .{};
     defer on_terminal.deinit();
     var on_pipe: Sink = .{};
     defer on_pipe.deinit();
-
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
-    defer pty.close(io);
 
     // Standard output is the terminal; standard error is a pipe. The child
     // reports which of the two it thinks is one, so the answer comes from the
@@ -1299,17 +1321,16 @@ test "spawnShell starts the user's shell on a pair" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    // Last out, for the reason the first pseudo-terminal test above gives: the
-    // read ends when the master closes, so `Shell.deinit` has to run before
-    // this.
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var shell = try conduit.spawnShell(io, gpa, .{
         .args = &script.shell_arguments,
         .size = .{ .rows = 40, .cols = 132 },
     });
     defer shell.deinit(io);
+
+    // The order out: see the first test in the pseudo-terminal section. The
+    // shell's own `deinit` closes the pair, so the reader is joined before it.
+    var sink: Sink = .{};
+    defer sink.deinit();
     defer _ = shell.child.killWait(io, 0) catch {};
 
     try testing.expectEqual(@as(u16, 40), (try shell.pty.size()).rows);
