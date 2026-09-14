@@ -8,6 +8,17 @@ before 1.0 the minor is the breaking one.
 
 ### Fixed
 
+- **A Windows child inherited every inheritable handle this process held**, not
+  only the three it was being given. `bInheritHandles` is all or nothing, and
+  `STARTF_USESTDHANDLES` names the child's standard handles without limiting
+  what else comes with them — so on a machine where this program's own standard
+  streams are inheritable pipes, as they are under a build or test harness, the
+  child and anything the child started kept those pipes open for as long as
+  they lived. Whatever is reading the other end then waits for an end of file
+  that never comes. `spawn` now passes a `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
+  naming exactly the handles the child is given. A plan that hands the child a
+  console handle gets no list, because a console is not inherited through the
+  handle table and naming one is how `CreateProcessW` fails.
 - **A pseudoconsole nobody is reading could block the program that owns it.**
   The console host writes into a pipe this process holds the reading end of,
   and both `ResizePseudoConsole` and `ClosePseudoConsole` wait for the host: a

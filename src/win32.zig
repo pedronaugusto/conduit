@@ -131,6 +131,13 @@ pub const PROC_THREAD_ATTRIBUTE_LIST = opaque {};
 /// number 22, input, of thread-and-process scope.
 pub const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 
+/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: number 2, input, of thread scope.
+///
+/// The list of handles a child may inherit. Without it `bInheritHandles` means
+/// *every* inheritable handle this process holds, which is far more than the
+/// three a child is being given.
+pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x00020002;
+
 pub extern "kernel32" fn InitializeProcThreadAttributeList(
     lpAttributeList: ?*PROC_THREAD_ATTRIBUTE_LIST,
     dwAttributeCount: DWORD,

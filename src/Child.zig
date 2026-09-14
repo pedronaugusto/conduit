@@ -153,6 +153,10 @@ pub const PipeOptions = struct {
 /// that vocabulary should not have to learn a second one here.
 pub const Stream = union(enum) {
     /// The parent's own descriptor for that stream.
+    ///
+    /// A stream the parent does not have cannot be inherited, and on Windows a
+    /// process may genuinely have none — a service, or a program started with
+    /// no console and no redirection. That slot then behaves as `.close`.
     inherit,
     /// A file the caller opened. Borrowed: `deinit` does not close it, and it
     /// must stay open until `spawn` returns.
@@ -636,6 +640,10 @@ pub const Signal = enum {
     /// The interrupt a terminal generates. POSIX: `SIGINT`. Windows:
     /// `CTRL_C_EVENT` to the child's process group, which exists only for a
     /// child spawned with `detach`; without one this is `error.Unsupported`.
+    /// A console control event also needs a console: a Windows process that
+    /// has none — a service, or a program run by a build or test harness —
+    /// has nothing to address one to, and this reports success while reaching
+    /// nobody. `.terminate` and `.kill` do not depend on a console.
     interrupt,
     /// Ask the child to stop, in a way it can catch and clean up after.
     /// POSIX: `SIGTERM`. Windows: `CTRL_BREAK_EVENT` to the child's process

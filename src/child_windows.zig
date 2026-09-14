@@ -100,6 +100,21 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             startup.StartupInfo.hStdInput = plan.child[0];
             startup.StartupInfo.hStdOutput = plan.child[1];
             startup.StartupInfo.hStdError = plan.child[2];
+
+            // And nothing else. `bInheritHandles` on its own hands the child
+            // every inheritable handle this process holds -- which on a machine
+            // where this program's own standard streams are inheritable pipes
+            // means the child, and anything the child starts, keeps those pipes
+            // open for as long as it lives. A handle list says exactly which
+            // three the child is being given.
+            if (try plan.inheritList(arena)) |inheritable| {
+                var list = try AttributeList.init(arena, 1);
+                try list.setHandleList(inheritable);
+                attributes = list;
+                startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
+                startup.lpAttributeList = list.raw;
+                flags.extended_startupinfo_present = true;
+            }
         },
     }
     const inherit_handles: windows.BOOL = switch (options.stdio) {
@@ -237,6 +252,41 @@ const Plan = struct {
         }
     }
 
+    /// The handles the child is being given, deduplicated, for the attribute
+    /// list that stops it from inheriting anything else — or `null` when the
+    /// child cannot be restricted that way.
+    ///
+    /// A `null` slot is `Stream.close`: there is nothing to inherit, and it is
+    /// simply left out. A console handle is different. A child sharing this
+    /// process's console reaches it through the console rather than through
+    /// the handle table, and naming one in a handle list is how
+    /// `CreateProcessW` comes back with `ERROR_INVALID_PARAMETER` — so a plan
+    /// that hands the child a console gets no list at all, and inherits the
+    /// way it always did. That is the case where this process is somebody's
+    /// terminal rather than a program whose streams are pipes, and it is not
+    /// the case the list is for.
+    ///
+    /// Every handle that does go in is marked inheritable first: a handle list
+    /// may only name inheritable handles, and this process's own standard
+    /// handles are whatever its parent made them. The list is what keeps that
+    /// from meaning anything beyond this one spawn.
+    fn inheritList(plan: *const Plan, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
+        var handles: std.ArrayList(windows.HANDLE) = .empty;
+        for (plan.child) |slot| {
+            const handle = slot orelse continue;
+            if (isConsole(handle)) return null;
+            if (std.mem.indexOfScalar(windows.HANDLE, handles.items, handle) != null) continue;
+            _ = win32.SetHandleInformation(
+                handle,
+                win32.HANDLE_FLAG_INHERIT,
+                win32.HANDLE_FLAG_INHERIT,
+            );
+            try handles.append(arena, handle);
+        }
+        if (handles.items.len == 0) return null;
+        return handles.items;
+    }
+
     /// The failure path inside `init`, which has no `std.Io` to hand.
     fn closeAllOnFailure(plan: *Plan) void {
         for (&plan.owned) |*slot| {
@@ -252,12 +302,23 @@ const Plan = struct {
     }
 };
 
+/// Whether a handle is one of this process's console handles.
+///
+/// The console is the one thing a child gets without the handle table: a
+/// process that shares this one's console has its console handles already, and
+/// naming one in a handle list makes `CreateProcessW` fail.
+fn isConsole(handle: windows.HANDLE) bool {
+    var mode: win32.DWORD = undefined;
+    return win32.GetConsoleMode(handle, &mode) != .FALSE;
+}
+
 /// This process's three standard handles, as a child inheriting them gets
 /// them.
 ///
 /// The process parameters rather than `GetStdHandle`, so a program whose own
 /// standard streams were redirected by *its* parent passes on what it actually
-/// has.
+/// has. A stream this process does not have is `null` here, and a child cannot
+/// inherit what does not exist: that slot behaves as `Stream.close` does.
 fn inheritedHandles() [3]?windows.HANDLE {
     const parameters = windows.peb().ProcessParameters;
     return .{
@@ -366,6 +427,23 @@ const AttributeList = struct {
             win32.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
             console,
             @sizeOf(win32.HPCON),
+            null,
+            null,
+        ) == .FALSE) return createError();
+    }
+
+    /// Limits what the child inherits to exactly these handles.
+    ///
+    /// `UpdateProcThreadAttribute` keeps a pointer to the array rather than
+    /// copying it, so `handles` must outlive the `CreateProcessW` call. The
+    /// arena it comes from does.
+    fn setHandleList(list: *AttributeList, handles: []windows.HANDLE) SpawnError!void {
+        if (win32.UpdateProcThreadAttribute(
+            list.raw,
+            0,
+            win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            @ptrCast(handles.ptr),
+            handles.len * @sizeOf(windows.HANDLE),
             null,
             null,
         ) == .FALSE) return createError();

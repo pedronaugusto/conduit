@@ -397,9 +397,12 @@ const pipe_bytes: win32.DWORD = 256 * 1024;
 
 fn openWindows(options: OpenOptions) OpenError!Pty {
     // Two pipes. Each has an end for the console and an end for this program,
-    // and neither end is inheritable: the console duplicates what it is given,
-    // and a child gets at the console through the attribute list rather than
-    // through an inherited handle.
+    // and neither end is inheritable -- `null` security attributes is what
+    // says so -- which is the Windows counterpart of the close-on-exec the
+    // POSIX side sets on both ends: a pair held open while some unrelated
+    // child is started is not handed to it. The console duplicates what it is
+    // given, and a child reaches the console through the attribute list rather
+    // than through an inherited handle.
     var input_read: win32.HANDLE = undefined;
     var input_write: win32.HANDLE = undefined;
     if (win32.CreatePipe(&input_read, &input_write, null, pipe_bytes) == .FALSE) return lastError();
