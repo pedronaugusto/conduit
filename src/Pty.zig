@@ -219,24 +219,66 @@ fn slaveFilePosix(pty: Pty) std.Io.File {
 /// Idempotent, and correct after `closeSlave` or `closeMaster`: a closed end
 /// is `null` and is not closed twice.
 ///
-/// The two systems want opposite orders, for opposite reasons. On POSIX the
-/// terminal end goes first, which is what lets a reader of the master see the
-/// stream finish. On Windows the master ends go first: `ClosePseudoConsole`
-/// waits for the console host to flush what the client last wrote, and the
-/// host writes it into a pipe whose other end this process is holding — so a
-/// caller who has stopped reading would wait forever. Dropping that end first
-/// makes the host's write fail rather than block, and it goes.
+/// The terminal end goes first on both systems, which is the order that lets a
+/// reader of the master see the stream finish.
 ///
-/// A program that wants the last of the output rather than the quickest exit
-/// should read the master until it has what it wants and then call this.
+/// On Windows that order needs something the caller should not have to supply.
+/// `ClosePseudoConsole` does not return until the console host has gone, and
+/// the host does not go until it has flushed what the client last wrote into a
+/// pipe this process holds the reading end of — so if nothing is reading, the
+/// host waits on a write that cannot complete and this call waits on the host.
+/// It has no deadline of its own; a run of this package's own suite met it
+/// about one time in two.
+///
+/// So `close` reads the master itself: a drain that throws away what it gets,
+/// started before the console is closed and joined after, which the host's own
+/// exit ends by closing its end of the pipe. A caller with a reader of its own
+/// still on the master should stop it before calling this, or the two will
+/// divide the last of the output between them.
 pub fn close(pty: *Pty, io: std.Io) void {
-    if (is_windows) {
+    if (is_windows) return pty.closeWindows(io);
+    pty.closeSlave(io);
+    pty.closeMaster(io);
+}
+
+fn closeWindows(pty: *Pty, io: std.Io) void {
+    const read_handle = pty.read;
+    if (pty.slave == null or read_handle == null) {
+        // Nothing to drain, or nothing to drain it with.
         pty.closeMaster(io);
         pty.closeSlave(io);
         return;
     }
+
+    var drain: std.Io.Group = .init;
+    drain.concurrent(io, drainMaster, .{ io, read_handle.? }) catch {
+        // No task to be had. Dropping the master ends first is then the only
+        // way the host's last write can fail rather than wait, and a `std.Io`
+        // with no concurrency to offer would have nowhere to put a reader
+        // either.
+        trace.print("pty: no task to drain with; closing the master first", .{});
+        pty.closeMaster(io);
+        pty.closeSlave(io);
+        return;
+    };
+    trace.print("pty: draining the master across the close", .{});
     pty.closeSlave(io);
+    // The host has gone, so its end of the pipe is closed and the drain has
+    // finished; this joins it.
+    drain.cancel(io);
+    trace.print("pty: drain joined", .{});
     pty.closeMaster(io);
+}
+
+/// Reads the master and throws it away, so the console host has somewhere to
+/// put what it flushes on its way out.
+fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
+    const f = file(handle);
+    var buffer: [4096]u8 = undefined;
+    while (true) {
+        const n = f.readStreaming(io, &.{&buffer}) catch return;
+        if (n == 0) return;
+    }
 }
 
 /// Closes the terminal end only.
@@ -259,9 +301,9 @@ pub fn close(pty: *Pty, io: std.Io) void {
 /// the console host has flushed what it last wrote, and the host flushes into
 /// a pipe this process holds the reading end of. So a program that has stopped
 /// reading waits for a write that cannot complete, and a program whose child
-/// is still running waits for the child. `close` deals with the first by
-/// dropping the master ends before this; the second is the caller's, and
-/// `Child.killWait` is how it is done.
+/// is still running waits for the child. `close` supplies the reading itself
+/// and is the call to prefer; the child is the caller's, and `Child.killWait`
+/// is how it is done.
 pub fn closeSlave(pty: *Pty, io: std.Io) void {
     const slave = pty.slave orelse return;
     pty.slave = null;

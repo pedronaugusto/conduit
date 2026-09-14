@@ -35,6 +35,7 @@ const Allocator = std.mem.Allocator;
 
 const Expect = @import("Expect.zig");
 const Pty = @import("Pty.zig");
+const trace = @import("trace.zig");
 const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
@@ -1082,7 +1083,9 @@ fn closeHandles(child: *Child) void {
 fn closeJob(child: *Child) void {
     const job = child.job orelse return;
     child.job = null;
+    trace.print("child: closing the job", .{});
     windows.CloseHandle(job);
+    trace.print("child: job closed", .{});
 }
 
 fn tryWaitWindows(child: *Child) TryWaitError!?Term {
@@ -1130,6 +1133,7 @@ fn terminateWindows(child: *Child) KillError!void {
     // `TerminateJobObject` is the same uncatchable end as `TerminateProcess`,
     // applied to the whole set, and the exit code is the same 1.
     if (child.job) |job| {
+        trace.print("child: TerminateJobObject", .{});
         if (win32.TerminateJobObject(job, 1) != .FALSE) return;
     }
     if (win32.TerminateProcess(child.id, 1) != .FALSE) return;

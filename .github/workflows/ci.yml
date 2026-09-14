@@ -140,8 +140,13 @@ jobs:
           "-Dtest-filter=killWait with no grace"
           "-Dtest-filter=reaches what the child started"
 
+      # Traced: both tests here that put a child on a pseudoconsole have hung
+      # on a runner at one time or another, so this step says which stage it
+      # reached.
       - name: Debug — spawn, pseudo-terminals
         timeout-minutes: 4
+        env:
+          CONDUIT_TRACE: "1"
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"

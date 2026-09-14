@@ -689,6 +689,9 @@ test "what a child writes to its terminal reaches the master" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
+    // Traced stage by stage, like the shell test below and for the same
+    // reason: this one has hung on a Windows runner with nothing to say.
+    trace.print("master: opening a pair", .{});
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
@@ -708,14 +711,19 @@ test "what a child writes to its terminal reaches the master" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    if (trace.enabled()) trace.print("master: child started, id={d}", .{childId(child)});
     // The one place the two systems want different timing, and the reason
     // `Pty.closeSlave` documents it at length.
     if (!is_windows) pty.closeSlave(io);
 
     try sink.start(pty.readFile());
+    trace.print("master: reading the master", .{});
 
     try sink.expect("on the terminal");
+    trace.print("master: the child said what it was asked to", .{});
+
     _ = try child.killWait(io, budget_ms);
+    trace.print("master: reaped", .{});
 }
 
 test "a child on a pty sees a terminal" {
