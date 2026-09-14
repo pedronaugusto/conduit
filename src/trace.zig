@@ -37,6 +37,14 @@ pub fn enabled() bool {
 
 /// One line, when the trace is on. The prefix says where it came from, because
 /// it lands in a log beside everything else the run printed.
+///
+/// **Guard the call with `enabled` when an argument has to be computed.** Zig
+/// evaluates a call's arguments before the call, so anything a trace line
+/// works out is worked out whether or not the trace is on — and a diagnostic
+/// that can end the process it is diagnosing is worse than none. Keep the
+/// arguments total as well: no `@tagName` of a value the operating system
+/// chose, since a non-exhaustive enum holding a number nobody named has no
+/// name to give and asking for one is illegal behaviour.
 pub fn print(comptime format: []const u8, args: anytype) void {
     if (!enabled()) return;
     std.debug.print("conduit: " ++ format ++ "\n", args);

@@ -36,6 +36,23 @@ pub const COORD = windows.COORD;
 pub const SECURITY_ATTRIBUTES = windows.SECURITY_ATTRIBUTES;
 pub const STARTUPINFOW = windows.STARTUPINFOW;
 
+/// `GetLastError` as `error.Unexpected`, keeping the number.
+///
+/// Not `std.os.windows.unexpectedError`, which in a Debug build prints the
+/// code by its tag name — and `Win32Error` is a non-exhaustive enum, so a code
+/// nobody has named ends the process rather than returning the error the
+/// caller was about to handle. A library may not do that to a program over a
+/// failure it can describe. The number says as much as the name and cannot
+/// fail to be printed.
+pub fn unexpected(err: windows.Win32Error) std.Io.UnexpectedError {
+    @branchHint(.cold);
+    if (std.options.unexpected_error_tracing) {
+        std.debug.print("conduit: error.Unexpected: GetLastError({d})\n", .{@intFromEnum(err)});
+        std.debug.dumpCurrentStackTrace(.{ .first_address = @returnAddress() });
+    }
+    return error.Unexpected;
+}
+
 /// `S_OK`. Every `HRESULT` this package reads is either this or a failure.
 pub const ok: HRESULT = 0;
 

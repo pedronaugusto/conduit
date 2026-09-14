@@ -266,7 +266,9 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
     const slave = pty.slave orelse return;
     pty.slave = null;
     if (is_windows) {
-        trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)});
+        if (trace.enabled()) {
+            trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)});
+        }
         win32.ClosePseudoConsole(slave);
         trace.print("pty: ClosePseudoConsole returned", .{});
         return;
@@ -445,11 +447,13 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
         else => return error.Unexpected,
     }
 
-    trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}", .{
-        @intFromPtr(console),
-        geometry.rows,
-        geometry.cols,
-    });
+    if (trace.enabled()) {
+        trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}", .{
+            @intFromPtr(console),
+            geometry.rows,
+            geometry.cols,
+        });
+    }
 
     // The console duplicated both of its ends, so this program's copies of
     // them are now only a way to keep the pipes from ever reporting end of
@@ -470,7 +474,7 @@ fn lastError() OpenError {
         .TOO_MANY_OPEN_FILES => error.ProcessFdQuotaExceeded,
         .NOT_ENOUGH_MEMORY, .OUTOFMEMORY => error.SystemResources,
         .ACCESS_DENIED => error.PermissionDenied,
-        else => |err| windows.unexpectedError(err),
+        else => |err| win32.unexpected(err),
     };
 }
 

@@ -132,7 +132,11 @@ pub fn exitCode(term: Term) ?u8 {
 }
 
 /// The name of the signal that ended the child, without the `SIG`: `"INT"`,
-/// `"TERM"`, `"KILL"`. `null` if a signal did not end it.
+/// `"TERM"`, `"KILL"`. `null` if a signal did not end it, and `null` too for a
+/// signal this system has no name for — a real-time signal is a number and
+/// nothing else, and asking a non-exhaustive enum for the name of a value
+/// nobody named is illegal behaviour rather than an answer. The number is in
+/// the `Term` either way.
 ///
 /// Always `null` on Windows, where `Term.signal` is never produced: a
 /// terminated process there reports the exit code it was terminated with, and
@@ -140,7 +144,7 @@ pub fn exitCode(term: Term) ?u8 {
 /// has to accept that the Windows answer is a number.
 pub fn signalName(term: Term) ?[]const u8 {
     return switch (term) {
-        .signal, .stopped => |signal| @tagName(signal),
+        .signal, .stopped => |signal| std.enums.tagName(posix.SIG, signal),
         else => null,
     };
 }
@@ -1050,7 +1054,7 @@ fn tryWaitWindows(child: *Child) TryWaitError!?Term {
     switch (win32.WaitForSingleObject(child.id, 0)) {
         win32.WAIT_OBJECT_0 => {},
         win32.WAIT_TIMEOUT => return null,
-        else => return windows.unexpectedError(windows.GetLastError()),
+        else => return win32.unexpected(windows.GetLastError()),
     }
     var code: win32.DWORD = undefined;
     const term: Term = if (win32.GetExitCodeProcess(child.id, &code) != .FALSE)
@@ -1082,7 +1086,7 @@ fn killWindows(child: *Child, signal: Signal) KillError!void {
         // The group is gone, which is the Windows spelling of "the child ended
         // between the check and here".
         .INVALID_PARAMETER, .INVALID_HANDLE => {},
-        else => |err| windows.unexpectedError(err),
+        else => |err| win32.unexpected(err),
     };
 }
 
@@ -1096,7 +1100,7 @@ fn terminateWindows(child: *Child) KillError!void {
             return error.PermissionDenied;
         },
         .INVALID_HANDLE => {},
-        else => |err| windows.unexpectedError(err),
+        else => |err| win32.unexpected(err),
     };
 }
 

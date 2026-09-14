@@ -106,7 +106,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             const console = pty.slave.?;
             var list = try AttributeList.init(arena, 1);
             try list.setPseudoConsole(console);
-            trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)});
+            if (trace.enabled()) {
+                trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)});
+            }
             attributes = list;
             startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
             startup.lpAttributeList = list.raw;
@@ -160,18 +162,22 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         else => .TRUE,
     };
 
-    trace.print(
-        "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
-        .{
-            @tagName(options.stdio),
-            startup.StartupInfo.cb,
-            @as(u32, @bitCast(flags)),
-            startup.StartupInfo.dwFlags,
-            @tagName(inherit_handles),
-            if (startup.lpAttributeList == null) "none" else "present",
-        },
-    );
     if (trace.enabled()) {
+        trace.print(
+            "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
+            .{
+                @tagName(options.stdio),
+                startup.StartupInfo.cb,
+                @as(u32, @bitCast(flags)),
+                startup.StartupInfo.dwFlags,
+                // Not `@tagName`. A Windows `BOOL` names only `FALSE`; every
+                // other value, `TRUE` included, is an unnamed one of a
+                // non-exhaustive enum, and asking for the name of one of those
+                // ends the process.
+                if (inherit_handles.toBool()) "TRUE" else "FALSE",
+                if (startup.lpAttributeList == null) "none" else "present",
+            },
+        );
         // Whether this process has a console of its own is the question behind
         // "where did the child's output go": a console child with no console
         // flags and no pseudoconsole inherits its parent's, and one whose
@@ -622,7 +628,7 @@ fn createError() SpawnError {
         .NOT_ENOUGH_MEMORY, .OUTOFMEMORY => error.SystemResources,
         .TOO_MANY_OPEN_FILES => error.ProcessFdQuotaExceeded,
         .MAX_THRDS_REACHED => error.ResourceLimitReached,
-        else => |err| windows.unexpectedError(err),
+        else => |err| win32.unexpected(err),
     };
 }
 

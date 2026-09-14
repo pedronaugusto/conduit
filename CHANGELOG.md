@@ -8,6 +8,18 @@ before 1.0 the minor is the breaking one.
 
 ### Fixed
 
+- **Three places asked a Windows value for a name it did not have.** A
+  non-exhaustive enum holding a number nobody named has no name to give, and
+  asking for one ends the process rather than returning an answer. A Windows
+  `BOOL` names only `FALSE` — `TRUE` is a declaration, not a tag — so the
+  trace naming one crashed every spawn that was not on a pseudoconsole, with
+  the trace switched off, because a call's arguments are worked out before the
+  call. `conduit.signalName` had the same shape for a real-time signal, which
+  is a number and nothing else; it answers `null` there now, and the number is
+  in the `Term` either way. And an unmapped `GetLastError` went to the standard
+  library's reporter, which prints the code by name in a Debug build: a library
+  must not end a program over a failure it was about to return, so the number
+  is printed instead.
 - **A child on a pseudoconsole wrote to the parent's pipes instead of its
   terminal**, everywhere the parent's own standard streams were pipes rather
   than console handles — which is every program a build system, a service or a

@@ -392,7 +392,7 @@ fn rawModeWindows(handle: Handle) RawModeError!Saved {
 fn consoleError(comptime Set: type) Set {
     return switch (windows.GetLastError()) {
         .INVALID_HANDLE, .INVALID_FUNCTION, .INVALID_PARAMETER => error.NotATerminal,
-        else => |err| windows.unexpectedError(err),
+        else => |err| win32.unexpected(err),
     };
 }
 
