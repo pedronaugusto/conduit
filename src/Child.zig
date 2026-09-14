@@ -301,6 +301,15 @@ pub const SpawnOptions = struct {
     /// The user, group and file-creation mask the child runs with. POSIX
     /// only: anything set here is `error.Unsupported` on Windows.
     credentials: Credentials = .{},
+    /// Resource limits to set in the child, in order, before `execve`.
+    ///
+    /// Applied before `credentials`, so a privileged parent can still raise a
+    /// hard limit for a child it is about to hand to somebody else. The list
+    /// is read by the fork child and nothing is copied, so it must stay valid
+    /// until `spawn` returns; it is not retained past that.
+    ///
+    /// POSIX only: a non-empty list is `error.Unsupported` on Windows.
+    resource_limits: []const ResourceLimit = &.{},
 };
 
 /// The user, group and file-creation mask a child starts with. POSIX only.
@@ -339,6 +348,29 @@ pub const Credentials = struct {
             credentials.gid != null or
             credentials.umask != null;
     }
+};
+
+/// One resource limit to set in the child before `execve`. POSIX only.
+///
+/// The other thing that can only be done between `fork` and `execve`: a limit
+/// belongs to a process, so a parent that set it on itself would be setting it
+/// on everything it does afterwards as well, and `execve` carries what the
+/// child had into the program it becomes.
+///
+/// Both fields are the operating system's own types, because there is no
+/// portable set of resources to enumerate and inventing one would only hide
+/// what a system offers. `std.posix.rlimit_resource` is `.NOFILE`, `.CPU`,
+/// `.AS` and whatever else the target has; `std.posix.rlimit` is the soft and
+/// hard pair `setrlimit` takes. Neither exists as anything but `void` on
+/// Windows, where a non-empty list is `error.Unsupported`.
+pub const ResourceLimit = struct {
+    /// Which resource to limit.
+    resource: posix.rlimit_resource,
+    /// The soft limit the child starts with, and the hard limit it may raise
+    /// the soft one back to. A soft limit above the hard one is refused by the
+    /// operating system, and a hard limit above the one this process already
+    /// has needs privilege.
+    limit: posix.rlimit,
 };
 
 /// Where the `PATH` that resolves a bare `argv[0]` comes from.
@@ -396,6 +428,7 @@ pub const SpawnError = error{
     ProcessFdQuotaExceeded,
     SystemFdQuotaExceeded,
     /// The user's process limit was reached, so no child could be started.
+    /// Not `ResourceLimitsFailed`, which is `resource_limits` being refused.
     ResourceLimitReached,
     /// `.ignore` was asked for and the null device could not be opened.
     NoDevice,
@@ -411,12 +444,17 @@ pub const SpawnError = error{
     /// process is not privileged enough to become that user or group; the
     /// child did not start.
     CredentialsFailed,
+    /// POSIX: one of `resource_limits` could not be set — a soft limit above
+    /// its hard limit, or a hard limit above the one this process has and no
+    /// privilege to raise it. Not `ResourceLimitReached`, which is this
+    /// process running out of room to start a child at all.
+    ResourceLimitsFailed,
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
     /// The combination asked for has no meaning on this system: `stderr_to`
     /// together with `.pty` on Windows, a `path_search` other than
-    /// `.child_environ` there, or `credentials` anywhere on Windows. The
-    /// option that cannot be honoured says so.
+    /// `.child_environ` there, or `credentials` or `resource_limits` anywhere
+    /// on Windows. The option that cannot be honoured says so.
     Unsupported,
 } || std.Io.UnexpectedError;
 

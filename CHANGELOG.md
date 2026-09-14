@@ -33,6 +33,17 @@ before 1.0 the minor is the breaking one.
   as well — no descriptor at that number at all, which is the one of the five a
   caller should think twice about and whose doc comment says why. The five
   names are the standard library's.
+- `Child.SpawnOptions.resource_limits` sets a child's `setrlimit` limits, in
+  order, before the `execve`. The other thing that can only happen between a
+  `fork` and an `exec`: a limit belongs to a process, so a parent that set it
+  on itself would be setting it on everything it went on to do, and `execve`
+  carries what the child had into the program it becomes. Both halves of a pair
+  are the operating system's own types — there is no portable set of resources
+  to enumerate, and inventing one would hide what a system offers. Applied
+  before `credentials`, so a privileged parent can still raise a hard limit for
+  a child it is about to hand to somebody else. A limit the system refuses is
+  `error.ResourceLimitsFailed` from `spawn`. POSIX only: a non-empty list is
+  `error.Unsupported` on Windows, which has no `setrlimit`.
 - `Child.SpawnOptions.credentials` sets a child's `uid`, `gid` and `umask`.
   They can only be set between `fork` and `execve` — this process changing its
   own user before a spawn would change it for everything else this process goes

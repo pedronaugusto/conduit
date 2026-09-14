@@ -220,7 +220,15 @@ const Failure = extern struct {
     stage: Stage,
     errno: u32,
 
-    const Stage = enum(u32) { detach, controlling_terminal, descriptors, credentials, chdir, exec };
+    const Stage = enum(u32) {
+        detach,
+        controlling_terminal,
+        descriptors,
+        resource_limits,
+        credentials,
+        chdir,
+        exec,
+    };
 
     fn toError(record: Failure) SpawnError {
         const err: posix.E = @enumFromInt(record.errno);
@@ -232,6 +240,7 @@ const Failure = extern struct {
                 .NFILE => error.SystemFdQuotaExceeded,
                 else => posix.unexpectedErrno(err),
             },
+            .resource_limits => error.ResourceLimitsFailed,
             .credentials => error.CredentialsFailed,
             .chdir => switch (err) {
                 .ACCES => error.AccessDenied,
@@ -335,6 +344,13 @@ fn childMain(
         else => {},
     }
 
+    // Before the credentials below: a privileged parent can still raise a hard
+    // limit for a child it is about to hand to somebody else, and after
+    // `setuid` it could not.
+    for (options.resource_limits) |entry| {
+        if (setrlimitSym(entry.resource, &entry.limit) != 0) bail(report, .resource_limits);
+    }
+
     // Last of the things that change what this process is, and before the
     // `chdir` below, so a working directory the new user may not enter is an
     // error rather than a child running somewhere it could not have reached.
@@ -431,6 +447,15 @@ fn environPath() ?[]const u8 {
     }
     return null;
 }
+
+/// `setrlimit` under whichever name this libc exports it.
+///
+/// glibc on 32-bit systems has two, with different widths for the limit, and
+/// the standard library's `posix.lfs64_abi` is the same test `std.posix` makes
+/// to choose between them. This file calls the symbol directly rather than
+/// going through `std.posix.setrlimit`, because it runs in a fork child, where
+/// what is legal is a system call and not a wrapper.
+const setrlimitSym = if (posix.lfs64_abi) c.setrlimit64 else c.setrlimit;
 
 /// The null device, opened for both directions so one descriptor can serve any
 /// of the three streams, and close-on-exec so the copy `dup2` makes is the only

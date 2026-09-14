@@ -159,7 +159,8 @@ will not start on anything older.
 | `conduit.succeeded(term)`, `exitCode(term)`, `signalName(term)` | What a `Term` says, without matching on it. `signalName` is POSIX in practice. |
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
-`stdio`, `detach`, `stderr_to`, `path_search`, `credentials`.
+`stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
+`resource_limits`.
 
 `stdio` is one of `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` — each
@@ -178,6 +179,11 @@ comment says which half.
 changing this process too. POSIX only: anything set there is
 `error.Unsupported` on Windows. Supplementary groups are the parent's —
 `setgroups` needs the group database, which a fork child may not read.
+
+`resource_limits` is a list of `.{ .resource, .limit }` pairs, each a
+`std.posix.rlimit_resource` and a `std.posix.rlimit`, applied in the fork child
+in order and before `credentials`. POSIX only: a non-empty list is
+`error.Unsupported` on Windows.
 
 `Term` is `std.process.Child.Term`, not a parallel type of this package's own.
 

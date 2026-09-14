@@ -958,6 +958,63 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     }
 }
 
+test "a resource limit set at spawn is the child's own" {
+    // POSIX only: Windows has no `setrlimit`, and the test below this one
+    // checks that the option is refused there rather than dropped.
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    // Lowering a soft limit needs no privilege, and `ulimit -n` is how a shell
+    // reports the one for open files. The hard limit is left where it is: a
+    // child cannot raise a hard limit back, so lowering it would be a
+    // different claim.
+    const current = try posix.getrlimit(.NOFILE);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "ulimit -n" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .resource_limits = &.{.{
+            .resource = .NOFILE,
+            .limit = .{ .cur = 64, .max = current.max },
+        }},
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "64") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+
+    // This process is not the one that was limited, which is the whole reason
+    // the option exists: doing it here would have done it to everything this
+    // process goes on to start.
+    try testing.expectEqual(current.cur, (try posix.getrlimit(.NOFILE)).cur);
+
+    // A limit the operating system refuses -- a soft limit above its hard one
+    // is refused for anybody, privileged or not -- is an error from `spawn`
+    // rather than a child that started without it.
+    try testing.expectError(error.ResourceLimitsFailed, Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "exit 0" },
+        .stdio = .ignore,
+        .resource_limits = &.{.{
+            .resource = .NOFILE,
+            .limit = .{ .cur = 100, .max = 10 },
+        }},
+    }));
+}
+
+test "resource limits are refused on Windows rather than quietly not applied" {
+    if (!is_windows) return error.SkipZigTest;
+    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .resource_limits = &.{.{ .resource = {}, .limit = {} }},
+    }));
+}
+
 test "credentials are refused on Windows rather than quietly not applied" {
     if (!is_windows) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());

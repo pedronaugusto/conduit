@@ -37,6 +37,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // quietly not done.
     if (options.credentials.any()) return error.Unsupported;
 
+    // Windows has no `setrlimit`. What it has instead is a job object, which
+    // this package does not create -- see the note on killing a process tree.
+    // Accepting the list and setting nothing would be the worst of both.
+    if (options.resource_limits.len != 0) return error.Unsupported;
+
     // The program is resolved by `CreateProcessW`, from the environment the
     // child is being given -- see the note on `lpApplicationName` below. That
     // is exactly `.child_environ`, and there is no argument to ask it for
