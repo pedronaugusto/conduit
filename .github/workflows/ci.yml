@@ -155,6 +155,7 @@ jobs:
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"
+          "-Dtest-filter=cursor shape the child wrote"
           "-Dtest-filter=Ctrl-C" "-Dtest-filter=foreground process group"
           "-Dtest-filter=hangs the terminal up"
 

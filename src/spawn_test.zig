@@ -82,6 +82,18 @@ const script = if (is_windows) struct {
         "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' -PassThru; " ++
             "Write-Output ('pid ' + $p.Id + '.')",
     };
+    /// Writes a cursor-shape sequence to its terminal and stays there.
+    ///
+    /// `DECSCUSR` is the one a console host that models what passes through it
+    /// does not model, so it survives only where passthrough was granted.
+    /// `[char]27` is the escape: `cmd.exe` has no way to spell one.
+    const cursor_shape = [_][]const u8{
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::Out.Write([char]27 + '[5 q'); Start-Sleep -Seconds 30",
+    };
     const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %CONDUIT_TEST_VALUE% %CD%" };
     const working_directory = "C:\\Windows";
     const working_directory_mark = "Windows";
@@ -1050,6 +1062,56 @@ test "what a child writes to its terminal reaches the master" {
 
     _ = try child.killWait(io, budget_ms);
     trace.print("master: reaped", .{});
+}
+
+test "a cursor shape the child wrote reaches the master where passthrough was granted" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows only: this is a claim about `PSEUDOCONSOLE_PASSTHROUGH_MODE`,
+    // and on POSIX there is nothing between the two ends of a pair rewriting
+    // anything in the first place.
+    if (!is_windows) return error.SkipZigTest;
+
+    // The order out: see the first test in this section.
+    var sink: Sink = .{};
+    defer sink.deinit();
+
+    var pty = try Pty.open(.{
+        .rows = 24,
+        .cols = 80,
+        .console = .{ .passthrough = true },
+    });
+    defer pty.close(io);
+
+    // The gate, and the reason it is one. Passthrough is Windows 11 22H2 and
+    // newer; an older system refuses the whole call and `Pty.open` asks again
+    // without it. On such a machine the console host interprets what the child
+    // wrote and what reaches the master is its redraw, in which a sequence the
+    // host does not model -- the cursor shape is the one people notice -- is
+    // simply not there. That is the documented behaviour and not a failure, so
+    // the test says which machine it is on and stops.
+    if (!pty.console.passthrough) {
+        std.debug.print(
+            "\nthis Windows did not grant PSEUDOCONSOLE_PASSTHROUGH_MODE; skipping\n",
+            .{},
+        );
+        return error.SkipZigTest;
+    }
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.cursor_shape,
+        .stdio = .{ .pty = &pty },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+
+    try sink.start(pty.readFile());
+
+    // Byte for byte, as the child wrote it: `DECSCUSR` with parameter 5.
+    try sink.expect("\x1b[5 q");
+
+    _ = try child.killWait(io, budget_ms);
 }
 
 test "a child on a pty sees a terminal" {
