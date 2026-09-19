@@ -1586,6 +1586,7 @@ fn statusToTerm(status: u32) Term {
 }
 
 test {
+    _ = @import("command_line.zig");
     if (is_windows) {
         _ = @import("child_windows.zig");
     } else {

@@ -10,6 +10,7 @@ const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
+const command_line = @import("command_line.zig");
 const Pty = @import("Pty.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("trace.zig");
@@ -34,7 +35,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // `PATH`, and appending `.exe` when there is no extension. That is what a
     // caller passing a bare program name means, and reimplementing it here
     // would only be a second, worse copy.
-    const command_line = try commandLine(arena, options.argv);
+    const line = try command_line.serialise(arena, options.argv);
 
     const environment: ?[*:0]const u16 = if (options.environ) |map| env: {
         const block = try map.createWindowsBlock(arena, .{});
@@ -84,7 +85,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
         null,
-        command_line.ptr,
+        line.ptr,
         null,
         null,
         inherit_handles,
@@ -663,7 +664,7 @@ const AttributeList = struct {
 };
 
 //======================================================================
-// The command line.
+// The program.
 //======================================================================
 
 /// Whether the program is a batch script, which this package refuses to run.
@@ -680,67 +681,6 @@ fn isBatchFile(program: []const u8) bool {
 fn endsWithIgnoringCase(haystack: []const u8, suffix: []const u8) bool {
     if (haystack.len < suffix.len) return false;
     return std.ascii.eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
-}
-
-/// Serialises `argv` into the single string `CreateProcessW` takes, by the
-/// rules `CommandLineToArgvW` parses back.
-///
-/// The first argument is quoted differently from the rest: a backslash in it
-/// has no special meaning, which makes a double quote in it impossible to
-/// escape without letting characters leak into the arguments after it. Such an
-/// `argv[0]` is refused rather than mangled. Every later argument is quoted
-/// whenever it is empty or holds a space, a control character or a quote, with
-/// backslashes doubled where they precede a quote.
-fn commandLine(arena: Allocator, argv: []const []const u8) SpawnError![:0]u16 {
-    var buffer: std.ArrayList(u8) = .empty;
-
-    const program = argv[0];
-    var program_needs_quotes = program.len == 0;
-    for (program) |byte| {
-        if (byte == '"') return error.InvalidArgv;
-        if (byte <= ' ') program_needs_quotes = true;
-    }
-    if (program_needs_quotes) {
-        try buffer.append(arena, '"');
-        try buffer.appendSlice(arena, program);
-        try buffer.append(arena, '"');
-    } else {
-        try buffer.appendSlice(arena, program);
-    }
-
-    for (argv[1..]) |argument| {
-        try buffer.append(arena, ' ');
-
-        const needs_quotes = for (argument) |byte| {
-            if (byte <= ' ' or byte == '"') break true;
-        } else argument.len == 0;
-        if (!needs_quotes) {
-            try buffer.appendSlice(arena, argument);
-            continue;
-        }
-
-        try buffer.append(arena, '"');
-        var backslashes: usize = 0;
-        for (argument) |byte| switch (byte) {
-            '\\' => backslashes += 1,
-            '"' => {
-                try buffer.appendNTimes(arena, '\\', backslashes * 2 + 1);
-                try buffer.append(arena, '"');
-                backslashes = 0;
-            },
-            else => {
-                try buffer.appendNTimes(arena, '\\', backslashes);
-                try buffer.append(arena, byte);
-                backslashes = 0;
-            },
-        };
-        // The run of backslashes before the closing quote is doubled, so the
-        // quote stays a quote and the backslashes stay backslashes.
-        try buffer.appendNTimes(arena, '\\', backslashes * 2);
-        try buffer.append(arena, '"');
-    }
-
-    return std.unicode.wtf8ToWtf16LeAllocZ(arena, buffer.items);
 }
 
 //======================================================================
@@ -770,40 +710,6 @@ fn createError() SpawnError {
 //======================================================================
 
 const testing = std.testing;
-
-fn expectCommandLine(expected: []const u8, argv: []const []const u8) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena_state.deinit();
-    const line = try commandLine(arena_state.allocator(), argv);
-    const utf8 = try std.unicode.wtf16LeToWtf8Alloc(testing.allocator, line);
-    defer testing.allocator.free(utf8);
-    try testing.expectEqualStrings(expected, utf8);
-}
-
-test "a command line quotes only what has to be quoted" {
-    try expectCommandLine("cmd.exe", &.{"cmd.exe"});
-    try expectCommandLine("cmd.exe /c echo", &.{ "cmd.exe", "/c", "echo" });
-    try expectCommandLine("\"C:\\Program Files\\x.exe\"", &.{"C:\\Program Files\\x.exe"});
-    try expectCommandLine("x.exe \"two words\"", &.{ "x.exe", "two words" });
-    try expectCommandLine("x.exe \"\"", &.{ "x.exe", "" });
-}
-
-test "a command line escapes quotes and the backslashes before them" {
-    try expectCommandLine("x.exe \"a\\\"b\"", &.{ "x.exe", "a\"b" });
-    try expectCommandLine("x.exe \"a\\\\\\\"b\"", &.{ "x.exe", "a\\\"b" });
-    try expectCommandLine("x.exe \"a b\\\\\\\\\"", &.{ "x.exe", "a b\\\\" });
-    // A backslash that is not before a quote is left alone.
-    try expectCommandLine("x.exe a\\b", &.{ "x.exe", "a\\b" });
-}
-
-test "a first argument containing a quote is refused" {
-    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena_state.deinit();
-    try testing.expectError(
-        error.InvalidArgv,
-        commandLine(arena_state.allocator(), &.{"a\"b.exe"}),
-    );
-}
 
 test "batch files are recognised whatever their case" {
     try testing.expect(isBatchFile("go.bat"));

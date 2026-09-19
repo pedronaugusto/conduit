@@ -115,6 +115,7 @@ jobs:
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=Child.test" "-Dtest-filter=child_windows.test"
+          "-Dtest-filter=command_line.test"
           "-Dtest-filter=Reaper.test" "-Dtest-filter=Proxy.test"
           "-Dtest-filter=tty.test"
           "-Dtest-filter=environ.test" "-Dtest-filter=shell.test"
