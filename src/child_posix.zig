@@ -13,7 +13,10 @@ const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
 const Pty = @import("Pty.zig");
+const handles = @import("handles.zig");
 const tty = @import("tty.zig");
+
+const file = handles.file;
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
@@ -298,6 +301,11 @@ fn childMain(
     // one thing a pseudo-terminal exists to deliver. Every ignored signal goes
     // back to its default action here, which is what a shell does when it puts
     // a job in the foreground.
+    // Up to 32, which is where the named signals end. Above it are the
+    // real-time signals, and on Linux the threading implementation owns the
+    // first two of those and sets them up before `main` runs: resetting them
+    // in a fork child would be taking them from it. Nothing a program is meant
+    // to ignore lives up there.
     var number: u6 = 1;
     while (number < 32) : (number += 1) {
         const signal: posix.SIG = @enumFromInt(number);
@@ -429,6 +437,13 @@ fn bail(report: posix.fd_t, stage: Failure.Stage) noreturn {
 /// directory, exactly as a shell would. Entries that would make an
 /// over-long path are skipped rather than failing the spawn.
 ///
+/// The candidates are built here, in the parent, and tried in the child after
+/// its `chdir`. So a relative entry -- an empty one, or a `.` -- and a relative
+/// `argv[0]` both resolve against `cwd` rather than against the parent's
+/// working directory. That is what a shell does with the same two options, and
+/// the alternative would be a program found at a path the child could not then
+/// name.
+///
 /// With `search` false there is no list: a bare name is its own only
 /// candidate, and the `execve` of a name with no separator fails the way a
 /// missing file does, which is what `PathSearch.none` promises.
@@ -482,14 +497,17 @@ const setrlimitSym = if (posix.lfs64_abi) c.setrlimit64 else c.setrlimit;
 /// The null device, opened for both directions so one descriptor can serve any
 /// of the three streams, and close-on-exec so the copy `dup2` makes is the only
 /// one the child keeps.
+///
+/// `O_CLOEXEC` in the open rather than an `fcntl` after it: between an open and
+/// a second call there is a descriptor without the flag, and another thread
+/// that forks in that gap hands it to a child it has nothing to do with.
 fn openNullDevice() SpawnError!posix.fd_t {
-    const fd = c.open("/dev/null", .{ .ACCMODE = .RDWR });
+    const fd = c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
     if (fd < 0) switch (c.errno(@as(c_int, -1))) {
         .MFILE => return error.ProcessFdQuotaExceeded,
         .NFILE => return error.SystemFdQuotaExceeded,
         else => return error.NoDevice,
     };
-    setCloseOnExec(fd);
     return fd;
 }
 
@@ -500,26 +518,28 @@ fn openNullDevice() SpawnError!posix.fd_t {
 /// away at the `execve` and the parent's end never reaches an unrelated child.
 /// The report pipe wants the write end to close at a successful `execve`,
 /// which is exactly how the parent learns the exec happened.
+///
+/// `pipe2` where the system has it, because the flag then arrives with the
+/// descriptors rather than a call later: in that gap the two ends have no flag
+/// at all, and another thread that forks through it hands them to a child that
+/// has nothing to do with this one. Darwin has no `pipe2` and takes the gap.
 fn makePipe() SpawnError![2]posix.fd_t {
     var ends: [2]posix.fd_t = undefined;
-    if (c.pipe(&ends) != 0) switch (c.errno(@as(c_int, -1))) {
+    const failed = if (@TypeOf(c.pipe2) == void) failed: {
+        const rc = c.pipe(&ends);
+        if (rc == 0) {
+            handles.setCloseOnExec(ends[0]);
+            handles.setCloseOnExec(ends[1]);
+        }
+        break :failed rc != 0;
+    } else c.pipe2(&ends, .{ .CLOEXEC = true }) != 0;
+
+    if (failed) switch (c.errno(@as(c_int, -1))) {
         .MFILE => return error.ProcessFdQuotaExceeded,
         .NFILE => return error.SystemFdQuotaExceeded,
         else => |err| return posix.unexpectedErrno(err),
     };
-    setCloseOnExec(ends[0]);
-    setCloseOnExec(ends[1]);
     return ends;
-}
-
-/// Best effort: a descriptor that could not be marked close-on-exec is still a
-/// working descriptor, and there is no useful way for a caller to react.
-fn setCloseOnExec(fd: posix.fd_t) void {
-    _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
-}
-
-fn file(fd: posix.fd_t) std.Io.File {
-    return .{ .handle = fd, .flags = .{ .nonblocking = false } };
 }
 
 /// Reads until the buffer is full or the writer is gone. Used on the report

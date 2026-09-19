@@ -53,6 +53,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const Pty = @import("Pty.zig");
+const handles = @import("handles.zig");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
@@ -364,10 +365,7 @@ fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
 
         const n = expect.master.read.readStreaming(io, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
-            // A pseudo-terminal whose child is gone reports this where a pipe
-            // reports end of stream. Both mean the same thing here.
-            error.EndOfStream, error.InputOutput => return expect.finish(io, .ended),
-            else => return expect.finish(io, .failed),
+            else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
         };
         if (n == 0) return expect.finish(io, .ended);
 

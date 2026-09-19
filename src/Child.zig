@@ -38,6 +38,7 @@ const Allocator = std.mem.Allocator;
 const Expect = @import("Expect.zig");
 const Pty = @import("Pty.zig");
 const trace = @import("trace.zig");
+const handles = @import("handles.zig");
 const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
@@ -1188,11 +1189,9 @@ fn collect(
     var buffer: [4096]u8 = undefined;
     while (true) {
         const n = f.readStreaming(io, &.{&buffer}) catch |e| switch (e) {
-            // A pseudo-terminal whose child is gone reports this where a pipe
-            // reports end of stream. Both mean the same thing here.
-            error.EndOfStream, error.InputOutput => return,
             error.Canceled => return error.Canceled,
             else => {
+                if (handles.finished(e)) return;
                 into.failed = true;
                 return;
             },

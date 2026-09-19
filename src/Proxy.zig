@@ -49,6 +49,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const Pty = @import("Pty.zig");
+const handles = @import("handles.zig");
 const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
@@ -166,12 +167,8 @@ fn inputTask(io: std.Io, options: Options, out_error: *?RunError) std.Io.Cancela
 fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!void {
     while (true) {
         const n = from.readStreaming(io, &.{buffer}) catch |err| switch (err) {
-            // The far end of a pseudo-terminal is gone. Linux reports this as
-            // an I/O error rather than as end of file, and both mean the same
-            // thing here.
-            error.EndOfStream, error.InputOutput => return,
             error.Canceled => return error.Canceled,
-            else => return error.ReadFailed,
+            else => if (handles.finished(err)) return else return error.ReadFailed,
         };
         if (n == 0) return;
         to.writeStreamingAll(io, buffer[0..n]) catch |err| switch (err) {

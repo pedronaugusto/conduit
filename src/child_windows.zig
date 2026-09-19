@@ -16,6 +16,7 @@ const win32 = @import("win32.zig");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
+const file = @import("handles.zig").file;
 
 /// See `Child.spawn`.
 pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
@@ -38,9 +39,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // quietly not done.
     if (options.credentials.any()) return error.Unsupported;
 
-    // Windows has no `setrlimit`. What it has instead is a job object, which
-    // this package does not create -- see the note on killing a process tree.
-    // Accepting the list and setting nothing would be the worst of both.
+    // Windows has no `setrlimit`, and `ResourceLimit` is a pair of POSIX types
+    // with no counterpart here. The job object below is the Windows way to
+    // bound what a child may use; `SpawnOptions.job_limits` is the option that
+    // reaches it, and accepting the POSIX list and setting nothing would be
+    // the worst of both.
     if (options.resource_limits.len != 0) return error.Unsupported;
 
     // The program is resolved by `CreateProcessW`, from the environment the
@@ -493,10 +496,6 @@ fn openNul() SpawnError!windows.HANDLE {
     );
     if (handle == windows.INVALID_HANDLE_VALUE) return error.NoDevice;
     return handle;
-}
-
-fn file(handle: windows.HANDLE) std.Io.File {
-    return .{ .handle = handle, .flags = .{ .nonblocking = false } };
 }
 
 //======================================================================

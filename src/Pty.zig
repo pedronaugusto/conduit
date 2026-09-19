@@ -33,12 +33,14 @@ const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
 const trace = @import("trace.zig");
+const handles = @import("handles.zig");
 const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 
 const Size = tty.Size;
+const file = handles.file;
 
 /// A stream handle. `std.posix.fd_t` on POSIX, `HANDLE` on Windows.
 pub const Handle = std.Io.File.Handle;
@@ -358,10 +360,6 @@ pub fn closeMaster(pty: *Pty, io: std.Io) void {
     }
 }
 
-fn file(handle: Handle) std.Io.File {
-    return .{ .handle = handle, .flags = .{ .nonblocking = false } };
-}
-
 //======================================================================
 // POSIX.
 //======================================================================
@@ -382,7 +380,7 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
     // is a second call, and the window between the two is the one a concurrent
     // `fork` on another thread could slip through. The slave below has no such
     // window: `open` takes the flag.
-    setCloseOnExec(master_fd);
+    handles.setCloseOnExec(master_fd);
 
     // `grantpt` fixes the ownership and mode of the slave device and
     // `unlockpt` clears the lock that keeps it unopenable until then. Both are
@@ -415,13 +413,6 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
         .slave = slave_fd,
         .remembered_size = {},
     };
-}
-
-/// Best effort: a descriptor that could not be marked close-on-exec is still
-/// a working descriptor, and there is nothing a caller could usefully do about
-/// it.
-fn setCloseOnExec(fd: posix.fd_t) void {
-    _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
 }
 
 /// The current `errno`, as one of `OpenError`. Everything `openPosix` calls

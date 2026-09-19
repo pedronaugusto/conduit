@@ -26,6 +26,7 @@ const c = std.c;
 const conduit = @import("conduit.zig");
 const Child = conduit.Child;
 const Pty = conduit.Pty;
+const handles = @import("handles.zig");
 const trace = @import("trace.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
 
@@ -170,10 +171,7 @@ const Sink = struct {
             if (sink.stopping.load(.acquire)) return sink.stop(null);
             const n = file.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
-                // A pseudo-terminal whose child is gone reports an I/O error
-                // where a pipe reports end of stream.
-                error.EndOfStream, error.InputOutput => return sink.stop(null),
-                else => return sink.stop(err),
+                else => return sink.stop(if (handles.finished(err)) null else err),
             };
             if (n == 0) return sink.stop(null);
             sink.mutex.lockUncancelable(io);
@@ -665,22 +663,30 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     // background job in a process group of its own. So the grandchild here is
     // a descendant of the child and *not* in the child's process group: the
     // one place a signal addressed to the group reaches nothing.
+    //
+    // On a pair rather than on pipes, because a shell with no controlling
+    // terminal declines to turn job control on at all.
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+
     var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf '%d\n' \"$!\"; wait" },
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .argv = &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf 'pid %d.' \"$!\"; wait" },
+        .stdio = .{ .pty = &pty },
         .detach = true,
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    pty.closeSlave(io);
 
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(pty.readFile());
 
     const grandchild = try readPid(&sink);
     // Only a claim about this shell if it really did what the fixture asks. A
-    // shell that ignores `set -m` leaves the grandchild in the child's group,
-    // where the group signal reaches it and there is nothing here to prove.
+    // shell that declines job control leaves the grandchild in the child's
+    // group, where the group signal reaches it and there is nothing here to
+    // prove.
     if (getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
 
     _ = try child.killWait(io, 0);
@@ -694,16 +700,20 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     return error.TestGrandchildOutlivedTheKill;
 }
 
-/// The first line of what the child said, as a process id.
+/// The number the child printed between `pid ` and `.`, as a process id.
 fn readPid(sink: *Sink) !posix.pid_t {
     var waited_ms: u32 = 0;
     while (waited_ms < budget_ms) : (waited_ms += 2) {
-        sink.mutex.lockUncancelable(io);
-        const line = std.mem.sliceTo(sink.bytes.items, '\n');
-        const complete = line.len < sink.bytes.items.len;
-        const copy = if (complete) std.fmt.parseInt(posix.pid_t, line, 10) catch null else null;
-        sink.mutex.unlock(io);
-        if (copy) |pid| return pid;
+        const found = found: {
+            sink.mutex.lockUncancelable(io);
+            defer sink.mutex.unlock(io);
+            const said = sink.bytes.items;
+            const at = std.mem.indexOf(u8, said, "pid ") orelse break :found null;
+            const rest = said[at + "pid ".len ..];
+            const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :found null;
+            break :found std.fmt.parseInt(posix.pid_t, rest[0..end], 10) catch null;
+        };
+        if (found) |pid| return pid;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
     return error.TestChildSaidNothing;
@@ -1202,6 +1212,48 @@ test "the older stdio shapes are the per-stream ones under another name" {
 }
 
 //======================================================================
+// The clean slate before execve.
+//======================================================================
+
+test "a signal this process ignores is back at its default action in the child" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // POSIX only: the claim is about signal dispositions surviving `execve`,
+    // and Windows has neither.
+    if (is_windows) return error.SkipZigTest;
+
+    // A shell that starts a background job ignores `SIGINT` in it, and
+    // `execve` keeps an ignored signal ignored. So a child spawned from one
+    // would be deaf to the Ctrl-C on its own terminal -- the one thing a
+    // pseudo-terminal exists to deliver -- unless the spawn puts every
+    // ignored signal back at its default action, which is what this asserts.
+    var ignored: posix.Sigaction = .{
+        .handler = .{ .handler = posix.SIG.IGN },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    var previous: posix.Sigaction = undefined;
+    posix.sigaction(.INT, &ignored, &previous);
+    defer posix.sigaction(.INT, &previous, null);
+
+    // The shell sends itself the signal. With the disposition reset it dies of
+    // it; with the parent's ignore inherited it carries on and says so.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "kill -INT $$; printf 'SURVIVED'" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+
+    try testing.expectEqualStrings("", result.stdout);
+    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term);
+}
+
+//======================================================================
 // Credentials.
 //======================================================================
 
@@ -1570,6 +1622,130 @@ fn childId(child: Child) usize {
 /// exactly what it reports. Never referenced on Windows, where those tests
 /// skip, so the declaration costs nothing there.
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
+
+//======================================================================
+// Descriptor hygiene.
+//======================================================================
+
+test "a child gets no descriptor of this process's but its own three" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // POSIX only: `/dev/fd` is where a process can see its own descriptors,
+    // and Windows hands a child a named list of handles rather than a table it
+    // might inherit the whole of.
+    if (is_windows) return error.SkipZigTest;
+
+    // Every descriptor this package opens for a spawn is close-on-exec, and
+    // where the system will carry the flag on the opening call it is asked for
+    // there rather than in a call after it: between an open and an `fcntl` the
+    // descriptor has no flag, and another thread that forks in that gap hands
+    // it to a child that has nothing to do with it. So the test is threads and
+    // forks at once -- children started while descriptors are being opened and
+    // closed around them -- and what it asserts is that no child was given a
+    // number a child started on its own would not have had.
+    //
+    // That quiet child is the control, and it is what makes the claim about
+    // this package rather than about the program it runs in: the listing
+    // program opens a descriptor of its own to read the directory with, and
+    // this process may itself have been started with inheritable descriptors
+    // it did not open. Both are in the control, and a stranger is anything
+    // else.
+    const control = try descriptorsOfAChild();
+
+    var churn: std.Io.Group = .init;
+    defer churn.cancel(io);
+    var stopping: std.atomic.Value(bool) = .init(false);
+    churn.concurrent(io, openAndClose, .{&stopping}) catch return error.SkipZigTest;
+
+    var spawners: std.Io.Group = .init;
+    defer spawners.cancel(io);
+    var strangers: std.atomic.Value(u32) = .init(0);
+    var started: usize = 0;
+    while (started < 6) : (started += 1) {
+        spawners.concurrent(io, spawnAndList, .{ 8, control, &strangers }) catch break;
+    }
+    // At least one spawner has to have run for the claim to mean anything.
+    if (started == 0) return error.SkipZigTest;
+    try spawners.await(io);
+    stopping.store(true, .release);
+
+    try testing.expectEqual(@as(u32, 0), strangers.load(.acquire));
+}
+
+/// The descriptors one child, started with nothing else going on, was given.
+fn descriptorsOfAChild() !u64 {
+    var child = try Child.spawn(io, gpa, .{ .argv = &list_descriptors, .stdio = .{ .streams = .{
+        .stdin = .ignore,
+        .stdout = .pipe,
+        .stderr = .ignore,
+    } } });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+    return descriptorSet(result.stdout);
+}
+
+/// `/dev/fd` is this process's own descriptors on both systems.
+const list_descriptors = [_][]const u8{ "/bin/sh", "-c", "ls /dev/fd" };
+
+/// The numbers in a listing, as a set. Anything at 64 or above is out of the
+/// set's reach and is counted as a stranger by not being in it.
+fn descriptorSet(listing: []const u8) u64 {
+    var set: u64 = 0;
+    var numbers = std.mem.tokenizeAny(u8, listing, " \t\r\n");
+    while (numbers.next()) |number| {
+        const fd = std.fmt.parseInt(u6, number, 10) catch continue;
+        set |= @as(u64, 1) << fd;
+    }
+    return set;
+}
+
+/// Opens and closes descriptors for as long as the test runs, so that the
+/// children being started meanwhile are started in the middle of it.
+///
+/// Close-on-exec, and from the open rather than a call after it. A descriptor
+/// this *test* left inheritable would be inherited, correctly and by every
+/// child, and the claim being made is about the ones the package opens.
+fn openAndClose(stopping: *std.atomic.Value(bool)) std.Io.Cancelable!void {
+    while (!stopping.load(.acquire)) {
+        const one = c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
+        const two = c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
+        if (one >= 0) _ = c.close(one);
+        if (two >= 0) _ = c.close(two);
+    }
+}
+
+/// Starts `each` children that report the descriptors they were given, and
+/// counts the ones the control child did not have.
+fn spawnAndList(each: usize, control: u64, strangers: *std.atomic.Value(u32)) std.Io.Cancelable!void {
+    var spawned: usize = 0;
+    while (spawned < each) : (spawned += 1) {
+        var child = Child.spawn(io, gpa, .{ .argv = &list_descriptors, .stdio = .{ .streams = .{
+            .stdin = .ignore,
+            .stdout = .pipe,
+            .stderr = .ignore,
+        } } }) catch return;
+        defer child.deinit(io);
+
+        var result = child.output(io, gpa, .{ .timeout_ms = budget_ms }) catch {
+            _ = child.killWait(io, 0) catch {};
+            return;
+        };
+        defer result.deinit(gpa);
+
+        const unexpected = descriptorSet(result.stdout) & ~control;
+        if (unexpected != 0) {
+            std.debug.print("\na child was given descriptors 0x{x} nothing gave the control child; it saw:\n{s}\n", .{
+                unexpected,
+                result.stdout,
+            });
+            _ = strangers.fetchAdd(1, .release);
+        }
+    }
+}
 
 //======================================================================
 // Descriptor placement.
