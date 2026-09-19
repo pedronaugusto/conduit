@@ -135,6 +135,13 @@ that the other has not.
 - **`Child.term` is read through `tryWait`.** It is written once, by whichever
   call reaps the child, and published through an atomic — so a plain read of
   the field from another task is a race, and `tryWait` is the read that is not.
+- **Two build flags, both for saying the same thing twice.**
+  `-Dfork-spawn` runs the suite with the `posix_spawn` path turned off, because
+  that path is a second implementation of one contract and running both is what
+  says they make the same child. `-Dthread-sanitizer` builds the tests with
+  ThreadSanitizer; the handshake between a `Reaper` and the owner of a `Child`
+  is the one claim here a race detector can check rather than a reader, and the
+  whole suite is clean under it.
 
 ### Breaking
 

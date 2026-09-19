@@ -330,11 +330,12 @@ directory, the current directory, the system directories and `PATH` and appends
 ## Testing
 
 ```sh
-zig build test          # the suite, and the examples, which are run
-zig build test -Dfork-spawn   # the same, with the posix_spawn path turned off
-zig build examples      # the examples alone
+zig build test                   # the suite, and the examples, which are run
+zig build test -Dfork-spawn      # the same, with the posix_spawn path off
+zig build unit -Dthread-sanitizer   # the suite under ThreadSanitizer
+zig build examples               # the examples alone
 zig fmt --check src examples build.zig
-ci/linux.sh --both      # the suite on glibc and musl Linux, in Docker
+ci/linux.sh --both               # the suite on glibc and musl Linux, in Docker
 ```
 
 Every test starts a real child process and reaps it, and CI runs the suite in
@@ -342,9 +343,13 @@ Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code between `fork` and
 `execve` is the kind an inlining decision can change. CI passes
 `--test-timeout 45s`, which ends the run and names the test that did not
 finish, and a test that starts a child or opens a pair carries a watchdog that
-panics with its own name after a minute. `zig build unit` is the suite without
-the examples, `-Dtest-filter` runs part of it, and `CONDUIT_TRACE` in the
-environment prints what this package asked the operating system for.
+panics with its own name after a minute. The suite also runs with the
+`posix_spawn` path turned off, because that path is a second implementation of
+one contract and running both is what says they make the same child.
+
+`zig build unit` is the suite without the examples, `-Dtest-filter` runs part
+of it, and `CONDUIT_TRACE` in the environment prints what this package asked
+the operating system for.
 
 ## Requirements
 

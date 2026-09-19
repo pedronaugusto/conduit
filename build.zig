@@ -55,11 +55,22 @@ pub fn build(b: *std.Build) void {
         "Run only the tests whose fully qualified name contains one of these",
     ) orelse &[0][]const u8{};
 
+    // The handshake between `Reaper` and the owner of a `Child` is two tasks
+    // and one child, so it is the one claim here a race detector can check
+    // rather than a reader: `zig build unit -Dthread-sanitizer
+    // -Dtest-filter=Reaper`.
+    const thread_sanitizer = b.option(
+        bool,
+        "thread-sanitizer",
+        "Build the tests with ThreadSanitizer",
+    ) orelse false;
+
     const test_module = b.createModule(.{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
+        .sanitize_thread = if (thread_sanitizer) true else null,
     });
     test_module.addOptions("conduit_options", conduit_options);
 
