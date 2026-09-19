@@ -8,4 +8,3 @@ zig-pkg/
 .DS_Store
 
 # Worktrees of this repository.
-.claude/
