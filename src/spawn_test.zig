@@ -472,6 +472,34 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     try testing.expectEqual(@as(?Child.Term, term), try child.tryWait());
 }
 
+test "a wait whose Reaper was cancelled is still a wait" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    // A `Reaper` that is stopped before the child ends leaves the child
+    // unreaped, and whoever asked for the wait while it held it has to end up
+    // doing the wait itself rather than waiting forever for a publish that is
+    // never coming.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    {
+        var reaper: conduit.Reaper = .init(&child);
+        try reaper.start(io);
+        try std.Io.sleep(io, .fromMilliseconds(50), .awake);
+        try testing.expectEqual(@as(?Child.Term, null), reaper.exit());
+        reaper.deinit(io);
+    }
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
+}
+
 test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
@@ -519,6 +547,62 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
     child.closeStdin(io);
 
     try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
+}
+
+test "waitTimeout costs no more than the blocking wait it is a deadline on" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    // A budget, not a measurement. `waitTimeout` used to ask again on a
+    // growing interval -- one millisecond, then two, then four -- which put a
+    // millisecond and a half between a child ending and this call noticing,
+    // whatever the machine. It waits on a handle the system makes ready now,
+    // so the difference should be nothing but noise. Medians rather than
+    // means, because one descheduled sample on a loaded machine is not the
+    // claim.
+    const samples = 32;
+    var blocking: [samples]i64 = undefined;
+    var deadlined: [samples]i64 = undefined;
+
+    for (&blocking) |*sample| sample.* = try timeOne(.blocking);
+    for (&deadlined) |*sample| sample.* = try timeOne(.deadlined);
+
+    std.mem.sort(i64, &blocking, {}, std.sort.asc(i64));
+    std.mem.sort(i64, &deadlined, {}, std.sort.asc(i64));
+    const with_wait = blocking[samples / 2];
+    const with_deadline = deadlined[samples / 2];
+
+    const slack_us = 1250;
+    if (with_deadline > with_wait + slack_us) {
+        std.debug.print(
+            "\nwait() {d} us, waitTimeout() {d} us: {d} us more than the {d} us allowed\n",
+            .{ with_wait, with_deadline, with_deadline - with_wait, slack_us },
+        );
+        return error.TestWaitTimeoutCostsTooMuch;
+    }
+}
+
+/// Microseconds to start a child that exits at once and reap it, one way or
+/// the other.
+fn timeOne(how: enum { blocking, deadlined }) !i64 {
+    const argv: []const []const u8 = if (is_windows)
+        &.{ "cmd.exe", "/c", "exit 0" }
+    else
+        &.{ "/bin/sh", "-c", "exit 0" };
+
+    const start: std.Io.Timestamp = .now(io, .awake);
+    var child = try Child.spawn(io, gpa, .{ .argv = argv, .stdio = .ignore });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    switch (how) {
+        .blocking => _ = try child.wait(io),
+        .deadlined => if (try child.waitTimeout(io, budget_ms) == null) {
+            return error.TestChildDidNotExit;
+        },
+    }
+    const end: std.Io.Timestamp = .now(io, .awake);
+    return start.durationTo(end).toMicroseconds();
 }
 
 test "waitTimeout gives up without ending the child" {

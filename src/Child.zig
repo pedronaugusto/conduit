@@ -44,6 +44,7 @@ const tty = @import("tty.zig");
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 const tree = if (is_windows) struct {} else @import("tree.zig");
+const wait_for = if (is_windows) struct {} else @import("wait.zig");
 
 /// The operating system's name for the child: the process id on POSIX, the
 /// process `HANDLE` on Windows. An alias for `std.process.Child.Id`.
@@ -612,11 +613,18 @@ pub const WaitError = std.process.Child.WaitError;
 /// this that reads and waits at once, and `Proxy` is the version that keeps
 /// reading.
 pub fn wait(child: *Child, io: std.Io) WaitError!Term {
-    if (child.settled()) |term| return term;
-    // Another task is already inside the wait -- a `Reaper`, in practice. It
-    // will publish the term, and a second wait on the same child would only
-    // take the status away from it.
-    if (!child.claimReap()) return child.awaitSettled(io);
+    // Another task may already be inside the wait -- a `Reaper`, in practice.
+    // It will publish the term, and a second wait on the same child would only
+    // take the status away from it; so this waits for the answer instead, and
+    // asks for the wait itself again each time round, because the task that
+    // had it may have been cancelled before it reaped anything.
+    var interval_ms: u32 = 1;
+    while (true) {
+        if (child.settled()) |term| return term;
+        if (child.claimReap()) break;
+        try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
+        interval_ms = @min(interval_ms * 2, 4);
+    }
     defer child.releaseReap();
     if (child.settled()) |term| return term;
 
@@ -666,20 +674,6 @@ fn releaseReap(child: *Child) void {
     child.reaping.store(false, .release);
 }
 
-/// Waits for whoever holds the reap to publish the term.
-///
-/// The rare path: it is reached only when a second task asks for a blocking
-/// wait while a `Reaper` is in one. The one in flight is blocked in the
-/// operating system's own wait, so this ends when the child does.
-fn awaitSettled(child: *Child, io: std.Io) std.Io.Cancelable!Term {
-    var interval_ms: u32 = 1;
-    while (true) {
-        if (child.settled()) |term| return term;
-        try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
-        interval_ms = @min(interval_ms * 2, 4);
-    }
-}
-
 pub const WaitTimeoutError = TryWaitError || std.Io.Cancelable;
 
 /// Reaps the child if it ends within `timeout_ms`, and returns `null` if it
@@ -694,18 +688,98 @@ pub const WaitTimeoutError = TryWaitError || std.Io.Cancelable;
 /// and reporting that as "it took too long" would be this call believing its
 /// own deadlock.
 ///
-/// The wait is polled rather than slept through in one piece, so a child that
-/// exits promptly is noticed promptly. The poll interval grows to a few
-/// milliseconds, which is the resolution of the timeout.
+/// **How it waits.** On POSIX, on a handle the operating system makes ready
+/// the moment the child ends: a `pidfd` on Linux, a kqueue registration on
+/// Darwin and the BSDs. So a child that ends is noticed then and not at the
+/// end of an interval — which used to cost a millisecond and a half on every
+/// wait. Where there is neither, and on Windows, the wait asks again on a
+/// growing interval as it always did. Either way it is a cancelation point.
+///
+/// `null` while another task holds the wait for this child -- a `Reaper` --
+/// and it has not published a term by the deadline: the child is not this
+/// call's to reap, and it says the same thing it says about a child that is
+/// still running.
 pub fn waitTimeout(child: *Child, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
-    var waited_ms: u32 = 0;
+    const deadline: Deadline = .in(io, timeout_ms);
+    if (child.settled()) |term| return term;
+    if (!child.claimReap()) return child.settledWithin(io, deadline);
+    defer child.releaseReap();
+    return child.reapWithin(io, deadline);
+}
+
+/// A deadline, however this system counts to one. `Deadline` does not exist on
+/// Windows, where nothing here needs to count.
+const Deadline = if (is_windows) struct {
+    at: std.Io.Clock.Timestamp,
+
+    fn in(io: std.Io, milliseconds: u32) @This() {
+        return .{ .at = .fromNow(io, .{
+            .raw = .fromMilliseconds(milliseconds),
+            .clock = .awake,
+        }) };
+    }
+
+    fn remainingMs(deadline: @This(), io: std.Io) u32 {
+        const left = deadline.at.durationFromNow(io).raw.toMilliseconds();
+        if (left <= 0) return 0;
+        return std.math.lossyCast(u32, left);
+    }
+} else wait_for.Deadline;
+
+/// Reaps the child if it ends before `deadline`. The caller holds the reap.
+///
+/// This is the one place a bounded wait is written: `waitTimeout` is it with
+/// the caller's timeout, and `killWait`'s grace is it with the grace. The two
+/// used to be the same loop copied out twice.
+fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
+    if (try child.tryWaitClaimed()) |term| return term;
+
+    if (!is_windows) {
+        if (wait_for.Watch.open(child.id)) |watch| {
+            defer watch.close();
+            while (true) {
+                const left = deadline.remainingMs(io);
+                if (left == 0) break;
+                // A blocking wait on a handle is not a cancelation point, so
+                // it is spent in slices and cancelation is asked about
+                // between them.
+                if (watch.ended(@min(left, wait_for.slice_ms))) break;
+                try std.Io.checkCancel(io);
+            }
+            return child.tryWaitClaimed();
+        }
+    }
+
+    // Nothing to wait on: ask again, on an interval that grows to a few
+    // milliseconds so a child that ends promptly is noticed promptly and one
+    // that does not is not asked about a thousand times a second.
     var interval_ms: u32 = 1;
     while (true) {
-        if (try child.tryWait()) |term| return term;
-        if (waited_ms >= timeout_ms) return null;
-        const step = @min(interval_ms, timeout_ms - waited_ms);
-        try std.Io.sleep(io, .fromMilliseconds(step), .awake);
-        waited_ms += step;
+        const left = deadline.remainingMs(io);
+        if (left == 0) return child.tryWaitClaimed();
+        try std.Io.sleep(io, .fromMilliseconds(@min(interval_ms, left)), .awake);
+        if (try child.tryWaitClaimed()) |term| return term;
+        interval_ms = @min(interval_ms * 2, 4);
+    }
+}
+
+/// Waits for whoever holds the reap to publish a term, until `deadline`.
+///
+/// The rare path, and the reason it asks again rather than waiting on a
+/// handle: what it is waiting for is another task's publish, not the child's
+/// end. The wait is asked for again each time round, because the task that had
+/// it may have been cancelled before it reaped anything.
+fn settledWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
+    var interval_ms: u32 = 1;
+    while (true) {
+        if (child.settled()) |term| return term;
+        if (child.claimReap()) {
+            defer child.releaseReap();
+            return child.reapWithin(io, deadline);
+        }
+        const left = deadline.remainingMs(io);
+        if (left == 0) return null;
+        try std.Io.sleep(io, .fromMilliseconds(@min(interval_ms, left)), .awake);
         interval_ms = @min(interval_ms * 2, 4);
     }
 }
@@ -738,8 +812,12 @@ pub fn tryWait(child: *Child) TryWaitError!?Term {
     // happen here.
     if (!child.claimReap()) return null;
     defer child.releaseReap();
-    if (child.settled()) |term| return term;
+    return child.tryWaitClaimed();
+}
 
+/// `tryWait` for a caller that already holds the reap.
+fn tryWaitClaimed(child: *Child) TryWaitError!?Term {
+    if (child.settled()) |term| return term;
     if (is_windows) return child.tryWaitWindows();
 
     var status: c_int = undefined;
@@ -933,25 +1011,15 @@ pub const KillWaitError = KillError || WaitError || TryWaitError || std.Io.Cance
 /// that system should pass a `grace_ms` of zero; a caller that wants to know
 /// whether the child ended well should ask `succeeded`.
 ///
-/// The grace is polled rather than slept through in one piece, so the common
-/// case of a child that exits promptly returns promptly. The poll interval
-/// grows to a few milliseconds, which is the resolution of the grace.
+/// The grace is `waitTimeout`, so a child that obeys the `.terminate` is
+/// noticed the moment it does rather than at the end of an interval.
 pub fn killWait(child: *Child, io: std.Io, grace_ms: u32) KillWaitError!Term {
     // A child that has already ended is reaped rather than signalled.
     if (try child.tryWait()) |term| return term;
 
     if (grace_ms > 0) {
         child.kill(.terminate) catch {};
-        var waited_ms: u32 = 0;
-        var interval_ms: u32 = 1;
-        while (waited_ms < grace_ms) {
-            if (try child.tryWait()) |term| return term;
-            const step = @min(interval_ms, grace_ms - waited_ms);
-            try std.Io.sleep(io, .fromMilliseconds(step), .awake);
-            waited_ms += step;
-            interval_ms = @min(interval_ms * 2, 4);
-        }
-        if (try child.tryWait()) |term| return term;
+        if (try child.waitTimeout(io, grace_ms)) |term| return term;
     }
 
     try child.kill(.kill);
@@ -1316,5 +1384,6 @@ test {
     } else {
         _ = @import("child_posix.zig");
         _ = @import("tree.zig");
+        _ = @import("wait.zig");
     }
 }

@@ -82,8 +82,9 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
 | `child.wait(io)` | Blocks; delegates to `std.process.Child.wait`. |
+| `child.term` | How it ended, once something reaped it. Written by whichever call did and published through an atomic, so `tryWait` is how to read it while a `Reaper` runs. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
-| `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. |
+| `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`. The process group of a detached child, the child alone otherwise. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
