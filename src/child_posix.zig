@@ -207,38 +207,7 @@ fn childMain(
     cwd: ?[*:0]const u8,
     report: posix.fd_t,
 ) noreturn {
-    // A fork child inherits the parent's signal mask, and `execve` keeps it.
-    // A program started here must not begin life unable to receive the signals
-    // its terminal generates -- a child whose `SIGINT` is blocked ignores
-    // Ctrl-C no matter how correctly the pseudo-terminal is wired -- so the
-    // mask is emptied first.
-    const no_signals_blocked = posix.sigemptyset();
-    posix.sigprocmask(posix.SIG.SETMASK, &no_signals_blocked, null);
-
-    // `execve` resets a signal the parent had a handler for, but a signal the
-    // parent set to "ignore" stays ignored in the new program. A shell that
-    // starts a background job ignores `SIGINT` and `SIGQUIT` in it, so a child
-    // spawned from one would be deaf to the Ctrl-C on its own terminal -- the
-    // one thing a pseudo-terminal exists to deliver. Every ignored signal goes
-    // back to its default action here, which is what a shell does when it puts
-    // a job in the foreground.
-    // Up to 32, which is where the named signals end. Above it are the
-    // real-time signals, and on Linux the threading implementation owns the
-    // first two of those and sets them up before `main` runs: resetting them
-    // in a fork child would be taking them from it. Nothing a program is meant
-    // to ignore lives up there.
-    var number: u6 = 1;
-    while (number < 32) : (number += 1) {
-        const signal: posix.SIG = @enumFromInt(number);
-        // The two that cannot be caught cannot be reset either.
-        if (signal == .KILL or signal == .STOP) continue;
-        var current: posix.Sigaction = undefined;
-        posix.sigaction(signal, null, &current);
-        if (current.handler.handler != posix.SIG.IGN) continue;
-        current.handler = .{ .handler = posix.SIG.DFL };
-        current.flags = 0;
-        posix.sigaction(signal, &current, null);
-    }
+    clearSignals();
 
     if (options.detach) {
         switch (options.stdio) {
@@ -252,40 +221,8 @@ fn childMain(
         }
     }
 
-    // A descriptor the caller handed over may itself be one of the three
-    // numbers about to be written. Placing 0, 1 and 2 in order would then read
-    // a number an earlier `dup2` had already overwritten -- `.stdout` given
-    // the file this process holds at 1 and `.stderr` given the one at 2, say,
-    // crossed over -- and the child would silently get one of them twice. Any
-    // source below the slot it serves is therefore copied out of the way
-    // first, above 2, before a single placement happens. A source at or above
-    // its own slot needs no copy: the placements run in increasing order, so
-    // nothing has touched it yet.
-    var placement = plan.child;
-    for (&placement, 0..) |*target, slot| switch (target.*) {
-        .place => |fd| if (fd < @as(posix.fd_t, @intCast(slot))) {
-            // Close-on-exec: the copy exists only to be `dup2`'d from, and
-            // `dup2` clears the flag on the descriptor it writes.
-            const moved = c.fcntl(fd, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
-            if (moved < 0) bail(report, .descriptors);
-            target.* = .{ .place = @intCast(moved) };
-        },
-        else => {},
-    };
+    if (!placeDescriptors(plan)) bail(report, .descriptors);
 
-    for (placement, 0..) |target, slot| switch (target) {
-        .inherit => {},
-        .place => |fd| if (!place(fd, @intCast(slot))) bail(report, .descriptors),
-        // A close that finds nothing there is not a failure of the spawn: the
-        // child was asked to have no descriptor at that number, and it does
-        // not.
-        .close => _ = c.close(@intCast(slot)),
-    };
-
-    // Everything above the child's own three, if that was asked for. After
-    // the placements, so the descriptors being placed are still there to place
-    // -- and after the master and spare slave of a pair are closed below, for
-    // the same reason, which is why this is not simply first.
     switch (options.stdio) {
         // The master end has no business in the child. While a descriptor for
         // it stays open there, the parent closing its own copy does not hang
@@ -339,6 +276,82 @@ fn childMain(
     const record: Failure = .{ .stage = .exec, .errno = @intFromEnum(best) };
     _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
     c._exit(127);
+}
+
+/// The clean slate the child is given before `execve`.
+fn clearSignals() void {
+    // A fork child inherits the parent's signal mask, and `execve` keeps it.
+    // A program started here must not begin life unable to receive the signals
+    // its terminal generates -- a child whose `SIGINT` is blocked ignores
+    // Ctrl-C no matter how correctly the pseudo-terminal is wired -- so the
+    // mask is emptied first.
+    const no_signals_blocked = posix.sigemptyset();
+    posix.sigprocmask(posix.SIG.SETMASK, &no_signals_blocked, null);
+
+    // `execve` resets a signal the parent had a handler for, but a signal the
+    // parent set to "ignore" stays ignored in the new program. A shell that
+    // starts a background job ignores `SIGINT` and `SIGQUIT` in it, so a child
+    // spawned from one would be deaf to the Ctrl-C on its own terminal -- the
+    // one thing a pseudo-terminal exists to deliver. Every ignored signal goes
+    // back to its default action here, which is what a shell does when it puts
+    // a job in the foreground.
+    // Up to 32, which is where the named signals end. Above it are the
+    // real-time signals, and on Linux the threading implementation owns the
+    // first two of those and sets them up before `main` runs: resetting them
+    // in a fork child would be taking them from it. Nothing a program is meant
+    // to ignore lives up there.
+    var number: u6 = 1;
+    while (number < 32) : (number += 1) {
+        const signal: posix.SIG = @enumFromInt(number);
+        // The two that cannot be caught cannot be reset either.
+        if (signal == .KILL or signal == .STOP) continue;
+        var current: posix.Sigaction = undefined;
+        posix.sigaction(signal, null, &current);
+        if (current.handler.handler != posix.SIG.IGN) continue;
+        current.handler = .{ .handler = posix.SIG.DFL };
+        current.flags = 0;
+        posix.sigaction(signal, &current, null);
+    }
+}
+
+/// Puts the descriptors the child was given at 0, 1 and 2, and returns false if
+/// the system refused one.
+fn placeDescriptors(plan: Plan) bool {
+    // A descriptor the caller handed over may itself be one of the three
+    // numbers about to be written. Placing 0, 1 and 2 in order would then read
+    // a number an earlier `dup2` had already overwritten -- `.stdout` given
+    // the file this process holds at 1 and `.stderr` given the one at 2, say,
+    // crossed over -- and the child would silently get one of them twice. Any
+    // source below the slot it serves is therefore copied out of the way
+    // first, above 2, before a single placement happens. A source at or above
+    // its own slot needs no copy: the placements run in increasing order, so
+    // nothing has touched it yet.
+    var placement = plan.child;
+    for (&placement, 0..) |*target, slot| switch (target.*) {
+        .place => |fd| if (fd < @as(posix.fd_t, @intCast(slot))) {
+            // Close-on-exec: the copy exists only to be `dup2`'d from, and
+            // `dup2` clears the flag on the descriptor it writes.
+            const moved = c.fcntl(fd, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+            if (moved < 0) return false;
+            target.* = .{ .place = @intCast(moved) };
+        },
+        else => {},
+    };
+
+    for (placement, 0..) |target, slot| switch (target) {
+        .inherit => {},
+        .place => |fd| if (!place(fd, @intCast(slot))) return false,
+        // A close that finds nothing there is not a failure of the spawn: the
+        // child was asked to have no descriptor at that number, and it does
+        // not.
+        .close => _ = c.close(@intCast(slot)),
+    };
+
+    // Everything above the child's own three, if that was asked for. After
+    // the placements, so the descriptors being placed are still there to place
+    // -- and after the master and spare slave of a pair are closed below, for
+    // the same reason, which is why this is not simply first.
+    return true;
 }
 
 /// Closes every descriptor from 3 upwards, in the fork child.

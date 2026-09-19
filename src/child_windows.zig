@@ -25,34 +25,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    if (isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
-
-    // A pseudoconsole is attached through the attribute list, and Windows
-    // documents `STARTF_USESTDHANDLES` as unsupported alongside it -- so there
-    // is nowhere to put the caller's file. Refusing beats accepting the option
-    // and quietly dropping it.
-    if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
-
-    // A Windows process runs as the token it was created with. Changing the
-    // user, the group or the file-creation mask are not steps between a fork
-    // and an exec there -- there is no fork -- and there is nothing here that
-    // could honour the option, so it is refused rather than accepted and
-    // quietly not done.
-    if (options.credentials.any()) return error.Unsupported;
-
-    // Windows has no `setrlimit`, and `ResourceLimit` is a pair of POSIX types
-    // with no counterpart here. The job object below is what bounds a child on
-    // this system, and it bounds the whole tree rather than the one process;
-    // `SpawnOptions.job_limits` is the option that reaches it. Accepting the
-    // POSIX list and setting nothing would be the worst of both.
-    if (options.resource_limits.len != 0) return error.Unsupported;
-
-    // The program is resolved by `CreateProcessW`, from the environment the
-    // child is being given -- see the note on `lpApplicationName` below. That
-    // is exactly `.child_environ`, and there is no argument to ask it for
-    // anything else, so the other two are refused rather than accepted and
-    // quietly not done.
-    if (options.path_search != .child_environ) return error.Unsupported;
+    try refuseWhatWindowsCannotDo(options);
 
     // `CreateProcessW` writes to the command line it is given, so it must be a
     // mutable buffer. `lpApplicationName` is left null on purpose: the system
@@ -68,25 +41,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         break :env block.slice.ptr;
     } else null;
 
-    const cwd: ?[*:0]const u16 = if (options.cwd) |dir|
-        (try std.unicode.wtf8ToWtf16LeAllocZ(arena, dir)).ptr
-    else
-        null;
-
-    // Looked at here rather than left to `CreateProcessW`, which reports a
-    // working directory that is not there with an error code it also uses for
-    // other things -- a program at a path that does not exist is one of them
-    // -- so the two would be indistinguishable afterwards. `spawn` promises
-    // `BadWorkingDirectory` for one and `FileNotFound` for the other on both
-    // systems, and on POSIX the fork child reports which step failed; this is
-    // what keeps that promise here. A directory that goes away between this
-    // and the spawn comes back as whatever `CreateProcessW` makes of it, which
-    // is the ordinary cost of asking first.
-    if (cwd) |dir| {
-        const attributes = win32.GetFileAttributesW(dir);
-        if (attributes == win32.INVALID_FILE_ATTRIBUTES) return error.BadWorkingDirectory;
-        if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY == 0) return error.BadWorkingDirectory;
-    }
+    const cwd = try workingDirectory(arena, options.cwd);
 
     var plan: Plan = try .init(io, options, null);
     errdefer plan.closeAll(io);
@@ -103,114 +58,19 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         .create_unicode_environment = environment != null,
     };
 
-    // A pseudoconsole is attached through an attribute list rather than
-    // through the standard handles, and the two are mutually exclusive:
-    // `STARTF_USESTDHANDLES` alongside `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
-    // is documented as unsupported. Nothing needs to be inheritable in that
-    // case, either, which is why `bInheritHandles` differs.
+    // What the child is attached to or handed, in the shape `CreateProcessW`
+    // takes it: a pseudoconsole through an attribute list, or three standard
+    // handles and a list of what may be inherited.
     var attributes: ?AttributeList = null;
     defer if (attributes) |*list| list.deinit();
+    try describeChild(arena, options, given, &inheritance, &startup, &flags, &attributes);
 
-    switch (options.stdio) {
-        .pty => |pty| {
-            const console = pty.slave.?;
-            var list = try AttributeList.init(arena, 1);
-            try list.setPseudoConsole(console);
-            if (trace.enabled()) {
-                trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)});
-            }
-            attributes = list;
-            startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
-            startup.lpAttributeList = list.raw;
-            flags.extended_startupinfo_present = true;
-
-            // And no standard handles, said out loud. `CreateProcessW` gives
-            // a child the parent's standard handles even with
-            // `bInheritHandles` false, when those handles are not console
-            // handles: they are duplicated into the child as a special case.
-            // So a program whose own streams are pipes -- which is every
-            // program a build system, a service or a test harness starts --
-            // would hand a child on a pseudoconsole the parent's pipes, and
-            // everything the child wrote would go there rather than to the
-            // console it is attached to. From a terminal it looks right,
-            // because console handles are not duplicated and the child falls
-            // back to its console; everywhere else it is wrong.
-            //
-            // `STARTF_USESTDHANDLES` with all three left null is how a child
-            // is given none, and a child with none uses the console it has,
-            // which is the pseudoconsole. This is not the combination Windows
-            // documents as unsupported alongside a pseudoconsole -- that is
-            // *naming* a handle, which is why `stderr_to` with `.pty` is
-            // refused rather than merged in here.
-            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
-        },
-        else => {
-            startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOW);
-            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
-            startup.StartupInfo.hStdInput = given[0];
-            startup.StartupInfo.hStdOutput = given[1];
-            startup.StartupInfo.hStdError = given[2];
-
-            // A handle the child is to inherit has to be marked inheritable,
-            // and this is the only way to say so about one somebody else
-            // opened. `Inheritance` is what puts the caller's flag back.
-            for (given) |slot| if (slot) |handle| inheritance.take(handle);
-
-            // And nothing else. `bInheritHandles` on its own hands the child
-            // every inheritable handle this process holds -- which on a machine
-            // where this program's own standard streams are inheritable pipes
-            // means the child, and anything the child starts, keeps those pipes
-            // open for as long as it lives. A handle list says exactly which
-            // three the child is being given.
-            if (try inheritList(given, arena)) |inheritable| {
-                var list = try AttributeList.init(arena, 1);
-                try list.setHandleList(inheritable);
-                attributes = list;
-                startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
-                startup.lpAttributeList = list.raw;
-                flags.extended_startupinfo_present = true;
-            }
-        },
-    }
     const inherit_handles: windows.BOOL = switch (options.stdio) {
         .pty => .FALSE,
         else => .TRUE,
     };
 
-    if (trace.enabled()) {
-        trace.print(
-            "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
-            .{
-                @tagName(options.stdio),
-                startup.StartupInfo.cb,
-                @as(u32, @bitCast(flags)),
-                startup.StartupInfo.dwFlags,
-                // Not `@tagName`. A Windows `BOOL` names only `FALSE`; every
-                // other value, `TRUE` included, is an unnamed one of a
-                // non-exhaustive enum, and asking for the name of one of those
-                // ends the process.
-                if (inherit_handles.toBool()) "TRUE" else "FALSE",
-                if (startup.lpAttributeList == null) "none" else "present",
-            },
-        );
-        // Whether this process has a console of its own is the question behind
-        // "where did the child's output go": a console child with no console
-        // flags and no pseudoconsole inherits its parent's, and one whose
-        // parent has none gets a new one nobody can see.
-        const inherited = inheritedHandles();
-        for (inherited, 0..) |slot, index| {
-            const name = ([3][]const u8{ "stdin", "stdout", "stderr" })[index];
-            if (slot) |handle| {
-                trace.print("spawn: parent {s}=0x{x}, console: {s}", .{
-                    name,
-                    @intFromPtr(handle),
-                    if (isConsole(handle)) "yes" else "no",
-                });
-            } else {
-                trace.print("spawn: parent {s} is not there", .{name});
-            }
-        }
-    }
+    traceSpawn(options, &startup, flags, inherit_handles);
 
     // The child is started suspended and put in its job before it runs, so
     // there is no moment in which it exists outside one -- a child that got as
@@ -269,6 +129,184 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         },
         .term = null,
     };
+}
+
+/// Says what the child is attached to or handed, in the two records
+/// `CreateProcessW` takes them in.
+///
+/// A pseudoconsole is attached through an attribute list rather than through
+/// the standard handles, and the two are mutually exclusive:
+/// `STARTF_USESTDHANDLES` alongside `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` is
+/// documented as unsupported. Nothing needs to be inheritable in that case
+/// either, which is why `inheritHandles` differs.
+fn describeChild(
+    arena: Allocator,
+    options: SpawnOptions,
+    given: [3]?windows.HANDLE,
+    inheritance: *Inheritance,
+    startup: *win32.STARTUPINFOEXW,
+    flags: *windows.CreateProcessFlags,
+    attributes: *?AttributeList,
+) SpawnError!void {
+    switch (options.stdio) {
+        .pty => |pty| {
+            const console = pty.slave.?;
+            var list = try AttributeList.init(arena, 1);
+            try list.setPseudoConsole(console);
+            if (trace.enabled()) {
+                trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)});
+            }
+            attributes.* = list;
+            startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
+            startup.lpAttributeList = list.raw;
+            flags.extended_startupinfo_present = true;
+
+            // And no standard handles, said out loud. `CreateProcessW` gives a
+            // child the parent's standard handles even with `bInheritHandles`
+            // false, when those handles are not console handles: they are
+            // duplicated into the child as a special case. So a program whose
+            // own streams are pipes -- which is every program a build system, a
+            // service or a test harness starts -- would hand a child on a
+            // pseudoconsole the parent's pipes, and everything the child wrote
+            // would go there rather than to the console it is attached to. From
+            // a terminal it looks right, because console handles are not
+            // duplicated and the child falls back to its console; everywhere
+            // else it is wrong.
+            //
+            // `STARTF_USESTDHANDLES` with all three left null is how a child is
+            // given none, and a child with none uses the console it has, which
+            // is the pseudoconsole. This is not the combination Windows
+            // documents as unsupported alongside a pseudoconsole -- that is
+            // *naming* a handle, which is why `stderr_to` with `.pty` is
+            // refused rather than merged in here.
+            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
+        },
+        else => {
+            startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOW);
+            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = given[0];
+            startup.StartupInfo.hStdOutput = given[1];
+            startup.StartupInfo.hStdError = given[2];
+
+            // A handle the child is to inherit has to be marked inheritable,
+            // and this is the only way to say so about one somebody else
+            // opened. `Inheritance` is what puts the caller's flag back.
+            for (given) |slot| if (slot) |handle| inheritance.take(handle);
+
+            // And nothing else. `bInheritHandles` on its own hands the child
+            // every inheritable handle this process holds -- which on a machine
+            // where this program's own standard streams are inheritable pipes
+            // means the child, and anything the child starts, keeps those pipes
+            // open for as long as it lives. A handle list says exactly which
+            // three the child is being given.
+            if (try inheritList(given, arena)) |inheritable| {
+                var list = try AttributeList.init(arena, 1);
+                try list.setHandleList(inheritable);
+                attributes.* = list;
+                startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
+                startup.lpAttributeList = list.raw;
+                flags.extended_startupinfo_present = true;
+            }
+        },
+    }
+}
+
+/// The child's working directory, as `CreateProcessW` wants it, and `null` for
+/// a child that inherits this process's.
+///
+/// The directory is looked at here rather than left to `CreateProcessW`, which
+/// reports one that is not there with an error code it also uses for other
+/// things -- a program at a path that does not exist is one of them -- so the
+/// two would be indistinguishable afterwards. `spawn` promises
+/// `BadWorkingDirectory` for one and `FileNotFound` for the other on both
+/// systems, and on POSIX the fork child reports which step failed; this is what
+/// keeps that promise here. A directory that goes away between this and the
+/// spawn comes back as whatever `CreateProcessW` makes of it, which is the
+/// ordinary cost of asking first.
+fn workingDirectory(arena: Allocator, wanted: ?[]const u8) SpawnError!?[*:0]const u16 {
+    const dir = wanted orelse return null;
+    const wide = (try std.unicode.wtf8ToWtf16LeAllocZ(arena, dir)).ptr;
+    const attributes = win32.GetFileAttributesW(wide);
+    if (attributes == win32.INVALID_FILE_ATTRIBUTES) return error.BadWorkingDirectory;
+    if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY == 0) return error.BadWorkingDirectory;
+    return wide;
+}
+
+/// The options this system has no way to honour, refused rather than accepted
+/// and quietly dropped.
+fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
+    // The program is resolved by `CreateProcessW`, from the environment the
+    // child is being given -- see the note on `lpApplicationName` in `spawn`.
+    // That is exactly `.child_environ`, and there is no argument to ask it for
+    // anything else, so the other two are refused rather than accepted and
+    // quietly not done.
+    if (options.path_search != .child_environ) return error.Unsupported;
+
+    if (isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
+
+    // A pseudoconsole is attached through the attribute list, and Windows
+    // documents `STARTF_USESTDHANDLES` as unsupported alongside it -- so there
+    // is nowhere to put the caller's file. Refusing beats accepting the option
+    // and quietly dropping it.
+    if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
+
+    // A Windows process runs as the token it was created with. Changing the
+    // user, the group or the file-creation mask are not steps between a fork
+    // and an exec there -- there is no fork -- and there is nothing here that
+    // could honour the option, so it is refused rather than accepted and
+    // quietly not done.
+    if (options.credentials.any()) return error.Unsupported;
+
+    // Windows has no `setrlimit`, and `ResourceLimit` is a pair of POSIX types
+    // with no counterpart here. The job object below is what bounds a child on
+    // this system, and it bounds the whole tree rather than the one process;
+    // `SpawnOptions.job_limits` is the option that reaches it. Accepting the
+    // POSIX list and setting nothing would be the worst of both.
+    if (options.resource_limits.len != 0) return error.Unsupported;
+}
+
+/// What this package asked the operating system for, when `CONDUIT_TRACE` says
+/// to print it.
+fn traceSpawn(
+    options: SpawnOptions,
+    startup: *const win32.STARTUPINFOEXW,
+    flags: windows.CreateProcessFlags,
+    inherit_handles: windows.BOOL,
+) void {
+    if (trace.enabled()) {
+        trace.print(
+            "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
+            .{
+                @tagName(options.stdio),
+                startup.StartupInfo.cb,
+                @as(u32, @bitCast(flags)),
+                startup.StartupInfo.dwFlags,
+                // Not `@tagName`. A Windows `BOOL` names only `FALSE`; every
+                // other value, `TRUE` included, is an unnamed one of a
+                // non-exhaustive enum, and asking for the name of one of those
+                // ends the process.
+                if (inherit_handles.toBool()) "TRUE" else "FALSE",
+                if (startup.lpAttributeList == null) "none" else "present",
+            },
+        );
+        // Whether this process has a console of its own is the question behind
+        // "where did the child's output go": a console child with no console
+        // flags and no pseudoconsole inherits its parent's, and one whose
+        // parent has none gets a new one nobody can see.
+        const inherited = inheritedHandles();
+        for (inherited, 0..) |slot, index| {
+            const name = ([3][]const u8{ "stdin", "stdout", "stderr" })[index];
+            if (slot) |handle| {
+                trace.print("spawn: parent {s}=0x{x}, console: {s}", .{
+                    name,
+                    @intFromPtr(handle),
+                    if (isConsole(handle)) "yes" else "no",
+                });
+            } else {
+                trace.print("spawn: parent {s} is not there", .{name});
+            }
+        }
+    }
 }
 
 //======================================================================
