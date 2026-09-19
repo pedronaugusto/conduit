@@ -4,10 +4,10 @@
 //! `Proxy` moves bytes and `Child.output` collects them. Neither is a
 //! conversation, which is the thing a program driving another program
 //! actually does: wait for the prompt, answer it, wait for the next one.
-//! `until` waits for a byte pattern to appear on the master, `bytes` waits
-//! for a count of them, and `send` writes the reply. Every wait takes a
-//! deadline, because a program waiting for a line the child will never print
-//! should fail rather than stop.
+//! `until` waits for a byte pattern to appear on the master, `untilAny` for
+//! any of several, `bytes` for a count of them, and `send` writes the reply.
+//! Every wait takes a deadline, because a program waiting for a line the child
+//! will never print should fail rather than stop.
 //!
 //! # The buffer is the caller's
 //!
@@ -102,6 +102,9 @@ stopping: std.atomic.Value(bool),
 /// Both slices point into the caller's buffer and are valid until the next
 /// call on the same `Expect`.
 pub const Match = struct {
+    /// Which pattern this was: an index into what `untilAny` was given, and
+    /// always zero from `until`, which is given one.
+    index: usize,
     /// Everything that arrived before the pattern, in the order it arrived.
     /// Empty when the pattern was the next thing the child said.
     before: []const u8,
@@ -210,40 +213,91 @@ pub fn until(
     pattern: []const u8,
     timeout_ms: u32,
 ) WaitError!Match {
+    return expect.untilAny(io, &.{pattern}, timeout_ms);
+}
+
+/// Waits for any of `patterns` to appear, and consumes everything up to and
+/// including the one that did.
+///
+/// This is the prompt-or-error shape, which one pattern at a time cannot
+/// express: three `until` calls for three possible answers race each other,
+/// and whichever is asked for first eats the bytes the others were looking
+/// for.
+///
+/// **The earliest match wins**, not the first pattern in the list: whichever
+/// of them appears soonest in what the child has said is the one reported, and
+/// two that match at the same place are settled by their order in `patterns`.
+/// So a caller may list them in whatever order reads best.
+///
+/// **The others are left where they are.** Only the bytes up to and including
+/// the winner are consumed, so a pattern that had also arrived, later, is
+/// still pending and the next call finds it. That is what makes a sequence of
+/// these a conversation.
+///
+/// `Match.index` says which one it was. An empty pattern matches at once,
+/// before anything has arrived; a pattern longer than the buffer could ever
+/// hold is `error.BufferFull`, since no wait could satisfy it; and an empty
+/// list matches nothing, so it ends the way a pattern that never comes does.
+pub fn untilAny(
+    expect: *Expect,
+    io: std.Io,
+    patterns: []const []const u8,
+    timeout_ms: u32,
+) WaitError!Match {
     expect.compact(io);
-    if (pattern.len == 0) return .{ .before = expect.buffer[0..0], .found = expect.buffer[0..0] };
-    if (pattern.len > expect.buffer.len) return error.BufferFull;
+
+    var longest: usize = 0;
+    for (patterns, 0..) |pattern, index| {
+        if (pattern.len == 0) return .{
+            .index = index,
+            .before = expect.buffer[0..0],
+            .found = expect.buffer[0..0],
+        };
+        if (pattern.len > expect.buffer.len) return error.BufferFull;
+        longest = @max(longest, pattern.len);
+    }
 
     const deadline = deadlineIn(io, timeout_ms);
     // Where the next search starts. Bytes already searched cannot become a
     // match on their own; only the tail that a new pattern could straddle is
-    // looked at again.
+    // looked at again, and with several patterns that tail is the longest
+    // one's.
     var from: usize = 0;
     while (true) {
         expect.arrived.reset();
 
-        var at: ?usize = null;
+        var winner: ?Match = null;
         var full = false;
         var ended = false;
         var failed = false;
         {
             expect.mutex.lockUncancelable(io);
             defer expect.mutex.unlock(io);
-            at = std.mem.indexOfPos(u8, expect.buffer[0..expect.filled], from, pattern);
-            if (at) |i| {
-                expect.consumed = i + pattern.len;
+
+            const said = expect.buffer[0..expect.filled];
+            var earliest: usize = said.len;
+            for (patterns, 0..) |pattern, index| {
+                const at = std.mem.indexOfPos(u8, said, from, pattern) orelse continue;
+                if (at >= earliest) continue;
+                earliest = at;
+                winner = .{
+                    .index = index,
+                    .before = expect.buffer[0..at],
+                    .found = expect.buffer[at..][0..pattern.len],
+                };
+            }
+
+            if (winner) |match| {
+                expect.consumed = earliest + match.found.len;
             } else {
-                from = expect.filled -| (pattern.len - 1);
+                from = expect.filled -| (longest -| 1);
                 full = expect.filled == expect.buffer.len;
                 ended = expect.ended;
                 failed = expect.failed;
             }
         }
 
-        if (at) |i| return .{
-            .before = expect.buffer[0..i],
-            .found = expect.buffer[i .. i + pattern.len],
-        };
+        if (winner) |match| return match;
         if (failed) return error.ReadFailed;
         if (ended) return error.EndOfStream;
         if (full) return error.BufferFull;
@@ -522,6 +576,108 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
     try testing.expectEqualStrings("got one and two", match.found);
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
+
+test "untilAny says which of several answers came, and leaves the rest" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Both systems. The shape is the one a single pattern cannot express: a
+    // child that will say one of two things, and a caller that has to wait for
+    // either without knowing which.
+    const argv: []const []const u8 = if (is_windows)
+        &.{ "cmd.exe", "/v:on", "/c", "set /p line=& if !line!==a (echo GOOD) else (echo BAD)" }
+    else
+        &.{ "/bin/sh", "-c", "read x; case $x in a) echo GOOD;; *) echo BAD;; esac" };
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = argv,
+        .stdio = .{ .pipes = .{ .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var buffer: [256]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+
+    try expect.send(io, "a\n");
+    const match = try expect.untilAny(io, &.{ "GOOD", "BAD" }, budget_ms);
+    try testing.expectEqual(@as(usize, 0), match.index);
+    try testing.expectEqualStrings("GOOD", match.found);
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
+
+test "untilAny takes the earliest match and leaves the later one pending" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // POSIX only for the fixture: this needs a child that writes two words in
+    // one breath, which `printf` says in one word.
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'first SECOND\n'" },
+        .stdio = .{ .pipes = .{ .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var buffer: [256]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+
+    // `SECOND` is listed first and arrives second, so the order in the list is
+    // not what decides: the earliest match is.
+    const match = try expect.untilAny(io, &.{ "SECOND", "first" }, budget_ms);
+    try testing.expectEqual(@as(usize, 1), match.index);
+    try testing.expectEqualStrings("first", match.found);
+    try testing.expectEqualStrings("", match.before);
+
+    // And the one that lost is still there to be waited for.
+    const later = try expect.until(io, "SECOND", budget_ms);
+    try testing.expectEqual(@as(usize, 0), later.index);
+    try testing.expectEqualStrings("SECOND", later.found);
+    try testing.expectEqualStrings(" ", later.before);
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
+
+test "untilAny with nothing to wait for ends the way a pattern that never comes does" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'here\n'; exec sleep 100" },
+        .stdio = .{ .pipes = .{ .stderr = false } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+
+    var buffer: [256]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+
+    try testing.expectError(error.Timeout, expect.untilAny(io, &.{}, 50));
+    // An empty pattern is the other end of it: it matches before anything has
+    // arrived, and says which one it was.
+    const empty = try expect.untilAny(io, &.{ "never", "" }, budget_ms);
+    try testing.expectEqual(@as(usize, 1), empty.index);
+    try testing.expectEqualStrings("", empty.found);
 }
 
 test "bytes waits for a count, and what follows stays pending" {

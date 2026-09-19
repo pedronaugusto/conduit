@@ -108,8 +108,8 @@ pub const Reaper = @import("Reaper.zig");
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master
 /// and a pair of files.
 pub const Proxy = @import("Proxy.zig");
-/// A conversation with a child: wait for a byte pattern or a byte count with a
-/// deadline, then send a reply.
+/// A conversation with a child: wait for a byte pattern, for any of several,
+/// or for a byte count, each with a deadline, then send a reply.
 pub const Expect = @import("Expect.zig");
 
 /// How a child process ended. An alias for `std.process.Child.Term`.

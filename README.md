@@ -134,6 +134,7 @@ needs the group database a fork child may not read.
 | `Expect.init(master, buffer)` | Over `Child.pty` or `Pty.master()`, with a buffer the caller owns. |
 | `expect.start(io)`, `expect.deinit(io)` | The reading task, which runs between calls. |
 | `expect.until(io, pattern, timeout_ms)` | Waits for a literal byte pattern and consumes through it: `Match.before` and `Match.found`. |
+| `expect.untilAny(io, patterns, timeout_ms)` | Waits for any of several. The earliest match wins, whatever order they were listed in; `Match.index` says which, and the ones that lost stay pending. |
 | `expect.bytes(io, count, timeout_ms)` | Waits for a count of bytes and consumes them. |
 | `expect.send(io, reply)` | Writes the reply, as if it had been typed at the child's terminal. |
 | `expect.pending(io)`, `expect.discard(io)` | What has arrived and no pattern has matched; and forgetting it. |
