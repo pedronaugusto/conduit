@@ -59,11 +59,12 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 
 | | |
 |---|---|
-| `Pty.open(options)` | A new pair. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`. |
+| `Pty.open(options)` | A new pair. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
 | `pty.read`, `pty.write` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
 | `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, as `std.Io.File`s sharing the handle rather than duplicating it. |
 | `pty.slave` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
 | `pty.resize(size)`, `pty.size()` | The window size. `resize` is safe to call while another task reads or writes. |
+| `pty.console` | Windows only: which of `OpenOptions.console` the system granted. `win32_input` for keys a terminal encoding cannot spell, `passthrough` for the child's own bytes rather than the console host's redraw of them, `resize_quirk` for a resize that does not reflow. A Windows too old for one of them refuses the whole call, so `open` asks again without it. |
 | `pty.close(io)` | Everything. Idempotent, and correct after either of the next two. |
 | `pty.closeSlave(io)`, `pty.closeMaster(io)` | One end. The two systems want `closeSlave` at different moments — see Design. |
 

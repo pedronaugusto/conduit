@@ -81,6 +81,17 @@ pub extern "kernel32" fn CreatePseudoConsole(
     phPC: *HPCON,
 ) callconv(.winapi) HRESULT;
 
+/// `PSEUDOCONSOLE_RESIZE_QUIRK`: a resize does not reflow what the client has
+/// already written.
+pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x00000002;
+/// `PSEUDOCONSOLE_WIN32_INPUT_MODE`: what is written to the console's input is
+/// read as Windows input records rather than as a character stream.
+pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x00000004;
+/// `PSEUDOCONSOLE_PASSTHROUGH_MODE`: the client's output reaches the reader as
+/// the client wrote it. Windows 11 22H2 and newer; older systems refuse the
+/// whole call with `E_INVALIDARG`.
+pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x00000008;
+
 /// Changes a pseudoconsole's geometry. The attached client is told the way a
 /// program on a POSIX terminal is told by `SIGWINCH`: through the console API
 /// it already polls.

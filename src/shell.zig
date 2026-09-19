@@ -59,6 +59,9 @@ pub const Options = struct {
     args: []const []const u8 = &.{},
     /// The geometry of the pair.
     size: tty.Size = .{ .rows = 24, .cols = 80 },
+    /// What the console on the far side of the pair is asked to do. Windows
+    /// only; `Shell.pty.console` says which of them the system granted.
+    console: Pty.ConsoleOptions = .{},
     /// The shell's working directory. `null` inherits this process's.
     cwd: ?[]const u8 = null,
     /// The shell's environment. `null` inherits this process's, with `term`
@@ -117,6 +120,7 @@ pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShell
         .cols = options.size.cols,
         .x_pixel = options.size.x_pixel,
         .y_pixel = options.size.y_pixel,
+        .console = options.console,
     });
     errdefer pty.close(io);
 

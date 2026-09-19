@@ -71,6 +71,12 @@ slave: ?Slave,
 /// POSIX there is an ioctl for it and this field does not exist, because a
 /// remembered number there would be a copy that a child could make wrong.
 remembered_size: if (is_windows) Size else void,
+/// Windows only: which of `OpenOptions.console` this system granted.
+///
+/// A flag a version of ConPTY does not know makes it refuse the whole call,
+/// so `open` asks again without it rather than failing. This is what it ended
+/// up with, and it is a subset of what was asked for.
+console: if (is_windows) ConsoleOptions else void,
 
 /// The master end as two `std.Io.File`s.
 pub const Master = struct {
@@ -80,7 +86,8 @@ pub const Master = struct {
     write: std.Io.File,
 };
 
-/// The initial terminal geometry of a new pair.
+/// The initial terminal geometry of a new pair, and what the console on the
+/// far side of it is asked to do.
 ///
 /// The defaults are the historical terminal size, which is what a program
 /// assumes when nothing tells it otherwise. Pixel dimensions default to zero,
@@ -90,6 +97,8 @@ pub const OpenOptions = struct {
     cols: u16 = 80,
     x_pixel: u16 = 0,
     y_pixel: u16 = 0,
+    /// Windows only. `Pty.console` says which of these the system granted.
+    console: ConsoleOptions = .{},
 
     fn size(options: OpenOptions) Size {
         return .{
@@ -99,6 +108,42 @@ pub const OpenOptions = struct {
             .y_pixel = options.y_pixel,
         };
     }
+};
+
+/// What a Windows pseudoconsole is asked to do with what passes through it.
+///
+/// All three are off by default, which is the behaviour every version of
+/// ConPTY has had: the console host interprets what the child writes and
+/// redraws it, and what reaches the master is that redraw rather than the
+/// child's own bytes.
+///
+/// Each arrived in a different Windows, and a version that does not know one
+/// refuses the whole call rather than ignoring the flag. So `open` asks again
+/// without it, and `Pty.console` is what it ended up with — an option asked
+/// for and not granted is a fact about the machine, not an error.
+///
+/// POSIX has none of this: a pseudo-terminal pair is a pipe with a line
+/// discipline on it, and nothing between the two ends is rewriting anything.
+/// These fields are read only on Windows.
+pub const ConsoleOptions = struct {
+    /// `PSEUDOCONSOLE_WIN32_INPUT_MODE`. What is written to the master is read
+    /// as Windows input records rather than as a terminal's character stream,
+    /// which is the only way to express a key the terminal encoding has no
+    /// sequence for — a modified arrow, a key released, Ctrl with a digit.
+    win32_input: bool = false,
+    /// `PSEUDOCONSOLE_PASSTHROUGH_MODE`. The child's output reaches the master
+    /// as the child wrote it, instead of as the console host's redraw of it.
+    /// Without this a sequence the host does not model is lost — the cursor
+    /// shape, `DECSCUSR`, is the one people notice.
+    ///
+    /// Windows 11 22H2 and newer. Older systems refuse it and `open` asks
+    /// again without it.
+    passthrough: bool = false,
+    /// `PSEUDOCONSOLE_RESIZE_QUIRK`. A resize does not reflow what the child
+    /// has already written, which is what a program that keeps its own screen
+    /// wants: it is going to repaint anyway, and a reflow it did not ask for
+    /// arrives as a screenful of bytes it has to discard.
+    resize_quirk: bool = false,
 };
 
 pub const OpenError = error{
@@ -412,6 +457,7 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
         .write = master_fd,
         .slave = slave_fd,
         .remembered_size = {},
+        .console = {},
     };
 }
 
@@ -470,26 +516,48 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
 
     const geometry = options.size();
     var console: win32.HPCON = undefined;
-    switch (win32.CreatePseudoConsole(
-        geometry.toCoord(),
-        input_read,
-        output_write,
-        0,
-        &console,
-    )) {
-        win32.ok => {},
-        // `HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY)`. Every other failure
-        // here is a bug in this package's arguments rather than a condition a
-        // caller can do anything about.
-        @as(win32.HRESULT, @bitCast(@as(u32, 0x8007000E))) => return error.SystemResources,
-        else => return error.Unexpected,
+    // Each of the three console options arrived in a different Windows, and a
+    // version that does not know one refuses the whole call with
+    // `E_INVALIDARG` rather than ignoring the flag. So the ask is narrowed
+    // until it is one this system will take: passthrough first, which is the
+    // newest of them, then the other two. Asking for nothing always works --
+    // that is what every version of this package before this one asked for.
+    var granted = options.console;
+    while (true) {
+        switch (win32.CreatePseudoConsole(
+            geometry.toCoord(),
+            input_read,
+            output_write,
+            consoleFlags(granted),
+            &console,
+        )) {
+            win32.ok => break,
+            // `E_INVALIDARG`: one of the flags. Which one is not said, so they
+            // go one at a time, newest first.
+            @as(win32.HRESULT, @bitCast(@as(u32, 0x80070057))) => {
+                if (granted.passthrough) {
+                    granted.passthrough = false;
+                } else if (granted.win32_input) {
+                    granted.win32_input = false;
+                } else if (granted.resize_quirk) {
+                    granted.resize_quirk = false;
+                } else return error.Unexpected;
+                trace.print("pty: CreatePseudoConsole refused a console option; asking again", .{});
+            },
+            // `HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY)`. Every other
+            // failure here is a bug in this package's arguments rather than a
+            // condition a caller can do anything about.
+            @as(win32.HRESULT, @bitCast(@as(u32, 0x8007000E))) => return error.SystemResources,
+            else => return error.Unexpected,
+        }
     }
 
     if (trace.enabled()) {
-        trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}", .{
+        trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}, flags=0x{x}", .{
             @intFromPtr(console),
             geometry.rows,
             geometry.cols,
+            consoleFlags(granted),
         });
     }
 
@@ -504,7 +572,16 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
         .write = input_write,
         .slave = console,
         .remembered_size = geometry,
+        .console = granted,
     };
+}
+
+fn consoleFlags(options: ConsoleOptions) win32.DWORD {
+    var flags: win32.DWORD = 0;
+    if (options.resize_quirk) flags |= win32.PSEUDOCONSOLE_RESIZE_QUIRK;
+    if (options.win32_input) flags |= win32.PSEUDOCONSOLE_WIN32_INPUT_MODE;
+    if (options.passthrough) flags |= win32.PSEUDOCONSOLE_PASSTHROUGH_MODE;
+    return flags;
 }
 
 fn lastError() OpenError {
@@ -662,4 +739,34 @@ test "both ends of a POSIX pair are close-on-exec" {
     const FD_CLOEXEC: c_int = c.FD_CLOEXEC;
     try testing.expectEqual(FD_CLOEXEC, c.fcntl(pty.read.?, c.F.GETFD, @as(c_int, 0)) & FD_CLOEXEC);
     try testing.expectEqual(FD_CLOEXEC, c.fcntl(pty.slave.?, c.F.GETFD, @as(c_int, 0)) & FD_CLOEXEC);
+}
+
+test "a pseudoconsole is opened with the console options this system will take" {
+    // Windows only: POSIX has no such switches, and `ConsoleOptions` is not
+    // read there.
+    if (!is_windows) return error.SkipZigTest;
+    const io = testing.io;
+
+    // All three asked for. `passthrough` needs Windows 11 22H2 and the others
+    // are older, so what comes back depends on the machine — but it is always
+    // a subset of the ask, and the open never fails for want of a flag.
+    var pty = try Pty.open(.{
+        .rows = 24,
+        .cols = 80,
+        .console = .{ .win32_input = true, .passthrough = true, .resize_quirk = true },
+    });
+    defer pty.close(io);
+
+    try testing.expect(pty.slave != null);
+
+    // And a pair that still works: the size it was given is the size it says.
+    try testing.expectEqual(@as(u16, 24), (try pty.size()).rows);
+}
+
+test "a pair asked for no console options gets none" {
+    if (!is_windows) return error.SkipZigTest;
+    const io = testing.io;
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+    try testing.expectEqual(ConsoleOptions{}, pty.console);
 }
