@@ -361,6 +361,53 @@ pub const SpawnOptions = struct {
     /// What the child does with the descriptors above 2 that this process
     /// holds.
     fd_policy: FdPolicy = .close_on_exec,
+    /// What the child and everything it starts may use. Windows only:
+    /// anything set here is `error.Unsupported` elsewhere.
+    job_limits: JobLimits = .{},
+};
+
+/// What the job object holding the child and its tree may use. Windows only.
+///
+/// This is the Windows answer to `resource_limits`, and it is a different
+/// answer: a POSIX limit is set on a process by itself between a fork and an
+/// exec, and a job limit is set on the container the child and everything it
+/// starts live in. So it bounds the *tree* rather than the child, which is
+/// more than `setrlimit` gives and is the reason the two are separate options
+/// rather than one with a translation in the middle.
+///
+/// The job is created for every child on that system whether or not anything
+/// here is set — it is what makes `kill` reach the tree — so a limit costs
+/// nothing but the call that sets it. A field left `null` is not limited.
+///
+/// A `JobLimits` with anything set is `error.Unsupported` on POSIX, where
+/// `resource_limits` is the option that exists.
+pub const JobLimits = struct {
+    /// The most memory any one process in the job may commit, in bytes.
+    /// `JOB_OBJECT_LIMIT_PROCESS_MEMORY`.
+    process_memory_bytes: ?usize = null,
+    /// The most memory every process in the job may commit between them, in
+    /// bytes. `JOB_OBJECT_LIMIT_JOB_MEMORY`.
+    job_memory_bytes: ?usize = null,
+    /// The most processes the job may hold at once, the child itself
+    /// included. `JOB_OBJECT_LIMIT_ACTIVE_PROCESS`: a process the job is
+    /// already full for does not start, so a child given 1 cannot start
+    /// anything.
+    active_processes: ?u32 = null,
+    /// A hard ceiling on the share of the machine's processors the job may
+    /// use, in hundredths of a percent of one processor's worth: 5_000 is half
+    /// a processor, 20_000 is two. `JobObjectCpuRateControlInformation` with a
+    /// hard cap. Must be between 1 and 10_000 times the processor count, and
+    /// the operating system refuses anything else.
+    cpu_rate: ?u32 = null,
+
+    /// Whether any of them asks for a limit. `spawn` sets nothing at all when
+    /// this is false, which is what keeps the default free.
+    pub fn any(limits: JobLimits) bool {
+        return limits.process_memory_bytes != null or
+            limits.job_memory_bytes != null or
+            limits.active_processes != null or
+            limits.cpu_rate != null;
+    }
 };
 
 /// What a child is given of the descriptors above 2 that the parent holds.
@@ -536,8 +583,9 @@ pub const SpawnError = error{
     BadWorkingDirectory,
     /// The combination asked for has no meaning on this system: `stderr_to`
     /// together with `.pty` on Windows, a `path_search` other than
-    /// `.child_environ` there, or `credentials` or `resource_limits` anywhere
-    /// on Windows. The option that cannot be honoured says so.
+    /// `.child_environ` there, `credentials` or `resource_limits` anywhere on
+    /// Windows, or `job_limits` anywhere else. The option that cannot be
+    /// honoured says so.
     Unsupported,
 } || std.Io.UnexpectedError;
 
@@ -590,6 +638,9 @@ pub fn execError(err: posix.E) SpawnError {
 pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
     if (options.argv.len == 0) return error.InvalidArgv;
     if (is_windows) return @import("child_windows.zig").spawn(io, allocator, options);
+    // A job object is what these bound, and POSIX has no such container.
+    // `resource_limits` is the option that exists here.
+    if (options.job_limits.any()) return error.Unsupported;
     return @import("child_posix.zig").spawn(io, allocator, options);
 }
 

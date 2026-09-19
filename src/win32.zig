@@ -143,6 +143,26 @@ pub const JobObjectExtendedLimitInformation: c_int = 9;
 /// Every process still in the job is ended when the last handle to the job is
 /// closed.
 pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
+/// `ActiveProcessLimit` is in force: a process that would be one too many does
+/// not start.
+pub const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: DWORD = 0x00000008;
+/// `ProcessMemoryLimit` is in force, per process in the job.
+pub const JOB_OBJECT_LIMIT_PROCESS_MEMORY: DWORD = 0x00000100;
+/// `JobMemoryLimit` is in force, across the job.
+pub const JOB_OBJECT_LIMIT_JOB_MEMORY: DWORD = 0x00000200;
+
+/// `JobObjectCpuRateControlInformation` in `JOBOBJECTINFOCLASS`.
+pub const JobObjectCpuRateControlInformation: c_int = 15;
+
+pub const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE: DWORD = 0x00000001;
+pub const JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP: DWORD = 0x00000004;
+
+/// The rate is in hundredths of a percent of one processor: 10_000 is a whole
+/// one.
+pub const JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = extern struct {
+    ControlFlags: DWORD,
+    Value: DWORD,
+};
 
 pub const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
     PerProcessUserTimeLimit: windows.LARGE_INTEGER,

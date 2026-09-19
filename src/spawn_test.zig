@@ -1463,6 +1463,50 @@ test "a resource limit set at spawn is the child's own" {
     }));
 }
 
+test "a job limit bounds what the child's tree may do" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows only: the limit is on the job object, which is the container the
+    // child and everything it starts live in, and POSIX has no such thing.
+    if (!is_windows) return error.SkipZigTest;
+
+    // One process in the job, and the child is it: what the child tries to
+    // start does not start. The same program without the limit does, which is
+    // what makes this about the limit rather than about `cmd.exe`.
+    const argv: []const []const u8 = &.{ "cmd.exe", "/c", "cmd.exe /c echo NESTED" };
+
+    var free = try Child.spawn(io, gpa, .{
+        .argv = argv,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer free.deinit(io);
+    errdefer _ = free.killWait(io, 0) catch {};
+    var without = try free.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer without.deinit(gpa);
+    try testing.expect(std.mem.indexOf(u8, without.stdout, "NESTED") != null);
+
+    var bounded = try Child.spawn(io, gpa, .{
+        .argv = argv,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .job_limits = .{ .active_processes = 1 },
+    });
+    defer bounded.deinit(io);
+    errdefer _ = bounded.killWait(io, 0) catch {};
+    var with = try bounded.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer with.deinit(gpa);
+    try testing.expect(std.mem.indexOf(u8, with.stdout, "NESTED") == null);
+}
+
+test "job limits are refused on POSIX rather than quietly not applied" {
+    if (is_windows) return error.SkipZigTest;
+    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .job_limits = .{ .active_processes = 1 },
+    }));
+}
+
 test "resource limits are refused on Windows rather than quietly not applied" {
     if (!is_windows) return error.SkipZigTest;
     try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{

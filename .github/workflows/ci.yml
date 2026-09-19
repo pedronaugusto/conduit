@@ -173,6 +173,9 @@ jobs:
           "-Dtest-filter=resource limit set at spawn"
           "-Dtest-filter=resource limits are refused"
           "-Dtest-filter=credentials are refused"
+          "-Dtest-filter=a job limit bounds"
+          "-Dtest-filter=job limits are refused"
+          "-Dtest-filter=as inheritable after a spawn"
 
       # Traced: `spawnShell starts the user's shell on a pair` hung here once
       # with nothing to say, so this step says which stage it reached.

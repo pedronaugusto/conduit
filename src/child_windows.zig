@@ -41,10 +41,10 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     if (options.credentials.any()) return error.Unsupported;
 
     // Windows has no `setrlimit`, and `ResourceLimit` is a pair of POSIX types
-    // with no counterpart here. The job object below is the Windows way to
-    // bound what a child may use; `SpawnOptions.job_limits` is the option that
-    // reaches it, and accepting the POSIX list and setting nothing would be
-    // the worst of both.
+    // with no counterpart here. The job object below is what bounds a child on
+    // this system, and it bounds the whole tree rather than the one process;
+    // `SpawnOptions.job_limits` is the option that reaches it. Accepting the
+    // POSIX list and setting nothing would be the worst of both.
     if (options.resource_limits.len != 0) return error.Unsupported;
 
     // The program is resolved by `CreateProcessW`, from the environment the
@@ -218,20 +218,8 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // something outside the job, which is the whole thing the job is for.
     flags.create_suspended = true;
 
-    const job = win32.CreateJobObjectW(null, null) orelse return createError();
+    const job = try createJob(options.job_limits);
     errdefer windows.CloseHandle(job);
-    {
-        var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(
-            win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        );
-        limits.BasicLimitInformation.LimitFlags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if (win32.SetInformationJobObject(
-            job,
-            win32.JobObjectExtendedLimitInformation,
-            &limits,
-            @sizeOf(win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
-        ) == .FALSE) return createError();
-    }
 
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
@@ -281,6 +269,64 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         },
         .term = null,
     };
+}
+
+//======================================================================
+// The job object.
+//======================================================================
+
+/// The container the child and everything it starts will live in.
+///
+/// Every child on this system gets one, because it is what makes `kill` reach
+/// the tree and what `deinit` closes to end whatever the child left behind.
+/// `limits` is what the caller wants bounded inside it, and a caller who wants
+/// nothing bounded pays for one extra call and no more.
+fn createJob(limits: Child.JobLimits) SpawnError!windows.HANDLE {
+    const job = win32.CreateJobObjectW(null, null) orelse return createError();
+    errdefer windows.CloseHandle(job);
+
+    var extended: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(
+        win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    );
+    var flags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (limits.active_processes) |most| {
+        flags |= win32.JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        extended.BasicLimitInformation.ActiveProcessLimit = most;
+    }
+    if (limits.process_memory_bytes) |bytes| {
+        flags |= win32.JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        extended.ProcessMemoryLimit = bytes;
+    }
+    if (limits.job_memory_bytes) |bytes| {
+        flags |= win32.JOB_OBJECT_LIMIT_JOB_MEMORY;
+        extended.JobMemoryLimit = bytes;
+    }
+    extended.BasicLimitInformation.LimitFlags = flags;
+    if (win32.SetInformationJobObject(
+        job,
+        win32.JobObjectExtendedLimitInformation,
+        &extended,
+        @sizeOf(win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
+    ) == .FALSE) return createError();
+
+    // A second call, because the processor share is a different information
+    // class from the rest -- it is scheduling rather than a limit on a
+    // resource the job holds.
+    if (limits.cpu_rate) |rate| {
+        var control: win32.JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = .{
+            .ControlFlags = win32.JOB_OBJECT_CPU_RATE_CONTROL_ENABLE |
+                win32.JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+            .Value = rate,
+        };
+        if (win32.SetInformationJobObject(
+            job,
+            win32.JobObjectCpuRateControlInformation,
+            &control,
+            @sizeOf(win32.JOBOBJECT_CPU_RATE_CONTROL_INFORMATION),
+        ) == .FALSE) return createError();
+    }
+
+    return job;
 }
 
 //======================================================================

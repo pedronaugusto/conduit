@@ -98,7 +98,7 @@ byte of it, since `Term.exited` is a byte and a Windows exit code is a `DWORD`.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`, `fd_policy`.
+`resource_limits`, `fd_policy`, `job_limits`.
 
 `stdio` is `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` —
@@ -126,6 +126,12 @@ fork child, limits first, so a privileged parent can still raise a hard limit
 for a child it is handing on. POSIX only: either on Windows is
 `error.Unsupported`. Supplementary groups stay the parent's, since `setgroups`
 needs the group database a fork child may not read.
+
+`job_limits` is the Windows answer, and a different one: `process_memory_bytes`,
+`job_memory_bytes`, `active_processes` and `cpu_rate` go on the job object
+every child there already has, so they bound the child *and everything it
+starts* rather than the one process. Windows only; anywhere else it is
+`error.Unsupported`.
 
 ### `Expect` — a conversation with a child
 
