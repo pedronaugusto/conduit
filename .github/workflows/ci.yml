@@ -146,6 +146,7 @@ jobs:
           "-Dtest-filter=killWait with no grace"
           "-Dtest-filter=reaches what the child started"
           "-Dtest-filter=waitTree says"
+          "-Dtest-filter=deinit ends a grandchild"
 
       # Traced: both tests here that put a child on a pseudoconsole have hung
       # on a runner at one time or another, so this step says which stage it

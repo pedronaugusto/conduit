@@ -935,6 +935,40 @@ test "waitTree says the tree has ended, and does not say it early" {
     _ = try waitWithin(&child);
 }
 
+test "deinit ends a grandchild the child started and left behind" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows only: this is the job object's doing. On POSIX `deinit` signals
+    // nothing and a grandchild of a reaped child keeps running, which
+    // `Child.deinit` says out loud.
+    if (!is_windows) return error.SkipZigTest;
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.detached_grandchild,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try sink.start(child.stdout.?);
+
+    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
+    defer std.os.windows.CloseHandle(grandchild);
+
+    // The child is gone and reaped, and nothing has been killed: `killWait` on
+    // a child that ended on its own signals nothing, so what is running now is
+    // running because the job is still open.
+    _ = try waitWithin(&child);
+    try testing.expect(runningNow(grandchild));
+
+    child.deinit(io);
+
+    try testing.expect(endedWithin(grandchild));
+}
+
 test "a detached child has a process group of its own and an attached one does not" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
