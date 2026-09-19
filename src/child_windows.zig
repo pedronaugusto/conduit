@@ -79,7 +79,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     flags.create_suspended = true;
 
     const job = try createJob(options.job_limits);
-    errdefer windows.CloseHandle(job);
+    errdefer job.close();
 
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
@@ -103,7 +103,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         windows.CloseHandle(information.hProcess);
     }
 
-    if (win32.AssignProcessToJobObject(job, information.hProcess) == .FALSE) {
+    if (win32.AssignProcessToJobObject(job.handle, information.hProcess) == .FALSE) {
         return error.JobAssignmentFailed;
     }
     if (win32.ResumeThread(information.hThread) == std.math.maxInt(win32.DWORD)) {
@@ -115,7 +115,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     return .{
         .id = information.hProcess,
         .thread = information.hThread,
-        .job = job,
+        .job = job.handle,
+        .job_port = job.port,
+        .tree_ended = false,
         .handles_open = true,
         // `CREATE_NEW_PROCESS_GROUP` makes a group whose id is the process id,
         // which is what `GenerateConsoleCtrlEvent` is addressed to.
@@ -313,15 +315,55 @@ fn traceSpawn(
 // The job object.
 //======================================================================
 
+/// A job object and the port it reports on.
+const Job = struct {
+    handle: windows.HANDLE,
+    port: windows.HANDLE,
+
+    fn close(job: Job) void {
+        windows.CloseHandle(job.handle);
+        windows.CloseHandle(job.port);
+    }
+};
+
 /// The container the child and everything it starts will live in.
 ///
 /// Every child on this system gets one, because it is what makes `kill` reach
 /// the tree and what `deinit` closes to end whatever the child left behind.
 /// `limits` is what the caller wants bounded inside it, and a caller who wants
 /// nothing bounded pays for one extra call and no more.
-fn createJob(limits: Child.JobLimits) SpawnError!windows.HANDLE {
-    const job = win32.CreateJobObjectW(null, null) orelse return createError();
-    errdefer windows.CloseHandle(job);
+///
+/// The port is associated before anything is in the job, which is what makes
+/// `Child.waitTree` possible: the message that says the job is empty is posted
+/// on the transition to empty, so a port attached after the child had already
+/// started and stopped would hear nothing and wait forever.
+fn createJob(limits: Child.JobLimits) SpawnError!Job {
+    const handle = win32.CreateJobObjectW(null, null) orelse return createError();
+    errdefer windows.CloseHandle(handle);
+
+    const port = win32.CreateIoCompletionPort(
+        windows.INVALID_HANDLE_VALUE,
+        null,
+        0,
+        1,
+    ) orelse return createError();
+    errdefer windows.CloseHandle(port);
+
+    // The job handle as the key, so a message that arrives on this port can be
+    // told to be this job's. One port per job makes that a formality; a key
+    // that means nothing would not.
+    var association: win32.JOBOBJECT_ASSOCIATE_COMPLETION_PORT = .{
+        .CompletionKey = handle,
+        .CompletionPort = port,
+    };
+    if (win32.SetInformationJobObject(
+        handle,
+        win32.JobObjectAssociateCompletionPortInformation,
+        &association,
+        @sizeOf(win32.JOBOBJECT_ASSOCIATE_COMPLETION_PORT),
+    ) == .FALSE) return createError();
+
+    const job: Job = .{ .handle = handle, .port = port };
 
     var extended: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(
         win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -341,7 +383,7 @@ fn createJob(limits: Child.JobLimits) SpawnError!windows.HANDLE {
     }
     extended.BasicLimitInformation.LimitFlags = flags;
     if (win32.SetInformationJobObject(
-        job,
+        job.handle,
         win32.JobObjectExtendedLimitInformation,
         &extended,
         @sizeOf(win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
@@ -357,7 +399,7 @@ fn createJob(limits: Child.JobLimits) SpawnError!windows.HANDLE {
             .Value = rate,
         };
         if (win32.SetInformationJobObject(
-            job,
+            job.handle,
             win32.JobObjectCpuRateControlInformation,
             &control,
             @sizeOf(win32.JOBOBJECT_CPU_RATE_CONTROL_INFORMATION),

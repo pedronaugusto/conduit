@@ -87,6 +87,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`. The process group of a detached child, the child alone otherwise. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
+| `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
 
 `conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
@@ -232,6 +233,18 @@ resumed, so nothing is ever outside it — and `.kill` ends the job. The job end
 what is left in it when its last handle closes, so `deinit` there also ends
 what the child started and left behind. A child that cannot be put in its job
 is `error.JobAssignmentFailed`, not a child whose tree `kill` would miss.
+
+A container the system keeps can also be asked about, which is `waitTree`: the
+job reports to a completion port from before the child is assigned to it, and
+the wait ends when the job says it holds nothing. So a program can watch the
+whole tree go rather than only the child — and it has to ask before `deinit`,
+which is what closes the job and the port. POSIX has nothing to ask. A process
+group is an address to send signals to and the system accounts nothing to it,
+and the walk `kill` uses goes down from the child, where a grandchild whose
+parent has exited belongs to `init` and is related to the child by nothing that
+can be looked up; a walk that named nothing would mean "ended" and "orphaned"
+in the same breath. `waitTree` is a compile error there, with a message that
+says so.
 
 POSIX has no container for a tree, so `kill` reaches three things: the child,
 the child's process group when `detach` made one, and every descendant the

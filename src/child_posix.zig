@@ -150,6 +150,8 @@ fn started(pid: posix.pid_t, plan: *const Plan, options: SpawnOptions) Child {
         .thread = {},
         .handles_open = {},
         .job = {},
+        .job_port = {},
+        .tree_ended = {},
         .pgid = if (options.detach) pid else null,
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],

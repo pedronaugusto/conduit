@@ -89,6 +89,19 @@ that the other has not.
   `active_processes` and a hard cap on the job's share of the processors.
   POSIX-side it is `error.Unsupported`, which is what `resource_limits` is on
   Windows; the two are different answers and neither pretends to be the other.
+- **`Child.waitTree`**, on Windows: a wait with a deadline that ends when
+  everything the child started has ended. `wait` answers about the child, and a
+  child that exits having started a server is a tree that is still running —
+  the job object every child there is put in is what knows the difference. It
+  reports to an I/O completion port, associated with the job before the child
+  is assigned to it, because the message that says the job is empty is posted
+  on the transition and a port attached afterwards would hear nothing. `true`
+  means the job holds no process any more, `false` that the time ran out, and
+  it has to be asked before `deinit`, which closes both. POSIX gets a compile
+  error rather than a second answer: a process group is an address to send
+  signals to and nothing is accounted to it, and the descendant walk `kill` uses
+  goes down from the child, where a grandchild whose parent has already exited
+  belongs to `init` and is related to the child by nothing the system will say.
 - **`Pty.OpenOptions.console`** asks a pseudoconsole for the three things it
   can be asked for: `passthrough`, so the child's own bytes reach the master
   rather than the console host's redraw of them — without it a cursor-shape
@@ -149,7 +162,8 @@ that the other has not.
   switched over it exhaustively has one more arm to write.
 - `Expect.Match` has a new field, `index`, which `untilAny` sets and `until`
   leaves at zero. A caller constructing one by literal has one more field.
-- `Child` has two new fields, `reaped` and `reaping`, both with defaults. A
+- `Child` has four new fields: `reaped` and `reaping`, which have defaults, and
+  `job_port` and `tree_ended`, which do not and are `void` off Windows. A
   `Child` comes from `spawn`, so this reaches only code that built one by hand.
 - `Pty` has a new field, `console`, which is `void` on POSIX.
 

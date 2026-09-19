@@ -76,6 +76,13 @@ handles_open: if (is_windows) bool else void,
 /// way a signal to a process group does on POSIX. `null` once `deinit` has
 /// closed it, and closing it ends whatever is still in it — see `deinit`.
 job: if (is_windows) ?windows.HANDLE else void,
+/// Windows only: the completion port the job posts to, which is how
+/// `waitTree` learns that the job has emptied. Closed alongside `job`.
+job_port: if (is_windows) ?windows.HANDLE else void,
+/// Windows only: whether the job has been heard to empty. `waitTree` sets it,
+/// and answers from it thereafter: the message is posted once and taking it
+/// off the port consumes it.
+tree_ended: if (is_windows) bool else void,
 /// The child's process group, when `detach` asked for one. `null` means the
 /// child is in the process group it inherited, and a signal is addressed to
 /// the child alone.
@@ -646,7 +653,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
 /// Closes the streams this `Child` owns: the pipes `spawn` created, if any,
 /// and on Windows the process and thread handles when the child was never
-/// reaped, and the job object.
+/// reaped, the job object, and the port the job reports on.
 ///
 /// Streams the caller supplied are left alone.
 ///
@@ -658,6 +665,8 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 /// has a container for a tree and POSIX has only an address to send signals
 /// to. A program that wants a grandchild to outlive it on Windows has to
 /// arrange that itself; this package will not leave one behind by accident.
+/// `waitTree` is how to watch that happen, and it has to be asked before this:
+/// the job is what reports, and this is what closes it.
 ///
 /// Safe to call more than once, and safe to call before the child has been
 /// reaped, though closing a pipe the child is still writing to earns it a
@@ -1128,6 +1137,94 @@ pub fn killWait(child: *Child, io: std.Io, grace_ms: u32) KillWaitError!Term {
     return child.wait(io);
 }
 
+pub const WaitTreeError = std.Io.Cancelable || std.Io.UnexpectedError;
+
+/// Waits up to `timeout_ms` for everything the child started to end, and says
+/// whether it did. **Windows only.**
+///
+/// `true` means the job object the child was put in holds no process any more:
+/// not the child, and not a grandchild the child started and left behind. That
+/// is a different question from `wait`, which is about the child alone, and it
+/// is the question a program that is about to take down a subsystem has: a
+/// child that exits having started a server is a tree that is still running.
+/// `false` means the time ran out with something still in the job.
+///
+/// Ask it before `deinit`. The job and the port it reports on are closed
+/// there, and closing the job is itself what ends what is left inside it — so
+/// after `deinit` there is nothing to hear the answer on and this reports what
+/// it heard while there was.
+///
+/// A zero `timeout_ms` asks and does not wait, which is how to poll. The
+/// message the job posts is posted once and taking it off the port consumes
+/// it, so this remembers: once it has answered `true` it answers `true`
+/// thereafter.
+///
+/// **There is no POSIX counterpart, and naming one would be a lie.** A job
+/// object is a container the operating system keeps and can report on; a
+/// process group is an address to send signals to and nothing is accounted to
+/// it. The nearest thing there — the descendant walk `kill` uses — cannot
+/// answer this question: it walks down from the child, and a grandchild whose
+/// parent has exited belongs to `init` and is related to the child by nothing
+/// the system will tell you. A walk that named nothing would mean "the tree
+/// has ended" and "the tree has been orphaned" indistinguishably, and on the
+/// BSDs and illumos, which name a process's children only through the whole
+/// process table, it would mean neither. So this is a compile error there
+/// rather than an answer that is right on one system and wrong on three.
+pub const waitTree = if (is_windows)
+    waitTreeWindows
+else
+    @compileError(
+        "Child.waitTree is Windows-only: a job object is a container the " ++
+            "system accounts for, and POSIX has no such thing to ask. See " ++
+            "Child.kill for what a signal reaches there.",
+    );
+
+/// How long one wait on the completion port lasts before the caller is given a
+/// chance to notice it has been cancelled.
+///
+/// `GetQueuedCompletionStatus` is not a cancelation point, so the deadline is
+/// spent in slices of this and cancelation is asked about between them. The
+/// same five milliseconds `wait.slice_ms` spends on POSIX, for the same
+/// reason.
+const tree_slice_ms: u32 = 5;
+
+fn waitTreeWindows(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
+    if (child.tree_ended) return true;
+    const port = child.job_port orelse return false;
+    const job = child.job orelse return false;
+    const deadline: Deadline = .in(io, timeout_ms);
+
+    while (true) {
+        const left = deadline.remainingMs(io);
+        var message: win32.DWORD = undefined;
+        var key: windows.ULONG_PTR = undefined;
+        var overlapped: ?*anyopaque = undefined;
+        if (win32.GetQueuedCompletionStatus(
+            port,
+            &message,
+            &key,
+            &overlapped,
+            @min(left, tree_slice_ms),
+        ) != .FALSE) {
+            // A job reports more than the one thing: a process started, a
+            // process exited, a limit was reached. Only one of them is the
+            // answer, and the rest are taken off the port and dropped.
+            if (key == @intFromPtr(job) and message == win32.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) {
+                child.tree_ended = true;
+                return true;
+            }
+            continue;
+        }
+        switch (windows.GetLastError()) {
+            // Nothing on the port within the slice, which is all this says.
+            .WAIT_TIMEOUT => {},
+            else => |err| return win32.unexpected(err),
+        }
+        if (left == 0) return false;
+        try std.Io.checkCancel(io);
+    }
+}
+
 //======================================================================
 // The child's streams, wherever they are.
 //======================================================================
@@ -1395,6 +1492,14 @@ fn closeHandles(child: *Child) void {
 
 /// Closes the job, which ends anything still in it. Idempotent.
 fn closeJob(child: *Child) void {
+    // The port goes after the job, because closing the job is what ends what
+    // is left in it and the job posts that to the port. Nothing reads the
+    // message by then; the order is so that the job is never reporting to a
+    // handle that has gone.
+    defer if (child.job_port) |port| {
+        child.job_port = null;
+        windows.CloseHandle(port);
+    };
     const job = child.job orelse return;
     child.job = null;
     trace.print("child: closing the job", .{});

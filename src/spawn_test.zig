@@ -64,6 +64,24 @@ const script = if (is_windows) struct {
     const say_on_terminal = [_][]const u8{ "cmd.exe", "/c", "echo on the terminal& set /p ignored=" };
     const out_and_err = [_][]const u8{ "cmd.exe", "/c", "echo to stdout& echo to stderr 1>&2" };
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
+    /// Starts a process of its own that outlives it, and says which one.
+    ///
+    /// `Start-Process` is `CreateProcess` with a console of its own, so the
+    /// grandchild holds none of this child's handles and goes on running after
+    /// the child has exited and been reaped. What relates the two afterwards is
+    /// the job object, which is the whole of what `waitTree` and `deinit` are
+    /// claims about. The id is printed the way `readMarkedNumber` reads it.
+    ///
+    /// Windows only, and used only by tests that skip elsewhere: POSIX has no
+    /// container to ask after a tree with.
+    const detached_grandchild = [_][]const u8{
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' -PassThru; " ++
+            "Write-Output ('pid ' + $p.Id + '.')",
+    };
     const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %CONDUIT_TEST_VALUE% %CD%" };
     const working_directory = "C:\\Windows";
     const working_directory_mark = "Windows";
@@ -791,6 +809,15 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
 
 /// The number the child printed between `pid ` and `.`, as a process id.
 fn readPid(sink: *Sink) !posix.pid_t {
+    return readMarkedNumber(posix.pid_t, sink);
+}
+
+/// The number the child printed between `pid ` and `.`.
+///
+/// The two systems name a process with different types — a signed `pid_t` and
+/// an unsigned `DWORD` — and the fixtures print the same thing either way, so
+/// the type is the caller's to ask for.
+fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
     var waited_ms: u32 = 0;
     while (waited_ms < budget_ms) : (waited_ms += 2) {
         const found = found: {
@@ -800,9 +827,9 @@ fn readPid(sink: *Sink) !posix.pid_t {
             const at = std.mem.indexOf(u8, said, "pid ") orelse break :found null;
             const rest = said[at + "pid ".len ..];
             const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :found null;
-            break :found std.fmt.parseInt(posix.pid_t, rest[0..end], 10) catch null;
+            break :found std.fmt.parseInt(Number, rest[0..end], 10) catch null;
         };
-        if (found) |pid| return pid;
+        if (found) |number| return number;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
     return error.TestChildSaidNothing;
@@ -813,6 +840,87 @@ fn readPid(sink: *Sink) !posix.pid_t {
 fn alive(pid: posix.pid_t) bool {
     if (c.kill(pid, @as(posix.SIG, @enumFromInt(0))) == 0) return true;
     return c.errno(@as(c_int, -1)) != .SRCH;
+}
+
+/// A handle on a process this package did not start, from its id. Windows
+/// only.
+///
+/// Opened while the process is known to be running, and held: a Windows
+/// process id is reused, and a later question asked by number could be about
+/// somebody else. A handle stays the one process for as long as it is open,
+/// even after that process has ended.
+fn openById(id: win32.DWORD) !win32.HANDLE {
+    return win32.OpenProcess(
+        win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION,
+        .FALSE,
+        id,
+    ) orelse error.TestProcessNotThere;
+}
+
+/// Whether that process is still running. Windows only.
+fn runningNow(handle: win32.HANDLE) bool {
+    return win32.WaitForSingleObject(handle, 0) == win32.WAIT_TIMEOUT;
+}
+
+/// Waits for that process to end, and says whether it did within the budget.
+/// Windows only.
+fn endedWithin(handle: win32.HANDLE) bool {
+    return win32.WaitForSingleObject(handle, budget_ms) == win32.WAIT_OBJECT_0;
+}
+
+test "waitTree says the tree has ended, and does not say it early" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows only, and `Child.waitTree` says why at length: a job object is a
+    // container the system accounts for, and a process group is an address to
+    // send signals to.
+    if (!is_windows) return error.SkipZigTest;
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.detached_grandchild,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try sink.start(child.stdout.?);
+
+    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
+    defer std.os.windows.CloseHandle(grandchild);
+
+    // The child ends on its own, and is left unreaped until the end: `kill`
+    // declines to signal a child it has already been told is gone, so a test
+    // that reaped it here would be asking the job to end a tree nothing would
+    // then ask it to end. The child's own handle is what says it has exited,
+    // and looking at a handle reaps nothing.
+    var waited: u32 = 0;
+    while (waited < budget_ms and runningNow(child.id)) : (waited += 10) {
+        try std.Io.sleep(io, .fromMilliseconds(10), .awake);
+    }
+    try testing.expect(!runningNow(child.id));
+
+    // The child is gone and the tree is not, which is the whole of the
+    // difference between this wait and `wait`.
+    try testing.expect(runningNow(grandchild));
+    try testing.expect(!try child.waitTree(io, 200));
+
+    // `.kill` is `TerminateJobObject`: the job ends what is left in it, which
+    // is the same end `deinit` reaches by closing the last handle to it, and
+    // the port is what says so. `deinit` is the one this cannot use, because
+    // it closes the port the answer would arrive on -- "deinit ends a
+    // grandchild" is that half, asserted against the grandchild instead.
+    try child.kill(.kill);
+    try testing.expect(try child.waitTree(io, budget_ms));
+    try testing.expect(endedWithin(grandchild));
+
+    // The message is posted once and taking it off the port consumes it, so
+    // the answer has to be remembered rather than asked for twice.
+    try testing.expect(try child.waitTree(io, 0));
+
+    _ = try waitWithin(&child);
 }
 
 test "a detached child has a process group of its own and an attached one does not" {

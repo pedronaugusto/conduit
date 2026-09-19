@@ -151,6 +151,47 @@ pub const JOB_OBJECT_LIMIT_PROCESS_MEMORY: DWORD = 0x00000100;
 /// `JobMemoryLimit` is in force, across the job.
 pub const JOB_OBJECT_LIMIT_JOB_MEMORY: DWORD = 0x00000200;
 
+/// `JobObjectAssociateCompletionPortInformation` in `JOBOBJECTINFOCLASS`.
+pub const JobObjectAssociateCompletionPortInformation: c_int = 7;
+
+/// Where a job sends what happens inside it. `CompletionKey` comes back on
+/// every message as the key, so one port can carry several jobs; this package
+/// gives each job a port of its own and uses the job handle as the key.
+pub const JOBOBJECT_ASSOCIATE_COMPLETION_PORT = extern struct {
+    CompletionKey: ?*anyopaque,
+    CompletionPort: ?HANDLE,
+};
+
+/// `JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO`: the job has no processes left in it.
+/// Posted on the transition, so a job that is empty when a port is associated
+/// with it does not produce one.
+pub const JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO: DWORD = 4;
+
+/// Makes an I/O completion port that is not attached to a file: the first
+/// argument is `INVALID_HANDLE_VALUE` and there is no existing port. That is
+/// the form a job object's messages want, and the only form this package uses.
+pub extern "kernel32" fn CreateIoCompletionPort(
+    FileHandle: HANDLE,
+    ExistingCompletionPort: ?HANDLE,
+    CompletionKey: windows.ULONG_PTR,
+    NumberOfConcurrentThreads: DWORD,
+) callconv(.winapi) ?HANDLE;
+
+/// Takes the next message off a completion port, waiting up to
+/// `dwMilliseconds` for one.
+///
+/// For a job object the message is not an I/O at all: the number of bytes is
+/// the message itself — `JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO` and the rest —
+/// the key is the one the job was associated with, and the overlapped pointer
+/// carries a process id as a value rather than an address.
+pub extern "kernel32" fn GetQueuedCompletionStatus(
+    CompletionPort: HANDLE,
+    lpNumberOfBytesTransferred: *DWORD,
+    lpCompletionKey: *windows.ULONG_PTR,
+    lpOverlapped: *?*anyopaque,
+    dwMilliseconds: DWORD,
+) callconv(.winapi) BOOL;
+
 /// `JobObjectCpuRateControlInformation` in `JOBOBJECTINFOCLASS`.
 pub const JobObjectCpuRateControlInformation: c_int = 15;
 
@@ -332,6 +373,18 @@ pub extern "kernel32" fn TerminateProcess(
     hProcess: HANDLE,
     uExitCode: UINT,
 ) callconv(.winapi) BOOL;
+
+/// Enough access to wait on a process this package did not start and to ask
+/// how it ended. Used by the tests, which is where a process named only by its
+/// id has to be looked at.
+pub const SYNCHRONIZE: DWORD = 0x00100000;
+pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x00001000;
+
+pub extern "kernel32" fn OpenProcess(
+    dwDesiredAccess: DWORD,
+    bInheritHandle: BOOL,
+    dwProcessId: DWORD,
+) callconv(.winapi) ?HANDLE;
 
 pub extern "kernel32" fn GetExitCodeProcess(
     hProcess: HANDLE,
