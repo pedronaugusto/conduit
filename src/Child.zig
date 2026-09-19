@@ -42,6 +42,7 @@ const tty = @import("tty.zig");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
+const tree = if (is_windows) struct {} else @import("tree.zig");
 
 /// The operating system's name for the child: the process id on POSIX, the
 /// process `HANDLE` on Windows. An alias for `std.process.Child.Id`.
@@ -815,11 +816,30 @@ pub const KillError = error{
 
 /// Asks the child to stop, with `signal`.
 ///
-/// On POSIX a detached child is signalled through its process group, so the
-/// signal reaches everything it started; an attached one is signalled alone.
-/// On Windows every child is in a job object of its own, and `.kill` ends the
-/// job — so it reaches the tree whether or not the child was detached, which
-/// is the one place that system gives more than a process group does.
+/// **What it reaches.** On Windows every child is in a job object of its own,
+/// and `.kill` ends the job, so it reaches the whole tree whether or not the
+/// child was detached.
+///
+/// On POSIX there is no container for a tree, and this reaches three things:
+/// the child, the child's process group when `detach` made one, and every
+/// descendant the operating system will name — the children of a process are
+/// in `/proc/<pid>/task/<tid>/children` on Linux and in `proc_listchildpids`
+/// on Darwin. The descendants are signalled deepest first and before the
+/// child, because a process signalled before the ones below it leaves them
+/// orphaned, and an orphan belongs to `init` and is related to nothing.
+///
+/// So a descendant that gave itself a process group of its own with `setsid`
+/// or `setpgid` is still reached, and — for `.kill`, which is the request that
+/// promises to leave nothing behind — so is one that was started while the
+/// first signal was being delivered: the group and the walk are asked again
+/// until a pass names nothing. What is not reached on any system is a process
+/// that has *both* left the group and been orphaned before anything looked,
+/// and on the BSDs and illumos, which name a process's children only through
+/// the whole process table, the process group is the whole of the reach.
+///
+/// `.terminate` and `.interrupt` ask once. They are requests a program is
+/// meant to act on, and sending one twice to a program that is cleaning up is
+/// not containment.
 ///
 /// A child that has already ended is not signalled, because its name no longer
 /// belongs to it; that case is not an error, and it may reap the child as a
@@ -833,8 +853,42 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
     if (child.settled() != null) return;
     if (is_windows) return child.killWindows(signal);
 
+    const sig = signal.toPosix();
     const target: posix.pid_t = if (child.pgid) |pgid| -pgid else child.id;
-    if (c.kill(target, signal.toPosix()) == 0) return;
+
+    // The descendants that the group does not cover, deepest first, and before
+    // the child itself: a leader signalled before the processes below it
+    // leaves them orphaned, and an orphan belongs to `init` and is named by no
+    // walk. A descendant already in the group about to be signalled is left to
+    // it, so the ordinary tree gets the one signal it always did.
+    _ = tree.signalDescendants(child.id, sig, child.pgid);
+
+    const answer = child.signalTarget(target, sig);
+    if (sig != .KILL) return answer;
+
+    // `.kill` is the one that promises to leave nothing behind, and
+    // `kill(-pgid)` is not atomic against a `fork` inside the group: a process
+    // started while the signal was being delivered is in the group without
+    // having been in it when the signal was sent. So it is asked again until a
+    // pass names no descendant, which for a tree that is already dead is the
+    // very next one.
+    var pass: u8 = 0;
+    while (pass < kill_passes) : (pass += 1) {
+        const reached = tree.signalDescendants(child.id, sig, null);
+        _ = c.kill(target, sig);
+        if (reached == 0) break;
+    }
+    return answer;
+}
+
+/// How many times after the first `.kill` will look again for something that
+/// was started while it was working. Two is enough for a tree that forks once
+/// more on its way out; a tree that forks faster than it can be killed is not
+/// something a bound can fix.
+const kill_passes: u8 = 2;
+
+fn signalTarget(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void {
+    if (c.kill(target, sig) == 0) return;
     switch (c.errno(@as(c_int, -1))) {
         .PERM => {
             // Darwin refuses a signal addressed to a process group whose only
@@ -1262,5 +1316,6 @@ test {
         _ = @import("child_windows.zig");
     } else {
         _ = @import("child_posix.zig");
+        _ = @import("tree.zig");
     }
 }

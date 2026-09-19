@@ -652,6 +652,70 @@ test "killWait reaches what the child started, not only the child" {
     return error.TestGrandchildOutlivedTheKill;
 }
 
+test "killWait reaches a grandchild that put itself in a process group of its own" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // POSIX only: on Windows the job object holds everything the child starts
+    // whatever it does with console groups, and the test above already asserts
+    // that.
+    if (is_windows) return error.SkipZigTest;
+
+    // `set -m` turns job control on, and a shell with job control puts each
+    // background job in a process group of its own. So the grandchild here is
+    // a descendant of the child and *not* in the child's process group: the
+    // one place a signal addressed to the group reaches nothing.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf '%d\n' \"$!\"; wait" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdout.?);
+
+    const grandchild = try readPid(&sink);
+    // Only a claim about this shell if it really did what the fixture asks. A
+    // shell that ignores `set -m` leaves the grandchild in the child's group,
+    // where the group signal reaches it and there is nothing here to prove.
+    if (getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
+
+    _ = try child.killWait(io, 0);
+
+    var waited: u32 = 0;
+    while (waited < budget_ms) : (waited += 10) {
+        if (!alive(grandchild)) return;
+        try std.Io.sleep(io, .fromMilliseconds(10), .awake);
+    }
+    _ = c.kill(grandchild, .KILL);
+    return error.TestGrandchildOutlivedTheKill;
+}
+
+/// The first line of what the child said, as a process id.
+fn readPid(sink: *Sink) !posix.pid_t {
+    var waited_ms: u32 = 0;
+    while (waited_ms < budget_ms) : (waited_ms += 2) {
+        sink.mutex.lockUncancelable(io);
+        const line = std.mem.sliceTo(sink.bytes.items, '\n');
+        const complete = line.len < sink.bytes.items.len;
+        const copy = if (complete) std.fmt.parseInt(posix.pid_t, line, 10) catch null else null;
+        sink.mutex.unlock(io);
+        if (copy) |pid| return pid;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+    return error.TestChildSaidNothing;
+}
+
+/// Whether the operating system still knows that process id. A zombie counts
+/// as alive; nothing here reaps a process it did not start.
+fn alive(pid: posix.pid_t) bool {
+    if (c.kill(pid, @as(posix.SIG, @enumFromInt(0))) == 0) return true;
+    return c.errno(@as(c_int, -1)) != .SRCH;
+}
+
 test "a detached child has a process group of its own and an attached one does not" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);

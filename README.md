@@ -209,14 +209,25 @@ this process holds the other end of, and both `ResizePseudoConsole` and
 can block in either. The pipes have room for a repaint of a large window, and
 `Pty.close` drops the master ends first so the host's last write fails instead.
 
-**`kill` and `killWait` reach what the child started.** On POSIX that is the
-process group `detach` made, so it takes `detach`. On Windows every child goes
-in a job object of its own before it runs — started suspended, assigned,
+**`kill` and `killWait` reach what the child started.** On Windows every child
+goes in a job object of its own before it runs — started suspended, assigned,
 resumed, so nothing is ever outside it — and `.kill` ends the job. The job ends
 what is left in it when its last handle closes, so `deinit` there also ends
-what the child started and left behind; POSIX has no container for that, and a
-grandchild of a reaped child keeps running. A child that cannot be put in its
-job is `error.JobAssignmentFailed`, not a child whose tree `kill` would miss.
+what the child started and left behind. A child that cannot be put in its job
+is `error.JobAssignmentFailed`, not a child whose tree `kill` would miss.
+
+POSIX has no container for a tree, so `kill` reaches three things: the child,
+the child's process group when `detach` made one, and every descendant the
+system will name — `/proc/<pid>/task/<tid>/children` on Linux,
+`proc_listchildpids` on Darwin, and on the BSDs and illumos neither, where the
+process group is the whole of the reach. Descendants are signalled deepest
+first and before the child, because a process signalled before the ones below
+it leaves them orphaned and an orphan is related to nothing. A descendant that
+gave itself a process group with `setsid` or `setpgid` is reached, and for
+`.kill` so is one started while the first signal was being delivered: the group
+and the walk are asked again until a pass names nothing. A process that has
+both left the group and been orphaned before anything looked is reached by no
+system, and a grandchild of a child that was already reaped keeps running.
 
 **A spawn that cannot run the program is an error**, not a child that exits
 127: the fork child reports the failure over a close-on-exec pipe before
