@@ -338,7 +338,10 @@ shown.
 
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, glibc on two architectures and musl on one, both macOS
-architectures, FreeBSD and NetBSD.
+architectures, FreeBSD and NetBSD. `zig build check -Dtarget=...` is what
+those jobs run: it compiles the library, the suite and the examples for the
+target and runs none of them, so a Windows-only path reached from a test and
+from nowhere else is still held to compiling.
 
 A test that is about POSIX alone — a controlling terminal, `getpgid`, Ctrl-C
 becoming `SIGINT`, `stty size` — says so and skips elsewhere, and so does a

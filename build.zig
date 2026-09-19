@@ -96,6 +96,17 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the conduit tests");
     test_step.dependOn(unit_step);
 
+    // Compiling without running is what a target this host cannot execute can
+    // still be held to: a pseudo-terminal is a kernel object, so a
+    // cross-compilation check says the sources are portable and nothing more.
+    // The test binary is in it as well as the library and the examples,
+    // because most of what is Windows-only here is reached from a test and
+    // from nowhere else. It is also the default step, so a bare
+    // `zig build -Dtarget=...` is the same check under another name.
+    const check_step = b.step("check", "Compile the tests and the examples without running them");
+    check_step.dependOn(&tests.step);
+    b.getInstallStep().dependOn(check_step);
+
     //=====================================================================
     // Examples
     //
@@ -120,15 +131,9 @@ pub fn build(b: *std.Build) void {
         });
         const run = b.addRunArtifact(example);
         examples_step.dependOn(&run.step);
-        // Compiled by a bare `zig build` too, so a cross-compilation check
-        // covers the examples and not only the library.
-        b.getInstallStep().dependOn(&example.step);
+        check_step.dependOn(&example.step);
     }
     test_step.dependOn(examples_step);
-
-    // `zig build` with no step compiles everything, so a cross-compilation
-    // check needs no step name of its own.
-    b.getInstallStep().dependOn(&tests.step);
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a
