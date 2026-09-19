@@ -214,6 +214,13 @@ pub extern "kernel32" fn SetHandleInformation(
     dwFlags: DWORD,
 ) callconv(.winapi) BOOL;
 
+/// What `SetHandleInformation` would be changing. Read before a spawn marks a
+/// caller's handle inheritable, so that the flag can be put back after.
+pub extern "kernel32" fn GetHandleInformation(
+    hObject: HANDLE,
+    lpdwFlags: *DWORD,
+) callconv(.winapi) BOOL;
+
 pub const GENERIC_READ: DWORD = 0x80000000;
 pub const GENERIC_WRITE: DWORD = 0x40000000;
 pub const FILE_SHARE_READ: DWORD = 0x00000001;

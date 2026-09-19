@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
 const Pty = @import("Pty.zig");
+const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("trace.zig");
 const win32 = @import("win32.zig");
 
@@ -87,8 +88,14 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY == 0) return error.BadWorkingDirectory;
     }
 
-    var plan: Plan = try .init(options);
-    errdefer plan.closeOwned(io);
+    var plan: Plan = try .init(io, options, null);
+    errdefer plan.closeAll(io);
+    const given = childHandles(&plan);
+
+    // The caller's handles get their inheritance flags back whatever happens
+    // next, including on every path that returns an error below.
+    var inheritance: Inheritance = .{};
+    defer inheritance.restore();
 
     var startup: win32.STARTUPINFOEXW = std.mem.zeroes(win32.STARTUPINFOEXW);
     var flags: windows.CreateProcessFlags = .{
@@ -140,9 +147,14 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         else => {
             startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOW);
             startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
-            startup.StartupInfo.hStdInput = plan.child[0];
-            startup.StartupInfo.hStdOutput = plan.child[1];
-            startup.StartupInfo.hStdError = plan.child[2];
+            startup.StartupInfo.hStdInput = given[0];
+            startup.StartupInfo.hStdOutput = given[1];
+            startup.StartupInfo.hStdError = given[2];
+
+            // A handle the child is to inherit has to be marked inheritable,
+            // and this is the only way to say so about one somebody else
+            // opened. `Inheritance` is what puts the caller's flag back.
+            for (given) |slot| if (slot) |handle| inheritance.take(handle);
 
             // And nothing else. `bInheritHandles` on its own hands the child
             // every inheritable handle this process holds -- which on a machine
@@ -150,7 +162,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             // means the child, and anything the child starts, keeps those pipes
             // open for as long as it lives. A handle list says exactly which
             // three the child is being given.
-            if (try plan.inheritList(arena)) |inheritable| {
+            if (try inheritList(given, arena)) |inheritable| {
                 var list = try AttributeList.init(arena, 1);
                 try list.setHandleList(inheritable);
                 attributes = list;
@@ -250,7 +262,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         return createError();
     }
 
-    plan.closeOwned(io);
+    plan.closeChildSide(io);
 
     return .{
         .id = information.hProcess,
@@ -275,147 +287,113 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 // Standard handles.
 //======================================================================
 
-/// The three handles the child starts with, which of them this package opened,
-/// and the pipe ends the parent keeps.
-const Plan = struct {
-    /// What the child gets as its standard input, output and error. A handle
-    /// the child is meant to inherit; `null` gives it nothing.
-    child: [3]?windows.HANDLE = @splat(null),
-    /// The subset of `child` this `Plan` opened and must close once the child
-    /// has its own copies. A `NUL` shared by all three appears once.
-    owned: [3]?windows.HANDLE = @splat(null),
-    /// The parent's end of each pipe, by the stream it serves in the child.
-    parent: [3]?std.Io.File = @splat(null),
+/// The handles a spawn involves. `stdio_plan` holds the policy; what is here
+/// is the two calls that open a handle on this system.
+const Plan = stdio_plan.Plan(struct {
+    pub const Error = SpawnError;
+    pub const openNull = openNul;
 
-    fn init(options: SpawnOptions) SpawnError!Plan {
-        var plan: Plan = .{};
-        errdefer plan.closeAllOnFailure();
+    pub fn openPipe(child_reads: bool) SpawnError!stdio_plan.Pipe {
+        return makePipe(if (child_reads) .to_child else .from_child);
+    }
+});
 
-        switch (options.stdio) {
-            // Attached through the attribute list, not through handles.
-            .pty => {},
-            else => {
-                const inherited = inheritedHandles();
-                // One `NUL` serves every stream that asked for it.
-                var nul: ?windows.HANDLE = null;
-                for (options.stdio.perStream(), 0..) |stream, slot| switch (stream) {
-                    // "The parent's" has to be said with the parent's handle:
-                    // `STARTF_USESTDHANDLES` is all or nothing, so a null slot
-                    // would hand the child no handle at all -- which is what
-                    // `.close` means and not what `.inherit` does.
-                    .inherit => plan.child[slot] = inherited[slot],
-                    .close => plan.child[slot] = null,
-                    .file => |f| {
-                        // The caller's file has to be inheritable for the child
-                        // to receive it, and this is the only way to say so
-                        // about a handle somebody else opened.
-                        _ = win32.SetHandleInformation(
-                            f.handle,
-                            win32.HANDLE_FLAG_INHERIT,
-                            win32.HANDLE_FLAG_INHERIT,
-                        );
-                        plan.child[slot] = f.handle;
-                    },
-                    .ignore => {
-                        const handle = nul orelse handle: {
-                            const opened = try openNul();
-                            plan.owned[slot] = opened;
-                            nul = opened;
-                            break :handle opened;
-                        };
-                        plan.child[slot] = handle;
-                    },
-                    .pipe => {
-                        // Standard input is the one the child reads.
-                        const ends = try makePipe(if (slot == 0) .to_child else .from_child);
-                        plan.child[slot] = ends.child;
-                        plan.owned[slot] = ends.child;
-                        plan.parent[slot] = file(ends.parent);
-                    },
-                };
-            },
+/// The handles the child is being given, in the order `STARTF_USESTDHANDLES`
+/// names them.
+///
+/// `Target.inherit` has to be said with the parent's own handle here: naming
+/// the child's standard handles is all or nothing, so a null slot would hand
+/// the child nothing at all -- which is what `.close` means and not what
+/// `.inherit` does. A stream this process does not have is `null` either way,
+/// and a child cannot inherit what does not exist.
+fn childHandles(plan: *const Plan) [3]?windows.HANDLE {
+    const inherited = inheritedHandles();
+    var given: [3]?windows.HANDLE = @splat(null);
+    for (plan.child, 0..) |target, slot| given[slot] = switch (target) {
+        .inherit => inherited[slot],
+        .place => |handle| handle,
+        .close => null,
+    };
+    return given;
+}
+
+/// Every handle a child inherits has to be marked inheritable, and a handle
+/// this package did not open is the caller's: leaving it marked would mean the
+/// next spawn anywhere in the process handed it on to a child that was never
+/// meant to have it.
+///
+/// So the flag is put back. This remembers what each handle had before
+/// `CreateProcessW` was told about it, and `restore` puts that back afterwards
+/// -- on the success path and on every failure path alike. The handles this
+/// package opened itself are created inheritable and are closed rather than
+/// restored, so they are not in here.
+const Inheritance = struct {
+    /// The handles whose flags were changed, and the flags they had.
+    saved: [3]Saved = undefined,
+    count: usize = 0,
+
+    const Saved = struct { handle: windows.HANDLE, flags: win32.DWORD };
+
+    /// Marks `handle` inheritable, remembering what it was.
+    ///
+    /// A handle already in the list is not saved twice: the first answer is
+    /// the one from before anything here touched it.
+    fn take(inheritance: *Inheritance, handle: windows.HANDLE) void {
+        for (inheritance.saved[0..inheritance.count]) |already| {
+            if (already.handle == handle) return;
         }
-
-        if (options.stderr_to) |f| {
-            // A stderr pipe that was planned is undone: the caller asked for
-            // the file instead, and the file is theirs, not this `Plan`'s.
-            if (plan.owned[2]) |handle| {
-                windows.CloseHandle(handle);
-                plan.owned[2] = null;
-            }
-            if (plan.parent[2]) |pipe_end| {
-                windows.CloseHandle(pipe_end.handle);
-                plan.parent[2] = null;
-            }
-            // The caller's file has to be inheritable for the child to receive
-            // it, and this is the only way to say so about a handle somebody
-            // else opened.
-            _ = win32.SetHandleInformation(f.handle, win32.HANDLE_FLAG_INHERIT, win32.HANDLE_FLAG_INHERIT);
-            plan.child[2] = f.handle;
+        var flags: win32.DWORD = 0;
+        if (win32.GetHandleInformation(handle, &flags) == .FALSE) return;
+        if (inheritance.count < inheritance.saved.len) {
+            inheritance.saved[inheritance.count] = .{ .handle = handle, .flags = flags };
+            inheritance.count += 1;
         }
-
-        return plan;
+        _ = win32.SetHandleInformation(
+            handle,
+            win32.HANDLE_FLAG_INHERIT,
+            win32.HANDLE_FLAG_INHERIT,
+        );
     }
 
-    /// Closes the handles that exist only for the child, once `CreateProcessW`
-    /// has duplicated them into it. Idempotent.
-    fn closeOwned(plan: *Plan, io: std.Io) void {
-        for (&plan.owned) |*slot| {
-            const handle = slot.* orelse continue;
-            file(handle).close(io);
-            slot.* = null;
-        }
-    }
-
-    /// The handles the child is being given, deduplicated, for the attribute
-    /// list that stops it from inheriting anything else — or `null` when the
-    /// child cannot be restricted that way.
-    ///
-    /// A `null` slot is `Stream.close`: there is nothing to inherit, and it is
-    /// simply left out. A console handle is different. A child sharing this
-    /// process's console reaches it through the console rather than through
-    /// the handle table, and naming one in a handle list is how
-    /// `CreateProcessW` comes back with `ERROR_INVALID_PARAMETER` — so a plan
-    /// that hands the child a console gets no list at all, and inherits the
-    /// way it always did. That is the case where this process is somebody's
-    /// terminal rather than a program whose streams are pipes, and it is not
-    /// the case the list is for.
-    ///
-    /// Every handle that does go in is marked inheritable first: a handle list
-    /// may only name inheritable handles, and this process's own standard
-    /// handles are whatever its parent made them. The list is what keeps that
-    /// from meaning anything beyond this one spawn.
-    fn inheritList(plan: *const Plan, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
-        var handles: std.ArrayList(windows.HANDLE) = .empty;
-        for (plan.child) |slot| {
-            const handle = slot orelse continue;
-            if (isConsole(handle)) return null;
-            if (std.mem.indexOfScalar(windows.HANDLE, handles.items, handle) != null) continue;
+    /// Puts every remembered flag back. Idempotent.
+    fn restore(inheritance: *Inheritance) void {
+        for (inheritance.saved[0..inheritance.count]) |already| {
             _ = win32.SetHandleInformation(
-                handle,
+                already.handle,
                 win32.HANDLE_FLAG_INHERIT,
-                win32.HANDLE_FLAG_INHERIT,
+                already.flags & win32.HANDLE_FLAG_INHERIT,
             );
-            try handles.append(arena, handle);
         }
-        if (handles.items.len == 0) return null;
-        return handles.items;
-    }
-
-    /// The failure path inside `init`, which has no `std.Io` to hand.
-    fn closeAllOnFailure(plan: *Plan) void {
-        for (&plan.owned) |*slot| {
-            const handle = slot.* orelse continue;
-            windows.CloseHandle(handle);
-            slot.* = null;
-        }
-        for (&plan.parent) |*slot| {
-            const f = slot.* orelse continue;
-            windows.CloseHandle(f.handle);
-            slot.* = null;
-        }
+        inheritance.count = 0;
     }
 };
+
+/// The handles the child is being given, deduplicated, for the attribute list
+/// that stops it from inheriting anything else — or `null` when the child
+/// cannot be restricted that way.
+///
+/// A `null` slot is `Stream.close`: there is nothing to inherit, and it is
+/// simply left out. A console handle is different. A child sharing this
+/// process's console reaches it through the console rather than through the
+/// handle table, and naming one in a handle list is how `CreateProcessW` comes
+/// back with `ERROR_INVALID_PARAMETER` — so a plan that hands the child a
+/// console gets no list at all, and inherits the way it always did. That is
+/// the case where this process is somebody's terminal rather than a program
+/// whose streams are pipes, and it is not the case the list is for.
+///
+/// Every handle in the list is inheritable already: `Inheritance.take` has
+/// been over them, and is what puts the caller's flags back afterwards.
+fn inheritList(given: [3]?windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
+    var list: std.ArrayList(windows.HANDLE) = .empty;
+    for (given) |slot| {
+        const handle = slot orelse continue;
+        if (isConsole(handle)) return null;
+        if (std.mem.indexOfScalar(windows.HANDLE, list.items, handle) != null) continue;
+        try list.append(arena, handle);
+    }
+    if (list.items.len == 0) return null;
+    return list.items;
+}
 
 /// Whether a handle is one of this process's console handles.
 ///
@@ -445,13 +423,6 @@ fn inheritedHandles() [3]?windows.HANDLE {
 
 const PipeDirection = enum { to_child, from_child };
 
-const PipeEnds = struct {
-    /// The end the child inherits.
-    child: windows.HANDLE,
-    /// The end this process keeps.
-    parent: windows.HANDLE,
-};
-
 /// A pipe whose child end is inheritable and whose parent end is not.
 ///
 /// Windows has no per-handle `O_CLOEXEC`: inheritance is a flag on the handle
@@ -459,7 +430,7 @@ const PipeEnds = struct {
 /// are created inheritable — there is no other way to ask — and the end this
 /// process keeps has the flag cleared again immediately, which is what stops a
 /// later, unrelated spawn from handing it to someone else.
-fn makePipe(direction: PipeDirection) SpawnError!PipeEnds {
+fn makePipe(direction: PipeDirection) SpawnError!stdio_plan.Pipe {
     var security: win32.SECURITY_ATTRIBUTES = .{
         .nLength = @sizeOf(win32.SECURITY_ATTRIBUTES),
         .lpSecurityDescriptor = null,
@@ -469,7 +440,7 @@ fn makePipe(direction: PipeDirection) SpawnError!PipeEnds {
     var write_end: windows.HANDLE = undefined;
     if (win32.CreatePipe(&read_end, &write_end, &security, 0) == .FALSE) return createError();
 
-    const ends: PipeEnds = switch (direction) {
+    const ends: stdio_plan.Pipe = switch (direction) {
         .to_child => .{ .child = read_end, .parent = write_end },
         .from_child => .{ .child = write_end, .parent = read_end },
     };

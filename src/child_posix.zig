@@ -14,12 +14,28 @@ const Allocator = std.mem.Allocator;
 const Child = @import("Child.zig");
 const Pty = @import("Pty.zig");
 const handles = @import("handles.zig");
+const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("tty.zig");
 
 const file = handles.file;
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
+
+/// The descriptors a spawn involves. `stdio_plan` holds the policy; what is
+/// here is the two calls that open a descriptor on this system.
+const Plan = stdio_plan.Plan(struct {
+    pub const Error = SpawnError;
+    pub const openNull = openNullDevice;
+
+    pub fn openPipe(child_reads: bool) SpawnError!stdio_plan.Pipe {
+        const ends = try makePipe();
+        return if (child_reads)
+            .{ .child = ends[0], .parent = ends[1] }
+        else
+            .{ .child = ends[1], .parent = ends[0] };
+    }
+});
 
 /// See `Child.spawn`.
 pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
@@ -56,7 +72,10 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     // The descriptors the child will have as 0, 1 and 2, and the ones the
     // parent keeps. `plan` opens nothing the caller owns.
-    var plan: Plan = try .init(io, options);
+    var plan: Plan = try .init(io, options, switch (options.stdio) {
+        .pty => |pty| pty.slave.?,
+        else => null,
+    });
     errdefer plan.closeAll(io);
 
     // How the fork child reports a failure that happens after the fork. The
@@ -113,109 +132,6 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         .term = null,
     };
 }
-
-/// What the child does with one of its first three descriptors.
-const Target = union(enum) {
-    /// Leave the parent's descriptor in place.
-    keep,
-    /// Put this descriptor there, with `dup2`.
-    place: posix.fd_t,
-    /// Close it, so the child has no descriptor at that number.
-    close,
-};
-
-/// The descriptors involved in a spawn: what the child puts on 0, 1 and 2,
-/// which of those this package opened and must therefore close in the parent
-/// after the fork, and the pipe ends the parent keeps.
-///
-/// Every method is idempotent, so the failure path may close twice without
-/// closing a descriptor number that has since been handed to something else.
-const Plan = struct {
-    /// Indexed by descriptor number in the child.
-    child: [3]Target = @splat(.keep),
-    /// The subset of `child` this `Plan` opened. A `/dev/null` shared by more
-    /// than one stream appears once, at the slot that opened it.
-    owned: [3]?posix.fd_t = @splat(null),
-    /// The parent's end of each pipe, by the descriptor number it serves in
-    /// the child.
-    parent: [3]?std.Io.File = @splat(null),
-
-    fn init(io: std.Io, options: SpawnOptions) SpawnError!Plan {
-        var plan: Plan = .{};
-        errdefer plan.closeAll(io);
-
-        switch (options.stdio) {
-            // The terminal end on all three, and nothing this `Plan` owns: the
-            // pair is the caller's.
-            .pty => |pty| plan.child = @splat(.{ .place = pty.slave.? }),
-            else => {
-                // One null device serves every stream that asked for it.
-                var null_device: ?posix.fd_t = null;
-                for (options.stdio.perStream(), 0..) |stream, slot| switch (stream) {
-                    .inherit => {},
-                    .close => plan.child[slot] = .close,
-                    .file => |f| plan.child[slot] = .{ .place = f.handle },
-                    .ignore => {
-                        const fd = null_device orelse fd: {
-                            const opened = try openNullDevice();
-                            plan.owned[slot] = opened;
-                            null_device = opened;
-                            break :fd opened;
-                        };
-                        plan.child[slot] = .{ .place = fd };
-                    },
-                    .pipe => {
-                        const ends = try makePipe();
-                        // Standard input is the one the child reads.
-                        const reading = slot == 0;
-                        const child_end = if (reading) ends[0] else ends[1];
-                        const parent_end = if (reading) ends[1] else ends[0];
-                        plan.child[slot] = .{ .place = child_end };
-                        plan.owned[slot] = child_end;
-                        plan.parent[slot] = file(parent_end);
-                    },
-                };
-            },
-        }
-
-        if (options.stderr_to) |f| {
-            // A stderr pipe that was planned is undone: the caller asked for
-            // the file instead, and the file is theirs, not this `Plan`'s.
-            if (plan.owned[2]) |fd| {
-                file(fd).close(io);
-                plan.owned[2] = null;
-            }
-            if (plan.parent[2]) |pipe_end| {
-                pipe_end.close(io);
-                plan.parent[2] = null;
-            }
-            plan.child[2] = .{ .place = f.handle };
-        }
-
-        return plan;
-    }
-
-    /// Closes the descriptors that exist only for the child. Called in the
-    /// parent once the fork has copied them.
-    fn closeChildSide(plan: *Plan, io: std.Io) void {
-        for (&plan.owned) |*slot| {
-            const fd = slot.* orelse continue;
-            file(fd).close(io);
-            slot.* = null;
-        }
-    }
-
-    /// Closes everything this `Plan` opened, on the path where no child was
-    /// started or the child failed before `execve`.
-    fn closeAll(plan: *Plan, io: std.Io) void {
-        plan.closeChildSide(io);
-        for (&plan.parent) |*slot| {
-            const f = slot.* orelse continue;
-            f.close(io);
-            slot.* = null;
-        }
-    }
-};
 
 /// Where between the fork and the exec something went wrong, and with what
 /// error number. Written to the report pipe by the fork child, read by the
@@ -353,7 +269,7 @@ fn childMain(
     };
 
     for (placement, 0..) |target, slot| switch (target) {
-        .keep => {},
+        .inherit => {},
         .place => |fd| if (!place(fd, @intCast(slot))) bail(report, .descriptors),
         // A close that finds nothing there is not a failure of the spawn: the
         // child was asked to have no descriptor at that number, and it does

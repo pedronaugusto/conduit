@@ -1627,6 +1627,49 @@ extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 // Descriptor hygiene.
 //======================================================================
 
+test "a caller's handle is as inheritable after a spawn as it was before" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows only: inheritance there is a flag on the handle and
+    // `CreateProcessW` takes every inheritable handle at once, so a spawn has
+    // to set the flag on a file the caller opened -- and then put it back, or
+    // a spawn elsewhere in the process inherits a handle nobody gave it. POSIX
+    // says the same thing per-child with `dup2`, and has nothing to restore.
+    if (!is_windows) return error.SkipZigTest;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var sink = try tmp.dir.createFile(io, "out", .{});
+    defer sink.close(io);
+
+    _ = win32.SetHandleInformation(sink.handle, win32.HANDLE_FLAG_INHERIT, 0);
+    var before: u32 = 1;
+    try testing.expect(win32.GetHandleInformation(sink.handle, &before) != .FALSE);
+    try testing.expectEqual(@as(u32, 0), before & win32.HANDLE_FLAG_INHERIT);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "cmd.exe", "/c", "echo to the caller's file" },
+        .stdio = .{ .streams = .{
+            .stdin = .ignore,
+            .stdout = .{ .file = sink },
+            .stderr = .ignore,
+        } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+
+    // The child got it, and this process has it back the way it was.
+    var after: u32 = 1;
+    try testing.expect(win32.GetHandleInformation(sink.handle, &after) != .FALSE);
+    try testing.expectEqual(@as(u32, 0), after & win32.HANDLE_FLAG_INHERIT);
+
+    var contents: [64]u8 = undefined;
+    const written = try tmp.dir.readFile(io, "out", &contents);
+    try testing.expect(std.mem.indexOf(u8, written, "to the caller's file") != null);
+}
+
 test "a child gets no descriptor of this process's but its own three" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
