@@ -336,12 +336,12 @@ the `Reaper` exists for.
 | Windows | ConPTY and `CreateProcessW` | `windows-latest` |
 | FreeBSD, NetBSD | as Linux | cross-compiled only |
 
-Every job in that matrix runs on each push and each pull request, and the badge
-above is the latest of them. Windows 10 version 1809 is the floor:
+Every job in that matrix runs on each push to `main` and on each pull request,
+and the badge above is the latest of them. Windows 10 version 1809 is the floor:
 `CreatePseudoConsole` is imported statically rather than looked up.
 
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
-`aarch64-windows-gnu`, both Linux libcs on two architectures, both macOS
+`aarch64-windows-gnu`, glibc on two architectures and musl on one, both macOS
 architectures, FreeBSD and NetBSD.
 
 Tests whose claim is POSIX-only — a controlling terminal, `getpgid`, Ctrl-C
@@ -357,20 +357,30 @@ directory, the current directory, the system directories and `PATH` and appends
 ```sh
 zig build test                   # the suite, and the examples, which are run
 zig build test -Dfork-spawn      # the same, with the posix_spawn path off
+zig build test --fuzz            # the three properties, under the fuzzer
 zig build unit -Dthread-sanitizer   # the suite under ThreadSanitizer
 zig build examples               # the examples alone
 zig fmt --check src examples build.zig
 ci/linux.sh --both               # the suite on glibc and musl Linux, in Docker
 ```
 
-Every test starts a real child process and reaps it, and CI runs the suite in
+Most of the suite starts a real child process and reaps it, and CI runs it in
 Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code between `fork` and
 `execve` is the kind an inlining decision can change. CI passes
 `--test-timeout 45s`, which ends the run and names the test that did not
 finish, and a test that starts a child or opens a pair carries a watchdog that
-panics with its own name after a minute. The suite also runs with the
+panics with its own name after thirty seconds. The suite also runs with the
 `posix_spawn` path turned off, because that path is a second implementation of
 one contract and running both is what says they make the same child.
+
+Three things here read bytes the package did not write, and each is a property
+`zig build test --fuzz` puts a fuzzer on: that the search behind `until` and
+`untilAny` reports what a search of the whole buffer would, however the child's
+output is cut into arrivals; that every candidate a `PATH` produces is an entry
+of it with the program on the end; and that an argument list survives the
+Windows command line it is written into, by the rules that parse it back. Each
+keeps a corpus of its own under `.zig-cache/f`. The test module is built with
+error return traces off, which is what lets the fuzzing test runner compile.
 
 `zig build unit` is the suite without the examples, `-Dtest-filter` runs part
 of it, and `CONDUIT_TRACE` in the environment prints what this package asked

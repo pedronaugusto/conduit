@@ -246,7 +246,6 @@ pub fn untilAny(
 ) WaitError!Match {
     expect.compact(io);
 
-    var longest: usize = 0;
     for (patterns, 0..) |pattern, index| {
         if (pattern.len == 0) return .{
             .index = index,
@@ -254,15 +253,10 @@ pub fn untilAny(
             .found = expect.buffer[0..0],
         };
         if (pattern.len > expect.buffer.len) return error.BufferFull;
-        longest = @max(longest, pattern.len);
     }
 
     const deadline = deadlineIn(io, timeout_ms);
-    // Where the next search starts. Bytes already searched cannot become a
-    // match on their own; only the tail that a new pattern could straddle is
-    // looked at again, and with several patterns that tail is the longest
-    // one's.
-    var from: usize = 0;
+    var search: Search = .init(patterns);
     while (true) {
         expect.arrived.reset();
 
@@ -274,23 +268,15 @@ pub fn untilAny(
             expect.mutex.lockUncancelable(io);
             defer expect.mutex.unlock(io);
 
-            const said = expect.buffer[0..expect.filled];
-            var earliest: usize = said.len;
-            for (patterns, 0..) |pattern, index| {
-                const at = std.mem.indexOfPos(u8, said, from, pattern) orelse continue;
-                if (at >= earliest) continue;
-                earliest = at;
+            if (search.find(expect.buffer[0..expect.filled], patterns)) |found| {
+                const pattern = patterns[found.index];
                 winner = .{
-                    .index = index,
-                    .before = expect.buffer[0..at],
-                    .found = expect.buffer[at..][0..pattern.len],
+                    .index = found.index,
+                    .before = expect.buffer[0..found.at],
+                    .found = expect.buffer[found.at..][0..pattern.len],
                 };
-            }
-
-            if (winner) |match| {
-                expect.consumed = earliest + match.found.len;
+                expect.consumed = found.at + pattern.len;
             } else {
-                from = expect.filled -| (longest -| 1);
                 full = expect.filled == expect.buffer.len;
                 ended = expect.ended;
                 failed = expect.failed;
@@ -304,6 +290,51 @@ pub fn untilAny(
         try expect.sleepUntil(io, deadline);
     }
 }
+
+/// The search `untilAny` runs again every time more bytes arrive.
+///
+/// A call asks repeatedly as the child says more, and the bytes it has already
+/// looked at cannot become a match on their own: only the tail a pattern could
+/// still straddle is searched again, and with several patterns that tail is the
+/// longest one's. That is what keeps a wait for a pattern that never comes from
+/// costing the length of everything the child said, squared.
+///
+/// The bound is exact rather than generous. A match beginning before `from`
+/// would have ended before the previous search's last byte, so that search
+/// would have found it and the call would already have returned.
+const Search = struct {
+    /// Where the next search starts.
+    from: usize,
+    /// The longest pattern, which is how much of the tail a later byte could
+    /// still complete.
+    longest: usize,
+
+    const Found = struct { index: usize, at: usize };
+
+    fn init(patterns: []const []const u8) Search {
+        var longest: usize = 0;
+        for (patterns) |pattern| longest = @max(longest, pattern.len);
+        return .{ .from = 0, .longest = longest };
+    }
+
+    /// The earliest of `patterns` in `said`, or `null`, in which case the next
+    /// search starts where a pattern could still straddle what arrives next.
+    ///
+    /// **The earliest match wins**, whatever order the patterns were listed
+    /// in; two that begin at the same byte are settled by that order.
+    fn find(search: *Search, said: []const u8, patterns: []const []const u8) ?Found {
+        var winner: ?Found = null;
+        var earliest: usize = said.len;
+        for (patterns, 0..) |pattern, index| {
+            const at = std.mem.indexOfPos(u8, said, search.from, pattern) orelse continue;
+            if (at >= earliest) continue;
+            earliest = at;
+            winner = .{ .index = index, .at = at };
+        }
+        if (winner == null) search.from = said.len -| (search.longest -| 1);
+        return winner;
+    }
+};
 
 /// Waits for `count` bytes to arrive, and consumes them.
 ///
@@ -801,4 +832,79 @@ fn waitWithin(io: std.Io, child: *Child) !Child.Term {
     }
     _ = child.killWait(io, 0) catch {};
     return error.TestChildDidNotExit;
+}
+
+//======================================================================
+// The search, against a search that keeps nothing.
+//======================================================================
+
+test "the incremental search finds what a search of the whole buffer would" {
+    try testing.fuzz({}, searchMatchesAFullScan, .{});
+}
+
+/// The property: however the child's bytes are cut into arrivals, the
+/// incremental search reports the same match, at the same place, as a search
+/// that starts from the beginning every time — and reports none while a full
+/// scan finds none.
+///
+/// This is where `Search.from` earns its keep or loses it. A bound that moved
+/// too far would step over a pattern straddling two arrivals and the wait
+/// would hang until its deadline; one that never moved would be correct and
+/// quadratic. Only the first is a fault a reader would not see, and it is the
+/// one an arrival split at an awkward byte finds.
+fn searchMatchesAFullScan(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+
+    // A three-letter alphabet, so that patterns actually occur: over 256 bytes
+    // a match would be a rare accident and the fuzzer would be exercising the
+    // miss and nothing else.
+    const alphabet: []const std.testing.Smith.Weight = &.{.rangeAtMost(u8, 'a', 'c', 1)};
+
+    var pattern_storage: [4][8]u8 = undefined;
+    var patterns: [4][]const u8 = undefined;
+    const count = smith.valueRangeAtMost(u8, 1, patterns.len);
+    for (patterns[0..count], pattern_storage[0..count]) |*pattern, *storage| {
+        // An empty pattern matches before anything arrives and `untilAny`
+        // answers it without searching, so the search never sees one.
+        const length = smith.valueRangeAtMost(u8, 1, storage.len);
+        smith.bytesWeighted(storage[0..length], alphabet);
+        pattern.* = storage[0..length];
+    }
+    const wanted = patterns[0..count];
+
+    var stream: [64]u8 = undefined;
+    const said = stream[0..smith.sliceWeightedBytes(&stream, alphabet)];
+
+    var search: Search = .init(wanted);
+    var arrived: usize = 0;
+    while (arrived < said.len) {
+        arrived += smith.valueRangeAtMost(u8, 1, @intCast(said.len - arrived));
+        const so_far = said[0..arrived];
+
+        const full = fullScan(so_far, wanted);
+        if (search.find(so_far, wanted)) |found| {
+            // Nothing may be reported that a full scan does not also find, in
+            // the same place and as the same pattern.
+            try testing.expect(full != null);
+            try testing.expectEqual(full.?.at, found.at);
+            try testing.expectEqual(full.?.index, found.index);
+            // A match ends the call, so the search stops here too.
+            return;
+        }
+        // And nothing may be missed.
+        try testing.expect(full == null);
+    }
+}
+
+/// The same question asked the expensive way: every pattern against every
+/// byte, every time.
+fn fullScan(said: []const u8, patterns: []const []const u8) ?Search.Found {
+    @disableInstrumentation();
+    var winner: ?Search.Found = null;
+    for (patterns, 0..) |pattern, index| {
+        const at = std.mem.indexOf(u8, said, pattern) orelse continue;
+        if (winner) |already| if (at >= already.at) continue;
+        winner = .{ .index = index, .at = at };
+    }
+    return winner;
 }

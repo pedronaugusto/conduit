@@ -119,3 +119,133 @@ test "a first argument containing a quote is refused" {
         serialise(arena_state.allocator(), &.{"a\"b.exe"}),
     );
 }
+
+//======================================================================
+// The command line, against the rules that parse it back.
+//======================================================================
+
+test "an argument list survives the command line it is written into" {
+    try testing.fuzz({}, argvSurvivesTheRoundTrip, .{});
+}
+
+/// The property: `CommandLineToArgvW`'s rules, applied to what `serialise`
+/// wrote, give back the argument list it was given.
+///
+/// This is the only claim that matters about this file, and the only one a
+/// reader cannot check: a quote or a backslash in the wrong place does not
+/// mangle an argument, it moves the boundary between two of them, and a child
+/// then receives an argument the caller never wrote. The rules are quoted in
+/// `parse` below, written from the other direction, and every argument here is
+/// built out of the three bytes that decide where a boundary falls.
+fn argvSurvivesTheRoundTrip(_: void, smith: *std.testing.Smith) !void {
+    @disableInstrumentation();
+
+    // Printable ASCII only: `serialise` ends in a WTF-8 to WTF-16 conversion,
+    // and what that does to bytes that spell nothing is a question about the
+    // standard library rather than about quoting. The three bytes the rules
+    // turn on carry most of the weight.
+    const alphabet: []const std.testing.Smith.Weight = &.{
+        .rangeAtMost(u8, 0x21, 0x7e, 1),
+        .value(u8, '"', 8),
+        .value(u8, '\\', 8),
+        .value(u8, ' ', 8),
+        .value(u8, '\t', 2),
+    };
+
+    var storage: [6][12]u8 = undefined;
+    var argv: [6][]const u8 = undefined;
+    const count = smith.valueRangeAtMost(u8, 1, argv.len);
+    for (argv[0..count], storage[0..count]) |*argument, *bytes| {
+        argument.* = bytes[0..smith.sliceWeightedBytes(bytes, alphabet)];
+    }
+    const wanted = argv[0..count];
+
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const line = serialise(arena, wanted) catch |err| switch (err) {
+        // The one argument list with no command line: a first argument
+        // holding a quote, which is refused rather than mangled.
+        error.InvalidArgv => {
+            try testing.expect(std.mem.indexOfScalar(u8, wanted[0], '"') != null);
+            return;
+        },
+        else => |e| return e,
+    };
+
+    const utf8 = try std.unicode.wtf16LeToWtf8Alloc(arena, line);
+    const parsed = try parse(arena, utf8);
+
+    try testing.expectEqual(wanted.len, parsed.len);
+    for (wanted, parsed) |expected, actual| try testing.expectEqualStrings(expected, actual);
+}
+
+/// The rules `CommandLineToArgvW` splits a command line by, as a program that
+/// starts a Windows child would have them applied to what it wrote.
+///
+/// The first argument is its own grammar: a quoted one runs to the next quote
+/// and a bare one to the first space or tab, and a backslash in either is an
+/// ordinary character. In every argument after it a run of backslashes means
+/// something only when a quote follows: `2n` of them are `n` backslashes and
+/// the quote opens or closes a quoted run, `2n + 1` are `n` backslashes and a
+/// literal quote. A space or a tab outside a quoted run ends the argument.
+fn parse(arena: Allocator, line: []const u8) Allocator.Error![]const []const u8 {
+    var argv: std.ArrayList([]const u8) = .empty;
+    var at: usize = 0;
+
+    {
+        var first: std.ArrayList(u8) = .empty;
+        if (at < line.len and line[at] == '"') {
+            at += 1;
+            while (at < line.len and line[at] != '"') : (at += 1) try first.append(arena, line[at]);
+            if (at < line.len) at += 1;
+        } else {
+            while (at < line.len and !isSeparator(line[at])) : (at += 1) try first.append(arena, line[at]);
+        }
+        try argv.append(arena, first.items);
+    }
+
+    while (true) {
+        while (at < line.len and isSeparator(line[at])) at += 1;
+        if (at == line.len) break;
+
+        var argument: std.ArrayList(u8) = .empty;
+        var quoted = false;
+        while (at < line.len) {
+            switch (line[at]) {
+                '\\' => {
+                    var backslashes: usize = 0;
+                    while (at < line.len and line[at] == '\\') : (at += 1) backslashes += 1;
+                    if (at < line.len and line[at] == '"') {
+                        try argument.appendNTimes(arena, '\\', backslashes / 2);
+                        if (backslashes % 2 == 1) {
+                            try argument.append(arena, '"');
+                        } else {
+                            quoted = !quoted;
+                        }
+                        at += 1;
+                    } else {
+                        try argument.appendNTimes(arena, '\\', backslashes);
+                    }
+                },
+                '"' => {
+                    quoted = !quoted;
+                    at += 1;
+                },
+                else => |byte| {
+                    if (!quoted and isSeparator(byte)) break;
+                    try argument.append(arena, byte);
+                    at += 1;
+                },
+            }
+        }
+        try argv.append(arena, argument.items);
+    }
+
+    return argv.items;
+}
+
+fn isSeparator(byte: u8) bool {
+    return byte == ' ' or byte == '\t';
+}

@@ -71,6 +71,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = link_libc,
         .sanitize_thread = if (thread_sanitizer) true else null,
+        // Error return traces off, for `zig build test --fuzz`. The fuzzing
+        // test runner hands `@errorReturnTrace()` to a function that takes the
+        // other `StackTrace` of the two the standard library has, so a test
+        // binary built with `-ffuzz` does not compile while they are on. With
+        // them off the call is comptime-unreachable and the binary builds;
+        // what is lost is the chain of return sites printed under a failure,
+        // and every test here says in its own name what it was asserting.
+        .error_tracing = false,
     });
     test_module.addOptions("conduit_options", conduit_options);
 

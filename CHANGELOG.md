@@ -155,6 +155,15 @@ that the other has not.
   ThreadSanitizer; the handshake between a `Reaper` and the owner of a `Child`
   is the one claim here a race detector can check rather than a reader, and the
   whole suite is clean under it.
+- **Three properties, under a fuzzer.** `zig build test --fuzz` runs the three
+  things here that read bytes this package did not write: the search behind
+  `until` and `untilAny`, which has to report what a search of the whole buffer
+  would however the child's output is cut into arrivals; the `PATH` search,
+  whose every candidate is an entry of it with the program on the end; and the
+  Windows command line, which an argument list has to survive by the rules that
+  parse it back. That last one is arithmetic on quotes and backslashes and no
+  system call at all, so it now lives in `src/command_line.zig` and is compiled
+  and tested on every host rather than on Windows alone.
 
 ### Breaking
 
