@@ -799,12 +799,13 @@ pub const WaitTimeoutError = TryWaitError || std.Io.Cancelable;
 /// and reporting that as "it took too long" would be this call believing its
 /// own deadlock.
 ///
-/// **How it waits.** On POSIX, on a handle the operating system makes ready
-/// the moment the child ends: a `pidfd` on Linux, a kqueue registration on
-/// Darwin and the BSDs. So a child that ends is noticed then and not at the
-/// end of an interval — which used to cost a millisecond and a half on every
-/// wait. Where there is neither, and on Windows, the wait asks again on a
-/// growing interval as it always did. Either way it is a cancelation point.
+/// **How it waits.** On a handle the operating system makes ready the moment
+/// the child ends: a `pidfd` on Linux, a kqueue registration on Darwin and
+/// the BSDs, and the process handle itself on Windows. So a child that ends
+/// is noticed then and not at the end of an interval — which used to cost a
+/// millisecond and a half on every wait. Where there is no such handle, the
+/// wait asks again on a growing interval as it always did. Either way it is
+/// a cancelation point.
 ///
 /// `null` while another task holds the wait for this child -- a `Reaper` --
 /// and it has not published a term by the deadline: the child is not this
@@ -837,6 +838,11 @@ const Deadline = if (is_windows) struct {
     }
 } else wait_for.Deadline;
 
+/// How long one wait on the child's process handle lasts before the caller is
+/// given a chance to notice it has been cancelled. `wait.zig` keeps the same
+/// number for the handles it opens, and is POSIX-only.
+const windows_slice_ms: u32 = 5;
+
 /// Reaps the child if it ends before `deadline`. The caller holds the reap.
 ///
 /// This is the one place a bounded wait is written: `waitTimeout` is it with
@@ -844,6 +850,28 @@ const Deadline = if (is_windows) struct {
 /// used to be the same loop copied out twice.
 fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
     if (try child.tryWaitClaimed()) |term| return term;
+
+    if (is_windows) {
+        // The child's own process handle is signalled the moment it ends, and
+        // `WaitForSingleObject` takes the deadline directly. Asking again on a
+        // sleeping interval instead cost a whole scheduler tick: the shortest
+        // sleep Windows grants is about fifteen milliseconds, so a child that
+        // ended in nine was not noticed until sixteen.
+        while (true) {
+            const left = deadline.remainingMs(io);
+            if (left == 0) break;
+            // A blocking wait on a handle is not a cancelation point, so it is
+            // spent in slices and cancelation is asked about between them.
+            switch (win32.WaitForSingleObject(child.id, @min(left, windows_slice_ms))) {
+                win32.WAIT_TIMEOUT => {},
+                // Ended, or a handle that cannot be waited on: either way the
+                // reap below is what says so.
+                else => break,
+            }
+            try std.Io.checkCancel(io);
+        }
+        return child.tryWaitClaimed();
+    }
 
     if (!is_windows) {
         if (wait_for.Watch.open(child.id)) |watch| {
