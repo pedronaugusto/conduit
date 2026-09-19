@@ -49,10 +49,15 @@ that the other has not.
 - **Two close-on-exec windows closed.** A pipe and the null device were opened
   and then marked close-on-exec by a second call, and in the gap between the
   two a `fork` on another thread hands the descriptor to a child that has
-  nothing to do with it. `pipe2` carries the flag where the system has it and
-  `O_CLOEXEC` carries it in the null device's open everywhere. Darwin has no
-  `pipe2` and keeps that one gap; the master of a pair keeps its own, which
-  `posix_openpt` has no flag to close and which `Pty.open` already documented.
+  nothing to do with it — which then holds it open for as long as it lives,
+  with whatever is reading the far end waiting for an end of file that will not
+  come. `pipe2` carries the flag where the system has it and `O_CLOEXEC`
+  carries it in the null device's open everywhere. Darwin has no `pipe2`, so
+  there this package holds its own pipe-making and its own spawning apart
+  instead; a `fork` elsewhere in the program can still land in that gap, and
+  nothing a library holds would stop it. The master of a pair keeps its own
+  window, which `posix_openpt` has no flag to close and which `Pty.open`
+  already documented.
 - **Windows left the caller's handles inheritable.** A handle a child is to
   inherit has to be marked inheritable, which is the only way to say so about
   one somebody else opened, and the flag was never cleared again — so a

@@ -264,6 +264,17 @@ number the attribute flags differently and keep the fork. `zig build test
 close-on-exec, so a pair held open while an unrelated child starts is not
 handed to it.
 
+**A descriptor this package opens is close-on-exec from the call that opens
+it**, where the system has a call that says so — `pipe2`, `O_CLOEXEC`,
+`F_DUPFD_CLOEXEC`. Where it has not, the flag is a second call, and between the
+two a child started on another thread would inherit a descriptor that has
+nothing to do with it; on Darwin, which has no `pipe2`, this package's own
+spawns and its own pipe-making are held apart so that they cannot overlap. A
+`fork` elsewhere in the program still can, and `Pty.open` marks the master in a
+second call for want of a flag to pass `posix_openpt`. A descriptor the
+*caller* opened without the flag is the caller's, and `fd_policy` is how to
+say the child should not have it.
+
 **Allocation.** `Child.spawn` and `spawnShell` take an allocator, use it for the
 call only — the argument, environment and search-path arrays that must exist
 before the child does — and retain nothing. `Child.output` allocates the bytes

@@ -85,7 +85,12 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // work per spawn. It answers `null` for a set of descriptors it cannot
     // describe, and then this falls through to the fork below.
     if (posix_spawn.suits(options)) {
-        if (try posix_spawn.spawn(plan.child, candidates, argv.ptr, envp, options)) |pid| {
+        const started_child = child: {
+            handles.ForkGap.startingAChild();
+            defer handles.ForkGap.release();
+            break :child try posix_spawn.spawn(plan.child, candidates, argv.ptr, envp, options);
+        };
+        if (started_child) |pid| {
             plan.closeChildSide(io);
             return started(pid, &plan, options);
         }
@@ -96,7 +101,15 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // parent's read below returns end of file instead of a record.
     const report = try makePipe();
 
+    handles.ForkGap.startingAChild();
     const pid = c.fork();
+    if (pid == 0) {
+        // The child inherits the lock as held, and the only thing it does with
+        // it is not touch it: it runs a handful of system calls and execs.
+        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1]);
+    }
+    handles.ForkGap.release();
+
     if (pid < 0) {
         file(report[0]).close(io);
         file(report[1]).close(io);
@@ -106,8 +119,6 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             else => |err| return posix.unexpectedErrno(err),
         }
     }
-    if (pid == 0) childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1]);
-
     file(report[1]).close(io);
     plan.closeChildSide(io);
 
@@ -488,6 +499,11 @@ fn openNullDevice() SpawnError!posix.fd_t {
 fn makePipe() SpawnError![2]posix.fd_t {
     var ends: [2]posix.fd_t = undefined;
     const failed = if (@TypeOf(c.pipe2) == void) failed: {
+        // No `pipe2` here, so the flag is a second call and there is a gap
+        // between the two. `ForkGap` is what keeps this package's own spawns
+        // out of it.
+        handles.ForkGap.openingDescriptors();
+        defer handles.ForkGap.release();
         const rc = c.pipe(&ends);
         if (rc == 0) {
             handles.setCloseOnExec(ends[0]);
