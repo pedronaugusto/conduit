@@ -430,6 +430,50 @@ test "Reaper.exit becomes non-null once the child has ended" {
     try testing.expectEqual(term, try child.wait(io));
 }
 
+test "killWait is legal while a Reaper is waiting, and the two share one reap" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    // The sequence the documentation used to forbid and now allows: a wait in
+    // flight on a task of its own, `exit` asked and answering null, and then
+    // the owner deciding the child has had long enough. Two reaps of one child
+    // are one status and one error about a child nobody can account for, so
+    // what this asserts is that only one of them happened.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .detach = true,
+    });
+    defer child.deinit(io);
+
+    var reaper: conduit.Reaper = .init(&child);
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    // Confirmed running: `exit` is null while the wait is in flight.
+    try std.Io.sleep(io, .fromMilliseconds(50), .awake);
+    try testing.expectEqual(@as(?Child.Term, null), reaper.exit());
+
+    // No grace, so this is the shortest form of the sequence: the signal
+    // nothing survives, and then a wait -- while another task is already
+    // inside one. Two waits on one child are one status and one error about a
+    // child nobody can account for.
+    const term = try child.killWait(io, 0);
+    try testing.expect(!conduit.succeeded(term));
+
+    // The same term, by both routes, and nothing left to reap: a second wait
+    // answers from what was published rather than asking the system again.
+    var waited: u32 = 0;
+    const reaped = while (waited < budget_ms) : (waited += 1) {
+        if (reaper.exit()) |t| break t;
+        try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+    } else return error.TestChildDidNotExit;
+    try testing.expectEqual(term, reaped);
+    try testing.expectEqual(term, try child.wait(io));
+    try testing.expectEqual(@as(?Child.Term, term), try child.tryWait());
+}
+
 test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);

@@ -10,8 +10,8 @@
 //!
 //! Lifetime rules, all of them:
 //!
-//! * The `Child` must outlive the `Reaper`, and nothing else may wait on,
-//!   reap or destroy it while the `Reaper` is running.
+//! * The `Child` must outlive the `Reaper`, and must not be destroyed while
+//!   the `Reaper` is running.
 //! * A `Reaper` must not be copied or moved once `start` has been called: the
 //!   running task holds a pointer to it.
 //! * `deinit` must be called before the `Reaper` goes out of scope, including
@@ -20,6 +20,15 @@
 //! * After `exit` returns non-null, the child has been reaped. `Child.wait`
 //!   and `Child.tryWait` keep returning the same term, and `Child.kill` does
 //!   nothing.
+//!
+//! The owner may go on calling `Child.kill`, `Child.killWait`, `Child.wait`
+//! and `Child.tryWait` while this runs, which is the sequence the whole thing
+//! exists for: ask `exit`, get `null`, and decide the child has had long
+//! enough. Only one of them is inside the operating system's wait at a time,
+//! and the one that is publishes the term to the rest — so `tryWait` answers
+//! `null` while this holds the wait, and `killWait` returns the term this
+//! task reaped rather than asking for a second one. `Child.term` documents
+//! the handshake.
 
 const Reaper = @This();
 

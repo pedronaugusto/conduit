@@ -6,10 +6,12 @@
 //! caller when the caller supplied them (`.pty`, `stderr_to`); `deinit` closes
 //! only the former.
 //!
-//! Nothing here is thread-safe. One task at a time may call the methods of a
-//! given `Child`; `Reaper` is the supported way to have a wait in flight while
-//! another task does something else, and `output` is the supported way to read
-//! two streams at once.
+//! One task at a time may call the methods of a given `Child`, with one
+//! exception that is the whole point of `Reaper`: a wait may be in flight on
+//! another task while the owner calls `kill`, `killWait`, `wait` or `tryWait`.
+//! Exactly one of them is inside the operating system's wait at a time and it
+//! publishes the term to the others, so the child is reaped once however many
+//! ask. `output` is the supported way to read two streams at once.
 //!
 //! # The two platforms
 //!
@@ -90,7 +92,26 @@ stderr: ?std.Io.File,
 pty: ?Pty.Master,
 /// How the child ended, once it has been reaped. While this is `null` the
 /// child is still a process the operating system knows about.
+///
+/// Written once, by whichever call reaps the child, and published through
+/// `reaped`. **Read it with `tryWait`**, which does that load: a `Reaper` may
+/// be the one that writes it, and a plain read of the field from another task
+/// is then a race on a value that is not a single word.
 term: ?Term,
+/// Whether `term` has been written and may be read.
+///
+/// Stored with release ordering after `term`, and loaded with acquire
+/// ordering before every read of it, so that a task which sees a term sees
+/// the whole of it. That pairing is what makes `Reaper` legal alongside
+/// `kill`, `killWait` and `tryWait` on the same `Child`.
+reaped: std.atomic.Value(bool) = .init(false),
+/// Whether some task is inside the operating system's wait for this child.
+///
+/// Exactly one may be: two waits on one child are one status and one `ECHILD`,
+/// and the second is a child nobody can account for. Whoever does not take
+/// this reads the answer the one who did publishes — `tryWait` by saying the
+/// child is still running, `wait` by waiting for the answer to appear.
+reaping: std.atomic.Value(bool) = .init(false),
 
 /// How a child process ended.
 ///
@@ -589,7 +610,14 @@ pub const WaitError = std.process.Child.WaitError;
 /// this that reads and waits at once, and `Proxy` is the version that keeps
 /// reading.
 pub fn wait(child: *Child, io: std.Io) WaitError!Term {
-    if (child.term) |term| return term;
+    if (child.settled()) |term| return term;
+    // Another task is already inside the wait -- a `Reaper`, in practice. It
+    // will publish the term, and a second wait on the same child would only
+    // take the status away from it.
+    if (!child.claimReap()) return child.awaitSettled(io);
+    defer child.releaseReap();
+    if (child.settled()) |term| return term;
+
     var proc: std.process.Child = .{
         .id = child.id,
         .thread_handle = child.thread,
@@ -601,10 +629,53 @@ pub fn wait(child: *Child, io: std.Io) WaitError!Term {
     const term = try proc.wait(io);
     // The standard library's Windows wait closes the process and thread
     // handles as part of reaping. Recording that here is what keeps `deinit`
-    // from closing them a second time.
+    // from closing them a second time, and it is written before the publish
+    // below so that whoever reads the term reads this too.
     if (is_windows) child.handles_open = false;
-    child.term = term;
+    child.publish(term);
     return term;
+}
+
+//======================================================================
+// One reap, whoever asks for it.
+//======================================================================
+
+/// The term, if whoever reaped the child has published it.
+///
+/// The acquire load pairs with the release store in `publish`, so a caller
+/// that sees a term sees every field the reaper wrote before it.
+fn settled(child: *const Child) ?Term {
+    if (!child.reaped.load(.acquire)) return null;
+    return child.term;
+}
+
+/// Records how the child ended and lets everyone else read it.
+fn publish(child: *Child, term: Term) void {
+    child.term = term;
+    child.reaped.store(true, .release);
+}
+
+/// Takes the right to be inside the operating system's wait for this child.
+fn claimReap(child: *Child) bool {
+    return child.reaping.cmpxchgStrong(false, true, .acquire, .monotonic) == null;
+}
+
+fn releaseReap(child: *Child) void {
+    child.reaping.store(false, .release);
+}
+
+/// Waits for whoever holds the reap to publish the term.
+///
+/// The rare path: it is reached only when a second task asks for a blocking
+/// wait while a `Reaper` is in one. The one in flight is blocked in the
+/// operating system's own wait, so this ends when the child does.
+fn awaitSettled(child: *Child, io: std.Io) std.Io.Cancelable!Term {
+    var interval_ms: u32 = 1;
+    while (true) {
+        if (child.settled()) |term| return term;
+        try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
+        interval_ms = @min(interval_ms * 2, 4);
+    }
 }
 
 pub const WaitTimeoutError = TryWaitError || std.Io.Cancelable;
@@ -637,13 +708,36 @@ pub fn waitTimeout(child: *Child, io: std.Io, timeout_ms: u32) WaitTimeoutError!
     }
 }
 
-pub const TryWaitError = std.Io.UnexpectedError;
+pub const TryWaitError = error{
+    /// Something outside this package reaped the child, so there is no status
+    /// left for anyone to report: a `SIGCHLD` handler of the program's own, or
+    /// `SIGCHLD` set to `SIG_IGN`, which is the program telling the system to
+    /// reap its children for it. POSIX only.
+    ///
+    /// This package has to be the one that reaps, and once it is not, the
+    /// child is gone and how it ended cannot be recovered.
+    ReapedElsewhere,
+} || std.Io.UnexpectedError;
 
 /// Reaps the child if it has already ended, and returns `null` if it has not.
 ///
 /// Never blocks. Once this has returned a term, `wait` returns the same one.
+///
+/// `null` while a `Reaper` — or any other task — is inside the wait for this
+/// child, whether or not the child has ended by then: the task that holds the
+/// wait is the one that reaps, and this answers from the term it publishes as
+/// soon as there is one. A `null` was always a snapshot; that is the one case
+/// where it can be a moment out of date.
 pub fn tryWait(child: *Child) TryWaitError!?Term {
-    if (child.term) |term| return term;
+    if (child.settled()) |term| return term;
+    // Another task is inside the wait. The child is still running as far as
+    // anything that has not been told otherwise is concerned, and taking the
+    // status out from under the wait in flight is the one thing that must not
+    // happen here.
+    if (!child.claimReap()) return null;
+    defer child.releaseReap();
+    if (child.settled()) |term| return term;
+
     if (is_windows) return child.tryWaitWindows();
 
     var status: c_int = undefined;
@@ -652,15 +746,12 @@ pub fn tryWait(child: *Child) TryWaitError!?Term {
         if (rc == 0) return null;
         if (rc > 0) {
             const term = statusToTerm(@bitCast(status));
-            child.term = term;
+            child.publish(term);
             return term;
         }
         switch (c.errno(rc)) {
             .INTR => continue,
-            // `ECHILD` here means something else reaped this child -- a
-            // `SIGCHLD` handler in the program, most likely. This package has
-            // to be the one that reaps, and once it is not, there is no term
-            // left for anyone to report.
+            .CHILD => return error.ReapedElsewhere,
             else => |err| return posix.unexpectedErrno(err),
         }
     }
@@ -739,7 +830,7 @@ pub const KillError = error{
 /// This does not wait. The child is still a process, and still needs reaping,
 /// when this returns.
 pub fn kill(child: *Child, signal: Signal) KillError!void {
-    if (child.term != null) return;
+    if (child.settled() != null) return;
     if (is_windows) return child.killWindows(signal);
 
     const target: posix.pid_t = if (child.pgid) |pgid| -pgid else child.id;
@@ -1100,7 +1191,7 @@ fn tryWaitWindows(child: *Child) TryWaitError!?Term {
     else
         .{ .unknown = 0 };
     child.closeHandles();
-    child.term = term;
+    child.publish(term);
     return term;
 }
 
