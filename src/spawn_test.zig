@@ -21,6 +21,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const posix = std.posix;
+const c = std.c;
 
 const conduit = @import("conduit.zig");
 const Child = conduit.Child;
@@ -1461,3 +1462,124 @@ fn childId(child: Child) usize {
 /// exactly what it reports. Never referenced on Windows, where those tests
 /// skip, so the declaration costs nothing there.
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
+
+//======================================================================
+// Descriptor placement.
+//======================================================================
+
+test "a stream whose file is a descriptor an earlier stream overwrites still gets its own file" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // POSIX only: the claim is about the order `dup2` puts descriptors in, and
+    // Windows hands the child three named handles with no numbering to clash.
+    if (is_windows) return error.SkipZigTest;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The caller's file is put on descriptor 0, which is also where the
+    // child's own standard input is about to go. A placement that walks 0, 1,
+    // 2 in order overwrites descriptor 0 before it reads it, and the child's
+    // standard output ends up on whatever landed there instead.
+    var sink = try tmp.dir.createFile(io, "out", .{});
+    defer sink.close(io);
+
+    var borrowed: BorrowedDescriptor = try .take(0, sink);
+    defer borrowed.restore();
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'on the caller-supplied file'" },
+        .stdio = .{ .streams = .{
+            .stdin = .ignore,
+            .stdout = .{ .file = .{ .handle = 0, .flags = .{ .nonblocking = false } } },
+            .stderr = .ignore,
+        } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+
+    var contents: [64]u8 = undefined;
+    const written = try tmp.dir.readFile(io, "out", &contents);
+    try testing.expectEqualStrings("on the caller-supplied file", written);
+}
+
+test "two streams whose files are each other's descriptors are not crossed" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // One file on descriptor 1 and another on descriptor 2, handed to the
+    // child crossed over: its standard output is the file this process holds
+    // at 2, its standard error the file this process holds at 1. Placing them
+    // in descriptor order destroys one before it is read.
+    var first = try tmp.dir.createFile(io, "one", .{});
+    defer first.close(io);
+    var second = try tmp.dir.createFile(io, "two", .{});
+    defer second.close(io);
+
+    var borrowed_out: BorrowedDescriptor = try .take(1, first);
+    defer borrowed_out.restore();
+    var borrowed_err: BorrowedDescriptor = try .take(2, second);
+    defer borrowed_err.restore();
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'out' >&1; printf 'err' >&2" },
+        .stdio = .{ .streams = .{
+            .stdin = .ignore,
+            .stdout = .{ .file = .{ .handle = 2, .flags = .{ .nonblocking = false } } },
+            .stderr = .{ .file = .{ .handle = 1, .flags = .{ .nonblocking = false } } },
+        } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    const term = try waitWithin(&child);
+
+    // Back before anything is printed: a failure below has to be able to
+    // reach the test runner's own standard error.
+    borrowed_out.restore();
+    borrowed_err.restore();
+    try testing.expectEqual(Child.Term{ .exited = 0 }, term);
+
+    var contents: [64]u8 = undefined;
+    try testing.expectEqualStrings("err", try tmp.dir.readFile(io, "one", &contents));
+    try testing.expectEqualStrings("out", try tmp.dir.readFile(io, "two", &contents));
+}
+
+/// One of this process's own standard descriptors, borrowed for the length of
+/// a test and put back afterwards.
+///
+/// The two tests above are about what the child finds at descriptors 0, 1 and
+/// 2, which means the caller's file has to *be* at one of those numbers. So
+/// the number is borrowed: the original is copied out of the way above 2, the
+/// file is put in its place, and `restore` undoes both. `restore` is
+/// idempotent, so a test may put a descriptor back before it starts printing
+/// and still leave the `defer` in place.
+const BorrowedDescriptor = struct {
+    number: posix.fd_t,
+    saved: ?posix.fd_t,
+
+    fn take(number: posix.fd_t, file: std.Io.File) !BorrowedDescriptor {
+        const copy = c.fcntl(number, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+        if (copy < 0) return error.TestUnexpectedResult;
+        const borrowed: BorrowedDescriptor = .{ .number = number, .saved = @intCast(copy) };
+        if (c.dup2(file.handle, number) < 0) {
+            var mutable = borrowed;
+            mutable.restore();
+            return error.TestUnexpectedResult;
+        }
+        return borrowed;
+    }
+
+    fn restore(borrowed: *BorrowedDescriptor) void {
+        const saved = borrowed.saved orelse return;
+        borrowed.saved = null;
+        _ = c.dup2(saved, borrowed.number);
+        _ = c.close(saved);
+    }
+};

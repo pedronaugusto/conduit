@@ -323,7 +323,28 @@ fn childMain(
         }
     }
 
-    for (plan.child, 0..) |target, slot| switch (target) {
+    // A descriptor the caller handed over may itself be one of the three
+    // numbers about to be written. Placing 0, 1 and 2 in order would then read
+    // a number an earlier `dup2` had already overwritten -- `.stdout` given
+    // the file this process holds at 1 and `.stderr` given the one at 2, say,
+    // crossed over -- and the child would silently get one of them twice. Any
+    // source below the slot it serves is therefore copied out of the way
+    // first, above 2, before a single placement happens. A source at or above
+    // its own slot needs no copy: the placements run in increasing order, so
+    // nothing has touched it yet.
+    var placement = plan.child;
+    for (&placement, 0..) |*target, slot| switch (target.*) {
+        .place => |fd| if (fd < @as(posix.fd_t, @intCast(slot))) {
+            // Close-on-exec: the copy exists only to be `dup2`'d from, and
+            // `dup2` clears the flag on the descriptor it writes.
+            const moved = c.fcntl(fd, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+            if (moved < 0) bail(report, .descriptors);
+            target.* = .{ .place = @intCast(moved) };
+        },
+        else => {},
+    };
+
+    for (placement, 0..) |target, slot| switch (target) {
         .keep => {},
         .place => |fd| if (!place(fd, @intCast(slot))) bail(report, .descriptors),
         // A close that finds nothing there is not a failure of the spawn: the
