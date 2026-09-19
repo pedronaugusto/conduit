@@ -85,7 +85,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.term` | How it ended, once something reaped it. Written by whichever call did and published through an atomic, so `tryWait` is how to read it while a `Reaper` runs. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
-| `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`. The process group of a detached child, the child alone otherwise. |
+| `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. `.interrupt` without a group is `error.Unsupported`, there being nothing honest to fall back to. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
@@ -119,7 +119,9 @@ process holds: `.close_on_exec`, the default, which is whatever close-on-exec
 allows, or `.close_all`, which closes every one of them in the child whatever
 its flags say — `close_range` on Linux, a loop elsewhere. On Windows a child is
 given the handles named in an attribute list and nothing else, so both values
-mean the same thing there.
+mean the same thing there; the exception is a child being handed one of this
+process's console handles, which such a list may not name, and which therefore
+inherits the way a Windows child always did.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
 `std.posix.rlimit_resource` and `std.posix.rlimit` pairs. Both are set in the
@@ -147,7 +149,8 @@ starts* rather than the one process. Windows only; anywhere else it is
 | `expect.pending(io)`, `expect.discard(io)` | What has arrived and no pattern has matched; and forgetting it. |
 
 A wait ends in `error.Timeout`, `error.EndOfStream`, `error.BufferFull` or
-`error.ReadFailed`.
+`error.ReadFailed`, and — like every call here that can be in flight — in
+`error.Canceled`.
 
 ### `conduit.environ` — a child's environment
 
@@ -159,7 +162,10 @@ child that should not see an agent socket or a token. A child with no `PATH` is
 also one a bare `argv[0]` cannot be found for, so `path_search` says which
 `PATH` resolves the program: `.child_environ` (the default, what a shell does),
 `.parent_environ` (what `std.process.spawn` does, and what a scrubbed
-environment wants) or `.none`.
+environment wants) or `.none`. Windows resolves the program inside
+`CreateProcessW`, from the environment the child is being given, so
+`.child_environ` is the only one of the three it can honour and the other two
+are `error.Unsupported` there.
 
 ### `spawnShell`, `Reaper`, `Proxy`
 
@@ -225,7 +231,11 @@ called when the program is done. `spawnShell` absorbs that.
 this process holds the other end of, and both `ResizePseudoConsole` and
 `ClosePseudoConsole` wait for the host, so a program that has stopped reading
 can block in either. The pipes have room for a repaint of a large window, and
-`Pty.close` drops the master ends first so the host's last write fails instead.
+`Pty.close` reads the master itself: a drain on a task of its own, started
+before the console is closed and joined after, which the host's exit ends. The
+terminal end goes first either way; only a `std.Io` with no task to give drops
+the master ends first instead, so that the host's last write fails rather than
+waits.
 
 **`kill` and `killWait` reach what the child started.** On Windows every child
 goes in a job object of its own before it runs — started suspended, assigned,
@@ -335,7 +345,9 @@ Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 architectures, FreeBSD and NetBSD.
 
 Tests whose claim is POSIX-only — a controlling terminal, `getpgid`, Ctrl-C
-becoming `SIGINT`, `stty size` — say so and skip elsewhere. On Windows the
+becoming `SIGINT`, `stty size` — say so and skip elsewhere, and so do the ones
+whose claim is Windows-only: a job object holding a tree, a handle's
+inheritance flag, a console option the system may decline. On Windows the
 program is resolved by `CreateProcessW`, which searches the application
 directory, the current directory, the system directories and `PATH` and appends
 `.exe`; `PATHEXT` is not searched.

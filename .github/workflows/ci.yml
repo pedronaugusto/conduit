@@ -110,12 +110,13 @@ jobs:
         timeout-minutes: 4
         run: zig build unit -Doptimize=Debug "-Dtest-filter=Pty.test" --test-timeout 45s --summary all
 
-      - name: Debug — Child, Reaper, tty, environ, shell
+      - name: Debug — Child, Reaper, Proxy, tty, environ, shell
         timeout-minutes: 4
         run: >
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=Child.test" "-Dtest-filter=child_windows.test"
-          "-Dtest-filter=Reaper.test" "-Dtest-filter=tty.test"
+          "-Dtest-filter=Reaper.test" "-Dtest-filter=Proxy.test"
+          "-Dtest-filter=tty.test"
           "-Dtest-filter=environ.test" "-Dtest-filter=shell.test"
 
       - name: Debug — Expect
@@ -128,7 +129,8 @@ jobs:
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=a child on pipes" "-Dtest-filter=max_bytes"
           "-Dtest-filter=gives up on a child" "-Dtest-filter=tryWait is null"
-          "-Dtest-filter=Reaper.exit"
+          "-Dtest-filter=Reaper.exit" "-Dtest-filter=legal while a Reaper"
+          "-Dtest-filter=Reaper was cancelled" "-Dtest-filter=waitTimeout costs"
 
       - name: Debug — spawn, streams and half-close
         timeout-minutes: 4
