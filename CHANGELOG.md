@@ -1,69 +1,25 @@
 # Changelog
 
-Each entry says what the release makes possible, so a reader has the reason and
-not only the diff. Versions follow [semantic versioning](https://semver.org);
-before 1.0 the minor is the breaking one.
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
-
-## 0.4.0
+## [0.4.0] - 2026-09-19
 
 Three faults a caller could not have seen coming, two waits that were a clock
 rather than the operating system, and the options the two systems each have
 that the other has not.
 
-### Fixed
+### Breaking
 
-- **A caller's file could arrive on the wrong stream, silently.** The child's
-  descriptors were placed at 0, 1 and 2 in that order, with no check that one
-  of them was also a number a later placement would read — so
-  `.stdout = .{ .file = <the file at 2> }` beside
-  `.stderr = .{ .file = <the file at 1> }` gave the child the same stream
-  twice, and nothing anywhere said so. Any source below the slot it serves is
-  copied out of the way first, close-on-exec, before a single placement
-  happens.
-- **A `Reaper` and the owner's `killWait` raced for one child.** `Reaper` waits
-  through `Child.wait` and `killWait` reaps through `tryWait`, and both wrote
-  `Child.term`: a data race on a value that is not a single word, and two
-  `wait4` calls on one child, which is one status and one `ECHILD`. The
-  sequence a `Reaper` exists for — ask `exit`, get `null`, decide the child has
-  had long enough — ended a Debug build every time. The right to be inside the
-  system's wait is now taken with an atomic and the term is published with a
-  release store that every read acquires; a caller who does not get the wait
-  reads the answer instead. `killWait`, `kill`, `wait` and `tryWait` are all
-  legal while a `Reaper` runs, and the child is reaped once.
-- **A grandchild could survive `kill` and `killWait` on POSIX.** A signal to a
-  process group misses a descendant that gave itself a group of its own with
-  `setsid` or `setpgid`, and `kill(-pgid)` is not atomic against a `fork`
-  inside the group — one of a hundred and fifty scratch grandchildren survived
-  a `killWait` with no grace. `kill` now asks the system who the descendants of
-  the child are and signals them deepest first, before the child itself, so
-  that nothing is orphaned on the way down; `.kill` asks again until a pass
-  names nothing, which is what catches a process started while the first signal
-  was landing. `Child.kill` and the README state the guarantee per system: the
-  children of a process are named by `/proc/<pid>/task/<tid>/children` on Linux
-  and by `proc_listchildpids` on Darwin, and on the BSDs and illumos, which
-  name them only through the whole process table, the process group is the
-  reach it always was. A process that has *both* left the group and been
-  orphaned before anything looked is reached by no system.
-- **Two close-on-exec windows closed.** A pipe and the null device were opened
-  and then marked close-on-exec by a second call, and in the gap between the
-  two a `fork` on another thread hands the descriptor to a child that has
-  nothing to do with it — which then holds it open for as long as it lives,
-  with whatever is reading the far end waiting for an end of file that will not
-  come. `pipe2` carries the flag where the system has it and `O_CLOEXEC`
-  carries it in the null device's open everywhere. Darwin has no `pipe2`, so
-  there this package holds its own pipe-making and its own spawning apart
-  instead; a `fork` elsewhere in the program can still land in that gap, and
-  nothing a library holds would stop it. The master of a pair keeps its own
-  window, which `posix_openpt` has no flag to close and which `Pty.open`
-  already documented.
-- **Windows left the caller's handles inheritable.** A handle a child is to
-  inherit has to be marked inheritable, which is the only way to say so about
-  one somebody else opened, and the flag was never cleared again — so a
-  concurrent spawn elsewhere in the process inherited the caller's files and
-  the parent's own standard handles. What each handle had is remembered and put
-  back, on the success path and on every failure path alike.
+- `Child.TryWaitError` has a new member, `ReapedElsewhere`. A caller that
+  switched over it exhaustively has one more arm to write.
+- `Expect.Match` has a new field, `index`, which `untilAny` sets and `until`
+  leaves at zero. A caller constructing one by literal has one more field.
+- `Child` has four new fields: `reaped` and `reaping`, which have defaults, and
+  `job_port` and `tree_ended`, which do not and are `void` off Windows. A
+  `Child` comes from `spawn`, so this reaches only code that built one by hand.
+- `Pty` has a new field, `console`, which is `void` on POSIX.
 
 ### Added
 
@@ -126,14 +82,14 @@ that the other has not.
   ready the moment the process ends: a `pidfd` on Linux, a kqueue registration
   for `EVFILT_PROC`/`NOTE_EXIT` on Darwin and the BSDs. An old kernel that has
   neither says so and the interval is asked again as before. Measured here on
-  `/bin/sh -c 'exit 0'`, fifty runs: a blocking `wait` 2.80 ms, `waitTimeout`
-  4.34 ms before and 2.71 ms after.
+  `/bin/sh -c 'exit 0'`: a blocking `wait` 2.80 ms, `waitTimeout` 4.34 ms
+  before and 2.71 ms after.
 - **A spawn that needs nothing done between the fork and the exec is handed to
   `posix_spawn`.** `fork` copies a process's page tables and the cost grows
   with what the parent has mapped; `posix_spawn` describes the child with file
   actions and attributes instead. Measured here over a thousand spawns of
-  `/usr/bin/true` on the null device: 1304 µs a spawn through `fork` and
-  `execve`, 902 µs through `posix_spawn`. Everything that can only be done in
+  `/usr/bin/true` on the null device: 1336 µs a spawn through `fork` and
+  `execve`, 946 µs through `posix_spawn`. Everything that can only be done in
   a fork child sends the spawn back to it — a pseudo-terminal, `credentials`,
   `resource_limits`, `cwd`, `Stream.close`, a caller's file at descriptor 0, 1
   or 2, and `fd_policy = .close_all` — and the child is the same child either
@@ -153,8 +109,8 @@ that the other has not.
   that path is a second implementation of one contract and running both is what
   says they make the same child. `-Dthread-sanitizer` builds the tests with
   ThreadSanitizer; the handshake between a `Reaper` and the owner of a `Child`
-  is the one claim here a race detector can check rather than a reader, and the
-  whole suite is clean under it.
+  is the one thing here a race detector can check rather than a reader, and the
+  suite runs clean under it.
 - **Three properties, under a fuzzer.** `zig build test --fuzz` runs the three
   things here that read bytes this package did not write: the search behind
   `until` and `untilAny`, which has to report what a search of the whole buffer
@@ -165,18 +121,59 @@ that the other has not.
   system call at all, so it now lives in `src/command_line.zig` and is compiled
   and tested on every host rather than on Windows alone.
 
-### Breaking
+### Fixed
 
-- `Child.TryWaitError` has a new member, `ReapedElsewhere`. A caller that
-  switched over it exhaustively has one more arm to write.
-- `Expect.Match` has a new field, `index`, which `untilAny` sets and `until`
-  leaves at zero. A caller constructing one by literal has one more field.
-- `Child` has four new fields: `reaped` and `reaping`, which have defaults, and
-  `job_port` and `tree_ended`, which do not and are `void` off Windows. A
-  `Child` comes from `spawn`, so this reaches only code that built one by hand.
-- `Pty` has a new field, `console`, which is `void` on POSIX.
+- **A caller's file could arrive on the wrong stream, silently.** The child's
+  descriptors were placed at 0, 1 and 2 in that order, with no check that one
+  of them was also a number a later placement would read — so
+  `.stdout = .{ .file = <the file at 2> }` beside
+  `.stderr = .{ .file = <the file at 1> }` gave the child the same stream
+  twice, and nothing anywhere said so. Any source below the slot it serves is
+  copied out of the way first, close-on-exec, before a single placement
+  happens.
+- **A `Reaper` and the owner's `killWait` raced for one child.** `Reaper` waits
+  through `Child.wait` and `killWait` reaps through `tryWait`, and both wrote
+  `Child.term`: a data race on a value that is not a single word, and two
+  `wait4` calls on one child, which is one status and one `ECHILD`. The
+  sequence a `Reaper` exists for — ask `exit`, get `null`, decide the child has
+  had long enough — ended a Debug build every time. The right to be inside the
+  system's wait is now taken with an atomic and the term is published with a
+  release store that every read acquires; a caller who does not get the wait
+  reads the answer instead. `killWait`, `kill`, `wait` and `tryWait` are all
+  legal while a `Reaper` runs, and the child is reaped once.
+- **A grandchild could survive `kill` and `killWait` on POSIX.** A signal to a
+  process group misses a descendant that gave itself a group of its own with
+  `setsid` or `setpgid`, and `kill(-pgid)` is not atomic against a `fork`
+  inside the group — a scratch grandchild survived a `killWait` with no grace. `kill` now asks the system who the descendants of
+  the child are and signals them deepest first, before the child itself, so
+  that nothing is orphaned on the way down; `.kill` asks again until a pass
+  names nothing, which is what catches a process started while the first signal
+  was landing. `Child.kill` and the README state the guarantee per system: the
+  children of a process are named by `/proc/<pid>/task/<tid>/children` on Linux
+  and by `proc_listchildpids` on Darwin, and on the BSDs and illumos, which
+  name them only through the whole process table, the process group is the
+  reach it always was. A process that has *both* left the group and been
+  orphaned before anything looked is reached by no system.
+- **Two close-on-exec windows closed.** A pipe and the null device were opened
+  and then marked close-on-exec by a second call, and in the gap between the
+  two a `fork` on another thread hands the descriptor to a child that has
+  nothing to do with it — which then holds it open for as long as it lives,
+  with whatever is reading the far end waiting for an end of file that will not
+  come. `pipe2` carries the flag where the system has it and `O_CLOEXEC`
+  carries it in the null device's open everywhere. Darwin has no `pipe2`, so
+  there this package holds its own pipe-making and its own spawning apart
+  instead; a `fork` elsewhere in the program can still land in that gap, and
+  nothing a library holds would stop it. The master of a pair keeps its own
+  window, which `posix_openpt` has no flag to close and which `Pty.open`
+  already documented.
+- **Windows left the caller's handles inheritable.** A handle a child is to
+  inherit has to be marked inheritable, which is the only way to say so about
+  one somebody else opened, and the flag was never cleared again — so a
+  concurrent spawn elsewhere in the process inherited the caller's files and
+  the parent's own standard handles. What each handle had is remembered and put
+  back, on the success path and on every failure path alike.
 
-## 0.3.2
+## [0.3.2] - 2026-09-14
 
 Four Windows faults that 0.3.1 shipped, and three of them the same one: a wait
 with no end.
@@ -216,90 +213,7 @@ with no end.
   value longer than that is declined rather than truncated — the fall-back
   shell is used instead.
 
-## 0.3.1
-
-### Fixed
-
-- **Three places asked a Windows value for a name it did not have.** A
-  non-exhaustive enum holding a number nobody named has no name to give, and
-  asking for one ends the process rather than returning an answer. A Windows
-  `BOOL` names only `FALSE` — `TRUE` is a declaration, not a tag — so the
-  trace naming one crashed every spawn that was not on a pseudoconsole, with
-  the trace switched off, because a call's arguments are worked out before the
-  call. `conduit.signalName` had the same shape for a real-time signal, which
-  is a number and nothing else; it answers `null` there now, and the number is
-  in the `Term` either way. And an unmapped `GetLastError` went to the standard
-  library's reporter, which prints the code by name in a Debug build: a library
-  must not end a program over a failure it was about to return, so the number
-  is printed instead.
-- **A child on a pseudoconsole wrote to the parent's pipes instead of its
-  terminal**, everywhere the parent's own standard streams were pipes rather
-  than console handles — which is every program a build system, a service or a
-  test harness starts. `CreateProcessW` duplicates the parent's standard
-  handles into the child as a special case when they are not console handles,
-  even with `bInheritHandles` false, so the child was attached to the
-  pseudoconsole and talking past it. From a terminal it looked right, because
-  console handles are not duplicated and the child falls back to the console it
-  has. A `.pty` spawn now sets `STARTF_USESTDHANDLES` with all three handles
-  null, which is how a child is given none and made to use the console it is
-  attached to. Naming a real handle beside a pseudoconsole is still refused —
-  that is the combination Windows documents as unsupported, and it is why
-  `stderr_to` with `.pty` is `error.Unsupported`.
-- **`spawnShell` read the environment by walking the process environment block
-  under the loader's lock.** The standard library's Windows lookup asserts
-  something about every entry it passes on the way, so a single odd entry in a
-  large environment would end the process from inside a lock, where the panic
-  itself has nowhere to go. It is `GetEnvironmentVariableW` now: one call,
-  which is also what the trace uses.
-- **`error.BadWorkingDirectory` meant what it says only on POSIX.**
-  `CreateProcessW` reports a working directory that is not there with an error
-  code it also uses for a program at a path that is not there, so the two were
-  indistinguishable afterwards and one of them could come back as the other's
-  error. `spawn` looks at the directory before it starts the child, which is
-  what the fork child's `chdir` does for the same reason on POSIX.
-- **A Windows child inherited every inheritable handle this process held**, not
-  only the three it was being given. `bInheritHandles` is all or nothing, and
-  `STARTF_USESTDHANDLES` names the child's standard handles without limiting
-  what else comes with them — so on a machine where this program's own standard
-  streams are inheritable pipes, as they are under a build or test harness, the
-  child and anything the child started kept those pipes open for as long as
-  they lived. Whatever is reading the other end then waits for an end of file
-  that never comes. `spawn` now passes a `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
-  naming exactly the handles the child is given. A plan that hands the child a
-  console handle gets no list, because a console is not inherited through the
-  handle table and naming one is how `CreateProcessW` fails.
-- **A pseudoconsole nobody is reading could block the program that owns it.**
-  The console host writes into a pipe this process holds the reading end of,
-  and both `ResizePseudoConsole` and `ClosePseudoConsole` wait for the host: a
-  resize repaints the viewport, which for a window of any size is more than the
-  few kilobytes a pipe holds by default, so a program that had stopped reading
-  the master stopped there too, with no deadline anywhere to end it. The pipes
-  are now created with room for a repaint of a window far larger than anyone
-  runs, `Pty.close` drops the master ends before the terminal end on Windows so
-  the host's last write fails rather than blocks, and `Pty.resize` and
-  `Pty.closeSlave` say in their doc comments that the master has to be read.
-  The whole suite ran to the end on macOS, Linux and Alpine and hung on
-  Windows; this is what it hung on.
-
-### Changed
-
-- **Closing the master is how a task reading it is released, and
-  `Pty.closeMaster` says so.** A read of a pseudo-terminal master ends when the
-  far end finishes or the handle goes away, and for a pair whose console host
-  is still running only the second happens — so a program with a reader on a
-  task should close the master and then join it, not the other way round.
-  `Pty.closeSlave` also says that a Windows pseudoconsole waits for its client,
-  so the child is reaped first.
-- **What `killWait` reports on Windows is written down.** `.kill` there is
-  `TerminateProcess` with an exit code of 1, so a child that had to be killed
-  reports `.exited = 1` — that number is this package's. `.terminate` is a
-  console control event, so a child that obeys it ends on its own terms and
-  reports the status *it* chose; for one that does not handle the event that is
-  the system's control-exit status, which reaches `Term.exited` as its low byte
-  because `Term.exited` is a byte and a Windows exit code is a `DWORD`. The
-  truncation is `std.process.Child.wait`'s and `tryWait` matches it, so the two
-  calls never report a child differently. `Term`, `Signal.terminate` and
-  `killWait` each say the part that belongs to them.
+## [0.3.1] - 2026-09-14
 
 ### Added
 
@@ -377,26 +291,94 @@ with no end.
   comes back for it. `Child.expect` builds one over a child's pipes as well as
   over a pair.
 
-## 0.3.0
+### Changed
+
+- **Closing the master is how a task reading it is released, and
+  `Pty.closeMaster` says so.** A read of a pseudo-terminal master ends when the
+  far end finishes or the handle goes away, and for a pair whose console host
+  is still running only the second happens — so a program with a reader on a
+  task should close the master and then join it, not the other way round.
+  `Pty.closeSlave` also says that a Windows pseudoconsole waits for its client,
+  so the child is reaped first.
+- **What `killWait` reports on Windows is written down.** `.kill` there is
+  `TerminateProcess` with an exit code of 1, so a child that had to be killed
+  reports `.exited = 1` — that number is this package's. `.terminate` is a
+  console control event, so a child that obeys it ends on its own terms and
+  reports the status *it* chose; for one that does not handle the event that is
+  the system's control-exit status, which reaches `Term.exited` as its low byte
+  because `Term.exited` is a byte and a Windows exit code is a `DWORD`. The
+  truncation is `std.process.Child.wait`'s and `tryWait` matches it, so the two
+  calls never report a child differently. `Term`, `Signal.terminate` and
+  `killWait` each say the part that belongs to them.
+
+### Fixed
+
+- **Three places asked a Windows value for a name it did not have.** A
+  non-exhaustive enum holding a number nobody named has no name to give, and
+  asking for one ends the process rather than returning an answer. A Windows
+  `BOOL` names only `FALSE` — `TRUE` is a declaration, not a tag — so the
+  trace naming one crashed every spawn that was not on a pseudoconsole, with
+  the trace switched off, because a call's arguments are worked out before the
+  call. `conduit.signalName` had the same shape for a real-time signal, which
+  is a number and nothing else; it answers `null` there now, and the number is
+  in the `Term` either way. And an unmapped `GetLastError` went to the standard
+  library's reporter, which prints the code by name in a Debug build: a library
+  must not end a program over a failure it was about to return, so the number
+  is printed instead.
+- **A child on a pseudoconsole wrote to the parent's pipes instead of its
+  terminal**, everywhere the parent's own standard streams were pipes rather
+  than console handles — which is every program a build system, a service or a
+  test harness starts. `CreateProcessW` duplicates the parent's standard
+  handles into the child as a special case when they are not console handles,
+  even with `bInheritHandles` false, so the child was attached to the
+  pseudoconsole and talking past it. From a terminal it looked right, because
+  console handles are not duplicated and the child falls back to the console it
+  has. A `.pty` spawn now sets `STARTF_USESTDHANDLES` with all three handles
+  null, which is how a child is given none and made to use the console it is
+  attached to. Naming a real handle beside a pseudoconsole is still refused —
+  that is the combination Windows documents as unsupported, and it is why
+  `stderr_to` with `.pty` is `error.Unsupported`.
+- **`spawnShell` read the environment by walking the process environment block
+  under the loader's lock.** The standard library's Windows lookup asserts
+  something about every entry it passes on the way, so a single odd entry in a
+  large environment would end the process from inside a lock, where the panic
+  itself has nowhere to go. It is `GetEnvironmentVariableW` now: one call,
+  which is also what the trace uses.
+- **`error.BadWorkingDirectory` meant what it says only on POSIX.**
+  `CreateProcessW` reports a working directory that is not there with an error
+  code it also uses for a program at a path that is not there, so the two were
+  indistinguishable afterwards and one of them could come back as the other's
+  error. `spawn` looks at the directory before it starts the child, which is
+  what the fork child's `chdir` does for the same reason on POSIX.
+- **A Windows child inherited every inheritable handle this process held**, not
+  only the three it was being given. `bInheritHandles` is all or nothing, and
+  `STARTF_USESTDHANDLES` names the child's standard handles without limiting
+  what else comes with them — so on a machine where this program's own standard
+  streams are inheritable pipes, as they are under a build or test harness, the
+  child and anything the child started kept those pipes open for as long as
+  they lived. Whatever is reading the other end then waits for an end of file
+  that never comes. `spawn` now passes a `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
+  naming exactly the handles the child is given. A plan that hands the child a
+  console handle gets no list, because a console is not inherited through the
+  handle table and naming one is how `CreateProcessW` fails.
+- **A pseudoconsole nobody is reading could block the program that owns it.**
+  The console host writes into a pipe this process holds the reading end of,
+  and both `ResizePseudoConsole` and `ClosePseudoConsole` wait for the host: a
+  resize repaints the viewport, which for a window of any size is more than the
+  few kilobytes a pipe holds by default, so a program that had stopped reading
+  the master stopped there too, with no deadline anywhere to end it. The pipes
+  are now created with room for a repaint of a window far larger than anyone
+  runs, `Pty.close` drops the master ends before the terminal end on Windows so
+  the host's last write fails rather than blocks, and `Pty.resize` and
+  `Pty.closeSlave` say in their doc comments that the master has to be read.
+  The whole suite ran to the end on macOS, Linux and Alpine and hung on
+  Windows; this is what it hung on.
+
+## [0.3.0] - 2026-09-14
 
 A pass over the package asking, feature by feature, what a caller of a process
 and pseudo-terminal library expects to find here — and the small things that
 pass found missing.
-
-### Fixed
-
-- **Neither end of a pseudo-terminal was close-on-exec.** A program holding a
-  pair open while it spawned some unrelated child handed both ends to it, and a
-  grandchild that has no idea it is holding a terminal keeps that terminal open
-  — so a read of the master never reports end of file, even after the child the
-  pair was for has exited. It is the failure `Pty.closeSlave` exists to prevent
-  in the parent, arriving by a route the parent cannot see. The slave takes the
-  flag in its `open`; the master takes it in a second call, because
-  `posix_openpt` portably accepts nothing else.
-- **`.pipes` meant two different things on the two systems.** A stream that was
-  not piped inherited the parent's on POSIX and gave the child *nothing* on
-  Windows, because `STARTF_USESTDHANDLES` is all or nothing and a null slot is
-  not "leave it alone". It inherits on both now.
 
 ### Added
 
@@ -428,17 +410,26 @@ pass found missing.
   dropping the last master descriptor hangs the terminal up, and the session
   leader — the child, when `detach` and `.pty` made it one — gets `SIGHUP`.
 
-### Known gaps
+### Fixed
 
-Named in README.md's "What this package does not do", each of them real and
-none of them small: an `expect` helper, per-stream stdio, per-child credentials
-and `setrlimit` at spawn, and Windows job objects so `detach` there kills a
-tree.
+- **Neither end of a pseudo-terminal was close-on-exec.** A program holding a
+  pair open while it spawned some unrelated child handed both ends to it, and a
+  grandchild that has no idea it is holding a terminal keeps that terminal open
+  — so a read of the master never reports end of file, even after the child the
+  pair was for has exited. It is the failure `Pty.closeSlave` exists to prevent
+  in the parent, arriving by a route the parent cannot see. The slave takes the
+  flag in its `open`; the master takes it in a second call, because
+  `posix_openpt` portably accepts nothing else.
+- **`.pipes` meant two different things on the two systems.** A stream that was
+  not piped inherited the parent's on POSIX and gave the child *nothing* on
+  Windows, because `STARTF_USESTDHANDLES` is all or nothing and a null slot is
+  not "leave it alone". It inherits on both now.
 
-## 0.2.0
 
-Windows, through ConPTY, behind the same API — and the API changed shape to be
-honest about it. Requires Zig 0.16.0.
+## [0.2.0] - 2026-09-13
+
+Windows, through pseudoconsoles, behind the same API, which changed shape to
+say so. Requires Zig 0.16.0.
 
 ### Breaking
 
@@ -484,10 +475,8 @@ honest about it. Requires Zig 0.16.0.
   bytes, and the child's terminal turns them back into signals.
 - `ci/linux.sh` runs the whole suite on Linux in Docker, on glibc and on musl,
   in Debug and ReleaseSafe. musl is there because `ptsname_r` reports failure
-  differently on the three libcs this package supports, and that claim deserves
-  an image rather than a comment.
-
-### Windows notes
+  differently on the three libcs this package supports, and that deserves an
+  image rather than a comment.
 
 - Windows 10 version 1809 or newer: `CreatePseudoConsole` is imported
   statically rather than looked up.
@@ -496,15 +485,17 @@ honest about it. Requires Zig 0.16.0.
   a new process group with Ctrl-C disabled. `spawnShell` therefore does not
   detach on Windows.
 - `.bat` and `.cmd` are refused with `error.UnsupportedBatchFile` rather than
-  handed to `cmd.exe`, whose re-parsing makes any argument serialisation
-  unsafe.
+  handed to the command interpreter, whose re-parsing makes any argument
+  serialisation unsafe.
 - `stderr_to` together with `.pty` is `error.Unsupported`: a pseudoconsole is
   attached through an attribute list, which Windows documents as incompatible
   with naming the child's standard handles. On POSIX the two compose.
 
-## 0.1.0
+## [0.1.0] - 2026-09-13
 
 First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
+
+### Added
 
 - `Pty` opens a pseudo-terminal pair through the POSIX 98 interface
   (`posix_openpt`, `grantpt`, `unlockpt`, `ptsname_r`) rather than through
@@ -536,3 +527,10 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
 - `rawMode`, `restore`, `winSize`, `setWinSize`, `isTty` and `ttyName` are the
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
+
+[0.4.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.4.0
+[0.3.2]: https://github.com/pedronaugusto/conduit/releases/tag/v0.3.2
+[0.3.1]: https://github.com/pedronaugusto/conduit/releases/tag/v0.3.1
+[0.3.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.3.0
+[0.2.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.2.0
+[0.1.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.1.0

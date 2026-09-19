@@ -85,7 +85,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.term` | How it ended, once something reaped it. Written by whichever call did and published through an atomic, so `tryWait` is how to read it while a `Reaper` runs. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
-| `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. `.interrupt` without a group is `error.Unsupported`, there being nothing honest to fall back to. |
+| `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
@@ -272,7 +272,7 @@ system, and a grandchild of a child that was already reaped keeps running.
 **Two ways to start a child on POSIX, and the same child either way.** A spawn
 that needs nothing done between the fork and the exec is handed to
 `posix_spawn`, which does not copy the parent's page tables: measured here over
-1000 spawns of `/usr/bin/true` on the null device, 902 µs a spawn against 1304.
+1000 spawns of `/usr/bin/true` on the null device, 946 µs a spawn against 1336.
 Everything that can only be done in a fork child sends the spawn back to the
 fork — a pseudo-terminal, which needs `setsid` and an ioctl; `credentials` and
 `resource_limits`, which a process sets on itself; `cwd`, `Stream.close`, a
@@ -314,40 +314,36 @@ the `Reaper` exists for.
 
 ## Scope
 
-- Terminal emulation. `Proxy` moves bytes; nothing here parses an escape
-  sequence or keeps a screen.
-- Shell-style command splitting. `argv` is a list; turning one string into
-  several is a shell's grammar.
-- Job control. `foregroundGroup` answers the question, and `tcsetpgrp` is the
-  caller's `std.posix` call to make with `child.pgid`.
-- Regular expressions. `Expect` matches byte strings.
-- A pre-exec callback. Only async-signal-safe calls are legal there, so the
-  uses people reach for one for are named options instead.
-- Run a `.bat` or `.cmd` script. `spawn` returns `error.UnsupportedBatchFile`:
-  `cmd.exe` re-parses their command line with rules no serialisation survives.
+- **No terminal emulation.** `Proxy` moves bytes; nothing here parses an escape sequence or keeps a screen.
+- **No command splitting.** `argv` is a list, and turning one string into several is a shell's grammar.
+- **No job control.** `foregroundGroup` answers the question; `tcsetpgrp` is the caller's call to make with `child.pgid`.
+- **No pattern language.** `Expect` matches byte strings.
+- **No pre-exec callback.** Only async-signal-safe calls are legal there, so the uses people reach for one for are named options instead.
+- **No `.bat` or `.cmd`.** `spawn` returns `error.UnsupportedBatchFile`, because the command interpreter re-parses their command line with rules no serialisation survives.
 
 ## Platforms
 
 | | Mechanism | Suite |
 |---|---|---|
-| Linux (glibc) | `posix_openpt`, `fork` and `execve` | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
+| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve` | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
 | Linux (musl) | the same | Alpine, in CI and with `ci/linux.sh --musl` |
 | macOS | the same | `macos-latest` |
-| Windows | ConPTY and `CreateProcessW` | `windows-latest` |
+| Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |
 | FreeBSD, NetBSD | as Linux | cross-compiled only |
 
-Every job in that matrix runs on each push to `main` and on each pull request,
-and the badge above is the latest of them. Windows 10 version 1809 is the floor:
-`CreatePseudoConsole` is imported statically rather than looked up.
+Windows 10 version 1809 is the floor: `CreatePseudoConsole` is imported
+statically rather than looked up. FreeBSD and NetBSD are compiled and never
+run, so what holds there is what the sources say and not what a suite has
+shown.
 
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, glibc on two architectures and musl on one, both macOS
 architectures, FreeBSD and NetBSD.
 
-Tests whose claim is POSIX-only — a controlling terminal, `getpgid`, Ctrl-C
-becoming `SIGINT`, `stty size` — say so and skip elsewhere, and so do the ones
-whose claim is Windows-only: a job object holding a tree, a handle's
-inheritance flag, a console option the system may decline. On Windows the
+A test that is about POSIX alone — a controlling terminal, `getpgid`, Ctrl-C
+becoming `SIGINT`, `stty size` — says so and skips elsewhere, and so does a
+Windows-only one: a job object holding a tree, a handle's inheritance flag, a
+console option the system may decline. On Windows the
 program is resolved by `CreateProcessW`, which searches the application
 directory, the current directory, the system directories and `PATH` and appends
 `.exe`; `PATHEXT` is not searched.
@@ -364,9 +360,11 @@ zig fmt --check src examples build.zig
 ci/linux.sh --both               # the suite on glibc and musl Linux, in Docker
 ```
 
-Most of the suite starts a real child process and reaps it, and CI runs it in
-Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code between `fork` and
-`execve` is the kind an inlining decision can change. CI passes
+Most of the suite starts a real child process and reaps it, and CI runs it on
+Linux and macOS in Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code
+between `fork` and `execve` is the kind an inlining decision can change. On
+Windows the three release modes run whole and Debug runs in filtered pieces,
+each its own step, so a step that hangs names what it was running. CI passes
 `--test-timeout 45s`, which ends the run and names the test that did not
 finish, and a test that starts a child or opens a pair carries a watchdog that
 panics with its own name after thirty seconds. The suite also runs with the
@@ -390,6 +388,6 @@ the operating system for.
 
 Zig 0.16.0. libc on POSIX; none on Windows.
 
-## License
+## Licence
 
 MIT. See [LICENSE](LICENSE).
