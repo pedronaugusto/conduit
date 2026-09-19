@@ -210,8 +210,9 @@ do about that is the program's.
 **Read the child's output while you wait for it.** A child that fills a pipe
 nobody drains stops there, and on Darwin a process whose terminal still holds
 output blocks *inside exit* until the master is read — so a parent that waits
-first and reads afterwards waits forever. `child.output` reads and waits at
-once, `Proxy` keeps reading, and `Expect` reads on a task from `start`.
+first and reads afterwards waits forever. It is any unread byte that does it,
+not a full buffer. `child.output` reads and waits at once, `Proxy` keeps
+reading, and `Expect` reads on a task from `start`.
 
 **`Pty.closeSlave` is wanted at different moments.** On POSIX, right after
 `Child.spawn`: until then the terminal still has a reader in this process, so a
@@ -271,7 +272,11 @@ Everything else works in buffers the caller passes, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
 which is one call; `Reaper`, which exists so a wait can be in flight while
-another task works; and `Child.output`, which reads two streams at once.
+another task works; and `Child.output`, which reads two streams at once. A
+child is reaped once however many tasks ask: the right to be inside the
+system's wait is taken with an atomic, and whoever has it publishes the term to
+the rest — so `killWait` is legal while a `Reaper` runs, which is the sequence
+the `Reaper` exists for.
 
 ## Scope
 
@@ -297,10 +302,9 @@ another task works; and `Child.output`, which reads two streams at once.
 | Windows | ConPTY and `CreateProcessW` | `windows-latest` |
 | FreeBSD, NetBSD | as Linux | cross-compiled only |
 
-Every job in that matrix passed on run
-[`34806711915`](https://github.com/pedronaugusto/conduit/actions/runs/34806711915).
-Windows 10 version 1809 is the floor: `CreatePseudoConsole` is imported
-statically rather than looked up.
+Every job in that matrix runs on each push and each pull request, and the badge
+above is the latest of them. Windows 10 version 1809 is the floor:
+`CreatePseudoConsole` is imported statically rather than looked up.
 
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, both Linux libcs on two architectures, both macOS

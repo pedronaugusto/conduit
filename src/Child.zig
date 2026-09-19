@@ -709,9 +709,11 @@ pub const WaitError = std.process.Child.WaitError;
 /// pipe nobody is draining stops there, and a child on a pseudo-terminal can
 /// do worse: on Darwin a process whose terminal still holds output it has
 /// written blocks *inside exit* until the master is read, so a parent that
-/// waits first and reads afterwards waits forever. `output` is the version of
-/// this that reads and waits at once, and `Proxy` is the version that keeps
-/// reading.
+/// waits first and reads afterwards waits forever. It is not a full buffer
+/// that does it but any unread byte — a hundred of them was enough to
+/// reproduce it here — so "the child only prints a line" is not a way out.
+/// `output` is the version of this that reads and waits at once, and `Proxy`
+/// is the version that keeps reading.
 pub fn wait(child: *Child, io: std.Io) WaitError!Term {
     // Another task may already be inside the wait -- a `Reaper`, in practice.
     // It will publish the term, and a second wait on the same child would only

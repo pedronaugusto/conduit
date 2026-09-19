@@ -6,6 +6,141 @@ before 1.0 the minor is the breaking one.
 
 ## Unreleased
 
+## 0.4.0
+
+Three faults a caller could not have seen coming, two waits that were a clock
+rather than the operating system, and the options the two systems each have
+that the other has not.
+
+### Fixed
+
+- **A caller's file could arrive on the wrong stream, silently.** The child's
+  descriptors were placed at 0, 1 and 2 in that order, with no check that one
+  of them was also a number a later placement would read — so
+  `.stdout = .{ .file = <the file at 2> }` beside
+  `.stderr = .{ .file = <the file at 1> }` gave the child the same stream
+  twice, and nothing anywhere said so. Any source below the slot it serves is
+  copied out of the way first, close-on-exec, before a single placement
+  happens.
+- **A `Reaper` and the owner's `killWait` raced for one child.** `Reaper` waits
+  through `Child.wait` and `killWait` reaps through `tryWait`, and both wrote
+  `Child.term`: a data race on a value that is not a single word, and two
+  `wait4` calls on one child, which is one status and one `ECHILD`. The
+  sequence a `Reaper` exists for — ask `exit`, get `null`, decide the child has
+  had long enough — ended a Debug build every time. The right to be inside the
+  system's wait is now taken with an atomic and the term is published with a
+  release store that every read acquires; a caller who does not get the wait
+  reads the answer instead. `killWait`, `kill`, `wait` and `tryWait` are all
+  legal while a `Reaper` runs, and the child is reaped once.
+- **A grandchild could survive `kill` and `killWait` on POSIX.** A signal to a
+  process group misses a descendant that gave itself a group of its own with
+  `setsid` or `setpgid`, and `kill(-pgid)` is not atomic against a `fork`
+  inside the group — one of a hundred and fifty scratch grandchildren survived
+  a `killWait` with no grace. `kill` now asks the system who the descendants of
+  the child are and signals them deepest first, before the child itself, so
+  that nothing is orphaned on the way down; `.kill` asks again until a pass
+  names nothing, which is what catches a process started while the first signal
+  was landing. `Child.kill` and the README state the guarantee per system: the
+  children of a process are named by `/proc/<pid>/task/<tid>/children` on Linux
+  and by `proc_listchildpids` on Darwin, and on the BSDs and illumos, which
+  name them only through the whole process table, the process group is the
+  reach it always was. A process that has *both* left the group and been
+  orphaned before anything looked is reached by no system.
+- **Two close-on-exec windows closed.** A pipe and the null device were opened
+  and then marked close-on-exec by a second call, and in the gap between the
+  two a `fork` on another thread hands the descriptor to a child that has
+  nothing to do with it. `pipe2` carries the flag where the system has it and
+  `O_CLOEXEC` carries it in the null device's open everywhere. Darwin has no
+  `pipe2` and keeps that one gap; the master of a pair keeps its own, which
+  `posix_openpt` has no flag to close and which `Pty.open` already documented.
+- **Windows left the caller's handles inheritable.** A handle a child is to
+  inherit has to be marked inheritable, which is the only way to say so about
+  one somebody else opened, and the flag was never cleared again — so a
+  concurrent spawn elsewhere in the process inherited the caller's files and
+  the parent's own standard handles. What each handle had is remembered and put
+  back, on the success path and on every failure path alike.
+
+### Added
+
+- **`Expect.untilAny`** waits for any of several patterns and says which one
+  came. One pattern per call cannot express the shape every program driving
+  another program has — the child will say one of three things — because three
+  `until` calls race each other and whichever is asked for first eats the bytes
+  the others were looking for. The earliest match wins rather than the first in
+  the list, and only the bytes up to and including it are consumed, so a
+  pattern that also arrived, later, is still pending for the next call.
+- **`SpawnOptions.fd_policy`.** `.close_all` closes every descriptor above 2 in
+  the child, whatever its flags say — `close_range` on Linux, a loop elsewhere
+  — for a program that opened a socket or a lock file without close-on-exec and
+  would otherwise hand a copy to every child it starts. The default,
+  `.close_on_exec`, is what it always did. On Windows a child is given the
+  handles named in an attribute list and nothing else, so both mean the same
+  thing there.
+- **`SpawnOptions.job_limits`.** `resource_limits` is a pair of POSIX types
+  with no Windows counterpart and is still refused there; what was missing was
+  the other half. The job object that makes `kill` reach the tree on Windows is
+  where that system puts a limit, and it bounds the whole set of processes
+  rather than the one: `process_memory_bytes`, `job_memory_bytes`,
+  `active_processes` and a hard cap on the job's share of the processors.
+  POSIX-side it is `error.Unsupported`, which is what `resource_limits` is on
+  Windows; the two are different answers and neither pretends to be the other.
+- **`Pty.OpenOptions.console`** asks a pseudoconsole for the three things it
+  can be asked for: `passthrough`, so the child's own bytes reach the master
+  rather than the console host's redraw of them — without it a cursor-shape
+  sequence is simply lost; `win32_input`, so a key the terminal encoding cannot
+  spell can be written to it; and `resize_quirk`, so a resize does not reflow
+  what the child has already drawn. Each arrived in a different Windows and a
+  version that does not know one refuses the whole call, so `open` narrows the
+  ask until the system takes it and `Pty.console` is what it ended up with.
+  `spawnShell` passes them through.
+- **`error.ReapedElsewhere`.** `tryWait` reported `ECHILD` as
+  `error.Unexpected`, which is a program with a `SIGCHLD` handler of its own,
+  or `SIGCHLD` set to `SIG_IGN`, getting an unnamed error for a named
+  situation: something outside this package reaped the child and there is no
+  status left for anyone to report.
+
+### Changed
+
+- **`waitTimeout` and `killWait`'s grace wait on the operating system.** Both
+  used to ask again on a growing interval — one millisecond, then two, then
+  four — so a child that had ended was noticed a millisecond and a half later,
+  every time, whatever the machine. Both now wait on a handle the system makes
+  ready the moment the process ends: a `pidfd` on Linux, a kqueue registration
+  for `EVFILT_PROC`/`NOTE_EXIT` on Darwin and the BSDs. An old kernel that has
+  neither says so and the interval is asked again as before. Measured here on
+  `/bin/sh -c 'exit 0'`, fifty runs: a blocking `wait` 2.80 ms, `waitTimeout`
+  4.34 ms before and 2.71 ms after.
+- **A spawn that needs nothing done between the fork and the exec is handed to
+  `posix_spawn`.** `fork` copies a process's page tables and the cost grows
+  with what the parent has mapped; `posix_spawn` describes the child with file
+  actions and attributes instead. Measured here over a thousand spawns of
+  `/usr/bin/true` on the null device: 1304 µs a spawn through `fork` and
+  `execve`, 902 µs through `posix_spawn`. Everything that can only be done in
+  a fork child sends the spawn back to it — a pseudo-terminal, `credentials`,
+  `resource_limits`, `cwd`, `Stream.close`, a caller's file at descriptor 0, 1
+  or 2, and `fd_policy = .close_all` — and the child is the same child either
+  way, down to the signal dispositions it starts with. Linux and macOS take
+  the fast path; the BSDs number the attribute flags differently, are
+  cross-compiled rather than tested here, and keep the fork. `zig build test
+  -Dfork-spawn` runs the whole suite with it turned off, and CI does that too.
+- **`tryWait` answers `null` while another task holds the wait.** A `Reaper` is
+  the one that reaps then, and taking the status out from under it is the thing
+  that must not happen. A `null` was always a snapshot; that is the one case
+  where it can be a moment out of date.
+- **`Child.term` is read through `tryWait`.** It is written once, by whichever
+  call reaps the child, and published through an atomic — so a plain read of
+  the field from another task is a race, and `tryWait` is the read that is not.
+
+### Breaking
+
+- `Child.TryWaitError` has a new member, `ReapedElsewhere`. A caller that
+  switched over it exhaustively has one more arm to write.
+- `Expect.Match` has a new field, `index`, which `untilAny` sets and `until`
+  leaves at zero. A caller constructing one by literal has one more field.
+- `Child` has two new fields, `reaped` and `reaping`, both with defaults. A
+  `Child` comes from `spawn`, so this reaches only code that built one by hand.
+- `Pty` has a new field, `console`, which is `void` on POSIX.
+
 ## 0.3.2
 
 Four Windows faults that 0.3.1 shipped, and three of them the same one: a wait
