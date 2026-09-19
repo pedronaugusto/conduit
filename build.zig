@@ -15,12 +15,26 @@ pub fn build(b: *std.Build) void {
     // The module.
     //=====================================================================
 
+    // The one build-time decision this package has. `Child.spawn` hands a
+    // spawn that needs nothing done between the fork and the exec to
+    // `posix_spawn`, which is a second implementation of the same contract;
+    // this turns it off, so that CI can run the whole suite down both paths
+    // and prove they produce the same child.
+    const fork_spawn = b.option(
+        bool,
+        "fork-spawn",
+        "Always fork and exec, never posix_spawn",
+    ) orelse false;
+    const conduit_options = b.addOptions();
+    conduit_options.addOption(bool, "force_fork_spawn", fork_spawn);
+
     const module = b.addModule("conduit", .{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
     });
+    module.addOptions("conduit_options", conduit_options);
 
     //=====================================================================
     // Tests.
@@ -41,15 +55,18 @@ pub fn build(b: *std.Build) void {
         "Run only the tests whose fully qualified name contains one of these",
     ) orelse &[0][]const u8{};
 
+    const test_module = b.createModule(.{
+        .root_source_file = b.path("src/conduit.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = link_libc,
+    });
+    test_module.addOptions("conduit_options", conduit_options);
+
     const tests = b.addTest(.{
         .name = "conduit-tests",
         .filters = test_filters,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/conduit.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = link_libc,
-        }),
+        .root_module = test_module,
     });
 
     // The suite without the examples, so a run that hangs says which of the

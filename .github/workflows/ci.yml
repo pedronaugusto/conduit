@@ -57,6 +57,12 @@ jobs:
       - name: Test — ReleaseSmall
         run: zig build test -Doptimize=ReleaseSmall --test-timeout 45s
 
+      # The same suite with the `posix_spawn` path turned off. It is a second
+      # implementation of one contract, and this is what says the two produce
+      # the same child.
+      - name: Test — the fork path
+        run: zig build test -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
+
       # Built AND run. An example that only compiles proves the names resolve;
       # running it is what proves the library works.
       - name: Examples

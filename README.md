@@ -98,7 +98,7 @@ byte of it, since `Term.exited` is a byte and a Windows exit code is a `DWORD`.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`.
+`resource_limits`, `fd_policy`.
 
 `stdio` is `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` —
@@ -112,6 +112,13 @@ becomes the child's controlling terminal; otherwise `setpgid(0, 0)`. On Windows
 it is `CREATE_NEW_PROCESS_GROUP`, which is what a console control event can be
 addressed to and nothing more — reaching the tree there is the job object's
 doing, not `detach`'s.
+
+`fd_policy` is what the child is given of the descriptors above 2 that this
+process holds: `.close_on_exec`, the default, which is whatever close-on-exec
+allows, or `.close_all`, which closes every one of them in the child whatever
+its flags say — `close_range` on Linux, a loop elsewhere. On Windows a child is
+given the handles named in an attribute list and nothing else, so both values
+mean the same thing there.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
 `std.posix.rlimit_resource` and `std.posix.rlimit` pairs. Both are set in the
@@ -231,6 +238,18 @@ and the walk are asked again until a pass names nothing. A process that has
 both left the group and been orphaned before anything looked is reached by no
 system, and a grandchild of a child that was already reaped keeps running.
 
+**Two ways to start a child on POSIX, and the same child either way.** A spawn
+that needs nothing done between the fork and the exec is handed to
+`posix_spawn`, which does not copy the parent's page tables: measured here over
+1000 spawns of `/usr/bin/true` on the null device, 902 µs a spawn against 1304.
+Everything that can only be done in a fork child sends the spawn back to the
+fork — a pseudo-terminal, which needs `setsid` and an ioctl; `credentials` and
+`resource_limits`, which a process sets on itself; `cwd`, `Stream.close`, a
+caller's file at descriptor 0, 1 or 2, and `fd_policy = .close_all`. The fast
+path runs on Linux and macOS, which are the systems the suite runs on; the BSDs
+number the attribute flags differently and keep the fork. `zig build test
+-Dfork-spawn` runs the whole suite with it turned off.
+
 **A spawn that cannot run the program is an error**, not a child that exits
 127: the fork child reports the failure over a close-on-exec pipe before
 `spawn` returns, and `CreateProcessW` fails outright. Both ends of a pair are
@@ -290,6 +309,7 @@ directory, the current directory, the system directories and `PATH` and appends
 
 ```sh
 zig build test          # the suite, and the examples, which are run
+zig build test -Dfork-spawn   # the same, with the posix_spawn path turned off
 zig build examples      # the examples alone
 zig fmt --check src examples build.zig
 ci/linux.sh --both      # the suite on glibc and musl Linux, in Docker

@@ -358,6 +358,35 @@ pub const SpawnOptions = struct {
     ///
     /// POSIX only: a non-empty list is `error.Unsupported` on Windows.
     resource_limits: []const ResourceLimit = &.{},
+    /// What the child does with the descriptors above 2 that this process
+    /// holds.
+    fd_policy: FdPolicy = .close_on_exec,
+};
+
+/// What a child is given of the descriptors above 2 that the parent holds.
+///
+/// A descriptor is inherited unless something says otherwise, and on POSIX the
+/// something is close-on-exec. Every descriptor this package opens for a spawn
+/// has it, and so does every descriptor the standard library opens — but a
+/// program that opened a socket, a log or a lock file with plain `open` is
+/// handing a copy to every child it starts afterwards, and a child that keeps
+/// one open keeps the far end of it waiting.
+///
+/// On Windows there is no choice to make. A child is given the handles named
+/// in an attribute list and nothing else, which is `close_all` already; both
+/// values mean the same thing there.
+pub const FdPolicy = enum {
+    /// Inherit whatever close-on-exec allows. The default, and what a spawn is
+    /// without an opinion.
+    close_on_exec,
+    /// Close every descriptor above 2 in the child before the program starts,
+    /// whatever its flags say. The child gets its three standard streams and
+    /// nothing else.
+    ///
+    /// `close_range` on Linux, which is one call; elsewhere a loop up to the
+    /// descriptor limit, which is thousands of calls that fail and is
+    /// therefore worth asking for rather than doing by default.
+    close_all,
 };
 
 /// The user, group and file-creation mask a child starts with. POSIX only.
@@ -511,6 +540,26 @@ pub const SpawnError = error{
     /// on Windows. The option that cannot be honoured says so.
     Unsupported,
 } || std.Io.UnexpectedError;
+
+/// What an `execve` that failed means, as one of `SpawnError`.
+///
+/// Both spawn paths on POSIX end here: the fork child reports the number it
+/// got back over its pipe, and `posix_spawn` returns it.
+pub fn execError(err: posix.E) SpawnError {
+    return switch (err) {
+        .ACCES => error.AccessDenied,
+        .PERM => error.PermissionDenied,
+        .NOENT => error.FileNotFound,
+        .NOTDIR => error.NotDir,
+        .ISDIR => error.IsDir,
+        .NAMETOOLONG => error.NameTooLong,
+        .LOOP => error.SymLinkLoop,
+        .NOEXEC => error.InvalidExe,
+        .TXTBSY => error.FileBusy,
+        .NOMEM, .@"2BIG" => error.SystemResources,
+        else => posix.unexpectedErrno(err),
+    };
+}
 
 /// Starts `options.argv` as a child process.
 ///

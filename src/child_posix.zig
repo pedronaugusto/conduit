@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const Child = @import("Child.zig");
 const Pty = @import("Pty.zig");
 const handles = @import("handles.zig");
+const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("tty.zig");
 
@@ -78,6 +79,18 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     });
     errdefer plan.closeAll(io);
 
+    // Nothing has to happen between a fork and an exec for this one, so it
+    // need not be a fork at all. `posix_spawn` describes the child with file
+    // actions instead, and on the systems that have it that is a third less
+    // work per spawn. It answers `null` for a set of descriptors it cannot
+    // describe, and then this falls through to the fork below.
+    if (posix_spawn.suits(options)) {
+        if (try posix_spawn.spawn(plan.child, candidates, argv.ptr, envp, options)) |pid| {
+            plan.closeChildSide(io);
+            return started(pid, &plan, options);
+        }
+    }
+
     // How the fork child reports a failure that happens after the fork. The
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
@@ -116,6 +129,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         return record.toError();
     }
 
+    return started(pid, &plan, options);
+}
+
+/// The `Child` a started process is, whichever path started it.
+fn started(pid: posix.pid_t, plan: *const Plan, options: SpawnOptions) Child {
     return .{
         .id = pid,
         .thread = {},
@@ -169,20 +187,7 @@ const Failure = extern struct {
                 .LOOP => error.SymLinkLoop,
                 else => posix.unexpectedErrno(err),
             },
-            .exec => switch (err) {
-                .ACCES => error.AccessDenied,
-                .PERM => error.PermissionDenied,
-                .NOENT => error.FileNotFound,
-                .NOTDIR => error.NotDir,
-                .ISDIR => error.IsDir,
-                .NAMETOOLONG => error.NameTooLong,
-                .LOOP => error.SymLinkLoop,
-                .NOEXEC => error.InvalidExe,
-                .TXTBSY => error.FileBusy,
-                .NOMEM => error.SystemResources,
-                .@"2BIG" => error.SystemResources,
-                else => posix.unexpectedErrno(err),
-            },
+            .exec => Child.execError(err),
         };
     }
 };
@@ -277,6 +282,10 @@ fn childMain(
         .close => _ = c.close(@intCast(slot)),
     };
 
+    // Everything above the child's own three, if that was asked for. After
+    // the placements, so the descriptors being placed are still there to place
+    // -- and after the master and spare slave of a pair are closed below, for
+    // the same reason, which is why this is not simply first.
     switch (options.stdio) {
         // The master end has no business in the child. While a descriptor for
         // it stays open there, the parent closing its own copy does not hang
@@ -289,6 +298,8 @@ fn childMain(
         },
         else => {},
     }
+
+    if (options.fd_policy == .close_all) closeFromThree();
 
     // Before the credentials below: a privileged parent can still raise a hard
     // limit for a child it is about to hand to somebody else, and after
@@ -328,6 +339,28 @@ fn childMain(
     const record: Failure = .{ .stage = .exec, .errno = @intFromEnum(best) };
     _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
     c._exit(127);
+}
+
+/// Closes every descriptor from 3 upwards, in the fork child.
+///
+/// `close_range` is one system call and has been in Linux since 5.9; the
+/// fallback is a loop to the soft descriptor limit, which is what a program
+/// may have open rather than what it does have. Both are async-signal-safe,
+/// which is what the fork child needs; neither can fail in a way that means
+/// anything here, because a descriptor that was not there is a descriptor the
+/// child does not have.
+fn closeFromThree() void {
+    if (builtin.os.tag == .linux) {
+        const rc = std.os.linux.close_range(3, std.math.maxInt(i32), .{ .UNSHARE = false, .CLOEXEC = false });
+        if (std.os.linux.errno(rc) == .SUCCESS) return;
+    }
+    var limit: posix.rlimit = undefined;
+    const ceiling: posix.fd_t = if (c.getrlimit(.NOFILE, &limit) == 0)
+        std.math.lossyCast(posix.fd_t, limit.cur)
+    else
+        4096;
+    var fd: posix.fd_t = 3;
+    while (fd < ceiling) : (fd += 1) _ = c.close(fd);
 }
 
 /// Makes `fd` the child's descriptor number `target`, clearing close-on-exec so
