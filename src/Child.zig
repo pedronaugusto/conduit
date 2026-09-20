@@ -298,8 +298,8 @@ pub const SpawnOptions = struct {
     /// On POSIX `argv[0]` is the program: if it contains a `/` it is a path,
     /// and otherwise it is looked up in `PATH`. On Windows the list is
     /// serialised into the one command-line string `CreateProcessW` takes, by
-    /// the rules `CommandLineToArgvW` parses, and the system does the looking
-    /// up. Must not be empty.
+    /// the rules `CommandLineToArgvW` parses; a bare program is resolved first
+    /// when a custom environment selects its PATH. Must not be empty.
     argv: []const []const u8,
     /// The child's working directory. `null` inherits the parent's.
     cwd: ?[]const u8 = null,
@@ -506,10 +506,9 @@ pub const ResourceLimit = struct {
 
 /// Where the `PATH` that resolves a bare `argv[0]` comes from.
 ///
-/// Windows resolves the program itself, inside `CreateProcessW`, from the
-/// environment the child is being given -- so `.child_environ` is what that
-/// system does and the other two are `error.Unsupported` there rather than a
-/// promise this package cannot keep.
+/// On Windows the package resolves `.child_environ` before `CreateProcessW`,
+/// because that call otherwise searches the parent's PATH even when given a
+/// different environment. The other two remain `error.Unsupported` there.
 pub const PathSearch = enum {
     /// The `PATH` in `SpawnOptions.environ`, or the parent's when that is
     /// `null`. What a shell does: the program is looked for where the child

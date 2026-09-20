@@ -162,10 +162,10 @@ child that should not see an agent socket or a token. A child with no `PATH` is
 also one a bare `argv[0]` cannot be found for, so `path_search` says which
 `PATH` resolves the program: `.child_environ` (the default, what a shell does),
 `.parent_environ` (what `std.process.spawn` does, and what a scrubbed
-environment wants) or `.none`. Windows resolves the program inside
-`CreateProcessW`, from the environment the child is being given, so
-`.child_environ` is the only one of the three it can honour and the other two
-are `error.Unsupported` there.
+environment wants) or `.none`. On Windows conduit resolves a bare program
+against the child environment before `CreateProcessW`, whose own search would
+otherwise use the parent's `PATH`; the other two modes are `error.Unsupported`
+there.
 
 ### `spawnShell`, `Reaper`, `Proxy`
 

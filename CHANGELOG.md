@@ -21,6 +21,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Streaming readers retry permitted zero-byte results instead of treating them
   as EOF; empty Proxy buffers now return `error.BufferTooSmall`, which adds a
   member to `Proxy.RunError`.
+- Windows resolves a bare program against the selected child environment's
+  `PATH` instead of the parent's.
 
 ## [0.4.0] - 2026-09-19
 

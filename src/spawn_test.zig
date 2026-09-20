@@ -1845,10 +1845,42 @@ test "a scrubbed environment is the only thing the child sees" {
 }
 
 test "path_search decides which PATH a bare program name is looked up in" {
-    if (is_windows) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
+
+    if (is_windows) {
+        var environment = try conduit.environ.inherit(gpa, &.{});
+        defer environment.deinit();
+        const comspec = environment.get("COMSPEC") orelse return error.SkipZigTest;
+
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try std.Io.Dir.copyFile(
+            std.Io.Dir.cwd(),
+            comspec,
+            tmp.dir,
+            "conduit-child-path.exe",
+            io,
+            .{},
+        );
+        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const path_len = try tmp.dir.realPath(io, &path_buffer);
+        try conduit.environ.apply(&environment, &.{.{
+            .name = "PATH",
+            .value = path_buffer[0..path_len],
+        }});
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "conduit-child-path", "/c", "exit 0" },
+            .environ = &environment,
+            .stdio = .ignore,
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+        return;
+    }
 
     var empty_path = try conduit.environ.inherit(gpa, &.{
         .{ .name = "PATH", .value = "/conduit-no-such-directory" },

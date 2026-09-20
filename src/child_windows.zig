@@ -29,13 +29,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     try refuseWhatWindowsCannotDo(options);
 
     // `CreateProcessW` writes to the command line it is given, so it must be a
-    // mutable buffer. `lpApplicationName` is left null on purpose: the system
-    // then resolves the program from the command line, searching the
-    // application directory, the current directory, the system directories and
-    // `PATH`, and appending `.exe` when there is no extension. That is what a
-    // caller passing a bare program name means, and reimplementing it here
-    // would only be a second, worse copy.
+    // mutable buffer. A custom child environment needs its program resolved
+    // before this call: Windows otherwise searches the parent's PATH even
+    // though it installs the supplied block in the child.
     const line = try command_line.serialise(arena, options.argv);
+    const application = try applicationName(io, arena, options);
 
     const environment: ?[*:0]const u16 = if (options.environ) |map| env: {
         const block = try map.createWindowsBlock(arena, .{});
@@ -92,7 +90,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
-        null,
+        application,
         line.ptr,
         null,
         null,
@@ -237,14 +235,77 @@ fn workingDirectory(arena: Allocator, wanted: ?[]const u8) SpawnError!?[*:0]cons
     return wide;
 }
 
+/// The executable passed as `lpApplicationName`, when this package has to
+/// resolve it itself to honour the selected child environment.
+///
+/// With no custom environment, null preserves `CreateProcessW`'s native
+/// search exactly. A program that already names a path needs no search either,
+/// but is passed explicitly so command-line parsing cannot choose a different
+/// executable. For a bare name and custom environment the ordinary Windows
+/// directories are searched first, then that environment's PATH.
+fn applicationName(
+    io: std.Io,
+    arena: Allocator,
+    options: SpawnOptions,
+) SpawnError!?[*:0]const u16 {
+    const program = options.argv[0];
+    if (!isBareProgram(program)) {
+        return (try std.unicode.wtf8ToWtf16LeAllocZ(arena, program)).ptr;
+    }
+    const environment = options.environ orelse return null;
+
+    var directories: std.ArrayList([]const u8) = .empty;
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.process.executableDirPath(io, &path_buffer)) |len| {
+        try directories.append(arena, try arena.dupe(u8, path_buffer[0..len]));
+    } else |_| {}
+    if (std.process.currentPath(io, &path_buffer)) |len| {
+        try directories.append(arena, try arena.dupe(u8, path_buffer[0..len]));
+    } else |_| {}
+
+    const system = try std.unicode.wtf16LeToWtf8Alloc(arena, windows.getSystemDirectoryWtf16Le());
+    try directories.append(arena, system);
+    if (std.fs.path.dirname(system)) |windows_dir| {
+        try directories.append(arena, try std.fs.path.join(arena, &.{ windows_dir, "System" }));
+        try directories.append(arena, windows_dir);
+    }
+
+    if (environment.get("PATH")) |path| {
+        var entries = std.mem.splitScalar(u8, path, ';');
+        while (entries.next()) |entry_raw| {
+            const entry = std.mem.trim(u8, entry_raw, "\"");
+            try directories.append(arena, entry);
+        }
+    }
+
+    const executable = if (std.fs.path.extension(program).len == 0)
+        try std.fmt.allocPrint(arena, "{s}.exe", .{program})
+    else
+        program;
+    for (directories.items) |directory| {
+        const candidate = if (directory.len == 0)
+            executable
+        else
+            try std.fs.path.join(arena, &.{ directory, executable });
+        const wide = try std.unicode.wtf8ToWtf16LeAllocZ(arena, candidate);
+        const attributes = win32.GetFileAttributesW(wide.ptr);
+        if (attributes == win32.INVALID_FILE_ATTRIBUTES) continue;
+        if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY != 0) continue;
+        return wide.ptr;
+    }
+    return error.FileNotFound;
+}
+
+fn isBareProgram(program: []const u8) bool {
+    return std.mem.indexOfAny(u8, program, "\\/:") == null;
+}
+
 /// The options this system has no way to honour, refused rather than accepted
 /// and quietly dropped.
 fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
-    // The program is resolved by `CreateProcessW`, from the environment the
-    // child is being given -- see the note on `lpApplicationName` in `spawn`.
-    // That is exactly `.child_environ`, and there is no argument to ask it for
-    // anything else, so the other two are refused rather than accepted and
-    // quietly not done.
+    // Windows has no argument that selects a PATH for CreateProcessW. This
+    // implementation resolves `.child_environ` before the call; the other two
+    // choices remain unsupported rather than being silently treated as it.
     if (options.path_search != .child_environ) return error.Unsupported;
 
     if (isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
