@@ -626,37 +626,44 @@ test "waitTimeout costs no more than the blocking wait it is a deadline on" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    // A budget, not a measurement. `waitTimeout` used to ask again on a
-    // growing interval -- one millisecond, then two, then four -- which put a
-    // millisecond and a half between a child ending and this call noticing,
-    // whatever the machine. It waits on a handle the system makes ready now,
-    // so the difference should be nothing but noise. Medians rather than
-    // means, because one descheduled sample on a loaded machine is not the
-    // claim.
-    const samples = 32;
-    const slack_us = 1250;
+    // A relative budget over complete rounds. `waitTimeout` used to ask again
+    // on a growing interval -- one millisecond, then two, then four -- which
+    // put a millisecond and a half between a child ending and this call
+    // noticing, whatever the machine. It waits on a handle the system makes
+    // ready now, so it stays within half again the blocking wait. The two are
+    // interleaved inside each round, and the fastest whole round from each
+    // side is the one compared: scheduler stalls can only make a round slower,
+    // and a shared runner gets several chances to leave each side alone.
+    const rounds = 6;
+    const per_round = 8;
+    var fastest_blocking: i64 = std.math.maxInt(i64);
+    var fastest_deadlined: i64 = std.math.maxInt(i64);
 
-    // Up to five goes at it. One descheduled run on a loaded machine is not
-    // the claim either, and a difference that is really there is there every
-    // time.
-    var attempt: usize = 0;
-    while (attempt < 5) : (attempt += 1) {
-        var blocking: [samples]i64 = undefined;
-        var deadlined: [samples]i64 = undefined;
-        for (&blocking) |*sample| sample.* = try timeOne(.blocking);
-        for (&deadlined) |*sample| sample.* = try timeOne(.deadlined);
+    // Neither side pays for the cold first spawn.
+    _ = try timeOne(.blocking);
+    _ = try timeOne(.deadlined);
 
-        std.mem.sort(i64, &blocking, {}, std.sort.asc(i64));
-        std.mem.sort(i64, &deadlined, {}, std.sort.asc(i64));
-        const with_wait = blocking[samples / 2];
-        const with_deadline = deadlined[samples / 2];
-        if (with_deadline <= with_wait + slack_us) return;
-
-        std.debug.print(
-            "\nwait() {d} us, waitTimeout() {d} us: {d} us more than the {d} us allowed\n",
-            .{ with_wait, with_deadline, with_deadline - with_wait, slack_us },
-        );
+    for (0..rounds) |round| {
+        var blocking: i64 = 0;
+        var deadlined: i64 = 0;
+        for (0..per_round) |_| {
+            if (round % 2 == 0) {
+                blocking += try timeOne(.blocking);
+                deadlined += try timeOne(.deadlined);
+            } else {
+                deadlined += try timeOne(.deadlined);
+                blocking += try timeOne(.blocking);
+            }
+        }
+        fastest_blocking = @min(fastest_blocking, blocking);
+        fastest_deadlined = @min(fastest_deadlined, deadlined);
     }
+
+    if (fastest_deadlined * 2 <= fastest_blocking * 3) return;
+    std.debug.print(
+        "\nfastest {d}-child round: wait() {d} us, waitTimeout() {d} us; deadline wait exceeded the 3:2 budget\n",
+        .{ per_round, fastest_blocking, fastest_deadlined },
+    );
     return error.TestWaitTimeoutCostsTooMuch;
 }
 
