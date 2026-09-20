@@ -134,7 +134,9 @@ needs the group database a fork child may not read.
 `job_memory_bytes`, `active_processes` and `cpu_rate` go on the job object
 every child there already has, so they bound the child *and everything it
 starts* rather than the one process. Windows only; anywhere else it is
-`error.Unsupported`.
+`error.Unsupported`. `cpu_rate` is hundredths of a percent of the whole
+machine's processor time, from 1 through 10,000; an out-of-range value is
+`error.InvalidJobLimit`.
 
 ### `Expect` — a conversation with a child
 

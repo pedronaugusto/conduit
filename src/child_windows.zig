@@ -402,6 +402,10 @@ const Job = struct {
 /// on the transition to empty, so a port attached after the child had already
 /// started and stopped would hear nothing and wait forever.
 fn createJob(limits: Child.JobLimits) SpawnError!Job {
+    if (limits.cpu_rate) |rate| {
+        if (rate < 1 or rate > 10_000) return error.InvalidJobLimit;
+    }
+
     const handle = win32.CreateJobObjectW(null, null) orelse return createError();
     errdefer windows.CloseHandle(handle);
 

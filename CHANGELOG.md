@@ -29,6 +29,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of racing on shared environment buffers.
 - `Proxy.run` now returns an input-side failure promptly even while a silent
   child keeps the output side blocked.
+- Windows `cpu_rate` is documented and validated as 1–10,000 hundredths of the
+  whole machine's CPU; `error.InvalidJobLimit` is added to `Child.SpawnError`.
 
 ## [0.4.0] - 2026-09-19
 

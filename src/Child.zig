@@ -400,11 +400,11 @@ pub const JobLimits = struct {
     /// already full for does not start, so a child given 1 cannot start
     /// anything.
     active_processes: ?u32 = null,
-    /// A hard ceiling on the share of the machine's processors the job may
-    /// use, in hundredths of a percent of one processor's worth: 5_000 is half
-    /// a processor, 20_000 is two. `JobObjectCpuRateControlInformation` with a
-    /// hard cap. Must be between 1 and 10_000 times the processor count, and
-    /// the operating system refuses anything else.
+    /// A hard ceiling on the share of the whole machine's processor time the
+    /// job may use, in hundredths of a percent: 5_000 is 50% of all available
+    /// CPU, however many processors the machine has.
+    /// `JobObjectCpuRateControlInformation` with a hard cap. Must be between 1
+    /// and 10_000 inclusive.
     cpu_rate: ?u32 = null,
 
     /// Whether any of them asks for a limit. `spawn` sets nothing at all when
@@ -593,6 +593,9 @@ pub const SpawnError = error{
     /// Windows, or `job_limits` anywhere else. The option that cannot be
     /// honoured says so.
     Unsupported,
+    /// Windows: `job_limits.cpu_rate` was outside its inclusive 1–10,000
+    /// range. No child was started.
+    InvalidJobLimit,
 } || std.Io.UnexpectedError;
 
 /// What an `execve` that failed means, as one of `SpawnError`.

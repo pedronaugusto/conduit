@@ -1744,6 +1744,18 @@ test "a job limit bounds what the child's tree may do" {
     try testing.expect(std.mem.indexOf(u8, with.stdout, "NESTED") == null);
 }
 
+test "Windows CPU job limits reject values outside a whole-system percentage" {
+    if (!is_windows) return error.SkipZigTest;
+
+    inline for (.{ @as(u32, 0), @as(u32, 10_001) }) |rate| {
+        try testing.expectError(error.InvalidJobLimit, Child.spawn(io, gpa, .{
+            .argv = &.{ "cmd.exe", "/c", "exit 0" },
+            .stdio = .ignore,
+            .job_limits = .{ .cpu_rate = rate },
+        }));
+    }
+}
+
 test "job limits are refused on POSIX rather than quietly not applied" {
     if (is_windows) return error.SkipZigTest;
     try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
