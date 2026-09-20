@@ -25,6 +25,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PATH` instead of the parent's.
 - POSIX descendant walks no longer stop after 512 processes; `Child.kill` now
   adds `error.OutOfMemory` rather than silently sending a partial tree signal.
+- Concurrent Windows `spawnShell` calls retain separate `%COMSPEC%` values
+  instead of racing on shared environment buffers.
 
 ## [0.4.0] - 2026-09-19
 

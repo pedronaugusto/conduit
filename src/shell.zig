@@ -99,9 +99,16 @@ pub const SpawnShellError = Pty.OpenError || Child.SpawnError || environ.Inherit
 /// On success the caller owns the `Shell` and must reap the child and call
 /// `Shell.deinit`.
 pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {
+    var owned_program: ?[]u8 = null;
+    defer if (owned_program) |program| allocator.free(program);
+    const program = options.program orelse program: {
+        owned_program = try defaultShell(allocator);
+        break :program owned_program.?;
+    };
+
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(allocator);
-    try argv.append(allocator, options.program orelse defaultShell());
+    try argv.append(allocator, program);
     try argv.appendSlice(allocator, options.args);
 
     // Built here and freed on the way out: `Child.spawn` copies everything it
@@ -139,27 +146,24 @@ pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShell
 }
 
 /// The user's shell, or the one every system is guaranteed to have.
-fn defaultShell() []const u8 {
-    if (is_windows) return fromEnvironment("COMSPEC") orelse "cmd.exe";
-    return fromEnvironment("SHELL") orelse "/bin/sh";
+fn defaultShell(allocator: Allocator) Allocator.Error![]u8 {
+    if (try fromEnvironment(allocator, if (is_windows) "COMSPEC" else "SHELL")) |program| {
+        return program;
+    }
+    return allocator.dupe(u8, if (is_windows) "cmd.exe" else "/bin/sh");
 }
 
-/// One variable from this process's environment, without allocating.
+/// An owned copy of one variable from this process's environment.
 ///
 /// On Windows the environment block moves when it is modified, so the value is
-/// copied into a static buffer rather than pointed at. It is read once, before
-/// any child exists, and the result is used immediately. `GetEnvironmentVariableW`
-/// does the copying: one call, rather than a walk of the process environment
-/// block under the loader's lock with an assertion about every entry it passes.
-fn fromEnvironment(name: []const u8) ?[]const u8 {
+/// copied rather than pointed at. `GetEnvironmentVariableW` does the copying:
+/// one call, rather than a walk of the process environment block under the
+/// loader's lock with an assertion about every entry it passes.
+fn fromEnvironment(allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {
     if (is_windows) {
-        const State = struct {
-            var value: [max_program_units]u16 = undefined;
-            /// Three bytes of WTF-8 for every WTF-16 unit is the worst case,
-            /// and this has to hold the worst case: `wtf16LeToWtf8` writes
-            /// what the value needs and does not ask.
-            var buffer: [max_program_units * 3]u8 = undefined;
-        };
+        var value: [max_program_units]u16 = undefined;
+        // Three bytes of WTF-8 for every WTF-16 unit is the worst case.
+        var buffer: [max_program_units * 3]u8 = undefined;
         var name_w: [64]u16 = undefined;
         if (name.len + 1 > name_w.len) return null;
         const name_len = std.unicode.wtf8ToWtf16Le(&name_w, name) catch return null;
@@ -167,8 +171,8 @@ fn fromEnvironment(name: []const u8) ?[]const u8 {
 
         const written = win32.GetEnvironmentVariableW(
             name_w[0..name_len :0].ptr,
-            &State.value,
-            State.value.len,
+            &value,
+            value.len,
         );
         // Zero is "there is no such variable" and the fall-back is used
         // instead. A count at or past the buffer's length is the variable not
@@ -176,9 +180,9 @@ fn fromEnvironment(name: []const u8) ?[]const u8 {
         // is going to run; the count `GetEnvironmentVariableW` reports in that
         // case is what it would have needed, not what it wrote, so nothing has
         // been written and there is nothing to read.
-        if (written == 0 or written >= State.value.len) return null;
-        const len = std.unicode.wtf16LeToWtf8(&State.buffer, State.value[0..written]);
-        return State.buffer[0..len];
+        if (written == 0 or written >= value.len) return null;
+        const len = std.unicode.wtf16LeToWtf8(&buffer, value[0..written]);
+        return try allocator.dupe(u8, buffer[0..len]);
     }
     var index: usize = 0;
     while (std.c.environ[index]) |entry| : (index += 1) {
@@ -188,13 +192,29 @@ fn fromEnvironment(name: []const u8) ?[]const u8 {
         if (pair[name.len] != '=') continue;
         const value = pair[name.len + 1 ..];
         if (value.len == 0) continue;
-        return value;
+        return try allocator.dupe(u8, value);
     }
     return null;
 }
 
 test "the default shell is a program that exists" {
-    const program = defaultShell();
+    const program = try defaultShell(std.testing.allocator);
+    defer std.testing.allocator.free(program);
     try std.testing.expect(program.len > 0);
     if (!is_windows) try std.testing.expect(std.mem.indexOfScalar(u8, program, '/') != null);
+}
+
+test "default shell calls retain independent values" {
+    if (!is_windows) return error.SkipZigTest;
+
+    const first = try defaultShell(std.testing.allocator);
+    defer std.testing.allocator.free(first);
+    const second = try defaultShell(std.testing.allocator);
+    defer std.testing.allocator.free(second);
+    try std.testing.expect(first.ptr != second.ptr);
+    if (first.len > 0 and second.len > 0) {
+        const second_first = second[0];
+        first[0] +%= 1;
+        try std.testing.expectEqual(second_first, second[0]);
+    }
 }
