@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+- `Child.output` reads directly into geometrically grown collection storage,
+  avoiding a copy and steady-state allocation while it drains each stream.
 - Descendant signals use stable process identities, so PID reuse cannot send a
   child's signal to an unrelated process.
 - Windows children with closed or console streams no longer inherit unrelated

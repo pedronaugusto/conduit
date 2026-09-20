@@ -1513,9 +1513,29 @@ fn collect(
     into: *Collector,
 ) std.Io.Cancelable!void {
     defer into.done.store(true, .release);
-    var buffer: [4096]u8 = undefined;
+    var discard: [64 * 1024]u8 = undefined;
     while (true) {
-        const n = handles.readStreaming(f, io, &.{&buffer}) catch |e| switch (e) {
+        const room = max_bytes -| into.list.items.len;
+        var keeping = into.failure.load(.acquire) != .out_of_memory and room != 0;
+        const buffer = if (keeping) buffer: {
+            if (into.list.capacity == into.list.items.len) {
+                // Start large enough to drain an ordinary pipe in a handful
+                // of reads, then grow geometrically. The read lands in the
+                // allocation itself: no stack-buffer-to-list copy follows it,
+                // and after a growth there is no allocation in the steady
+                // state.
+                const additional = @min(room, @max(@as(usize, 16 * 1024), into.list.items.len));
+                into.list.ensureUnusedCapacity(allocator, additional) catch {
+                    into.failure.store(.out_of_memory, .release);
+                    into.truncated = true;
+                    keeping = false;
+                    break :buffer discard[0..];
+                };
+            }
+            break :buffer into.list.unusedCapacitySlice()[0..@min(room, into.list.capacity - into.list.items.len)];
+        } else discard[0..];
+
+        const n = handles.readStreaming(f, io, &.{buffer}) catch |e| switch (e) {
             error.Canceled => return error.Canceled,
             else => {
                 if (handles.finished(e)) return;
@@ -1523,25 +1543,13 @@ fn collect(
                 return;
             },
         };
-        if (into.failure.load(.acquire) == .out_of_memory) {
+        if (!keeping) {
             // Allocation failed, but reading must continue until the child
             // exits or it can fill this pipe and make the wait deadlock.
             into.truncated = true;
             continue;
         }
-        const room = max_bytes -| into.list.items.len;
-        if (room == 0) {
-            // Still read, so the child is never blocked on a full pipe; just
-            // stop keeping it.
-            into.truncated = true;
-            continue;
-        }
-        const keep = @min(room, n);
-        if (keep < n) into.truncated = true;
-        into.list.appendSlice(allocator, buffer[0..keep]) catch {
-            into.failure.store(.out_of_memory, .release);
-            into.truncated = true;
-        };
+        into.list.items.len += n;
     }
 }
 
