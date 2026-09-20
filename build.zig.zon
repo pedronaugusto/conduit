@@ -1,6 +1,6 @@
 .{
     .name = .conduit,
-    .version = "0.5.0",
+    .version = "0.5.1",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0xfdbb5281ef00b2e2,
     .paths = .{
