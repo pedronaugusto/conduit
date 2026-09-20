@@ -4,40 +4,56 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.5.0] - 2026-09-20
 
+Two rows of a private head-to-head brought level, a handful of faults the
+suite had not reached, and the errors a caller can now be told instead of
+being left with a child in a state the type did not name.
+
+### Breaking
+
+- `Expect.StartError` has a new member, `AlreadyStarted`: `Expect.start` now
+  reports it instead of putting a second reader over the same buffer.
+- `Proxy.RunError` has a new member, `BufferTooSmall`, which an empty buffer
+  returns.
+- `Child.SpawnError` has a new member, `InvalidJobLimit`: Windows `cpu_rate`
+  is documented and validated as 1–10,000 hundredths of the whole machine's
+  CPU.
+- `Child.kill` can return `error.OutOfMemory` where before it sent a partial
+  tree signal in silence.
+- `Reaper.exit` returns `Child.WaitError!?Term`, so a terminal wait failure is
+  preserved instead of being reported as `null` forever.
+
+### Changed
+
+- `Child.output` reads directly into geometrically grown collection storage,
+  with no copy and no steady-state allocation while it drains each stream.
 - POSIX tree signals keep their ordinary in-group path on stack storage and
   retain separate stable identities only for descendants that left the group.
-- `Child.output` reads directly into geometrically grown collection storage,
-  avoiding a copy and steady-state allocation while it drains each stream.
-- Descendant signals use stable process identities, so PID reuse cannot send a
-  child's signal to an unrelated process.
-- Windows children with closed or console streams no longer inherit unrelated
-  inheritable process handles.
-- `Expect.start` now reports `error.AlreadyStarted` instead of putting a second
-  reader over the same buffer; this adds a member to `Expect.StartError`.
+- Descendant signals use stable process identities, so PID reuse cannot send
+  a child's signal to an unrelated process, and the descendant walk no longer
+  stops after 512 processes.
+
+### Fixed
+
+- A deadline wait on Darwin and the BSDs reaps a child whose exit note arrived a moment before `waitpid` would hand it over, instead of reporting the timeout it was not. Under a busy process table that moment was long enough to report about one child in fifteen hundred as still running.
+- Windows children with closed or console streams no longer inherit
+  unrelated inheritable process handles.
 - Concurrent Windows spawns use private inheritable handle copies instead of
   racing while changing flags on caller-owned handles.
 - POSIX `.close_all` spawns still report a pre-exec failure instead of
   returning a child that exits 127.
 - `Child.output` keeps draining after allocation failure, returns
   `error.OutOfMemory`, and ends a child promptly when a stream cannot be read.
-- Streaming readers retry permitted zero-byte results instead of treating them
-  as EOF; empty Proxy buffers now return `error.BufferTooSmall`, which adds a
-  member to `Proxy.RunError`.
+- Streaming readers retry permitted zero-byte results instead of treating
+  them as EOF.
 - Windows resolves a bare program against the selected child environment's
   `PATH` instead of the parent's.
-- POSIX descendant walks no longer stop after 512 processes; `Child.kill` now
-  adds `error.OutOfMemory` rather than silently sending a partial tree signal.
 - Concurrent Windows `spawnShell` calls retain separate `%COMSPEC%` values
   instead of racing on shared environment buffers.
-- `Proxy.run` now returns an input-side failure promptly even while a silent
+- `Proxy.run` returns an input-side failure promptly even while a silent
   child keeps the output side blocked.
-- Windows `cpu_rate` is documented and validated as 1–10,000 hundredths of the
-  whole machine's CPU; `error.InvalidJobLimit` is added to `Child.SpawnError`.
-- `Reaper.exit` now returns `Child.WaitError!?Term` and preserves a terminal
-  wait failure instead of reporting `null` forever.
-- A canceled Windows `Expect` reader now publishes completion immediately, so
+- A canceled Windows `Expect` reader publishes completion immediately, so
   `deinit` does not spend its full cancellation budget after the read ended.
 
 ## [0.4.0] - 2026-09-19

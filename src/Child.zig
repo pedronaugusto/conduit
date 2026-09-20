@@ -884,7 +884,7 @@ fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?T
                 // A blocking wait on a handle is not a cancelation point, so
                 // it is spent in slices and cancelation is asked about
                 // between them.
-                if (watch.ended(@min(left, wait_for.slice_ms))) break;
+                if (watch.ended(@min(left, wait_for.slice_ms))) return child.reapEnded(io, deadline);
                 try std.Io.checkCancel(io);
             }
             return child.tryWaitClaimed();
@@ -975,6 +975,28 @@ fn tryWaitClaimed(child: *Child) TryWaitError!?Term {
             .CHILD => return error.ReapedElsewhere,
             else => |err| return posix.unexpectedErrno(err),
         }
+    }
+}
+
+/// Reap a child the watch has said is ending.
+///
+/// The note is posted as the process leaves and not as it becomes something
+/// `waitpid` will hand over: on Darwin the two are a moment apart, and under
+/// a busy process table the moment is long enough for `WNOHANG` to answer
+/// "still running" once or twice. Taking that answer as a timeout reported a
+/// child that had already ended as one that never did. So the reap is asked
+/// for again, on a short interval, until the deadline the caller gave.
+fn reapEnded(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
+    var tries: u32 = 0;
+    while (true) {
+        if (try child.tryWaitClaimed()) |term| return term;
+        const left = deadline.remainingMs(io);
+        if (left == 0) return null;
+        // The first few asks give the kernel the scheduler tick it needs
+        // without sleeping; after that, a millisecond at a time.
+        if (tries < 8) std.Thread.yield() catch {} else try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+        tries += 1;
+        try std.Io.checkCancel(io);
     }
 }
 
