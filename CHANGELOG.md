@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returning a child that exits 127.
 - `Child.output` keeps draining after allocation failure, returns
   `error.OutOfMemory`, and ends a child promptly when a stream cannot be read.
+- Streaming readers retry permitted zero-byte results instead of treating them
+  as EOF; empty Proxy buffers now return `error.BufferTooSmall`, which adds a
+  member to `Proxy.RunError`.
 
 ## [0.4.0] - 2026-09-19
 

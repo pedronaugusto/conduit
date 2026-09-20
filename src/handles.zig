@@ -49,6 +49,34 @@ pub fn finished(err: anyerror) bool {
     return err == error.EndOfStream or err == error.InputOutput;
 }
 
+pub const ReadStreamingError = std.Io.File.ReadStreamingError || error{
+    /// No read can make progress because every destination slice is empty.
+    EmptyBuffer,
+};
+
+/// A streaming read that follows Zig's distinction between a transient zero
+/// and `error.EndOfStream`.
+///
+/// All readers in this package want progress or a named end. Retrying here
+/// keeps one permitted zero from truncating output, ending an `Expect`, or
+/// stopping a proxy. An all-empty destination is rejected separately so a
+/// backend that correctly returns zero for it cannot make this loop spin.
+pub fn readStreaming(
+    f: std.Io.File,
+    io: std.Io,
+    buffers: []const []u8,
+) ReadStreamingError!usize {
+    var has_room = false;
+    for (buffers) |buffer| has_room = has_room or buffer.len != 0;
+    if (!has_room) return error.EmptyBuffer;
+
+    while (true) {
+        const n = try f.readStreaming(io, buffers);
+        if (n != 0) return n;
+        try std.Io.checkCancel(io);
+    }
+}
+
 /// Whether a descriptor on this system can be opened close-on-exec in one
 /// call, or needs a second one.
 ///
@@ -100,3 +128,37 @@ pub const ForkGap = struct {
         }
     }
 };
+
+test "readStreaming retries a permitted zero-byte result" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var written = try tmp.dir.createFile(io, "bytes", .{});
+    try written.writeStreamingAll(io, "after zero");
+    written.close(io);
+    var f = try tmp.dir.openFile(io, "bytes", .{});
+    defer f.close(io);
+
+    const ZeroOnce = struct {
+        base: std.Io,
+        returned_zero: bool = false,
+
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            if (operation == .file_read_streaming and !state.returned_zero) {
+                state.returned_zero = true;
+                return .{ .file_read_streaming = 0 };
+            }
+            return state.base.vtable.operate(state.base.userdata, operation);
+        }
+    };
+    var state: ZeroOnce = .{ .base = io };
+    var vtable = io.vtable.*;
+    vtable.operate = ZeroOnce.operate;
+    const zero_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
+
+    var buffer: [32]u8 = undefined;
+    const n = try readStreaming(f, zero_io, &.{&buffer});
+    try std.testing.expect(state.returned_zero);
+    try std.testing.expectEqualStrings("after zero", buffer[0..n]);
+}

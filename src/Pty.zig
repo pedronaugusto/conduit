@@ -328,8 +328,7 @@ fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
     const f = file(handle);
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const n = f.readStreaming(io, &.{&buffer}) catch return;
-        if (n == 0) return;
+        _ = handles.readStreaming(f, io, &.{&buffer}) catch return;
     }
 }
 
@@ -621,11 +620,10 @@ const Drain = struct {
     fn run(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {
         var buffer: [4096]u8 = undefined;
         while (true) {
-            const n = f.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+            _ = handles.readStreaming(f, io, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return,
             };
-            if (n == 0) return;
         }
     }
 };

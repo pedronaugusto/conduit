@@ -110,6 +110,9 @@ pub const RunError = error{
     /// The master could not be read, for a reason other than the child
     /// leaving.
     ReadFailed,
+    /// One of the two transfer buffers is empty, so its direction cannot make
+    /// progress.
+    BufferTooSmall,
 } || std.Io.Cancelable;
 
 /// Pumps both directions, and forwards the window size, until the child's end
@@ -131,6 +134,9 @@ pub const RunError = error{
 /// that has gone away is the child's problem and the program's, not this
 /// loop's, and it will be reported to them by the read or write that follows.
 pub fn run(io: std.Io, options: Options) RunError!void {
+    if (options.input_buffer.len == 0 or options.output_buffer.len == 0) {
+        return error.BufferTooSmall;
+    }
     var input_error: ?RunError = null;
     var group: std.Io.Group = .init;
     try group.concurrent(io, inputTask, .{ io, options, &input_error });
@@ -166,11 +172,10 @@ fn inputTask(io: std.Io, options: Options, out_error: *?RunError) std.Io.Cancela
 /// One direction. Ends at the first sign that `from` has no more to give.
 fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!void {
     while (true) {
-        const n = from.readStreaming(io, &.{buffer}) catch |err| switch (err) {
+        const n = handles.readStreaming(from, io, &.{buffer}) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => if (handles.finished(err)) return else return error.ReadFailed,
         };
-        if (n == 0) return;
         to.writeStreamingAll(io, buffer[0..n]) catch |err| switch (err) {
             error.BrokenPipe => return,
             error.Canceled => return error.Canceled,
@@ -228,6 +233,25 @@ const testing = std.testing;
 const Child = @import("Child.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
 
+test "empty transfer buffers are rejected before either direction starts" {
+    const io = testing.io;
+    var one: [1]u8 = undefined;
+    try testing.expectError(error.BufferTooSmall, run(io, .{
+        .master = undefined,
+        .input = undefined,
+        .output = undefined,
+        .input_buffer = &.{},
+        .output_buffer = &one,
+    }));
+    try testing.expectError(error.BufferTooSmall, run(io, .{
+        .master = undefined,
+        .input = undefined,
+        .output = undefined,
+        .input_buffer = &one,
+        .output_buffer = &.{},
+    }));
+}
+
 /// `run` under a `std.Io.Group`, which accepts only `error.Canceled`.
 fn runQuietly(io: std.Io, options: Options) std.Io.Cancelable!void {
     run(io, options) catch |err| switch (err) {
@@ -249,7 +273,7 @@ fn expectWithin(io: std.Io, file: std.Io.File, seen: []u8, want: []const u8) !vo
             .revents = 0,
         }};
         if (try std.posix.poll(&fds, 5000) == 0) return error.TestPumpDeliveredNothing;
-        filled += try file.readStreaming(io, &.{seen[filled..]});
+        filled += try handles.readStreaming(file, io, &.{seen[filled..]});
     }
     try testing.expectEqualStrings(want, seen[0..filled]);
 }

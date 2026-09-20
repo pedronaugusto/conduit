@@ -179,7 +179,8 @@ difference below.
 
 `Proxy.run(io, .{ .master, .input, .output, .input_buffer, .output_buffer, .resize })`
 moves bytes both ways until the child's end of the terminal closes, and keeps
-the pair the size of a terminal of yours.
+the pair the size of a terminal of yours. Both buffers must be non-empty;
+otherwise it returns `error.BufferTooSmall`.
 
 ### Terminal helpers
 

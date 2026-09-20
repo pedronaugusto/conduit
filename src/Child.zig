@@ -1510,7 +1510,7 @@ fn collect(
     defer into.done.store(true, .release);
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const n = f.readStreaming(io, &.{&buffer}) catch |e| switch (e) {
+        const n = handles.readStreaming(f, io, &.{&buffer}) catch |e| switch (e) {
             error.Canceled => return error.Canceled,
             else => {
                 if (handles.finished(e)) return;
@@ -1518,7 +1518,6 @@ fn collect(
                 return;
             },
         };
-        if (n == 0) return;
         if (into.failure.load(.acquire) == .out_of_memory) {
             // Allocation failed, but reading must continue until the child
             // exits or it can fill this pipe and make the wait deadlock.

@@ -463,12 +463,10 @@ fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
             continue;
         }
 
-        const n = expect.master.read.readStreaming(io, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
+        const n = handles.readStreaming(expect.master.read, io, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
         };
-        if (n == 0) return expect.finish(io, .ended);
-
         {
             expect.mutex.lockUncancelable(io);
             defer expect.mutex.unlock(io);
