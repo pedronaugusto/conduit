@@ -252,6 +252,26 @@ pub extern "kernel32" fn CreatePipe(
 
 pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;
 
+/// What names a file on its volume, for the tests to say whether a handle in
+/// another process is to the same file as one here.
+pub const BY_HANDLE_FILE_INFORMATION = extern struct {
+    dwFileAttributes: DWORD,
+    ftCreationTime: windows.FILETIME,
+    ftLastAccessTime: windows.FILETIME,
+    ftLastWriteTime: windows.FILETIME,
+    dwVolumeSerialNumber: DWORD,
+    nFileSizeHigh: DWORD,
+    nFileSizeLow: DWORD,
+    nNumberOfLinks: DWORD,
+    nFileIndexHigh: DWORD,
+    nFileIndexLow: DWORD,
+};
+
+pub extern "kernel32" fn GetFileInformationByHandle(
+    hFile: HANDLE,
+    lpFileInformation: *BY_HANDLE_FILE_INFORMATION,
+) callconv(.winapi) BOOL;
+
 /// What `GetFileAttributesW` returns when it could not look at the path.
 pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
 pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x00000010;

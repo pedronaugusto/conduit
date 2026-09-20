@@ -2346,6 +2346,8 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     defer watchdog.deinit(io);
     if (!is_windows) return error.SkipZigTest;
 
+    // A handle this process holds that is inheritable and has nothing to do
+    // with the child: what `bInheritHandles` alone would hand over.
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var secret = try tmp.dir.createFile(io, "secret", .{});
@@ -2357,22 +2359,89 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     ) != .FALSE);
     defer _ = win32.SetHandleInformation(secret.handle, win32.HANDLE_FLAG_INHERIT, 0);
 
-    const command = try std.fmt.allocPrint(
-        gpa,
-        "$s='[DllImport(\"kernel32.dll\")] public static extern bool GetHandleInformation(IntPtr h, out uint f);'; " ++
-            "Add-Type -MemberDefinition $s -Name Native -Namespace Conduit; $f=0; " ++
-            "if ([Conduit.Native]::GetHandleInformation([IntPtr]{d},[ref]$f)) {{ exit 9 }} else {{ exit 0 }}",
-        .{@intFromPtr(secret.handle)},
-    );
-    defer gpa.free(command);
+    // The question is put to the child's handle table from here, not to a
+    // program running in the child: an inherited handle keeps its value, so
+    // the child is asked for a copy of whatever it holds at that value, and
+    // the copy is compared with the file. Asking the child whether the value
+    // is *valid* would not do -- a handle value is an index into a table the
+    // child fills with handles of its own, and a program the size of a shell
+    // holds hundreds, so the number is nearly always in use for something
+    // else. The child only has to stay alive to be asked.
+    const sleep = [_][]const u8{
+        "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30",
+    };
 
     var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command },
+        .argv = &sleep,
         .stdio = .{ .streams = .{ .stdin = .close, .stdout = .close, .stderr = .close } },
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expect(!holdsFile(child.id, secret.handle));
+
+    // The control: the same program started the plain Windows way, with
+    // `bInheritHandles` and no list, does hold it. Without this the claim
+    // above would also be made by a probe that can see nothing.
+    const control = try plainSpawn(&sleep);
+    defer {
+        _ = win32.TerminateProcess(control, 1);
+        std.os.windows.CloseHandle(control);
+    }
+    try testing.expect(holdsFile(control, secret.handle));
+}
+
+/// Whether `process` holds, at the value `handle` has here, a handle to the
+/// same file. `false` for no handle at that value, or one to anything else.
+fn holdsFile(process: std.os.windows.HANDLE, handle: std.os.windows.HANDLE) bool {
+    const windows = std.os.windows;
+    var copy: windows.HANDLE = undefined;
+    if (win32.DuplicateHandle(
+        process,
+        handle,
+        windows.GetCurrentProcess(),
+        &copy,
+        0,
+        .FALSE,
+        win32.DUPLICATE_SAME_ACCESS,
+    ) == .FALSE) return false;
+    defer windows.CloseHandle(copy);
+
+    var theirs: win32.BY_HANDLE_FILE_INFORMATION = undefined;
+    var ours: win32.BY_HANDLE_FILE_INFORMATION = undefined;
+    if (win32.GetFileInformationByHandle(copy, &theirs) == .FALSE) return false;
+    if (win32.GetFileInformationByHandle(handle, &ours) == .FALSE) return false;
+    return theirs.dwVolumeSerialNumber == ours.dwVolumeSerialNumber and
+        theirs.nFileIndexHigh == ours.nFileIndexHigh and
+        theirs.nFileIndexLow == ours.nFileIndexLow;
+}
+
+/// `CreateProcessW` as a program that has not thought about inheritance
+/// calls it: every inheritable handle goes to the child. The process handle,
+/// which the caller ends and closes.
+fn plainSpawn(argv: []const []const u8) !std.os.windows.HANDLE {
+    const windows = std.os.windows;
+    const joined = try std.mem.join(gpa, " ", argv);
+    defer gpa.free(joined);
+    const line = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, joined);
+    defer gpa.free(line);
+
+    var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+    startup.cb = @sizeOf(windows.STARTUPINFOW);
+    var information: windows.PROCESS.INFORMATION = undefined;
+    if (windows.kernel32.CreateProcessW(
+        null,
+        line.ptr,
+        null,
+        null,
+        .TRUE,
+        .{},
+        null,
+        null,
+        &startup,
+        &information,
+    ) == .FALSE) return error.ControlDidNotStart;
+    windows.CloseHandle(information.hThread);
+    return information.hProcess;
 }
 
 test "a child gets no descriptor of this process's but its own three" {
