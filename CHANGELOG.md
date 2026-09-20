@@ -14,6 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reader over the same buffer; this adds a member to `Expect.StartError`.
 - Concurrent Windows spawns use private inheritable handle copies instead of
   racing while changing flags on caller-owned handles.
+- POSIX `.close_all` spawns still report a pre-exec failure instead of
+  returning a child that exits 127.
 
 ## [0.4.0] - 2026-09-19
 

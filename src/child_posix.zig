@@ -249,7 +249,7 @@ fn childMain(
         else => {},
     }
 
-    if (options.fd_policy == .close_all) closeFromThree();
+    if (options.fd_policy == .close_all) closeFromThreeExcept(report);
 
     // Before the credentials below: a privileged parent can still raise a hard
     // limit for a child it is about to hand to somebody else, and after
@@ -367,7 +367,11 @@ fn placeDescriptors(plan: Plan) bool {
     return true;
 }
 
-/// Closes every descriptor from 3 upwards, in the fork child.
+/// Closes every descriptor from 3 upwards except `kept`, in the fork child.
+///
+/// `kept` is the close-on-exec report pipe. It has to survive long enough to
+/// report a failure below, while a successful exec still closes it and gives
+/// the parent end of file.
 ///
 /// `close_range` is one system call and has been in Linux since 5.9; the
 /// fallback is a loop to the soft descriptor limit, which is what a program
@@ -375,10 +379,17 @@ fn placeDescriptors(plan: Plan) bool {
 /// which is what the fork child needs; neither can fail in a way that means
 /// anything here, because a descriptor that was not there is a descriptor the
 /// child does not have.
-fn closeFromThree() void {
+fn closeFromThreeExcept(kept: posix.fd_t) void {
     if (builtin.os.tag == .linux) {
-        const rc = std.os.linux.close_range(3, std.math.maxInt(i32), .{ .UNSHARE = false, .CLOEXEC = false });
-        if (std.os.linux.errno(rc) == .SUCCESS) return;
+        const before = if (kept > 3)
+            std.os.linux.close_range(3, @intCast(kept - 1), .{ .UNSHARE = false, .CLOEXEC = false })
+        else
+            0;
+        const after = std.os.linux.close_range(@intCast(@max(kept + 1, 3)), std.math.maxInt(i32), .{
+            .UNSHARE = false,
+            .CLOEXEC = false,
+        });
+        if (std.os.linux.errno(before) == .SUCCESS and std.os.linux.errno(after) == .SUCCESS) return;
     }
     var limit: posix.rlimit = undefined;
     const ceiling: posix.fd_t = if (c.getrlimit(.NOFILE, &limit) == 0)
@@ -386,7 +397,9 @@ fn closeFromThree() void {
     else
         4096;
     var fd: posix.fd_t = 3;
-    while (fd < ceiling) : (fd += 1) _ = c.close(fd);
+    while (fd < ceiling) : (fd += 1) {
+        if (fd != kept) _ = c.close(fd);
+    }
 }
 
 /// Makes `fd` the child's descriptor number `target`, clearing close-on-exec so

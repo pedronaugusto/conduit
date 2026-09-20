@@ -1865,6 +1865,13 @@ test "a program that is not there is an error, not a child that exits 127" {
         .argv = &.{},
         .stdio = .ignore,
     }));
+    if (!is_windows) {
+        try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+            .argv = &.{"conduit-no-such-program-anywhere"},
+            .stdio = .ignore,
+            .fd_policy = .close_all,
+        }));
+    }
 }
 
 test "a working directory that is not there is an error" {
