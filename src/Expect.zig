@@ -93,6 +93,9 @@ mutex: std.Io.Mutex,
 arrived: std.Io.Event,
 /// The task doing the reading.
 group: std.Io.Group,
+/// Whether a reading task has been started. Atomic so two callers cannot both
+/// get past `start` and put readers over the same buffer.
+started: std.atomic.Value(bool),
 /// Set by `deinit`, read by the task before every read it starts, so a reader
 /// that is between reads when `deinit` begins does not start another one.
 stopping: std.atomic.Value(bool),
@@ -131,21 +134,33 @@ pub fn init(master: Pty.Master, buffer: []u8) Expect {
         .mutex = .init,
         .arrived = .unset,
         .group = .init,
+        .started = .init(false),
         .stopping = .init(false),
         .finished = .init(false),
     };
 }
 
-pub const StartError = std.Io.ConcurrentError;
+pub const StartError = error{
+    /// This `Expect` already has, or had, its one reading task.
+    AlreadyStarted,
+} || std.Io.ConcurrentError;
 
 /// Begins reading.
 ///
 /// The task must be able to run alongside the caller, so an `std.Io`
 /// implementation with no concurrency to offer fails here rather than
 /// deadlocking at the first `until`. Everything the child says from this
-/// moment is kept; anything it said before it is not.
+/// moment is kept; anything it said before it is not. An `Expect` has one
+/// reading task for its lifetime; a second successful-start attempt is
+/// `error.AlreadyStarted`.
 pub fn start(expect: *Expect, io: std.Io) StartError!void {
-    return expect.group.concurrent(io, read, .{ expect, io });
+    if (expect.started.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+        return error.AlreadyStarted;
+    }
+    expect.group.concurrent(io, read, .{ expect, io }) catch |err| {
+        expect.started.store(false, .release);
+        return err;
+    };
 }
 
 /// Stops reading and releases the task.
@@ -530,6 +545,33 @@ const Watchdog = @import("test_support.zig").Watchdog;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;
+
+test "start refuses to put a second reader over the buffer" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    const argv: []const []const u8 = if (is_windows)
+        &.{ "cmd.exe", "/c", "echo one reader" }
+    else
+        &.{ "/bin/sh", "-c", "printf 'one reader'" };
+    var child = try Child.spawn(io, gpa, .{
+        .argv = argv,
+        .stdio = .{ .pipes = .{ .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var buffer: [64]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+    try testing.expectError(error.AlreadyStarted, expect.start(io));
+    try testing.expectEqualStrings("one reader", (try expect.until(io, "one reader", budget_ms)).found);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
 
 test "a conversation over pipes: wait for what the child echoes, then answer" {
     const io = testing.io;

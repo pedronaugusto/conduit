@@ -10,6 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   child's signal to an unrelated process.
 - Windows children with closed or console streams no longer inherit unrelated
   inheritable process handles.
+- `Expect.start` now reports `error.AlreadyStarted` instead of putting a second
+  reader over the same buffer; this adds a member to `Expect.StartError`.
 
 ## [0.4.0] - 2026-09-19
 

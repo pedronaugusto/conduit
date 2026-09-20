@@ -141,7 +141,7 @@ starts* rather than the one process. Windows only; anywhere else it is
 | | |
 |---|---|
 | `Expect.init(master, buffer)` | Over `Child.pty` or `Pty.master()`, with a buffer the caller owns. |
-| `expect.start(io)`, `expect.deinit(io)` | The reading task, which runs between calls. |
+| `expect.start(io)`, `expect.deinit(io)` | The one reading task, which runs between calls. A second `start` is `error.AlreadyStarted`. |
 | `expect.until(io, pattern, timeout_ms)` | Waits for a literal byte pattern and consumes through it: `Match.before` and `Match.found`. |
 | `expect.untilAny(io, patterns, timeout_ms)` | Waits for any of several. The earliest match wins, whatever order they were listed in; `Match.index` says which, and the ones that lost stay pending. |
 | `expect.bytes(io, count, timeout_ms)` | Waits for a count of bytes and consumes them. |
