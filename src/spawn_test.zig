@@ -2188,6 +2188,41 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
     try testing.expect(std.mem.indexOf(u8, written, "to the caller's file") != null);
 }
 
+test "a Windows child with every stream closed inherits no unrelated handle" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (!is_windows) return error.SkipZigTest;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var secret = try tmp.dir.createFile(io, "secret", .{});
+    defer secret.close(io);
+    try testing.expect(win32.SetHandleInformation(
+        secret.handle,
+        win32.HANDLE_FLAG_INHERIT,
+        win32.HANDLE_FLAG_INHERIT,
+    ) != .FALSE);
+    defer _ = win32.SetHandleInformation(secret.handle, win32.HANDLE_FLAG_INHERIT, 0);
+
+    const command = try std.fmt.allocPrint(
+        gpa,
+        "$s='[DllImport(\"kernel32.dll\")] public static extern bool GetHandleInformation(IntPtr h, out uint f);'; " ++
+            "Add-Type -MemberDefinition $s -Name Native -Namespace Conduit; $f=0; " ++
+            "if ([Conduit.Native]::GetHandleInformation([IntPtr]{d},[ref]$f)) {{ exit 9 }} else {{ exit 0 }}",
+        .{@intFromPtr(secret.handle)},
+    );
+    defer gpa.free(command);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command },
+        .stdio = .{ .streams = .{ .stdin = .close, .stdout = .close, .stderr = .close } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+}
+
 test "a child gets no descriptor of this process's but its own three" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);

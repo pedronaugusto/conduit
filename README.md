@@ -119,9 +119,9 @@ process holds: `.close_on_exec`, the default, which is whatever close-on-exec
 allows, or `.close_all`, which closes every one of them in the child whatever
 its flags say — `close_range` on Linux, a loop elsewhere. On Windows a child is
 given the handles named in an attribute list and nothing else, so both values
-mean the same thing there; the exception is a child being handed one of this
-process's console handles, which such a list may not name, and which therefore
-inherits the way a Windows child always did.
+mean the same thing there. Console handles are supplied through the shared
+console rather than named in the list; ordinary handles beside them remain
+restricted to the ones the child was given.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
 `std.posix.rlimit_resource` and `std.posix.rlimit` pairs. Both are set in the

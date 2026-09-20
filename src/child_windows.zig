@@ -66,9 +66,20 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     defer if (attributes) |*list| list.deinit();
     try describeChild(arena, options, given, &inheritance, &startup, &flags, &attributes);
 
+    // A console handle is already meaningful to a child sharing this
+    // process's console and is not inherited through the handle table. Every
+    // other handle is named in the restrictive attribute list below. With no
+    // such handle there is nothing to inherit, so passing FALSE is what keeps
+    // unrelated inheritable handles out of the child.
     const inherit_handles: windows.BOOL = switch (options.stdio) {
         .pty => .FALSE,
-        else => .TRUE,
+        else => inherit: {
+            for (given) |slot| {
+                const handle = slot orelse continue;
+                if (!isConsole(handle)) break :inherit .TRUE;
+            }
+            break :inherit .FALSE;
+        },
     };
 
     traceSpawn(options, &startup, flags, inherit_handles);
@@ -496,17 +507,16 @@ const Inheritance = struct {
 };
 
 /// The handles the child is being given, deduplicated, for the attribute list
-/// that stops it from inheriting anything else — or `null` when the child
-/// cannot be restricted that way.
+/// that stops it from inheriting anything else — or `null` when there is no
+/// handle-table handle to inherit.
 ///
 /// A `null` slot is `Stream.close`: there is nothing to inherit, and it is
 /// simply left out. A console handle is different. A child sharing this
 /// process's console reaches it through the console rather than through the
 /// handle table, and naming one in a handle list is how `CreateProcessW` comes
-/// back with `ERROR_INVALID_PARAMETER` — so a plan that hands the child a
-/// console gets no list at all, and inherits the way it always did. That is
-/// the case where this process is somebody's terminal rather than a program
-/// whose streams are pipes, and it is not the case the list is for.
+/// back with `ERROR_INVALID_PARAMETER`, so it too is left out. Any ordinary
+/// handles beside it are still listed, and an all-console or all-closed plan
+/// uses `bInheritHandles=FALSE`.
 ///
 /// Every handle in the list is inheritable already: `Inheritance.take` has
 /// been over them, and is what puts the caller's flags back afterwards.
@@ -514,7 +524,7 @@ fn inheritList(given: [3]?windows.HANDLE, arena: Allocator) Allocator.Error!?[]w
     var list: std.ArrayList(windows.HANDLE) = .empty;
     for (given) |slot| {
         const handle = slot orelse continue;
-        if (isConsole(handle)) return null;
+        if (isConsole(handle)) continue;
         if (std.mem.indexOfScalar(windows.HANDLE, list.items, handle) != null) continue;
         try list.append(arena, handle);
     }

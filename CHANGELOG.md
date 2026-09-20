@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Descendant signals use stable process identities, so PID reuse cannot send a
   child's signal to an unrelated process.
+- Windows children with closed or console streams no longer inherit unrelated
+  inheritable process handles.
 
 ## [0.4.0] - 2026-09-19
 
