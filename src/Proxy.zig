@@ -5,8 +5,8 @@
 //! This is the loop at the centre of every program that puts another program on
 //! a pseudo-terminal: everything read from `input` is written to the master as
 //! if it had been typed, and everything the child writes to its terminal is
-//! read from the master and written to `output`. Two directions, so two tasks;
-//! the caller's task runs the one from the child, which is the one that ends.
+//! read from the master and written to `output`. The caller waits for either
+//! direction to end and cancels the other one.
 //!
 //! # What happens to Ctrl-C
 //!
@@ -118,11 +118,12 @@ pub const RunError = error{
 /// Pumps both directions, and forwards the window size, until the child's end
 /// of the terminal closes.
 ///
-/// Returns when reading the master reports end of file — which on some systems
-/// is reported as an I/O error instead, and is treated the same — or when
-/// writing `output` fails. The other tasks are cancelled on the way out, so a
-/// read of the program's own standard input that will never complete does not
-/// hold the call open.
+/// Returns when either direction ends: when reading the master reports end of
+/// file — which on some systems is reported as an I/O error instead and is
+/// treated the same — or when either input pump fails. The other tasks are
+/// cancelled on the way out, so a read from a silent terminal cannot hide an
+/// input-side error, and a read of the program's own standard input that will
+/// never complete does not hold the call open.
 ///
 /// A child that has exited does not by itself end this: bytes it wrote are
 /// still in the terminal, and on POSIX the master reports end of file only
@@ -137,36 +138,73 @@ pub fn run(io: std.Io, options: Options) RunError!void {
     if (options.input_buffer.len == 0 or options.output_buffer.len == 0) {
         return error.BufferTooSmall;
     }
-    var input_error: ?RunError = null;
+    var completion: Completion = .{};
     var group: std.Io.Group = .init;
-    try group.concurrent(io, inputTask, .{ io, options, &input_error });
+    errdefer group.cancel(io);
+    try group.concurrent(io, pumpTask, .{
+        io,
+        options.input,
+        options.master.write,
+        options.input_buffer,
+        Direction.input,
+        &completion,
+    });
+    try group.concurrent(io, pumpTask, .{
+        io,
+        options.master.read,
+        options.output,
+        options.output_buffer,
+        Direction.output,
+        &completion,
+    });
     if (options.resize) |resize| {
-        group.concurrent(io, forwardSize, .{ io, resize }) catch |err| {
-            group.cancel(io);
-            return err;
-        };
+        try group.concurrent(io, forwardSize, .{ io, resize });
     }
 
-    const result = pump(io, options.master.read, options.output, options.output_buffer);
-
-    // Unconditional, and before the result is examined: the group owns
-    // resources either way, and the direction carrying `input` is blocked on a
-    // read that may never complete.
+    try completion.arrived.wait(io);
     group.cancel(io);
 
-    try result;
-    if (input_error) |err| return err;
+    switch (completion.winner.load(.acquire)) {
+        .none => unreachable,
+        .input => if (completion.input_error) |err| return err,
+        .output => if (completion.output_error) |err| return err,
+    }
 }
 
-/// The direction carrying `input`, as a task.
-///
-/// `std.Io.Group` tasks may fail only with `error.Canceled`, so anything else
-/// is left in `out_error` for `run` to return once the group has joined.
-fn inputTask(io: std.Io, options: Options, out_error: *?RunError) std.Io.Cancelable!void {
-    pump(io, options.input, options.master.write, options.input_buffer) catch |err| switch (err) {
-        error.Canceled => return error.Canceled,
-        else => out_error.* = err,
+const Direction = enum(u8) { none, input, output };
+
+const Completion = struct {
+    winner: std.atomic.Value(Direction) = .init(.none),
+    arrived: std.Io.Event = .unset,
+    input_error: ?RunError = null,
+    output_error: ?RunError = null,
+};
+
+/// One direction as a task. The first direction to finish publishes its result
+/// and wakes `run`; the group boundary itself carries cancellation only.
+fn pumpTask(
+    io: std.Io,
+    from: std.Io.File,
+    to: std.Io.File,
+    buffer: []u8,
+    direction: Direction,
+    completion: *Completion,
+) std.Io.Cancelable!void {
+    const pump_error: ?RunError = result: {
+        pump(io, from, to, buffer) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            else => break :result err,
+        };
+        break :result null;
     };
+    switch (direction) {
+        .none => unreachable,
+        .input => completion.input_error = pump_error,
+        .output => completion.output_error = pump_error,
+    }
+    if (completion.winner.cmpxchgStrong(.none, direction, .release, .monotonic) == null) {
+        completion.arrived.set(io);
+    }
 }
 
 /// One direction. Ends at the first sign that `from` has no more to give.
@@ -249,6 +287,30 @@ test "empty transfer buffers are rejected before either direction starts" {
         .output = undefined,
         .input_buffer = &one,
         .output_buffer = &.{},
+    }));
+}
+
+test "an input error interrupts a silent output pump" {
+    if (is_windows) return error.SkipZigTest;
+
+    const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    watchdog.limit_ms = 2000;
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var terminal = try Pty.open(.{});
+    defer terminal.close(io);
+    var input_buffer: [32]u8 = undefined;
+    var output_buffer: [32]u8 = undefined;
+    const invalid: std.Io.File = .{ .handle = -1, .flags = .{ .nonblocking = false } };
+
+    try testing.expectError(error.ReadFailed, run(io, .{
+        .master = terminal.master(),
+        .input = invalid,
+        .output = invalid,
+        .input_buffer = &input_buffer,
+        .output_buffer = &output_buffer,
     }));
 }
 

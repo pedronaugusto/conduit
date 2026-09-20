@@ -27,6 +27,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   adds `error.OutOfMemory` rather than silently sending a partial tree signal.
 - Concurrent Windows `spawnShell` calls retain separate `%COMSPEC%` values
   instead of racing on shared environment buffers.
+- `Proxy.run` now returns an input-side failure promptly even while a silent
+  child keeps the output side blocked.
 
 ## [0.4.0] - 2026-09-19
 
