@@ -26,7 +26,10 @@
 //! to the child any more.
 //!
 //! POSIX only. Nothing here allocates: `Child.kill` takes no allocator, and a
-//! kill that could fail for want of memory would be a poor kind of kill.
+//! kill that could fail for want of memory would be a poor kind of kill. A
+//! process is captured as a stable kernel identity before the walk retains it:
+//! a pidfd on Linux and an audit token on Darwin. A PID alone is never used as
+//! a later signal target because it may have been recycled by then.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -59,20 +62,22 @@ const max_descendants = 512;
 /// caller's kill: the answer `Child.kill` reports is the one from the child's
 /// own signal.
 pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid_t) usize {
-    var found: [max_descendants]posix.pid_t = undefined;
+    var found: [max_descendants]Process = undefined;
     const count = collect(root, &found);
+    defer for (found[0..count]) |*process| process.deinit();
 
     var reached: usize = 0;
     var i = count;
     while (i > 0) {
         i -= 1;
-        const pid = found[i];
+        const process = &found[i];
+        const pid = process.pid;
         // Nothing this package started can be `init` or this process itself,
         // and a signal to either would be a bug worth refusing rather than
         // sending.
         if (pid <= 1 or pid == c.getpid()) continue;
         if (in_group) |pgid| if (getpgid(pid) == pgid) continue;
-        if (c.kill(pid, sig) == 0) reached += 1;
+        if (process.signal(sig)) reached += 1;
     }
     return reached;
 }
@@ -82,14 +87,110 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
 ///
 /// Breadth first so that the order in the array is by generation, which makes
 /// walking it backwards the deepest-first order `signalDescendants` sends in.
-fn collect(root: posix.pid_t, into: []posix.pid_t) usize {
-    var count = childrenOf(root, into);
+fn collect(root: posix.pid_t, into: []Process) usize {
+    var pids: [max_descendants]posix.pid_t = undefined;
+    var count = captureChildren(root, into, &pids);
     var expanded: usize = 0;
     while (expanded < count) : (expanded += 1) {
-        count += childrenOf(into[expanded], into[count..]);
+        count += captureChildren(into[expanded].pid, into[count..], &pids);
     }
     return count;
 }
+
+fn captureChildren(parent: posix.pid_t, into: []Process, pids: []posix.pid_t) usize {
+    const named = childrenOf(parent, pids[0..into.len]);
+    var captured: usize = 0;
+    for (pids[0..named]) |pid| {
+        into[captured] = Process.capture(pid) orelse continue;
+        captured += 1;
+    }
+    return captured;
+}
+
+const Process = switch (builtin.os.tag) {
+    .linux => LinuxProcess,
+    .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => DarwinProcess,
+    else => NoProcess,
+};
+
+const LinuxProcess = struct {
+    pid: posix.pid_t,
+    pidfd: std.os.linux.fd_t,
+
+    fn capture(pid: posix.pid_t) ?LinuxProcess {
+        const rc = std.os.linux.pidfd_open(pid, 0);
+        if (std.os.linux.errno(rc) != .SUCCESS) return null;
+        return .{ .pid = pid, .pidfd = @intCast(rc) };
+    }
+
+    fn signal(process: *const LinuxProcess, sig: posix.SIG) bool {
+        const rc = std.os.linux.pidfd_send_signal(process.pidfd, sig, null, 0);
+        return std.os.linux.errno(rc) == .SUCCESS;
+    }
+
+    fn deinit(process: *LinuxProcess) void {
+        _ = std.os.linux.close(process.pidfd);
+    }
+};
+
+const AuditToken = extern struct { val: [8]c_uint };
+
+const DarwinProcess = struct {
+    pid: posix.pid_t,
+    token: AuditToken,
+
+    fn capture(pid: posix.pid_t) ?DarwinProcess {
+        var info: ProcUniqueInfo = undefined;
+        const written = proc_pidinfo(pid, proc_pid_unique_info, 0, &info, @sizeOf(ProcUniqueInfo));
+        if (written != @sizeOf(ProcUniqueInfo)) return null;
+        var token: AuditToken = .{ .val = @splat(0) };
+        token.val[5] = @bitCast(pid);
+        token.val[7] = @bitCast(info.id_version);
+        return .{ .pid = pid, .token = token };
+    }
+
+    fn signal(process: *const DarwinProcess, sig: posix.SIG) bool {
+        var token = process.token;
+        return proc_signal_with_audittoken(&token, @intCast(@intFromEnum(sig))) == 0;
+    }
+
+    fn deinit(process: *DarwinProcess) void {
+        _ = process;
+    }
+};
+
+const ProcUniqueInfo = extern struct {
+    executable_uuid: [16]u8,
+    unique_id: u64,
+    parent_unique_id: u64,
+    id_version: i32,
+    reserved2: u32,
+    reserved3: u64,
+    reserved4: u64,
+};
+
+const NoProcess = struct {
+    pid: posix.pid_t,
+
+    fn capture(pid: posix.pid_t) ?NoProcess {
+        _ = pid;
+        return null;
+    }
+
+    fn signal(process: *const NoProcess, sig: posix.SIG) bool {
+        _ = process;
+        _ = sig;
+        return false;
+    }
+
+    fn deinit(process: *NoProcess) void {
+        _ = process;
+    }
+};
+
+const proc_pid_unique_info = 17;
+extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *anyopaque, size: c_int) c_int;
+extern "c" fn proc_signal_with_audittoken(token: *AuditToken, sig: c_int) c_int;
 
 /// The immediate children of `pid`, as many of them as `into` has room for.
 const childrenOf = switch (builtin.os.tag) {
@@ -209,7 +310,11 @@ test "the descendants of this process include a child it just started" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
 
-    var found: [max_descendants]posix.pid_t = undefined;
+    var found: [max_descendants]Process = undefined;
     const count = collect(c.getpid(), &found);
-    try testing.expect(std.mem.indexOfScalar(posix.pid_t, found[0..count], child.id) != null);
+    defer for (found[0..count]) |*process| process.deinit();
+    for (found[0..count]) |process| {
+        if (process.pid == child.id) return;
+    }
+    return error.TestChildWasNotFound;
 }

@@ -267,7 +267,10 @@ gave itself a process group with `setsid` or `setpgid` is reached, and for
 `.kill` so is one started while the first signal was being delivered: the group
 and the walk are asked again until a pass names nothing. A process that has
 both left the group and been orphaned before anything looked is reached by no
-system, and a grandchild of a child that was already reaped keeps running.
+system, and a grandchild of a child that was already reaped keeps running. The
+walk signals stable process identities — pidfds on Linux and audit tokens on
+Darwin — so a descendant that exits cannot turn a recycled PID into a signal
+for an unrelated process.
 
 **Two ways to start a child on POSIX, and the same child either way.** A spawn
 that needs nothing done between the fork and the exec is handed to
