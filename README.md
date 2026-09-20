@@ -176,8 +176,9 @@ with a terminal emulator's defaults — `$SHELL` or `%COMSPEC%`, 24×80, `TERM`
 set, a controlling terminal on POSIX — absorbing the `closeSlave` timing
 difference below.
 
-`Reaper.init(&child)`, `start(io)`, `exit()` for a `?Term` without blocking,
-`deinit(io)`. The `Child` must outlive it, it must not move once started.
+`Reaper.init(&child)`, `start(io)`, `exit()` for a `Child.WaitError!?Term`
+without blocking, `deinit(io)`. The `Child` must outlive it, it must not move
+once started, and a wait error is final and returned by every later `exit()`.
 
 `Proxy.run(io, .{ .master, .input, .output, .input_buffer, .output_buffer, .resize })`
 moves bytes both ways until the child's end of the terminal closes, and keeps

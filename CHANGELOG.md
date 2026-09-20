@@ -31,6 +31,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   child keeps the output side blocked.
 - Windows `cpu_rate` is documented and validated as 1–10,000 hundredths of the
   whole machine's CPU; `error.InvalidJobLimit` is added to `Child.SpawnError`.
+- `Reaper.exit` now returns `Child.WaitError!?Term` and preserves a terminal
+  wait failure instead of reporting `null` forever.
 
 ## [0.4.0] - 2026-09-19
 

@@ -484,7 +484,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    try testing.expectEqual(@as(?Child.Term, null), reaper.exit());
+    try testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
 
     child.closeStdin(io);
 
@@ -492,7 +492,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
     // but not later than the budget every other wait in this file obeys.
     var waited: u32 = 0;
     const term = while (waited < budget_ms) : (waited += 1) {
-        if (reaper.exit()) |term| break term;
+        if (try reaper.exit()) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(1), .awake);
     } else return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .exited = 5 }, term);
@@ -523,7 +523,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
 
     // Confirmed running: `exit` is null while the wait is in flight.
     try std.Io.sleep(io, .fromMilliseconds(50), .awake);
-    try testing.expectEqual(@as(?Child.Term, null), reaper.exit());
+    try testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
 
     // No grace, so this is the shortest form of the sequence: the signal
     // nothing survives, and then a wait -- while another task is already
@@ -536,7 +536,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     // answers from what was published rather than asking the system again.
     var waited: u32 = 0;
     const reaped = while (waited < budget_ms) : (waited += 1) {
-        if (reaper.exit()) |t| break t;
+        if (try reaper.exit()) |t| break t;
         try std.Io.sleep(io, .fromMilliseconds(1), .awake);
     } else return error.TestChildDidNotExit;
     try testing.expectEqual(term, reaped);
@@ -564,7 +564,7 @@ test "a wait whose Reaper was cancelled is still a wait" {
         var reaper: conduit.Reaper = .init(&child);
         try reaper.start(io);
         try std.Io.sleep(io, .fromMilliseconds(50), .awake);
-        try testing.expectEqual(@as(?Child.Term, null), reaper.exit());
+        try testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
         reaper.deinit(io);
     }
 

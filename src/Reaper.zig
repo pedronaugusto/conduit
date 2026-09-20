@@ -17,9 +17,10 @@
 //! * `deinit` must be called before the `Reaper` goes out of scope, including
 //!   on the path where the child never exits. It requests cancelation of the
 //!   task and waits for it to finish.
-//! * After `exit` returns non-null, the child has been reaped. `Child.wait`
-//!   and `Child.tryWait` keep returning the same term, and `Child.kill` does
-//!   nothing.
+//! * After `exit` returns a non-null term, the child has been reaped.
+//!   `Child.wait` and `Child.tryWait` keep returning the same term, and
+//!   `Child.kill` does nothing. A wait failure is returned instead and is
+//!   likewise final.
 //!
 //! The owner may go on calling `Child.kill`, `Child.killWait`, `Child.wait`
 //! and `Child.tryWait` while this runs, which is the sequence the whole thing
@@ -41,8 +42,8 @@ const Term = Child.Term;
 child: *Child,
 /// The task running the wait.
 group: std.Io.Group,
-/// `running`, or a term encoded by `encode`. Written once by the task and read
-/// by anyone.
+/// `running`, a term encoded by `encode`, or an error encoded by
+/// `encodeError`. Written once by the task and read by anyone.
 state: std.atomic.Value(u64),
 
 /// A `Reaper` that is not waiting for anything yet. Call `start` to put the
@@ -67,14 +68,16 @@ pub fn start(reaper: *Reaper, io: std.Io) StartError!void {
     return reaper.group.concurrent(io, run, .{ reaper, io });
 }
 
-/// How the child ended, or `null` while it is still running.
+pub const ExitError = Child.WaitError;
+
+/// How the child ended, or `null` while the wait is still running.
 ///
 /// Never blocks. A `null` is a snapshot and may be stale by the time the caller
-/// acts on it; a non-null answer is final.
-pub fn exit(reaper: *const Reaper) ?Term {
+/// acts on it; a term or error is final.
+pub fn exit(reaper: *const Reaper) ExitError!?Term {
     const state = reaper.state.load(.acquire);
     if (state == running) return null;
-    return decode(state);
+    return @as(?Term, try decode(state));
 }
 
 /// Stops waiting and releases the task.
@@ -90,7 +93,10 @@ pub fn deinit(reaper: *Reaper, io: std.Io) void {
 }
 
 fn run(reaper: *Reaper, io: std.Io) void {
-    const term = reaper.child.wait(io) catch return;
+    const term = reaper.child.wait(io) catch |err| {
+        reaper.state.store(encodeError(err), .release);
+        return;
+    };
     reaper.state.store(encode(term), .release);
 }
 
@@ -107,13 +113,19 @@ fn encode(term: Term) u64 {
     return (tag << 32) | payload;
 }
 
-fn decode(state: u64) Term {
+fn encodeError(err: ExitError) u64 {
+    return (@as(u64, 4) << 32) | @intFromError(err);
+}
+
+fn decode(state: u64) ExitError!Term {
     const payload: u32 = @truncate(state);
     return switch (state >> 32) {
         0 => .{ .exited = @intCast(payload) },
         1 => .{ .signal = @enumFromInt(payload) },
         2 => .{ .stopped = @enumFromInt(payload) },
-        else => .{ .unknown = payload },
+        3 => .{ .unknown = payload },
+        4 => @as(ExitError, @errorCast(@errorFromInt(@as(u16, @truncate(payload))))),
+        else => unreachable,
     };
 }
 
@@ -126,7 +138,19 @@ test "every term survives the round trip through the atomic" {
         .{ .unknown = 0xdeadbeef },
     };
     for (cases) |term| {
-        try std.testing.expectEqual(term, decode(encode(term)));
+        try std.testing.expectEqual(term, try decode(encode(term)));
         try std.testing.expect(encode(term) != running);
+    }
+}
+
+test "every wait error survives the round trip through the atomic" {
+    const cases = [_]ExitError{
+        error.AccessDenied,
+        error.Canceled,
+        error.Unexpected,
+    };
+    for (cases) |err| {
+        try std.testing.expectError(err, decode(encodeError(err)));
+        try std.testing.expect(encodeError(err) != running);
     }
 }
