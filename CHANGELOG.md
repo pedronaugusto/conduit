@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+- POSIX tree signals keep their ordinary in-group path on stack storage and
+  retain separate stable identities only for descendants that left the group.
 - `Child.output` reads directly into geometrically grown collection storage,
   avoiding a copy and steady-state allocation while it drains each stream.
 - Descendant signals use stable process identities, so PID reuse cannot send a

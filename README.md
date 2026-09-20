@@ -262,7 +262,7 @@ says so.
 
 POSIX has no container for a tree, so `kill` reaches three things: the child,
 the child's process group when `detach` made one, and every descendant the
-system will name — `/proc/<pid>/task/<tid>/children` on Linux,
+system will name — one `/proc` process-table pass on Linux,
 `proc_listchildpids` on Darwin, and on the BSDs and illumos neither, where the
 process group is the whole of the reach. Descendants are signalled deepest
 first and before the child, because a process signalled before the ones below

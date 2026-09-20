@@ -1045,11 +1045,11 @@ pub const KillError = error{
 ///
 /// On POSIX there is no container for a tree, and this reaches three things:
 /// the child, the child's process group when `detach` made one, and every
-/// descendant the operating system will name — the children of a process are
-/// in `/proc/<pid>/task/<tid>/children` on Linux and in `proc_listchildpids`
-/// on Darwin. The descendants are signalled deepest first and before the
-/// child, because a process signalled before the ones below it leaves them
-/// orphaned, and an orphan belongs to `init` and is related to nothing.
+/// descendant the operating system will name — from one `/proc` process-table
+/// pass on Linux and from `proc_listchildpids` on Darwin. The descendants are
+/// signalled deepest first and before the child, because a process signalled
+/// before the ones below it leaves them orphaned, and an orphan belongs to
+/// `init` and is related to nothing.
 ///
 /// So a descendant that gave itself a process group of its own with `setsid`
 /// or `setpgid` is still reached, and — for `.kill`, which is the request that
