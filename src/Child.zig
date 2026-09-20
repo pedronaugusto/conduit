@@ -1423,11 +1423,24 @@ pub fn output(
     } else err.done.store(true, .release);
 
     var timed_out = false;
-    const term = term: {
-        const timeout_ms = options.timeout_ms orelse break :term try child.wait(io);
-        if (try child.waitTimeout(io, timeout_ms)) |term| break :term term;
-        timed_out = true;
-        break :term try child.killWait(io, options.grace_ms);
+    const deadline: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+    const term = term: while (true) {
+        // A reader that cannot continue leaves a pipe the child may fill and
+        // block on. Notice it while the child is still running, end the child,
+        // and report the read failure after both tasks have joined.
+        if (out.readFailed() or err.readFailed()) {
+            break :term try child.killWait(io, 0);
+        }
+
+        const slice_ms = if (deadline) |until| slice: {
+            const left = until.remainingMs(io);
+            if (left == 0) {
+                timed_out = true;
+                break :term try child.killWait(io, options.grace_ms);
+            }
+            break :slice @min(left, output_wait_slice_ms);
+        } else output_wait_slice_ms;
+        if (try child.waitTimeout(io, slice_ms)) |finished| break :term finished;
     };
 
     // The child is gone, so its ends of the pipes are closed and the readers
@@ -1442,7 +1455,10 @@ pub fn output(
     // Joins the tasks, so the lists below are this task's alone again.
     group.cancel(io);
 
-    if (out.failed or err.failed) return error.ReadFailed;
+    const out_failure = out.failure.load(.acquire);
+    const err_failure = err.failure.load(.acquire);
+    if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
+    if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
     const stdout_bytes = try out.list.toOwnedSlice(allocator);
     errdefer allocator.free(stdout_bytes);
     const stderr_bytes = try err.list.toOwnedSlice(allocator);
@@ -1462,16 +1478,27 @@ pub fn output(
 const Collector = struct {
     list: std.ArrayList(u8),
     truncated: bool,
-    failed: bool,
+    failure: std.atomic.Value(Failure),
     done: std.atomic.Value(bool),
+
+    const Failure = enum(u8) { none, read_failed, out_of_memory };
 
     const init: Collector = .{
         .list = .empty,
         .truncated = false,
-        .failed = false,
+        .failure = .init(.none),
         .done = .init(false),
     };
+
+    fn readFailed(collector: *const Collector) bool {
+        return collector.failure.load(.acquire) == .read_failed;
+    }
 };
+
+/// How often an unbounded `output` wait gives its readers a chance to report
+/// that one of them cannot keep draining. Each bounded wait still uses the
+/// operating system's process handle rather than sleeping this interval.
+const output_wait_slice_ms: u32 = 10;
 
 fn collect(
     io: std.Io,
@@ -1487,11 +1514,17 @@ fn collect(
             error.Canceled => return error.Canceled,
             else => {
                 if (handles.finished(e)) return;
-                into.failed = true;
+                into.failure.store(.read_failed, .release);
                 return;
             },
         };
         if (n == 0) return;
+        if (into.failure.load(.acquire) == .out_of_memory) {
+            // Allocation failed, but reading must continue until the child
+            // exits or it can fill this pipe and make the wait deadlock.
+            into.truncated = true;
+            continue;
+        }
         const room = max_bytes -| into.list.items.len;
         if (room == 0) {
             // Still read, so the child is never blocked on a full pipe; just
@@ -1502,8 +1535,8 @@ fn collect(
         const keep = @min(room, n);
         if (keep < n) into.truncated = true;
         into.list.appendSlice(allocator, buffer[0..keep]) catch {
-            into.failed = true;
-            return;
+            into.failure.store(.out_of_memory, .release);
+            into.truncated = true;
         };
     }
 }

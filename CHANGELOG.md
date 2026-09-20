@@ -16,6 +16,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   racing while changing flags on caller-owned handles.
 - POSIX `.close_all` spawns still report a pre-exec failure instead of
   returning a child that exits 127.
+- `Child.output` keeps draining after allocation failure, returns
+  `error.OutOfMemory`, and ends a child promptly when a stream cannot be read.
 
 ## [0.4.0] - 2026-09-19
 

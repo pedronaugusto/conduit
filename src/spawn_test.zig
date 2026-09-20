@@ -390,6 +390,48 @@ test "output stops at max_bytes and says it did" {
     try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
 }
 
+test "output keeps draining after allocation failure and reports out of memory" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    // Much more than a pipe holds: a collector that stops at its first failed
+    // allocation leaves this child blocked in write and reaches the timeout.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "dd if=/dev/zero bs=65536 count=4 2>/dev/null" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, child.output(io, failing.allocator(), .{
+        .timeout_ms = budget_ms,
+    }));
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+}
+
+test "output ends a silent child when its stream cannot be read" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    child.stdout.?.close(io);
+    child.stdout.?.handle = -1;
+    defer child.stdout = null;
+    try testing.expectError(error.ReadFailed, child.output(io, gpa, .{}));
+    try testing.expect((try child.tryWait()) != null);
+}
+
 test "output gives up on a child that will not end, and ends it" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
