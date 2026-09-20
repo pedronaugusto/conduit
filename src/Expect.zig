@@ -445,6 +445,7 @@ pub fn discard(expect: *Expect, io: std.Io) void {
 /// Reads the master into the caller's buffer until the stream ends, the read
 /// fails, or the task is cancelled.
 fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
+    defer expect.markFinished(io);
     var chunk: [512]u8 = undefined;
     while (true) {
         if (expect.stopping.load(.acquire)) return expect.finish(io, .ended);
@@ -477,10 +478,8 @@ fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
     }
 }
 
-/// Records why the reading stopped, and wakes whoever is waiting.
-///
-/// `finished` is stored last and outside the lock, so `deinit` can see that
-/// the task has gone without taking anything the task holds.
+/// Records why an ordinary read end stopped. The task defer publishes that it
+/// has finished, including when cancellation bypasses this function.
 fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
     {
         expect.mutex.lockUncancelable(io);
@@ -490,6 +489,12 @@ fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
             .failed => expect.failed = true,
         }
     }
+    expect.arrived.set(io);
+}
+
+/// Published on every exit from the reading task. Stored outside the mutex so
+/// `deinit` can observe it without taking anything the task might hold.
+fn markFinished(expect: *Expect, io: std.Io) void {
     expect.finished.store(true, .release);
     expect.arrived.set(io);
 }
@@ -543,6 +548,28 @@ const Watchdog = @import("test_support.zig").Watchdog;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;
+
+test "a canceled reading task publishes that it finished" {
+    const io = testing.io;
+    const CancelRead = struct {
+        base: std.Io,
+
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            if (operation == .file_read_streaming) return error.Canceled;
+            return state.base.vtable.operate(state.base.userdata, operation);
+        }
+    };
+    var state: CancelRead = .{ .base = io };
+    var vtable = io.vtable.*;
+    vtable.operate = CancelRead.operate;
+    const cancel_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
+
+    var buffer: [32]u8 = undefined;
+    var expect: Expect = .init(undefined, &buffer);
+    try testing.expectError(error.Canceled, expect.read(cancel_io));
+    try testing.expect(expect.finished.load(.acquire));
+}
 
 test "start refuses to put a second reader over the buffer" {
     const io = testing.io;

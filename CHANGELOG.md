@@ -33,6 +33,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole machine's CPU; `error.InvalidJobLimit` is added to `Child.SpawnError`.
 - `Reaper.exit` now returns `Child.WaitError!?Term` and preserves a terminal
   wait failure instead of reporting `null` forever.
+- A canceled Windows `Expect` reader now publishes completion immediately, so
+  `deinit` does not spend its full cancellation budget after the read ended.
 
 ## [0.4.0] - 2026-09-19
 
