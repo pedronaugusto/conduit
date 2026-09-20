@@ -12,6 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inheritable process handles.
 - `Expect.start` now reports `error.AlreadyStarted` instead of putting a second
   reader over the same buffer; this adds a member to `Expect.StartError`.
+- Concurrent Windows spawns use private inheritable handle copies instead of
+  racing while changing flags on caller-owned handles.
 
 ## [0.4.0] - 2026-09-19
 

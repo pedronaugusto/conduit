@@ -46,12 +46,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     var plan: Plan = try .init(io, options, null);
     errdefer plan.closeAll(io);
-    const given = childHandles(&plan);
-
-    // The caller's handles get their inheritance flags back whatever happens
-    // next, including on every path that returns an error below.
-    var inheritance: Inheritance = .{};
-    defer inheritance.restore();
+    var child_handles = try ChildHandles.init(childHandles(&plan));
+    defer child_handles.deinit();
+    const given = child_handles.given;
 
     var startup: win32.STARTUPINFOEXW = std.mem.zeroes(win32.STARTUPINFOEXW);
     var flags: windows.CreateProcessFlags = .{
@@ -64,7 +61,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // handles and a list of what may be inherited.
     var attributes: ?AttributeList = null;
     defer if (attributes) |*list| list.deinit();
-    try describeChild(arena, options, given, &inheritance, &startup, &flags, &attributes);
+    try describeChild(arena, options, given, &startup, &flags, &attributes);
 
     // A console handle is already meaningful to a child sharing this
     // process's console and is not inherited through the handle table. Every
@@ -157,7 +154,6 @@ fn describeChild(
     arena: Allocator,
     options: SpawnOptions,
     given: [3]?windows.HANDLE,
-    inheritance: *Inheritance,
     startup: *win32.STARTUPINFOEXW,
     flags: *windows.CreateProcessFlags,
     attributes: *?AttributeList,
@@ -201,11 +197,6 @@ fn describeChild(
             startup.StartupInfo.hStdInput = given[0];
             startup.StartupInfo.hStdOutput = given[1];
             startup.StartupInfo.hStdError = given[2];
-
-            // A handle the child is to inherit has to be marked inheritable,
-            // and this is the only way to say so about one somebody else
-            // opened. `Inheritance` is what puts the caller's flag back.
-            for (given) |slot| if (slot) |handle| inheritance.take(handle);
 
             // And nothing else. `bInheritHandles` on its own hands the child
             // every inheritable handle this process holds -- which on a machine
@@ -455,54 +446,52 @@ fn childHandles(plan: *const Plan) [3]?windows.HANDLE {
     return given;
 }
 
-/// Every handle a child inherits has to be marked inheritable, and a handle
-/// this package did not open is the caller's: leaving it marked would mean the
-/// next spawn anywhere in the process handed it on to a child that was never
-/// meant to have it.
-///
-/// So the flag is put back. This remembers what each handle had before
-/// `CreateProcessW` was told about it, and `restore` puts that back afterwards
-/// -- on the success path and on every failure path alike. The handles this
-/// package opened itself are created inheritable and are closed rather than
-/// restored, so they are not in here.
-const Inheritance = struct {
-    /// The handles whose flags were changed, and the flags they had.
-    saved: [3]Saved = undefined,
+/// Private inheritable copies of the ordinary handles one spawn gives its
+/// child. No flag on a caller-owned handle is ever changed, so concurrent
+/// spawns cannot observe or restore one another's temporary state.
+const ChildHandles = struct {
+    given: [3]?windows.HANDLE,
+    duplicates: [3]windows.HANDLE = undefined,
     count: usize = 0,
 
-    const Saved = struct { handle: windows.HANDLE, flags: win32.DWORD };
+    fn init(originals: [3]?windows.HANDLE) SpawnError!ChildHandles {
+        var result: ChildHandles = .{ .given = originals };
+        errdefer result.deinit();
+        for (originals, 0..) |slot, index| {
+            const original = slot orelse continue;
+            if (isConsole(original)) continue;
 
-    /// Marks `handle` inheritable, remembering what it was.
-    ///
-    /// A handle already in the list is not saved twice: the first answer is
-    /// the one from before anything here touched it.
-    fn take(inheritance: *Inheritance, handle: windows.HANDLE) void {
-        for (inheritance.saved[0..inheritance.count]) |already| {
-            if (already.handle == handle) return;
+            var duplicate: ?windows.HANDLE = null;
+            for (originals[0..index], 0..) |earlier, earlier_index| {
+                if (earlier == original) {
+                    duplicate = result.given[earlier_index];
+                    break;
+                }
+            }
+            if (duplicate == null) {
+                const process = windows.GetCurrentProcess();
+                var made: windows.HANDLE = undefined;
+                if (win32.DuplicateHandle(
+                    process,
+                    original,
+                    process,
+                    &made,
+                    0,
+                    .TRUE,
+                    win32.DUPLICATE_SAME_ACCESS,
+                ) == .FALSE) return createError();
+                result.duplicates[result.count] = made;
+                result.count += 1;
+                duplicate = made;
+            }
+            result.given[index] = duplicate;
         }
-        var flags: win32.DWORD = 0;
-        if (win32.GetHandleInformation(handle, &flags) == .FALSE) return;
-        if (inheritance.count < inheritance.saved.len) {
-            inheritance.saved[inheritance.count] = .{ .handle = handle, .flags = flags };
-            inheritance.count += 1;
-        }
-        _ = win32.SetHandleInformation(
-            handle,
-            win32.HANDLE_FLAG_INHERIT,
-            win32.HANDLE_FLAG_INHERIT,
-        );
+        return result;
     }
 
-    /// Puts every remembered flag back. Idempotent.
-    fn restore(inheritance: *Inheritance) void {
-        for (inheritance.saved[0..inheritance.count]) |already| {
-            _ = win32.SetHandleInformation(
-                already.handle,
-                win32.HANDLE_FLAG_INHERIT,
-                already.flags & win32.HANDLE_FLAG_INHERIT,
-            );
-        }
-        inheritance.count = 0;
+    fn deinit(handles: *ChildHandles) void {
+        for (handles.duplicates[0..handles.count]) |handle| windows.CloseHandle(handle);
+        handles.count = 0;
     }
 };
 
@@ -518,8 +507,8 @@ const Inheritance = struct {
 /// handles beside it are still listed, and an all-console or all-closed plan
 /// uses `bInheritHandles=FALSE`.
 ///
-/// Every handle in the list is inheritable already: `Inheritance.take` has
-/// been over them, and is what puts the caller's flags back afterwards.
+/// Every handle in the list is a private inheritable duplicate made for this
+/// spawn and closed once `CreateProcessW` returns.
 fn inheritList(given: [3]?windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
     var list: std.ArrayList(windows.HANDLE) = .empty;
     for (given) |slot| {

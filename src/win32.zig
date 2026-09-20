@@ -293,6 +293,18 @@ pub extern "kernel32" fn GetHandleInformation(
     lpdwFlags: *DWORD,
 ) callconv(.winapi) BOOL;
 
+pub const DUPLICATE_SAME_ACCESS: DWORD = 0x00000002;
+
+pub extern "kernel32" fn DuplicateHandle(
+    hSourceProcessHandle: HANDLE,
+    hSourceHandle: HANDLE,
+    hTargetProcessHandle: HANDLE,
+    lpTargetHandle: *HANDLE,
+    dwDesiredAccess: DWORD,
+    bInheritHandle: BOOL,
+    dwOptions: DWORD,
+) callconv(.winapi) BOOL;
+
 pub const GENERIC_READ: DWORD = 0x80000000;
 pub const GENERIC_WRITE: DWORD = 0x40000000;
 pub const FILE_SHARE_READ: DWORD = 0x00000001;

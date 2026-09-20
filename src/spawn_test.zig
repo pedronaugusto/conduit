@@ -2188,6 +2188,65 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
     try testing.expect(std.mem.indexOf(u8, written, "to the caller's file") != null);
 }
 
+test "concurrent Windows spawns never change a caller handle's inheritance flag" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (!is_windows) return error.SkipZigTest;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var sink = try tmp.dir.createFile(io, "out", .{});
+    defer sink.close(io);
+    try testing.expect(win32.SetHandleInformation(sink.handle, win32.HANDLE_FLAG_INHERIT, 0) != .FALSE);
+
+    var changed: std.atomic.Value(bool) = .init(false);
+    var group: std.Io.Group = .init;
+    defer group.cancel(io);
+    var started: usize = 0;
+    while (started < 6) : (started += 1) {
+        group.concurrent(io, spawnWithSharedHandle, .{ sink, &changed }) catch break;
+    }
+    if (started == 0) return error.SkipZigTest;
+    try group.await(io);
+
+    var flags: u32 = 0;
+    try testing.expect(win32.GetHandleInformation(sink.handle, &flags) != .FALSE);
+    try testing.expectEqual(@as(u32, 0), flags & win32.HANDLE_FLAG_INHERIT);
+    try testing.expect(!changed.load(.acquire));
+}
+
+fn spawnWithSharedHandle(sink: std.Io.File, changed: *std.atomic.Value(bool)) std.Io.Cancelable!void {
+    var iteration: usize = 0;
+    while (iteration < 8) : (iteration += 1) {
+        var child = Child.spawn(io, gpa, .{
+            .argv = &.{ "cmd.exe", "/c", "exit 0" },
+            .stdio = .{ .streams = .{
+                .stdin = .ignore,
+                .stdout = .{ .file = sink },
+                .stderr = .ignore,
+            } },
+        }) catch {
+            changed.store(true, .release);
+            return;
+        };
+        _ = child.wait(io) catch {
+            _ = child.killWait(io, 0) catch {};
+            child.deinit(io);
+            changed.store(true, .release);
+            return;
+        };
+        child.deinit(io);
+
+        var flags: u32 = 0;
+        if (win32.GetHandleInformation(sink.handle, &flags) == .FALSE or
+            flags & win32.HANDLE_FLAG_INHERIT != 0)
+        {
+            changed.store(true, .release);
+        }
+    }
+}
+
 test "a Windows child with every stream closed inherits no unrelated handle" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
