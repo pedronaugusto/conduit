@@ -2345,29 +2345,36 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (!is_windows) return error.SkipZigTest;
+    const windows = std.os.windows;
 
     // A handle this process holds that is inheritable and has nothing to do
-    // with the child: what `bInheritHandles` alone would hand over.
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    var secret = try tmp.dir.createFile(io, "secret", .{});
-    defer secret.close(io);
-    try testing.expect(win32.SetHandleInformation(
-        secret.handle,
-        win32.HANDLE_FLAG_INHERIT,
-        win32.HANDLE_FLAG_INHERIT,
-    ) != .FALSE);
-    defer _ = win32.SetHandleInformation(secret.handle, win32.HANDLE_FLAG_INHERIT, 0);
+    // with the child: what `bInheritHandles` alone would hand over. An event,
+    // because two handles to one event can be shown to be one thing --
+    // signal through one, and the other is signalled -- which is a question
+    // the operating system answers about the object rather than about a
+    // number.
+    var security: win32.SECURITY_ATTRIBUTES = .{
+        .nLength = @sizeOf(win32.SECURITY_ATTRIBUTES),
+        .lpSecurityDescriptor = null,
+        .bInheritHandle = .TRUE,
+    };
+    const secret = win32.CreateEventW(&security, .TRUE, .FALSE, null) orelse return error.NoEvent;
+    defer windows.CloseHandle(secret);
 
     // The question is put to the child's handle table from here, not to a
     // program running in the child: an inherited handle keeps its value, so
     // the child is asked for a copy of whatever it holds at that value, and
-    // the copy is compared with the file. Asking the child whether the value
-    // is *valid* would not do -- a handle value is an index into a table the
-    // child fills with handles of its own, and a program the size of a shell
-    // holds hundreds, so the number is nearly always in use for something
-    // else. The child only has to exist to be asked, and is asked before it
-    // has had time to do anything.
+    // the copy is signalled. Asking the child whether the value is *valid*
+    // would not do -- a handle value is an index into a table the child
+    // fills with handles of its own, and a program the size of a shell holds
+    // hundreds, so the number is nearly always in use for something else.
+    // The child only has to exist to be asked, and is asked before it has
+    // had time to do anything.
+    //
+    // First on this process, which certainly holds it: the probe has to be
+    // able to see a handle before its not seeing one means anything.
+    try testing.expectEqual(Probe.the_object, probe(windows.GetCurrentProcess(), secret));
+
     const sleep = [_][]const u8{
         "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30",
     };
@@ -2378,7 +2385,7 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    const found = probe(child.id, secret.handle);
+    const found = probe(child.id, secret);
     // A child that had already gone would hold nothing and prove nothing.
     if (try child.tryWait()) |term| {
         std.debug.print("the child ended before it was asked: {any}\n", .{term});
@@ -2389,31 +2396,33 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
 
     // The control: the same program started the plain Windows way, with
     // `bInheritHandles` and no list, does hold it. Without this the claim
-    // above would also be made by a probe that can see nothing. It is
-    // started suspended and never resumed -- its handle table is filled
+    // above would also be made by a probe that cannot see into a child. It
+    // is started suspended and never resumed -- its handle table is filled
     // before `CreateProcessW` returns, and a process that never runs cannot
     // exit, write anywhere or care what its streams are.
     const control = try plainSpawn(&sleep);
     defer {
         _ = win32.TerminateProcess(control, 1);
-        std.os.windows.CloseHandle(control);
+        windows.CloseHandle(control);
     }
-    const held = probe(control, secret.handle);
-    if (held != .the_file) std.debug.print("the control holds the value: {t}\n", .{held});
-    try testing.expectEqual(Probe.the_file, held);
+    const held = probe(control, secret);
+    if (held != .the_object) std.debug.print("the control holds the value: {t}\n", .{held});
+    try testing.expectEqual(Probe.the_object, held);
 }
 
 /// What a process holds at the value a handle has in this one.
-const Probe = enum { nothing, something_else, the_file };
+const Probe = enum { nothing, something_else, the_object };
 
-/// Asks `process` for a copy of what it holds at `handle`'s value, and says
-/// whether that is the same file `handle` is here.
-fn probe(process: std.os.windows.HANDLE, handle: std.os.windows.HANDLE) Probe {
+/// Asks `process` for a copy of what it holds at `event`'s value, signals
+/// through the copy, and says whether `event` -- this process's handle --
+/// was what got signalled. Prints what the system said wherever the answer
+/// is not the plain one, so a failure names its cause.
+fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
     const windows = std.os.windows;
     var copy: windows.HANDLE = undefined;
     if (win32.DuplicateHandle(
         process,
-        handle,
+        event,
         windows.GetCurrentProcess(),
         &copy,
         0,
@@ -2422,23 +2431,28 @@ fn probe(process: std.os.windows.HANDLE, handle: std.os.windows.HANDLE) Probe {
     ) == .FALSE) {
         const code = windows.GetLastError();
         if (code != .INVALID_HANDLE) {
-            std.debug.print("DuplicateHandle from the process: GetLastError({d})\n", .{@intFromEnum(code)});
+            std.debug.print("DuplicateHandle of 0x{x} from the process: GetLastError({d})\n", .{
+                @intFromPtr(event),
+                @intFromEnum(code),
+            });
         }
         return .nothing;
     }
     defer windows.CloseHandle(copy);
 
-    var theirs: win32.BY_HANDLE_FILE_INFORMATION = undefined;
-    var ours: win32.BY_HANDLE_FILE_INFORMATION = undefined;
-    if (win32.GetFileInformationByHandle(copy, &theirs) == .FALSE) return .something_else;
-    if (win32.GetFileInformationByHandle(handle, &ours) == .FALSE) {
-        std.debug.print("GetFileInformationByHandle on the file: GetLastError({d})\n", .{@intFromEnum(windows.GetLastError())});
+    _ = win32.ResetEvent(event);
+    defer _ = win32.ResetEvent(event);
+    if (win32.SetEvent(copy) == .FALSE) {
+        std.debug.print("SetEvent on the copy of 0x{x}: GetLastError({d})\n", .{
+            @intFromPtr(event),
+            @intFromEnum(windows.GetLastError()),
+        });
         return .something_else;
     }
-    const same = theirs.dwVolumeSerialNumber == ours.dwVolumeSerialNumber and
-        theirs.nFileIndexHigh == ours.nFileIndexHigh and
-        theirs.nFileIndexLow == ours.nFileIndexLow;
-    return if (same) .the_file else .something_else;
+    const waited = win32.WaitForSingleObject(event, 0);
+    if (waited == win32.WAIT_OBJECT_0) return .the_object;
+    std.debug.print("the copy of 0x{x} is another object: wait said {d}\n", .{ @intFromPtr(event), waited });
+    return .something_else;
 }
 
 /// `CreateProcessW` as a program that has not thought about inheritance

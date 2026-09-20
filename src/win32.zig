@@ -252,26 +252,6 @@ pub extern "kernel32" fn CreatePipe(
 
 pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;
 
-/// What names a file on its volume, for the tests to say whether a handle in
-/// another process is to the same file as one here.
-pub const BY_HANDLE_FILE_INFORMATION = extern struct {
-    dwFileAttributes: DWORD,
-    ftCreationTime: windows.FILETIME,
-    ftLastAccessTime: windows.FILETIME,
-    ftLastWriteTime: windows.FILETIME,
-    dwVolumeSerialNumber: DWORD,
-    nFileSizeHigh: DWORD,
-    nFileSizeLow: DWORD,
-    nNumberOfLinks: DWORD,
-    nFileIndexHigh: DWORD,
-    nFileIndexLow: DWORD,
-};
-
-pub extern "kernel32" fn GetFileInformationByHandle(
-    hFile: HANDLE,
-    lpFileInformation: *BY_HANDLE_FILE_INFORMATION,
-) callconv(.winapi) BOOL;
-
 /// What `GetFileAttributesW` returns when it could not look at the path.
 pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
 pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x00000010;
@@ -443,6 +423,17 @@ pub const CTRL_BREAK_EVENT: DWORD = 1;
 /// Sends a console control event to a process group. The only way to ask a
 /// Windows process to stop that it can decline, and it works only for a group
 /// that shares this process's console.
+/// An event, for the tests: two handles to one event can be shown to be
+/// one object by signalling through one and waiting on the other.
+pub extern "kernel32" fn CreateEventW(
+    lpEventAttributes: ?*SECURITY_ATTRIBUTES,
+    bManualReset: BOOL,
+    bInitialState: BOOL,
+    lpName: ?LPCWSTR,
+) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn SetEvent(hEvent: HANDLE) callconv(.winapi) BOOL;
+pub extern "kernel32" fn ResetEvent(hEvent: HANDLE) callconv(.winapi) BOOL;
+
 pub extern "kernel32" fn GenerateConsoleCtrlEvent(
     dwCtrlEvent: DWORD,
     dwProcessGroupId: DWORD,
