@@ -271,7 +271,8 @@ both left the group and been orphaned before anything looked is reached by no
 system, and a grandchild of a child that was already reaped keeps running. The
 walk signals stable process identities — pidfds on Linux and audit tokens on
 Darwin — so a descendant that exits cannot turn a recycled PID into a signal
-for an unrelated process.
+for an unrelated process. The walk grows to hold the whole tree; if it cannot,
+`kill` reports `error.OutOfMemory` before sending a partial descendant pass.
 
 **Two ways to start a child on POSIX, and the same child either way.** A spawn
 that needs nothing done between the fork and the exec is handed to
@@ -305,8 +306,10 @@ say the child should not have it.
 **Allocation.** `Child.spawn` and `spawnShell` take an allocator, use it for the
 call only — the argument, environment and search-path arrays that must exist
 before the child does — and retain nothing. `Child.output` allocates the bytes
-it collects and `environ` the map it returns; both say whose they are.
-Everything else works in buffers the caller passes, `Expect` included.
+it collects and `environ` the map it returns; both say whose they are. POSIX
+`Child.kill` uses the page allocator for its exhaustive descendant snapshot
+and reports `error.OutOfMemory` if that snapshot cannot be made. Everything
+else works in buffers the caller passes, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
 which is one call; `Reaper`, which exists so a wait can be in flight while

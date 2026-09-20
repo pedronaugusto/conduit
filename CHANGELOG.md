@@ -23,6 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   member to `Proxy.RunError`.
 - Windows resolves a bare program against the selected child environment's
   `PATH` instead of the parent's.
+- POSIX descendant walks no longer stop after 512 processes; `Child.kill` now
+  adds `error.OutOfMemory` rather than silently sending a partial tree signal.
 
 ## [0.4.0] - 2026-09-19
 

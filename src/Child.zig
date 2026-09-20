@@ -1023,6 +1023,9 @@ pub const Signal = enum {
 };
 
 pub const KillError = error{
+    /// POSIX: the descendant walk could not retain every stable process
+    /// identity, so no partial tree signal was sent.
+    OutOfMemory,
     /// This process may not signal the child.
     PermissionDenied,
     /// Windows: `.interrupt` was asked for and the child has no process group
@@ -1078,7 +1081,7 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
     // leaves them orphaned, and an orphan belongs to `init` and is named by no
     // walk. A descendant already in the group about to be signalled is left to
     // it, so the ordinary tree gets the one signal it always did.
-    _ = tree.signalDescendants(child.id, sig, child.pgid);
+    _ = try tree.signalDescendants(child.id, sig, child.pgid);
 
     const answer = child.signalTarget(target, sig);
     if (sig != .KILL) return answer;
@@ -1091,7 +1094,7 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
     // very next one.
     var pass: u8 = 0;
     while (pass < kill_passes) : (pass += 1) {
-        const reached = tree.signalDescendants(child.id, sig, null);
+        const reached = try tree.signalDescendants(child.id, sig, null);
         _ = c.kill(target, sig);
         if (reached == 0) break;
     }
