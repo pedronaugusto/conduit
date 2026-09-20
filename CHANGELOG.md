@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- `Child.output` on POSIX reads both pipes and watches the child's end from the calling task with one `poll`, starting no task and waking no thread; the promises are unchanged. Windows keeps the readers on tasks. Spawn and collect over a 1 KiB output: 1036 µs to 880 µs, within four percent of a C loop doing the same.
+
 ## [0.5.0] - 2026-09-20
 
 Two rows of a private head-to-head brought level, a handful of faults the

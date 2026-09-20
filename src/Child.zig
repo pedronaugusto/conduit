@@ -1427,6 +1427,14 @@ pub fn output(
     allocator: Allocator,
     options: OutputOptions,
 ) OutputError!Output {
+    // On a system with a handle that becomes readable when the child ends,
+    // the two pipes and that handle are watched together from this task, so
+    // no task is started and no thread is woken to read a pipe. Windows, and
+    // a system with nothing to watch, keep the readers on tasks.
+    if (!is_windows) {
+        if (wait_for.Watch.open(child.id)) |watch| return child.outputPolled(io, allocator, options, watch);
+    }
+
     var out: Collector = .init;
     var err: Collector = .init;
     errdefer out.list.deinit(allocator);
@@ -1534,9 +1542,20 @@ fn collect(
     max_bytes: usize,
     into: *Collector,
 ) std.Io.Cancelable!void {
-    defer into.done.store(true, .release);
+    while (!try collectOnce(io, allocator, f, max_bytes, into)) {}
+}
+
+/// One read of a stream into its collector. True once the stream is finished,
+/// by its end or by a failure the collector now records; `done` is set then.
+fn collectOnce(
+    io: std.Io,
+    allocator: Allocator,
+    f: std.Io.File,
+    max_bytes: usize,
+    into: *Collector,
+) std.Io.Cancelable!bool {
     var discard: [64 * 1024]u8 = undefined;
-    while (true) {
+    {
         const room = max_bytes -| into.list.items.len;
         var keeping = into.failure.load(.acquire) != .out_of_memory and room != 0;
         const buffer = if (keeping) buffer: {
@@ -1560,19 +1579,139 @@ fn collect(
         const n = handles.readStreaming(f, io, &.{buffer}) catch |e| switch (e) {
             error.Canceled => return error.Canceled,
             else => {
-                if (handles.finished(e)) return;
-                into.failure.store(.read_failed, .release);
-                return;
+                if (!handles.finished(e)) into.failure.store(.read_failed, .release);
+                into.done.store(true, .release);
+                return true;
             },
         };
         if (!keeping) {
             // Allocation failed, but reading must continue until the child
             // exits or it can fill this pipe and make the wait deadlock.
             into.truncated = true;
-            continue;
+            return false;
         }
         into.list.items.len += n;
+        return false;
     }
+}
+
+/// `output` on one task: the pipes and the child's end are polled together.
+///
+/// The promises are the same as the task-based path's. Two streams are read
+/// as either has bytes, so a child that fills one while the other is being
+/// read is never blocked; a timeout is a bound on the poll and not on a read
+/// that may never return; after the child ends the streams are drained for
+/// `drain_ms` and no longer, because whatever still holds them open is not
+/// the child.
+fn outputPolled(
+    child: *Child,
+    io: std.Io,
+    allocator: Allocator,
+    options: OutputOptions,
+    watch: wait_for.Watch,
+) OutputError!Output {
+    defer watch.close();
+    var out: Collector = .init;
+    var err: Collector = .init;
+    errdefer out.list.deinit(allocator);
+    errdefer err.list.deinit(allocator);
+
+    const streams = [2]?std.Io.File{ child.stdoutFile(), child.stderr };
+    const collectors = [2]*Collector{ &out, &err };
+    // A stream this process does not hold is finished before it starts.
+    for (streams, collectors) |stream, collector| {
+        if (stream == null) collector.done.store(true, .release);
+    }
+
+    var timed_out = false;
+    const deadline: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+    var term: ?Term = null;
+    var drain: ?Deadline = null;
+    var ended = false;
+    while (true) {
+        try std.Io.checkCancel(io);
+        const out_done = out.done.load(.acquire);
+        const err_done = err.done.load(.acquire);
+        if (term == null) {
+            // A reader that cannot continue leaves a pipe the child may fill
+            // and block on: end the child now and report the failure once
+            // the other stream is drained.
+            if (out.readFailed() or err.readFailed()) {
+                term = try child.killWait(io, 0);
+            } else if (deadline != null and deadline.?.remainingMs(io) == 0) {
+                timed_out = true;
+                term = try child.killWait(io, options.grace_ms);
+            } else if (ended) {
+                term = try child.tryWaitClaimed();
+            }
+            if (term != null) drain = .in(io, options.drain_ms);
+        }
+        if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
+
+        var fds: [3]posix.pollfd = undefined;
+        var which: [3]u8 = undefined;
+        var count: usize = 0;
+        for (streams, 0..) |stream, i| {
+            if (collectors[i].done.load(.acquire)) continue;
+            // A descriptor that is not one is not something `poll` reports
+            // on: it is read directly, so that the read says what is wrong.
+            if (stream.?.handle < 0) {
+                _ = try collectOnce(io, allocator, stream.?, options.max_bytes, collectors[i]);
+                continue;
+            }
+            fds[count] = .{ .fd = stream.?.handle, .events = posix.POLL.IN, .revents = 0 };
+            which[count] = @intCast(i);
+            count += 1;
+        }
+        if (term == null and !ended) {
+            fds[count] = .{ .fd = watch.handle, .events = posix.POLL.IN, .revents = 0 };
+            which[count] = 2;
+            count += 1;
+        }
+        var slice: u32 = output_wait_slice_ms;
+        if (term == null) {
+            if (deadline) |until| slice = @min(slice, until.remainingMs(io));
+        } else slice = @min(slice, drain.?.remainingMs(io));
+        if (count == 0) {
+            // The streams are finished and the child has been told to end;
+            // it is only its own exit that is waited for now.
+            if (try child.waitTimeout(io, slice)) |finished| {
+                term = finished;
+                drain = .in(io, options.drain_ms);
+            }
+            continue;
+        }
+        // A poll that cannot be made is a stream that cannot be read.
+        const ready = posix.poll(fds[0..count], @intCast(slice)) catch return error.ReadFailed;
+        if (ready == 0) continue;
+        for (fds[0..count], which[0..count]) |fd, i| {
+            if (fd.revents == 0) continue;
+            if (i == 2) {
+                // The child has ended, or is a moment from being waitable:
+                // the reap is asked for on the next round, and again until
+                // it answers.
+                ended = true;
+                continue;
+            }
+            _ = try collectOnce(io, allocator, streams[i].?, options.max_bytes, collectors[i]);
+        }
+    }
+
+    const out_failure = out.failure.load(.acquire);
+    const err_failure = err.failure.load(.acquire);
+    if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
+    if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
+    const stdout_bytes = try out.list.toOwnedSlice(allocator);
+    errdefer allocator.free(stdout_bytes);
+    const stderr_bytes = try err.list.toOwnedSlice(allocator);
+    return .{
+        .stdout = stdout_bytes,
+        .stderr = stderr_bytes,
+        .stdout_truncated = out.truncated or !out.done.load(.acquire),
+        .stderr_truncated = err.truncated or !err.done.load(.acquire),
+        .term = term.?,
+        .timed_out = timed_out,
+    };
 }
 
 //======================================================================
