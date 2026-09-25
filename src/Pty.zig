@@ -690,6 +690,19 @@ test "both ends of a POSIX pair are the same terminal" {
     }, try tty.winSize(pty.slave.?));
 }
 
+test "a pair opened with a pixel size reports it at both ends" {
+    if (is_windows) return error.SkipZigTest;
+    const io = testing.io;
+    // What a terminal embedding a program passes through: the cells it gave
+    // the program, and those cells in pixels, so a program that sizes
+    // pictures by the cell does not have to guess.
+    var pty = try Pty.open(.{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 });
+    defer pty.close(io);
+    const want: Size = .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 };
+    try testing.expectEqual(want, try pty.size());
+    try testing.expectEqual(want, try tty.winSize(pty.slave.?));
+}
+
 test "the terminal end of a POSIX pair has a name under /dev" {
     if (is_windows) return error.SkipZigTest;
     const io = testing.io;
