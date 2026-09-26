@@ -56,6 +56,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `Child.output` left the child running when the call was cancelled or
+  failed partway, so a caller whose task was cancelled had a process it could
+  no longer wait for. A run abandoned is now a run ended: the child and what
+  it started are killed and reaped before the error is returned.
 - `restore` could wait for ever. It set the saved mode with `TCSAFLUSH`,
   which waits for every byte written to be transmitted, so restoring a
   terminal that had stopped reading -- suspended, gone, or the terminal of a

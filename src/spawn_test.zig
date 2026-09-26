@@ -819,6 +819,35 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
     try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
 }
 
+test "output abandoned by a cancelation ends the child and reaps it" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .detach = !is_windows,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+
+    const Run = struct {
+        fn run(ch: *Child) void {
+            var result = ch.output(io, gpa, .{}) catch return;
+            result.deinit(gpa);
+        }
+    };
+    var group: std.Io.Group = .init;
+    try group.concurrent(io, Run.run, .{&child});
+    try std.Io.sleep(io, .fromMilliseconds(50), .awake);
+    group.cancel(io);
+
+    // Reaped by the call that was abandoned, not by the `defer` above.
+    const term = (try child.tryWait()) orelse return error.TestChildOutlivedTheRun;
+    try testing.expect(!conduit.succeeded(term));
+}
+
 test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);

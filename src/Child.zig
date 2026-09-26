@@ -1453,14 +1453,18 @@ pub const OutputError = error{
 /// grown on those tasks.
 ///
 /// The child is reaped when this returns, whether it ended on its own or was
-/// killed, so `wait` afterwards answers from the same term. `deinit` is still
-/// the caller's to make.
+/// killed, so `wait` afterwards answers from the same term. That holds for a
+/// call that returns an error too, a cancelation included: a run abandoned
+/// is a run ended, so the child and what it started are killed and reaped
+/// before the error comes back, and no caller is left holding a process it
+/// can no longer wait for. `deinit` is still the caller's to make.
 pub fn output(
     child: *Child,
     io: std.Io,
     allocator: Allocator,
     options: OutputOptions,
 ) OutputError!Output {
+    errdefer child.abandon(io);
     // On a system with a handle that becomes readable when the child ends,
     // the two pipes and that handle are watched together from this task, so
     // no task is started and no thread is woken to read a pipe. Windows, and
@@ -1468,7 +1472,23 @@ pub fn output(
     if (!is_windows) {
         if (wait_for.Watch.open(child.id)) |watch| return child.outputPolled(io, allocator, options, watch);
     }
+    return child.outputOnTasks(io, allocator, options);
+}
 
+/// The end of a run nobody will finish: `.kill` and the reap, with
+/// cancelation held off, since the cancelation is usually why.
+fn abandon(child: *Child, io: std.Io) void {
+    const protection = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(protection);
+    _ = child.killWait(io, 0) catch {};
+}
+
+fn outputOnTasks(
+    child: *Child,
+    io: std.Io,
+    allocator: Allocator,
+    options: OutputOptions,
+) OutputError!Output {
     var out: Collector = .init;
     var err: Collector = .init;
     errdefer out.list.deinit(allocator);
