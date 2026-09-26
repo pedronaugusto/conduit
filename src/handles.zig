@@ -129,6 +129,42 @@ pub const ForkGap = struct {
     }
 };
 
+pub const PipeError = error{
+    ProcessFdQuotaExceeded,
+    SystemFdQuotaExceeded,
+} || std.Io.UnexpectedError;
+
+/// A pipe, both ends close-on-exec: `pipe2` where the system has it, and
+/// `pipe` with the flag set in the `ForkGap` where it has not. POSIX only.
+pub const pipe = if (is_windows)
+    @compileError("handles.pipe is POSIX-only")
+else
+    pipePosix;
+
+fn pipePosix() PipeError![2]posix.fd_t {
+    var ends: [2]posix.fd_t = undefined;
+    const failed = if (@TypeOf(c.pipe2) == void) failed: {
+        // No `pipe2` here, so the flag is a second call and there is a gap
+        // between the two. `ForkGap` is what keeps this package's own spawns
+        // out of it.
+        ForkGap.openingDescriptors();
+        defer ForkGap.release();
+        const rc = c.pipe(&ends);
+        if (rc == 0) {
+            setCloseOnExec(ends[0]);
+            setCloseOnExec(ends[1]);
+        }
+        break :failed rc != 0;
+    } else c.pipe2(&ends, .{ .CLOEXEC = true }) != 0;
+
+    if (failed) switch (c.errno(@as(c_int, -1))) {
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        else => |err| return posix.unexpectedErrno(err),
+    };
+    return ends;
+}
+
 test "readStreaming retries a permitted zero-byte result" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});

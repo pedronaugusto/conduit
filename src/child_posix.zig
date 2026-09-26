@@ -512,27 +512,7 @@ fn openNullDevice() SpawnError!posix.fd_t {
 /// at all, and another thread that forks through it hands them to a child that
 /// has nothing to do with this one. Darwin has no `pipe2` and takes the gap.
 fn makePipe() SpawnError![2]posix.fd_t {
-    var ends: [2]posix.fd_t = undefined;
-    const failed = if (@TypeOf(c.pipe2) == void) failed: {
-        // No `pipe2` here, so the flag is a second call and there is a gap
-        // between the two. `ForkGap` is what keeps this package's own spawns
-        // out of it.
-        handles.ForkGap.openingDescriptors();
-        defer handles.ForkGap.release();
-        const rc = c.pipe(&ends);
-        if (rc == 0) {
-            handles.setCloseOnExec(ends[0]);
-            handles.setCloseOnExec(ends[1]);
-        }
-        break :failed rc != 0;
-    } else c.pipe2(&ends, .{ .CLOEXEC = true }) != 0;
-
-    if (failed) switch (c.errno(@as(c_int, -1))) {
-        .MFILE => return error.ProcessFdQuotaExceeded,
-        .NFILE => return error.SystemFdQuotaExceeded,
-        else => |err| return posix.unexpectedErrno(err),
-    };
-    return ends;
+    return handles.pipe();
 }
 
 /// Reads until the buffer is full or the writer is gone. Used on the report
