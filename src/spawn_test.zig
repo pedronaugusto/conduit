@@ -610,8 +610,6 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     // The shell and the `sleep` it starts both ignore `SIGTERM` — an ignored
     // signal is inherited across `execve` — and the `sleep` is the grandchild
     // the tree kill has to reach.
-    var sink: Sink = .{};
-    defer sink.deinit();
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 100 & printf 'pid %d.' \"$!\"; wait" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
@@ -619,6 +617,9 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    // after the child, so it stops reading before the child closes its file
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(child.stdout.?);
     const grandchild = try readPid(&sink);
 
@@ -684,8 +685,6 @@ test "Reaper.stop with no grace is the force, now" {
 
     // The shell says so once it ignores the request, so the request cannot
     // arrive before it does.
-    var sink: Sink = .{};
-    defer sink.deinit();
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
@@ -693,6 +692,8 @@ test "Reaper.stop with no grace is the force, now" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(child.stdout.?);
     _ = try readPid(&sink);
 
@@ -716,8 +717,6 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     // Two left behind: one that goes when asked, and one that ignores the
     // request and has to be made to. The child's own end is an ordinary
     // exit, and that is the term published.
-    var sink: Sink = .{};
-    defer sink.deinit();
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{
             "/bin/sh", "-c",
@@ -729,6 +728,8 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(child.stdout.?);
     const polite = try readPid(&sink);
     const stubborn = stubborn: {
