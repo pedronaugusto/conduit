@@ -170,6 +170,12 @@ against the child environment before `CreateProcessW`, whose own search would
 otherwise use the parent's `PATH`; the other two modes are `error.Unsupported`
 there.
 
+`conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
+find `name` for a child given `environ`, by the same rules, or `null`: for a
+program that asks whether something is installed, to say so. `spawn` does not
+need it and searches for itself — resolving a name and then starting what it
+resolved to is two steps, with room between them for the answer to change.
+
 ### `spawnShell`, `Reaper`, `Proxy`
 
 `spawnShell(io, allocator, options)` returns a `Shell`: a `Pty` and a `Child`,

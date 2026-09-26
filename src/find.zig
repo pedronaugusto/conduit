@@ -1,0 +1,109 @@
+//! Where a program named by a bare name would be found, asked on its own.
+//!
+//! `Child.spawn` searches for its program itself, in the child, and that is
+//! where the search belongs: resolving a name and then starting what it
+//! resolved to is two steps, and a window between them for the answer to
+//! change. This is for the other question — whether something is installed at
+//! all, to say so to a user — which is a lookup and nothing else.
+
+const builtin = @import("builtin");
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+
+const is_windows = builtin.os.tag == .windows;
+const child_windows = if (is_windows) @import("child_windows.zig") else struct {};
+
+/// Where `name` resolves for a child given `environ`, by the rules
+/// `Child.spawn` uses with `path_search = .child_environ`, or `null` when it
+/// names nothing that could be run.
+///
+/// **POSIX**: a name with a `/` is itself; otherwise each entry of `PATH` in
+/// turn, an empty one being the current directory, and the first that holds
+/// something executable that is not a directory. With no `PATH` the search is
+/// the one a shell falls back to. Relative entries resolve against this
+/// process's working directory — `spawn` resolves them against the child's,
+/// which is the same thing unless `cwd` is set.
+///
+/// **Windows**: the directory of this executable, the current directory, the
+/// system directories, then `PATH`, with `.exe` supplied to a name with no
+/// extension; a name with a separator or a drive is itself if it exists.
+///
+/// The path is allocated with `allocator` and is the caller's.
+pub fn findProgram(
+    io: std.Io,
+    allocator: Allocator,
+    environ: *const std.process.Environ.Map,
+    name: []const u8,
+) Allocator.Error!?[]u8 {
+    if (name.len == 0) return null;
+    if (is_windows) {
+        var arena_state: std.heap.ArenaAllocator = .init(allocator);
+        defer arena_state.deinit();
+        if (!child_windows.isBareProgram(name)) {
+            std.Io.Dir.cwd().access(io, name, .{}) catch return null;
+            return try allocator.dupe(u8, name);
+        }
+        const found = try child_windows.findBare(io, arena_state.allocator(), name, environ) orelse return null;
+        return try allocator.dupe(u8, found);
+    }
+
+    if (std.mem.indexOfScalar(u8, name, '/') != null) {
+        return if (runnable(io, name)) try allocator.dupe(u8, name) else null;
+    }
+    // As `spawn`'s own search: what `confstr(_CS_PATH)` reports on the
+    // systems this package supports.
+    const directories = environ.get("PATH") orelse "/usr/local/bin:/usr/bin:/bin";
+    var it = std.mem.splitScalar(u8, directories, ':');
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    while (it.next()) |dir| {
+        const prefix = if (dir.len == 0) "." else dir;
+        const candidate = std.fmt.bufPrint(&buffer, "{s}/{s}", .{ prefix, name }) catch continue;
+        if (runnable(io, candidate)) return try allocator.dupe(u8, candidate);
+    }
+    return null;
+}
+
+/// Executable by this process, and not a directory: a directory is
+/// "executable" in the sense `access` asks about, and runs nothing.
+fn runnable(io: std.Io, path: []const u8) bool {
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(io, path, .{ .execute = true }) catch return false;
+    const st = cwd.statFile(io, path, .{}) catch return false;
+    return st.kind != .directory;
+}
+
+test "a program on PATH is found where the search finds it, and a missing one is not" {
+    if (is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const dir = path_buffer[0..try tmp.dir.realPath(testing.io, &path_buffer)];
+
+    // Not executable, then executable; and a directory by the same name
+    // earlier on the path, which is passed over.
+    try tmp.dir.createDirPath(testing.io, "early/prog");
+    try tmp.dir.createDirPath(testing.io, "late");
+    const f = try tmp.dir.createFile(testing.io, "late/prog", .{});
+    f.close(testing.io);
+
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}/early::{s}/late", .{ dir, dir });
+    defer testing.allocator.free(path);
+    try environ.put("PATH", path);
+
+    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "prog") == null);
+    try tmp.dir.setFilePermissions(testing.io, "late/prog", .fromMode(0o755), .{});
+    const found = (try findProgram(testing.io, testing.allocator, &environ, "prog")).?;
+    defer testing.allocator.free(found);
+    const expected = try std.fmt.allocPrint(testing.allocator, "{s}/late/prog", .{dir});
+    defer testing.allocator.free(expected);
+    try testing.expectEqualStrings(expected, found);
+
+    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "no-such-program") == null);
+    // A name that is a path is itself, when it can be run.
+    const direct = (try findProgram(testing.io, testing.allocator, &environ, expected)).?;
+    defer testing.allocator.free(direct);
+    try testing.expectEqualStrings(expected, direct);
+}

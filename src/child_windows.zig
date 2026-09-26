@@ -253,7 +253,23 @@ fn applicationName(
         return (try std.unicode.wtf8ToWtf16LeAllocZ(arena, program)).ptr;
     }
     const environment = options.environ orelse return null;
+    // A name with no UTF-16 spelling is refused as such, not as a file that
+    // could not be found.
+    _ = try std.unicode.wtf8ToWtf16LeAllocZ(arena, program);
+    const found = try findBare(io, arena, program, environment) orelse return error.FileNotFound;
+    return (try std.unicode.wtf8ToWtf16LeAllocZ(arena, found)).ptr;
+}
 
+/// Where a bare program name resolves for a child given `environment`: the
+/// directory of this executable, the current directory, the system
+/// directories, then that environment's `PATH`, with `.exe` supplied when the
+/// name has no extension. `findProgram` asks the same question.
+pub fn findBare(
+    io: std.Io,
+    arena: Allocator,
+    program: []const u8,
+    environment: *const std.process.Environ.Map,
+) Allocator.Error!?[]const u8 {
     var directories: std.ArrayList([]const u8) = .empty;
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
     if (std.process.executableDirPath(io, &path_buffer)) |len| {
@@ -263,7 +279,9 @@ fn applicationName(
         try directories.append(arena, try arena.dupe(u8, path_buffer[0..len]));
     } else |_| {}
 
-    const system = try std.unicode.wtf16LeToWtf8Alloc(arena, windows.getSystemDirectoryWtf16Le());
+    const system = std.unicode.wtf16LeToWtf8Alloc(arena, windows.getSystemDirectoryWtf16Le()) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
     try directories.append(arena, system);
     if (std.fs.path.dirname(system)) |windows_dir| {
         try directories.append(arena, try std.fs.path.join(arena, &.{ windows_dir, "System" }));
@@ -287,16 +305,20 @@ fn applicationName(
             executable
         else
             try std.fs.path.join(arena, &.{ directory, executable });
-        const wide = try std.unicode.wtf8ToWtf16LeAllocZ(arena, candidate);
+        const wide = std.unicode.wtf8ToWtf16LeAllocZ(arena, candidate) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A name with no UTF-16 spelling names no file here.
+            else => continue,
+        };
         const attributes = win32.GetFileAttributesW(wide.ptr);
         if (attributes == win32.INVALID_FILE_ATTRIBUTES) continue;
         if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY != 0) continue;
-        return wide.ptr;
+        return candidate;
     }
-    return error.FileNotFound;
+    return null;
 }
 
-fn isBareProgram(program: []const u8) bool {
+pub fn isBareProgram(program: []const u8) bool {
     return std.mem.indexOfAny(u8, program, "\\/:") == null;
 }
 

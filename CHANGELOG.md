@@ -30,6 +30,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are asked whether the group has emptied; elsewhere what is left is sent
   `SIGKILL` at once. On Windows the job is ended as soon as the child is
   reaped. The term published is the child's own.
+- `findProgram`: where `spawn` would find a program for a child given an
+  environment, by the same rules, for a program that asks whether something
+  is installed. Windows resolves it the way a spawn with a custom
+  environment already did, now in one place for both.
 - `Child.holdReap` and `HeldReap`: the right to reap a child, taken and held
   by a caller that waits for the end in a way of its own and does something
   between the end and the reap.

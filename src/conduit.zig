@@ -138,6 +138,12 @@ pub const Shell = shell.Shell;
 pub const ShellOptions = shell.Options;
 pub const SpawnShellError = shell.SpawnShellError;
 
+/// Where a program named by a bare name would be found, by `spawn`'s own rules,
+/// for a program that asks whether something is installed rather than to run
+/// it. `spawn` searches for itself; resolving first and then spawning what was
+/// found is two steps, with room between them for the answer to change.
+pub const findProgram = @import("find.zig").findProgram;
+
 /// Building a child's environment, from this process's own or from nothing.
 ///
 /// `environ.inherit(allocator, &.{.{ .name = "TERM", .value = "xterm-256color" }})`
@@ -192,5 +198,6 @@ test {
     inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty }) |decl| _ = decl;
     _ = environ_impl;
     _ = shell;
+    _ = @import("find.zig");
     _ = @import("spawn_test.zig");
 }
