@@ -278,6 +278,12 @@ terminal end goes first either way; only a `std.Io` with no task to give drops
 the master ends first instead, so that the host's last write fails rather than
 waits.
 
+**Stop a reader before closing what it reads.** A task reading the master or a
+child's pipe is cancelled, or reads to the end, and is joined before
+`Pty.close`, `closeMaster` or `Child.deinit` closes that file. A descriptor
+closed under a read is free for the next open in the process, and a read that
+starts after the close reads that file instead.
+
 **`kill` and `killWait` reach what the child started.** On Windows every child
 goes in a job object of its own before it runs — started suspended, assigned,
 resumed, so nothing is ever outside it — and `.kill` ends the job. The job ends

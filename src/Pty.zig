@@ -281,12 +281,10 @@ fn slaveFilePosix(pty: Pty) std.Io.File {
 /// started before the console is closed and joined after, which the host's own
 /// exit ends by closing its end of the pipe.
 ///
-/// A caller may leave a reader of its own running across this, and that is the
-/// easier order: closing the pair is what ends the stream, so the caller's
-/// read comes back on its own afterwards with nothing to cancel. The two
-/// readers divide the last of the output between them, which matters only to a
-/// caller that wanted those final bytes — and one that does should read until
-/// it has them before calling this.
+/// A reader of the caller's is stopped and joined before this, not left
+/// running across it: see `closeMaster`. A caller that wants the last of the
+/// output reads until it has it — on POSIX, `closeSlave` first and read to the
+/// end — and then stops its reader and calls this.
 pub fn close(pty: *Pty, io: std.Io) void {
     if (is_windows) return pty.closeWindows(io);
     pty.closeSlave(io);
@@ -384,11 +382,15 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
 /// On Windows the child's console loses the pipes behind it; the client learns
 /// when it next reads or writes.
 ///
-/// **This is also how a task that is reading the master is released.** That
-/// read ends when the far end finishes or the handle goes away, and for a pair
-/// whose console host is still running only the second happens — so a program
-/// that keeps a reader on a task should close the master and then join it,
-/// rather than the other way round.
+/// **Stop a task that is reading the master before calling this.** Closing a
+/// descriptor another thread is reading is a race: the number is free as soon
+/// as the close returns, the next file this process opens can take it, and a
+/// read the task starts after that reads the other file. ThreadSanitizer
+/// reports it as a race on the descriptor. Cancel the task and join it, or let
+/// its read end and join it — on POSIX a read of the master ends once
+/// `closeSlave` has been called and every process on the terminal is gone —
+/// and close afterwards. On Windows `close` reads the master itself while the
+/// console host goes, so no reader of the caller's has to stay for it.
 pub fn closeMaster(pty: *Pty, io: std.Io) void {
     trace.print("pty: closing the master ends", .{});
     defer trace.print("pty: master ends closed", .{});
@@ -635,11 +637,12 @@ test "open gives a pair at the requested size, and resize changes it" {
     defer watchdog.deinit(io);
 
     var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
-    // Registered before the close below, so it runs after it: the master is
-    // still being read while the pair goes away.
+    defer pty.close(io);
+    // Registered after the close, so it runs before it: the reader is stopped
+    // before the file it reads is closed (see `closeMaster`), and `close`
+    // reads the master itself on Windows while the console host goes.
     var drain: Drain = .{};
     defer drain.deinit(io);
-    defer pty.close(io);
     try drain.start(io, pty.readFile());
 
     const opened = try pty.size();

@@ -123,6 +123,11 @@ const script = if (is_windows) struct {
 /// read would block past the end of the test, so this is how every test here
 /// waits for bytes: start the task, ask `contains` until the budget runs out,
 /// cancel on the way out.
+///
+/// A sink is declared after whatever owns the file it reads — the `Child`
+/// whose pipe it is, the `Pty` whose master — so that its `deinit` runs first.
+/// Closing a file under a task that is reading it is a race on the
+/// descriptor, and ThreadSanitizer on Linux says so.
 const Sink = struct {
     mutex: std.Io.Mutex = .init,
     bytes: std.ArrayList(u8) = .empty,
@@ -1065,9 +1070,6 @@ test "killWait reaches what the child started, not only the child" {
         // would leave no grandchild to lose.
         &.{ "/bin/sh", "-c", "sleep 30; :" };
 
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var child = try Child.spawn(io, gpa, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
@@ -1077,6 +1079,8 @@ test "killWait reaches what the child started, not only the child" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(child.stdout.?);
 
     // Both still running, so the pipe still has writers.
@@ -1215,15 +1219,14 @@ test "waitTree says the tree has ended, and does not say it early" {
     // send signals to.
     if (!is_windows) return error.SkipZigTest;
 
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(child.stdout.?);
 
     const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
@@ -1270,15 +1273,14 @@ test "deinit ends a grandchild the child started and left behind" {
     // `Child.deinit` says out loud.
     if (!is_windows) return error.SkipZigTest;
 
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(child.stdout.?);
 
     const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
@@ -1388,15 +1390,14 @@ test "what a child writes to its terminal reaches the master" {
 
     // Traced stage by stage, like the shell test below and for the same
     // reason: this one has hung on a Windows runner with nothing to say.
-    // The order out, for every test in this section: end the child, close the
-    // pair, then join the reader. The child first because closing a
-    // pseudoconsole waits for its client. The pair before the reader because
-    // closing it is what ends the stream, and a read of a stream that has
-    // ended comes back on its own -- there is then nothing to cancel and
-    // nothing to wait for. Declaring the sink first is what puts its `deinit`
-    // last.
-    var sink: Sink = .{};
-    defer sink.deinit();
+    // The order out, for every test in this section: stop the reader, end the
+    // child, then close the pair. The reader first because closing a file
+    // another task is reading is a race on its descriptor -- the number can be
+    // reused by the next open, and a read that starts after the close then
+    // reads someone else's file -- so the sink is declared after the pair and
+    // the child, which puts its `deinit` first. The child before the pair
+    // because closing a pseudoconsole waits for its client; `Pty.close` reads
+    // the master itself while it does.
 
     trace.print("master: opening a pair", .{});
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
@@ -1414,6 +1415,8 @@ test "what a child writes to its terminal reaches the master" {
     // `Pty.closeSlave` documents it at length.
     if (!is_windows) pty.closeSlave(io);
 
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(pty.readFile());
     trace.print("master: reading the master", .{});
 
@@ -1432,10 +1435,6 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // and on POSIX there is nothing between the two ends of a pair rewriting
     // anything in the first place.
     if (!is_windows) return error.SkipZigTest;
-
-    // The order out: see the first test in this section.
-    var sink: Sink = .{};
-    defer sink.deinit();
 
     var pty = try Pty.open(.{
         .rows = 24,
@@ -1466,6 +1465,8 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
 
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(pty.readFile());
 
     // Byte for byte, as the child wrote it: `DECSCUSR` with parameter 5.
@@ -1507,10 +1508,6 @@ test "a child on a pty reports the window size it was given, and the one it is r
     // print; that a pseudoconsole takes the new size is `Pty`'s own test.
     if (is_windows) return error.SkipZigTest;
 
-    // The order out: see the first test in this section.
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
     defer pty.close(io);
 
@@ -1525,6 +1522,8 @@ test "a child on a pty reports the window size it was given, and the one it is r
     defer _ = child.killWait(io, 0) catch {};
     pty.closeSlave(io);
 
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(pty.readFile());
 
     try sink.expect("30 100");
@@ -1679,10 +1678,6 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     // a pseudoconsole is not a file.
     if (is_windows) return error.SkipZigTest;
 
-    // The order out: see the first test in the pseudo-terminal section.
-    var sink: Sink = .{};
-    defer sink.deinit();
-
     var sink_pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer sink_pty.close(io);
 
@@ -1697,6 +1692,8 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     // The stderr pipe was not created, because the file replaced it.
     try testing.expectEqual(@as(?std.Io.File, null), child.stderr);
 
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(sink_pty.readFile());
 
     try sink.expect("to stderr");
@@ -1749,13 +1746,6 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // `Pty.slaveFile` is a compile error there and says so.
     if (is_windows) return error.SkipZigTest;
 
-    // The order out, both of them: see the first test in the pseudo-terminal
-    // section.
-    var on_terminal: Sink = .{};
-    defer on_terminal.deinit();
-    var on_pipe: Sink = .{};
-    defer on_pipe.deinit();
-
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
@@ -1779,7 +1769,11 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // it: closing it is what lets a read of the master finish.
     pty.closeSlave(io);
 
+    var on_terminal: Sink = .{};
+    defer on_terminal.deinit();
     try on_terminal.start(pty.readFile());
+    var on_pipe: Sink = .{};
+    defer on_pipe.deinit();
     try on_pipe.start(child.stderr.?);
 
     try on_terminal.expect("stdout is a terminal");
@@ -2301,9 +2295,7 @@ test "spawnShell starts the user's shell on a pair" {
     // it again will have to say.
     // The order out: see the first test in the pseudo-terminal section. The
     // shell's own `deinit` is what closes the pair, so the sink is declared
-    // before it and joined after it.
-    var sink: Sink = .{};
-    defer sink.deinit();
+    // after it and stopped before it.
 
     trace.print("shell: opening a pair and starting the shell", .{});
     var shell = try conduit.spawnShell(io, gpa, .{
@@ -2316,6 +2308,8 @@ test "spawnShell starts the user's shell on a pair" {
 
     try testing.expectEqual(@as(u16, 40), (try shell.pty.size()).rows);
 
+    var sink: Sink = .{};
+    defer sink.deinit();
     try sink.start(shell.pty.readFile());
     trace.print("shell: reading the master", .{});
 

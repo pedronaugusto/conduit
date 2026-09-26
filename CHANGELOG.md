@@ -53,6 +53,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `std.Io` can cancel. Where there is no such handle it waits as before.
 - `rawMode` on a Windows input handle also turns quick edit off, so the
   mouse is the program's rather than a selection that pauses the console.
+- `Pty.closeMaster` and `Pty.close` no longer say to close the master under a
+  task that is reading it and join the task afterwards. Closing a descriptor
+  another thread is reading is a race: the number is free for the next open,
+  and a read started after the close reads that file. Stop the reader
+  (cancel it, or let it read to the end) and join it, then close. The suite's
+  own readers now do, and the Linux ThreadSanitizer run of the whole suite,
+  which reported six such races, reports none.
 
 ### Fixed
 
