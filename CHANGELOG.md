@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `conduit.tty`, the terminal primitives -- `rawMode`, `restore`, `winSize`,
+  `setWinSize`, `isTty`, `ttyName`, `foregroundGroup` -- as a module of their
+  own, for a program that draws its own screen and runs no child. On Linux
+  it makes no call through libc: the primitives are ioctls, and a
+  descriptor's device name is read from `/proc`. `conduit` imports it, and
+  the names it exported are unchanged.
+
+### Changed
+
+- `rawMode` on a Windows input handle also turns quick edit off, so the
+  mouse is the program's rather than a selection that pauses the console.
+
+### Fixed
+
+- `restore` could wait for ever. It set the saved mode with `TCSAFLUSH`,
+  which waits for every byte written to be transmitted, so restoring a
+  terminal that had stopped reading -- suspended, gone, or the terminal of a
+  program on its way out of a panic -- never returned. It and `rawMode` now
+  discard unread input and take effect at once.
+
 ## [0.5.1] - 2026-09-20
 
 Collecting a child's output no longer wakes a thread to do it.

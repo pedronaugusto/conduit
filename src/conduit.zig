@@ -62,7 +62,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const tty = @import("tty.zig");
+const tty = @import("conduit.tty");
 const environ_impl = @import("environ.zig");
 const shell = @import("shell.zig");
 
@@ -187,7 +187,9 @@ test {
     _ = Reaper;
     _ = Proxy;
     _ = Expect;
-    _ = tty;
+    // A module of its own, so its declarations are named here to be
+    // compiled for every target the check builds.
+    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty }) |decl| _ = decl;
     _ = environ_impl;
     _ = shell;
     _ = @import("spawn_test.zig");

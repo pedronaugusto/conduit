@@ -34,7 +34,7 @@ const c = std.c;
 const windows = std.os.windows;
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
-const tty = @import("tty.zig");
+const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
@@ -730,7 +730,12 @@ test "raw mode round-trips on the terminal end of a POSIX pair" {
     try testing.expect(!during.oflag.OPOST);
 
     try tty.restore(pty.slave.?, saved);
-    const after = try posix.tcgetattr(pty.slave.?);
+    var after = try posix.tcgetattr(pty.slave.?);
+    // A BSD kernel marks input for retyping whenever canonical mode comes
+    // back without a flush that waits on the output, which `restore` never
+    // does; the mark clears on the next read and is not part of the mode
+    // that was saved.
+    if (@hasField(@TypeOf(after.lflag), "PENDIN")) after.lflag.PENDIN = before.lflag.PENDIN;
     try testing.expectEqual(before.lflag, after.lflag);
     try testing.expectEqual(before.iflag, after.iflag);
     try testing.expectEqual(before.oflag, after.oflag);
@@ -780,4 +785,29 @@ test "a pair asked for no console options gets none" {
     var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     try testing.expectEqual(ConsoleOptions{}, pty.console);
+}
+
+test "restoring a terminal nobody reads does not wait for its output" {
+    // Output written to the terminal end with nothing reading the other,
+    // more than the pair holds: a restore that waited for it to drain, as
+    // TCSAFLUSH does, would never return.
+    if (is_windows) return error.SkipZigTest;
+    const io = testing.io;
+    var pty = try Pty.open(.{});
+    defer pty.close(io);
+    const saved = try tty.rawMode(pty.slave.?);
+    // Not blocking, so filling the pair cannot hang the test either.
+    const flags = posix.system.fcntl(pty.slave.?, posix.F.GETFL, @as(usize, 0));
+    try testing.expect(flags >= 0);
+    const nonblock: u32 = @bitCast(posix.O{ .NONBLOCK = true });
+    try testing.expectEqual(@as(@TypeOf(flags), 0), posix.system.fcntl(pty.slave.?, posix.F.SETFL, @as(usize, @intCast(flags)) | nonblock));
+    const chunk: [4096]u8 = @splat('x');
+    var written: usize = 0;
+    while (written < 1 << 20) {
+        const rc = posix.system.write(pty.slave.?, &chunk, chunk.len);
+        if (posix.errno(rc) != .SUCCESS) break;
+        written += @intCast(rc);
+    }
+    try testing.expect(written > 0);
+    try tty.restore(pty.slave.?, saved);
 }

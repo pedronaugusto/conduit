@@ -50,7 +50,7 @@ const std = @import("std");
 
 const Pty = @import("Pty.zig");
 const handles = @import("handles.zig");
-const tty = @import("tty.zig");
+const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
 

@@ -16,7 +16,7 @@ const Pty = @import("Pty.zig");
 const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
-const tty = @import("tty.zig");
+const tty = @import("conduit.tty");
 
 const file = handles.file;
 
@@ -226,7 +226,7 @@ fn childMain(
         switch (options.stdio) {
             .pty => |pty| {
                 if (c.setsid() < 0) bail(report, .detach);
-                if (c.ioctl(pty.slave.?, tty.T.SCTTY, @as(usize, 0)) != 0) {
+                if (c.ioctl(pty.slave.?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
                     bail(report, .controlling_terminal);
                 }
             },

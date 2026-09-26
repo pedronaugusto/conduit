@@ -28,11 +28,27 @@ pub fn build(b: *std.Build) void {
     const conduit_options = b.addOptions();
     conduit_options.addOption(bool, "force_fork_spawn", fork_spawn);
 
+    // The terminal primitives -- raw mode, the window size, the terminal's
+    // name and its foreground group -- as a module of their own, for a
+    // program that draws its own screen and runs no child. On Linux they are
+    // system calls and link no C library; elsewhere the C library is the
+    // system interface and is linked whatever a program does.
+    const tty_module = b.addModule("conduit.tty", .{
+        .root_source_file = b.path("src/tty.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = switch (target.result.os.tag) {
+            .linux, .windows => null,
+            else => true,
+        },
+    });
+
     const module = b.addModule("conduit", .{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
+        .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
     });
     module.addOptions("conduit_options", conduit_options);
 
@@ -79,6 +95,7 @@ pub fn build(b: *std.Build) void {
         // what is lost is the chain of return sites printed under a failure,
         // and every test here says in its own name what it was asserting.
         .error_tracing = false,
+        .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
     });
     test_module.addOptions("conduit_options", conduit_options);
 

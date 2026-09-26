@@ -196,6 +196,20 @@ console is two handles with two unrelated sets of mode flags, so `rawMode` is
 called once for each and works out which it was given, and `winSize` wants the
 output one.
 
+`rawMode` and `restore` take effect at once and throw away input nobody read;
+neither waits for the output to drain, so a terminal that has stopped reading
+cannot hold a program there, on its way out or in a panic.
+
+These are also a module of their own, `conduit.tty`, for a program that draws
+its own screen and runs no child:
+
+```zig
+exe.root_module.addImport("conduit.tty", conduit.module("conduit.tty"));
+```
+
+On Linux it makes no call through libc, so importing it alone links no C
+library; `conduit` itself imports it.
+
 ## Design
 
 **Why this forks rather than wrapping `std.process.spawn`.** The standard

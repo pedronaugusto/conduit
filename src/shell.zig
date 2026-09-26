@@ -13,7 +13,7 @@ const Allocator = std.mem.Allocator;
 const Child = @import("Child.zig");
 const Pty = @import("Pty.zig");
 const environ = @import("environ.zig");
-const tty = @import("tty.zig");
+const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
