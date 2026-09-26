@@ -63,13 +63,18 @@ pub fn findProgram(
     return null;
 }
 
-/// Executable by this process, and not a directory: a directory is
-/// "executable" in the sense `access` asks about, and runs nothing.
+/// A file with an execute bit that this process may execute: what
+/// `execve` asks. A directory is "executable" in the sense `access` asks
+/// about, and runs nothing; and a privileged process passes `access` on a
+/// file with no execute bit at all on some file systems, where `execve`
+/// would still refuse it.
 fn runnable(io: std.Io, path: []const u8) bool {
     const cwd = std.Io.Dir.cwd();
-    cwd.access(io, path, .{ .execute = true }) catch return false;
     const st = cwd.statFile(io, path, .{}) catch return false;
-    return st.kind != .directory;
+    if (st.kind == .directory) return false;
+    if (st.permissions.toMode() & 0o111 == 0) return false;
+    cwd.access(io, path, .{ .execute = true }) catch return false;
+    return true;
 }
 
 test "a program on PATH is found where the search finds it, and a missing one is not" {
