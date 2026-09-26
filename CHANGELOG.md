@@ -6,7 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Reaper.init` takes `Reaper.Options`: `.init(&child, .{})` is the
+  behaviour it had.
+
 ### Added
+
+- `Reaper.wait` and `Reaper.waitTimeout`: the answer waited for on an event
+  the task sets, rather than asked of `exit` again and again. Any number of
+  tasks may wait at once, and none of them asks the operating system
+  anything.
+- `Reaper.stop(io, grace_ms)`: `.terminate` now and `.kill` once the grace
+  has passed, each reaching what `Child.kill` reaches, and it returns at
+  once -- the grace is spent on the `Reaper`'s task and ends the moment the
+  child does. So a program holding a lock can stop a child without waiting
+  for it. A grace of zero is `.kill` now.
+- `Reaper.Options.end_tree`: what a child leaves running ends with it. On
+  POSIX, for a detached child, what is left in its process group once it has
+  ended is sent `SIGTERM`, given `tree_grace_ms` and then `SIGKILL`, all
+  before the child is reaped, so the group's id is still the child's and the
+  signal cannot reach a group given the same number since. Linux and Darwin
+  are asked whether the group has emptied; elsewhere what is left is sent
+  `SIGKILL` at once. On Windows the job is ended as soon as the child is
+  reaped. The term published is the child's own.
+- `Child.holdReap` and `HeldReap`: the right to reap a child, taken and held
+  by a caller that waits for the end in a way of its own and does something
+  between the end and the reap.
 
 - `conduit.tty`, the terminal primitives -- `rawMode`, `restore`, `winSize`,
   `setWinSize`, `isTty`, `ttyName`, `foregroundGroup` -- as a module of their
@@ -17,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- On POSIX a `Reaper` waits on the child's `pidfd` or kqueue registration
+  beside a pipe that `deinit` writes to, rather than in the standard
+  library's blocking wait, so `deinit` ends the task at once whatever the
+  `std.Io` can cancel. Where there is no such handle it waits as before.
 - `rawMode` on a Windows input handle also turns quick edit off, so the
   mouse is the program's rather than a selection that pauses the console.
 

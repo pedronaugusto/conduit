@@ -84,6 +84,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.wait(io)` | Blocks; delegates to `std.process.Child.wait`. |
 | `child.term` | How it ended, once something reaped it. Written by whichever call did and published through an atomic, so `tryWait` is how to read it while a `Reaper` runs. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
+| `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
@@ -176,9 +177,25 @@ with a terminal emulator's defaults — `$SHELL` or `%COMSPEC%`, 24×80, `TERM`
 set, a controlling terminal on POSIX — absorbing the `closeSlave` timing
 difference below.
 
-`Reaper.init(&child)`, `start(io)`, `exit()` for a `Child.WaitError!?Term`
-without blocking, `deinit(io)`. The `Child` must outlive it, it must not move
-once started, and a wait error is final and returned by every later `exit()`.
+`Reaper.init(&child, options)` and `start(io)` put the wait for a child on a
+task of its own; `exit()` answers a `Child.WaitError!?Term` without blocking,
+and `wait(io)` and `waitTimeout(io, ms)` wait for the answer on an event the
+task sets, so nothing asks the system again and again. `stop(io, grace_ms)`
+asks the child and what it started to end and makes them once the grace has
+passed, and returns at once: the grace is spent on the `Reaper`'s task, so a
+caller holding a lock can stop a child. `deinit(io)` ends the task; on POSIX
+the wait is on the child's `pidfd` or kqueue registration beside a pipe
+`deinit` writes to, so it goes at once whether or not the `std.Io` can cancel
+a system call. The `Child` must outlive it, it must not move once started, and
+a wait error is final and returned by every later `exit()`.
+
+`Options.end_tree` ends what the child leaves running when it ends by itself,
+before it is reaped. On POSIX, for a detached child: what is left in its
+process group is sent `SIGTERM`, given `tree_grace_ms`, then `SIGKILL` — while
+the ended child, not yet reaped, still holds the group's id, so the signal
+cannot reach a group that has been given the same number since. On Windows the
+job is ended as soon as the child is reaped. The term published is the
+child's own.
 
 `Proxy.run(io, .{ .master, .input, .output, .input_buffer, .output_buffer, .resize })`
 moves bytes both ways until the child's end of the terminal closes, and keeps

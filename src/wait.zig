@@ -106,6 +106,30 @@ pub const Watch = struct {
             else => endedKqueue(watch, milliseconds),
         };
     }
+
+    /// Waits for the process to end or for `wake` to become readable, for
+    /// `milliseconds` or — when that is `null` — for as long as that takes.
+    ///
+    /// The wake is what lets a task hold a wait with no deadline: the wait is
+    /// not a cancelation point, so whoever wants the task back writes to the
+    /// other end of `wake` first. A wait that a signal interrupts says
+    /// `timed_out`, and the caller asks again.
+    pub fn endedOrWoken(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcome {
+        return switch (builtin.os.tag) {
+            .linux => endedOrWokenPidfd(watch, wake, milliseconds),
+            else => endedOrWokenKqueue(watch, wake, milliseconds),
+        };
+    }
+};
+
+/// What ended a wait on a `Watch` that can also be woken.
+pub const Outcome = enum {
+    /// The process has ended.
+    ended,
+    /// The wake became readable before the process ended.
+    woken,
+    /// The time ran out, or a signal interrupted the wait.
+    timed_out,
 };
 
 //======================================================================
@@ -127,6 +151,18 @@ fn endedPidfd(watch: Watch, milliseconds: u32) bool {
     const ready = c.poll(&fds, 1, @intCast(@min(milliseconds, std.math.maxInt(i32))));
     if (ready <= 0) return false;
     return fds[0].revents != 0;
+}
+
+fn endedOrWokenPidfd(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcome {
+    var fds = [_]c.pollfd{
+        .{ .fd = wake, .events = c.POLL.IN, .revents = 0 },
+        .{ .fd = watch.handle, .events = c.POLL.IN, .revents = 0 },
+    };
+    const timeout: c_int = if (milliseconds) |ms| @intCast(@min(ms, std.math.maxInt(i32))) else -1;
+    if (c.poll(&fds, fds.len, timeout) <= 0) return .timed_out;
+    if (fds[0].revents != 0) return .woken;
+    if (fds[1].revents != 0) return .ended;
+    return .timed_out;
 }
 
 //======================================================================
@@ -173,6 +209,32 @@ fn endedKqueue(watch: Watch, milliseconds: u32) bool {
     return true;
 }
 
+/// The wake is registered on the same queue at every wait: adding a
+/// registration that is already there changes nothing, and it costs no
+/// system call of its own, being the change list of the wait itself.
+fn endedOrWokenKqueue(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcome {
+    var change = [_]c.Kevent{.{
+        .ident = @intCast(wake),
+        .filter = c.EVFILT.READ,
+        .flags = c.EV.ADD | c.EV.ENABLE,
+        .fflags = 0,
+        .data = 0,
+        .udata = 0,
+    }};
+    var events: [2]c.Kevent = undefined;
+    const timeout: c.timespec = if (milliseconds) |ms| .{
+        .sec = @intCast(ms / 1000),
+        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
+    } else undefined;
+    const ready = c.kevent(watch.handle, &change, 1, &events, events.len, if (milliseconds != null) &timeout else null);
+    if (ready <= 0) return .timed_out;
+    const got = events[0..@intCast(ready)];
+    for (got) |event| if (event.filter == c.EVFILT.READ and event.ident == @as(usize, @intCast(wake))) return .woken;
+    // `EV_ERROR` is how a registration on a process that has already gone
+    // comes back. Either way there is nothing left to wait for.
+    return .ended;
+}
+
 test "a watch on a child ends when the child does" {
     const testing = std.testing;
     const Child = @import("Child.zig");
@@ -192,6 +254,38 @@ test "a watch on a child ends when the child does" {
     defer watch.close();
 
     try testing.expect(watch.ended(5000));
+}
+
+test "a watch with a wake ends on the wake, then on the child" {
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    const handles = @import("handles.zig");
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
+
+    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    defer watch.close();
+    const wake = try handles.pipe();
+    defer _ = c.close(wake[0]);
+    defer _ = c.close(wake[1]);
+
+    try testing.expectEqual(Outcome.timed_out, watch.endedOrWoken(wake[0], 20));
+    _ = c.write(wake[1], "w", 1);
+    try testing.expectEqual(Outcome.woken, watch.endedOrWoken(wake[0], 5000));
+    var byte: [1]u8 = undefined;
+    _ = c.read(wake[0], &byte, 1);
+
+    child.closeStdin(testing.io);
+    // With no deadline: the wait lasts exactly as long as the child does.
+    var outcome = watch.endedOrWoken(wake[0], null);
+    while (outcome == .timed_out) outcome = watch.endedOrWoken(wake[0], null);
+    try testing.expectEqual(Outcome.ended, outcome);
 }
 
 test "a watch on a child that is still running says so" {

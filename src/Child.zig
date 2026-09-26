@@ -739,6 +739,11 @@ pub fn wait(child: *Child, io: std.Io) WaitError!Term {
         interval_ms = @min(interval_ms * 2, 4);
     }
     defer child.releaseReap();
+    return child.waitClaimed(io);
+}
+
+/// `wait` for a caller that already holds the reap.
+fn waitClaimed(child: *Child, io: std.Io) WaitError!Term {
     if (child.settled()) |term| return term;
 
     var proc: std.process.Child = .{
@@ -786,6 +791,35 @@ fn claimReap(child: *Child) bool {
 fn releaseReap(child: *Child) void {
     child.reaping.store(false, .release);
 }
+
+/// Takes the right to reap the child, for a caller that waits for the child's
+/// end in a way of its own and reaps it afterwards: `Reaper`, which waits on
+/// a handle it can also be woken from, and does something between the end and
+/// the reap. `null` while another task holds it.
+///
+/// While it is held the rest of the handshake behaves as it does for any wait
+/// in flight: `tryWait` says the child is still running, and `wait` waits for
+/// the term the holder publishes.
+pub fn holdReap(child: *Child) ?HeldReap {
+    if (!child.claimReap()) return null;
+    return .{ .child = child };
+}
+
+/// The right to reap a child, held. `wait` or `release` gives it back.
+pub const HeldReap = struct {
+    child: *Child,
+
+    /// Blocks until the child ends, reaps it and publishes the term — or
+    /// answers from the one already published.
+    pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {
+        return held.child.waitClaimed(io);
+    }
+
+    /// Gives the right back, whether or not the child was reaped.
+    pub fn release(held: HeldReap) void {
+        held.child.releaseReap();
+    }
+};
 
 pub const WaitTimeoutError = TryWaitError || std.Io.Cancelable;
 

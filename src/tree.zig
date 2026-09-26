@@ -169,6 +169,7 @@ fn collectLinux(
 }
 
 const LinuxRelation = struct {
+    state: u8,
     ppid: posix.pid_t,
     pgrp: posix.pid_t,
 };
@@ -192,10 +193,11 @@ fn parseLinuxStat(text: []const u8) ?LinuxRelation {
     // parent and process-group fields.
     const close = std.mem.lastIndexOfScalar(u8, text, ')') orelse return null;
     var fields = std.mem.tokenizeScalar(u8, text[close + 1 ..], ' ');
-    _ = fields.next() orelse return null; // state
+    const state = fields.next() orelse return null;
+    if (state.len != 1) return null;
     const ppid = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
     const pgrp = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
-    return .{ .ppid = ppid, .pgrp = pgrp };
+    return .{ .state = state[0], .ppid = ppid, .pgrp = pgrp };
 }
 
 fn captureChildren(
@@ -370,6 +372,83 @@ fn childrenOfDarwin(
 }
 
 //======================================================================
+// A process group's members.
+//======================================================================
+
+/// Whether a process group holds anything but its leader.
+pub const Members = enum {
+    /// Something other than `leader` is in the group and has not ended.
+    others,
+    /// Nothing is, or only processes that have ended and wait to be reaped.
+    none,
+    /// This system cannot say without reading its whole process table.
+    unknown,
+};
+
+/// Whether a process other than `leader` is still running in process group
+/// `pgid`.
+///
+/// The leader is left out because the caller asking is the one holding it:
+/// a leader that has ended and is not yet reaped keeps the group's id from
+/// being given to anyone else, which is what makes a signal to `-pgid` safe
+/// while this is asked. Linux answers from one `/proc` pass, leaving out a
+/// process that has ended; Darwin from `proc_listpgrppids`, which names the
+/// group's processes and not their state, so a member that has ended and
+/// whose parent has not yet reaped it is counted until it is. The BSDs and
+/// illumos answer `unknown`.
+pub fn members(pgid: posix.pid_t, leader: posix.pid_t) Members {
+    return switch (builtin.os.tag) {
+        .linux => membersLinux(pgid, leader),
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => membersDarwin(pgid, leader),
+        else => .unknown,
+    };
+}
+
+fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
+    const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
+    if (dir < 0) return .unknown;
+    defer _ = c.close(dir);
+
+    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
+    while (true) {
+        const rc = std.os.linux.getdents64(dir, &entries, entries.len);
+        if (std.os.linux.errno(rc) != .SUCCESS) return .unknown;
+        if (rc == 0) return .none;
+
+        var offset: usize = 0;
+        while (offset < rc) {
+            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
+            offset += entry.reclen;
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            if (pid == leader) continue;
+            const relation = processRelationLinux(pid) orelse continue;
+            // `Z` has ended and waits for its parent; `X` is being torn down.
+            if (relation.pgrp == pgid and relation.state != 'Z' and relation.state != 'X') return .others;
+        }
+    }
+}
+
+/// From `<libproc.h>`, like `proc_listchildpids`. Returns the number of
+/// processes it wrote, or a negative number.
+extern "c" fn proc_listpgrppids(pgrpid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
+
+fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
+    // A leader and one more is the whole of the question, but the list comes
+    // in no promised order, so it is asked for with room for a crowd and
+    // asked again, larger, only when it came back full.
+    var local: [64]posix.pid_t = undefined;
+    const written = proc_listpgrppids(pgid, &local, @sizeOf(@TypeOf(local)));
+    if (written < 0) return .unknown;
+    const count: usize = @intCast(written);
+    for (local[0..@min(count, local.len)]) |pid| if (pid != leader and pid > 0) return .others;
+    if (count < local.len) return .none;
+    // Full, and every one of them the leader: impossible, but not something
+    // to answer `none` for without looking.
+    return .unknown;
+}
+
+//======================================================================
 // Shared.
 //======================================================================
 
@@ -476,9 +555,43 @@ test "the descendants of this process include a child it just started" {
     return error.TestChildWasNotFound;
 }
 
+test "a group is empty but for its leader once what the leader started has ended" {
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => true,
+        else => false,
+    };
+    if (!can_list) return error.SkipZigTest;
+
+    // The shell leads the group, and the `sleep` it starts is in it.
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 30 & read x; kill $!; wait" },
+        // The shell reports the job it killed on its standard error.
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
+    const pgid = child.pgid.?;
+
+    var waited_ms: u32 = 0;
+    while (members(pgid, child.id) != .others) : (waited_ms += 2) {
+        if (waited_ms > 5000) return error.TestMemberNotSeen;
+        try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
+    }
+    child.closeStdin(testing.io);
+    waited_ms = 0;
+    while (members(pgid, child.id) != .none) : (waited_ms += 2) {
+        if (waited_ms > 5000) return error.TestMemberStayed;
+        try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
+    }
+}
+
 test "a Linux stat record yields its parent and process group" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const relation = parseLinuxStat("12 (a name) with ) punctuation) S 7 9 0 0 0").?;
+    try std.testing.expectEqual(@as(u8, 'S'), relation.state);
     try std.testing.expectEqual(@as(posix.pid_t, 7), relation.ppid);
     try std.testing.expectEqual(@as(posix.pid_t, 9), relation.pgrp);
 }

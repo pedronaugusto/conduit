@@ -480,7 +480,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
     });
     defer child.deinit(io);
 
-    var reaper: conduit.Reaper = .init(&child);
+    var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
     defer reaper.deinit(io);
 
@@ -517,7 +517,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     });
     defer child.deinit(io);
 
-    var reaper: conduit.Reaper = .init(&child);
+    var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
     defer reaper.deinit(io);
 
@@ -561,12 +561,259 @@ test "a wait whose Reaper was cancelled is still a wait" {
     errdefer _ = child.killWait(io, 0) catch {};
 
     {
-        var reaper: conduit.Reaper = .init(&child);
+        var reaper: conduit.Reaper = .init(&child, .{});
         try reaper.start(io);
         try std.Io.sleep(io, .fromMilliseconds(50), .awake);
         try testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
         reaper.deinit(io);
     }
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
+}
+
+test "Reaper.wait blocks until the child has ended, and answers everyone who asks" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    // Still running: a bounded wait says so, and says it no sooner than asked.
+    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
+    try testing.expectEqual(@as(?Child.Term, null), try reaper.waitTimeout(io, 30));
+    try testing.expect(t0.untilNow(io).raw.toMilliseconds() >= 30);
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
+    // Final, for every later asker, whichever way they ask.
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
+    try testing.expectEqual(@as(?Child.Term, .{ .exited = 5 }), try reaper.waitTimeout(io, 0));
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try child.wait(io));
+}
+
+test "Reaper.stop returns at once and ends a child that ignores the request, by force, with its tree" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // POSIX: a request that can be ignored is a signal, and so is the force.
+    if (is_windows) return error.SkipZigTest;
+
+    // The shell and the `sleep` it starts both ignore `SIGTERM` — an ignored
+    // signal is inherited across `execve` — and the `sleep` is the grandchild
+    // the tree kill has to reach.
+    var sink: Sink = .{};
+    defer sink.deinit();
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 100 & printf 'pid %d.' \"$!\"; wait" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try sink.start(child.stdout.?);
+    const grandchild = try readPid(&sink);
+
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    const grace_ms = 300;
+    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
+    reaper.stop(io, grace_ms);
+    // Asked, not waited for: the grace is the reaper's to spend.
+    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < grace_ms);
+    // A second request with a grace changes nothing.
+    reaper.stop(io, grace_ms);
+
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    const took_ms = t0.untilNow(io).raw.toMilliseconds();
+    try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
+    try testing.expect(took_ms >= grace_ms);
+    try testing.expect(took_ms < grace_ms + 2000);
+
+    var waited: u32 = 0;
+    while (alive(grandchild)) : (waited += 2) {
+        if (waited >= budget_ms) {
+            _ = c.kill(grandchild, .KILL);
+            return error.TestGrandchildOutlivedTheStop;
+        }
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+test "Reaper.stop is over the moment a child that honours the request ends" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
+    reaper.stop(io, 60_000);
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    // The request, not the force: the grace was never waited out.
+    try testing.expectEqual(Child.Term{ .signal = .TERM }, term);
+    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
+}
+
+test "Reaper.stop with no grace is the force, now" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    // The shell says so once it ignores the request, so the request cannot
+    // arrive before it does.
+    var sink: Sink = .{};
+    defer sink.deinit();
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try sink.start(child.stdout.?);
+    _ = try readPid(&sink);
+
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    reaper.stop(io, 60_000);
+    reaper.stop(io, 0);
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
+}
+
+test "end_tree: what a child leaves in its group ends with it, before the child is reaped" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // A process group is a POSIX address; the Windows answer is the job.
+    if (is_windows) return error.SkipZigTest;
+
+    // Two left behind: one that goes when asked, and one that ignores the
+    // request and has to be made to. The child's own end is an ordinary
+    // exit, and that is the term published.
+    var sink: Sink = .{};
+    defer sink.deinit();
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{
+            "/bin/sh", "-c",
+            "sleep 100 & a=$!; (trap '' TERM; sleep 100) & b=$!; " ++
+                "printf 'pid %d.\\n' \"$a\"; printf 'pid %d.\\n' \"$b\"; read x; exit 3",
+        },
+        .stdio = .{ .pipes = .{ .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try sink.start(child.stdout.?);
+    const polite = try readPid(&sink);
+    const stubborn = stubborn: {
+        var waited_ms: u32 = 0;
+        while (waited_ms < budget_ms) : (waited_ms += 2) {
+            sink.mutex.lockUncancelable(io);
+            const said = gpa.dupe(u8, sink.bytes.items) catch "";
+            sink.mutex.unlock(io);
+            defer gpa.free(said);
+            var lines = std.mem.tokenizeScalar(u8, said, '\n');
+            _ = lines.next();
+            if (lines.next()) |line| if (std.mem.endsWith(u8, line, ".")) {
+                break :stubborn try std.fmt.parseInt(posix.pid_t, line["pid ".len .. line.len - 1], 10);
+            };
+            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        }
+        return error.TestChildSaidNothing;
+    };
+    defer _ = c.kill(polite, .KILL);
+    defer _ = c.kill(stubborn, .KILL);
+
+    const grace_ms = 300;
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = grace_ms });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
+    child.closeStdin(io);
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    try testing.expectEqual(Child.Term{ .exited = 3 }, term);
+    // The one that would not go when asked was made to, once the grace had
+    // passed, and the child was published only after it.
+    if (t0.untilNow(io).raw.toMilliseconds() < grace_ms) return error.TestGraceNotGiven;
+    // Ended, both: what is left is their new parent's reaping of them, which
+    // this test cannot hurry and only waits out.
+    var waited: u32 = 0;
+    while (alive(polite) or alive(stubborn)) : (waited += 2) {
+        if (waited >= budget_ms) return error.TestLeftBehindOutlivedTheChild;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+test "end_tree: a child that leaves nothing is reaped without waiting on its group" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = 60_000 });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+
+    child.closeStdin(io);
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    try testing.expectEqual(Child.Term{ .exited = 5 }, term);
+}
+
+test "a Reaper told to go while the child runs goes at once, and leaves the child to be waited for" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+        .detach = !is_windows,
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
+    try reaper.start(io);
+    try std.Io.sleep(io, .fromMilliseconds(20), .awake);
+    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
+    reaper.deinit(io);
+    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
+    try testing.expectError(error.Canceled, reaper.exit());
 
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
