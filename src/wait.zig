@@ -70,7 +70,10 @@ pub const Watch = struct {
     /// `null` is not a failure: the caller falls back to asking again, which
     /// is what this package did everywhere before. An old Linux kernel with no
     /// `pidfd_open`, a system that is neither Linux nor a BSD, and a `pid`
-    /// that has already been reaped all arrive here the same way.
+    /// that has already been reaped all arrive here the same way — and on
+    /// Darwin so does a child that has ended and not been reaped: the kernel
+    /// refuses `EVFILT_PROC` on a zombie with `ESRCH`. `endedUnreaped` is how
+    /// a caller that holds the reap tells that case apart.
     pub fn open(pid: posix.pid_t) ?Watch {
         return switch (builtin.os.tag) {
             .linux => openPidfd(pid),
@@ -138,6 +141,57 @@ pub const Outcome = enum {
 
 /// `pidfd_open` is Linux 5.3. An older kernel answers `ENOSYS` and the caller
 /// falls back.
+/// Whether a child of this process has ended, asked without reaping it.
+pub const Ended = enum {
+    /// It has ended and is still there to be reaped.
+    ended,
+    /// It is running.
+    running,
+    /// This system cannot be asked, or would not answer.
+    unknown,
+};
+
+/// Asks whether `pid`, a child of this process that nobody has reaped, has
+/// ended — `waitid` with `WNOWAIT`, so the child stays unreaped and its pid,
+/// and the id of a group it leads, stay its own. Never blocks.
+///
+/// For the caller whose `Watch.open` came back `null`: on Darwin that is also
+/// what a child that ended before the watch was opened looks like.
+pub fn endedUnreaped(pid: posix.pid_t) Ended {
+    const flags = waitid_flags orelse return .unknown;
+    while (true) {
+        var info = std.mem.zeroes(c.siginfo_t);
+        if (waitid(p_pid, @intCast(pid), &info, flags) == 0) {
+            // With `WNOHANG` and nothing to report, the fields stay zero.
+            return if (infoPid(&info) == 0) .running else .ended;
+        }
+        switch (posix.errno(@as(c_int, -1))) {
+            .INTR => continue,
+            else => return .unknown,
+        }
+    }
+}
+
+/// `P_PID`, which is 1 on both systems `waitid_flags` is set for.
+const p_pid: c_uint = 1;
+
+/// `WEXITED | WNOHANG | WNOWAIT`, spelled per system, where it is known to
+/// be right; `null` elsewhere.
+const waitid_flags: ?c_int = switch (builtin.os.tag) {
+    .linux => 0x4 | 0x1 | 0x1000000,
+    .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => 0x4 | 0x1 | 0x20,
+    else => null,
+};
+
+extern "c" fn waitid(idtype: c_uint, id: c_uint, info: *c.siginfo_t, options: c_int) c_int;
+
+fn infoPid(info: *const c.siginfo_t) posix.pid_t {
+    return switch (builtin.os.tag) {
+        .linux => info.fields.common.first.piduid.pid,
+        else => info.pid,
+    };
+}
+
 fn openPidfd(pid: posix.pid_t) ?Watch {
     const rc = std.os.linux.pidfd_open(pid, 0);
     if (std.os.linux.errno(rc) != .SUCCESS) return null;

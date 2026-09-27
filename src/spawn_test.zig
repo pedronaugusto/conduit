@@ -27,6 +27,7 @@ const conduit = @import("conduit.zig");
 const Child = conduit.Child;
 const Pty = conduit.Pty;
 const handles = @import("handles.zig");
+const wait_for = if (is_windows) struct {} else @import("wait.zig");
 const trace = @import("trace.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
 
@@ -773,6 +774,49 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     var waited: u32 = 0;
     while (alive(polite) or alive(stubborn)) : (waited += 2) {
         if (waited >= budget_ms) return error.TestLeftBehindOutlivedTheChild;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+test "end_tree: a child that ended before its Reaper started still takes what it left" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    // The child has ended, unreaped, before the Reaper's task first looks at
+    // it. Darwin refuses a kqueue watch on a process in that state, and the
+    // Reaper used to take that as "nothing to watch" and reap it without
+    // touching its group -- which a slow start of the task, as under
+    // ThreadSanitizer, made happen to the test above one run in a few.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 100 & printf 'pid %d.' \"$!\"; exit 4" },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdout.?);
+    const left = try readPid(&sink);
+    defer _ = c.kill(left, .KILL);
+
+    var waited_ms: u32 = 0;
+    while (wait_for.endedUnreaped(child.id) != .ended) : (waited_ms += 2) {
+        if (waited_ms >= budget_ms) return error.TestChildDidNotExit;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+    try testing.expect(alive(left));
+
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = 300 });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    try testing.expectEqual(Child.Term{ .exited = 4 }, term);
+    var gone_ms: u32 = 0;
+    while (alive(left)) : (gone_ms += 2) {
+        if (gone_ms >= budget_ms) return error.TestLeftBehindOutlivedTheChild;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }

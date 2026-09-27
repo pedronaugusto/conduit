@@ -63,6 +63,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A `Reaper` with `end_tree` whose child had already ended when its task
+  first looked reaped the child and left what it had started running.
+  Darwin refuses a kqueue watch on a process that has ended and not been
+  reaped, and the `Reaper` took the refusal for "nothing to watch" and fell
+  back to the plain wait. It now asks whether the child has ended without
+  reaping it (`waitid` with `WNOWAIT`), ends the group, and reaps. A slow
+  start of the task, as under ThreadSanitizer, made the end_tree test fail
+  one full-suite run in ten.
 - `Child.output` left the child running when the call was cancelled or
   failed partway, so a caller whose task was cancelled had a process it could
   no longer wait for. A run abandoned is now a run ended: the child and what

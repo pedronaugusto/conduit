@@ -256,14 +256,27 @@ fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
     // ended is still the child's, unreaped, while its group is ended below.
     const held = reaper.child.holdReap() orelse return reaper.child.wait(io);
     defer held.release();
-    const watch = wait_for.Watch.open(reaper.child.id) orelse return held.wait(io);
-    defer watch.close();
-    while (true) switch (watch.endedOrWoken(wake[0], null)) {
-        .ended => break,
-        .woken => return error.Canceled,
-        // a signal, not the end: ask again
-        .timed_out => {},
-    };
+    if (wait_for.Watch.open(reaper.child.id)) |watch| {
+        defer watch.close();
+        while (true) switch (watch.endedOrWoken(wake[0], null)) {
+            .ended => break,
+            .woken => return error.Canceled,
+            // a signal, not the end: ask again
+            .timed_out => {},
+        };
+    } else {
+        // No watch. Darwin refuses one on a child that has already ended --
+        // one that ended before this task first ran -- and some systems have
+        // none at all. Either way the end is asked for without reaping, so
+        // that what the child left in its group can still be ended by the id
+        // the child holds. Where even that cannot be asked, the wait is the
+        // standard library's, and the group is left as it is.
+        while (true) switch (wait_for.endedUnreaped(reaper.child.id)) {
+            .ended => break,
+            .running => if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled,
+            .unknown => return held.wait(io),
+        };
+    }
     // Ended, and not yet reaped: the group's id is still the child's, and
     // what is left in the group can be addressed by it.
     if (reaper.options.end_tree) if (reaper.child.pgid) |pgid| {
