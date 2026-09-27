@@ -201,6 +201,14 @@ pub const startTime = if (is_windows)
     @compileError("startTime is POSIX-only")
 else
     @import("tree.zig").startTime;
+pub const CapturedPid = if (is_windows)
+    @compileError("CapturedPid is POSIX-only")
+else
+    @import("tree.zig").CapturedPid;
+pub const captureStarted = if (is_windows)
+    @compileError("captureStarted is POSIX-only")
+else
+    @import("tree.zig").captureStarted;
 
 /// Sends a signal to every descendant of a process, deepest first, leaving
 /// alone those in `in_group` (the group the caller signals on its own), and

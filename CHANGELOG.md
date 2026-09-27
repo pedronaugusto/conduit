@@ -13,6 +13,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `captureStarted`: on Linux, open a pidfd before checking a recorded
+  process's start time, then signal only through that captured identity.
 - `signalGroupSince`: on Linux, end members of a detached child's group
   after its leader has gone, checking each member's group and start time
   through a captured pidfd before signalling it through that descriptor.

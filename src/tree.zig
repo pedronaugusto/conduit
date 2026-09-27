@@ -238,6 +238,22 @@ pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
     }
 }
 
+/// A Linux process captured before its recorded start time is checked.
+/// Signals through the pidfd stay bound to that process even if its pid is
+/// later reused. Close the capture when the sweep is done with it.
+pub const CapturedPid = LinuxProcess;
+
+pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?CapturedPid {
+    if (comptime builtin.os.tag != .linux) return error.Unsupported;
+    if (pid <= 1 or since == 0) return null;
+    var process = LinuxProcess.capture(pid) orelse return null;
+    if ((try startTime(pid)) != since or !process.signal(@enumFromInt(0))) {
+        process.deinit();
+        return null;
+    }
+    return process;
+}
+
 /// Signal the live members of a Linux process group whose leader was
 /// started at `since`. A crashed parent's death signal can end the leader
 /// before the next process can walk its tree; its group still names the
@@ -343,12 +359,12 @@ const LinuxProcess = struct {
         return .{ .pid = pid, .pidfd = @intCast(rc) };
     }
 
-    fn signal(process: *const LinuxProcess, sig: posix.SIG) bool {
+    pub fn signal(process: *const LinuxProcess, sig: posix.SIG) bool {
         const rc = std.os.linux.pidfd_send_signal(process.pidfd, sig, null, 0);
         return std.os.linux.errno(rc) == .SUCCESS;
     }
 
-    fn deinit(process: *LinuxProcess) void {
+    pub fn deinit(process: *LinuxProcess) void {
         _ = std.os.linux.close(process.pidfd);
     }
 };
@@ -736,6 +752,26 @@ test "a process's start time is its own: the same while it runs, gone once it is
     child.stdin = null;
     _ = try child.wait(testing.io);
     try std.testing.expectEqual(@as(?u64, null), try startTime(pid));
+}
+
+test "a captured Linux pid stays bound to the recorded process" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(testing.io);
+    const started = (try startTime(child.id)).?;
+    try testing.expect((try captureStarted(child.id, started + 1)) == null);
+    var captured = (try captureStarted(child.id, started)).?;
+    defer captured.deinit();
+    try testing.expect(captured.signal(@enumFromInt(0)));
+    child.stdin.?.close(testing.io);
+    child.stdin = null;
+    _ = try child.wait(testing.io);
+    try testing.expect(!captured.signal(@enumFromInt(0)));
 }
 
 test "a leaderless Linux group keeps the child its leader started" {
