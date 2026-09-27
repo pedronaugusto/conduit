@@ -187,6 +187,32 @@ else
     tty.ttyName;
 pub const TtyNameError = tty.TtyNameError;
 
+/// When a running process started, as a number no later process given the
+/// same pid shares: a pid written down with it can be told, later, from a
+/// stranger given the number since. `null` when there is no such process or
+/// it has ended; `error.Unsupported` where the system has no cheap way to
+/// ask (Linux and Darwin have one). POSIX only.
+///
+/// For a program that must not leave children behind a crash on a system
+/// with no `parent_death_signal`: it writes down each child's pid and start
+/// time, and the next time it runs it ends each that still runs as the same
+/// process.
+pub const startTime = if (is_windows)
+    @compileError("startTime is POSIX-only")
+else
+    @import("tree.zig").startTime;
+
+/// Sends a signal to every descendant of a process, deepest first, leaving
+/// alone those in `in_group` (the group the caller signals on its own), and
+/// says how many it reached: what `Child.kill` does beside the group, for a
+/// process this program holds no `Child` for — one a crashed run of it
+/// started. Linux and Darwin name the descendants; elsewhere there are none
+/// to name and the group is the whole reach. POSIX only.
+pub const signalDescendants = if (is_windows)
+    @compileError("signalDescendants is POSIX-only")
+else
+    @import("tree.zig").signalDescendants;
+
 test {
     _ = Pty;
     _ = Child;

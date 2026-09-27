@@ -75,6 +75,8 @@ pub fn suits(options: SpawnOptions) bool {
     if (options.credentials.any()) return false;
     if (options.resource_limits.len != 0) return false;
     if (options.fd_policy != .close_on_exec) return false;
+    // set between the fork and the exec, which file actions cannot say
+    if (options.parent_death_signal != null) return false;
     return true;
 }
 

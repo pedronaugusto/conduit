@@ -100,7 +100,7 @@ byte of it, since `Term.exited` is a byte and a Windows exit code is a `DWORD`.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`, `fd_policy`, `job_limits`.
+`resource_limits`, `fd_policy`, `job_limits`, `parent_death_signal`.
 
 `stdio` is `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` —
@@ -169,6 +169,14 @@ environment wants) or `.none`. On Windows conduit resolves a bare program
 against the child environment before `CreateProcessW`, whose own search would
 otherwise use the parent's `PATH`; the other two modes are `error.Unsupported`
 there.
+
+`parent_death_signal` (`.interrupt`, `.terminate` or `.kill`) is sent to the
+child when the thread that spawned it ends, however it ends: Linux's
+`PR_SET_PDEATHSIG`, and `error.Unsupported` anywhere else. Where there is no
+such thing, a program that must not leave children running behind a crash
+writes down each child's pid and `conduit.startTime(pid)`, and the next time
+it runs ends each one still running as the same process — the group with
+`kill(-pid)` and what left it with `conduit.signalDescendants(pid, sig, pid)`.
 
 `conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
 find `name` for a child given `environ`, by the same rules, or `null`: for a

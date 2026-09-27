@@ -100,13 +100,17 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
     const report = try makePipe();
+    // Who the child's parent is before the fork: the child compares it with
+    // its own parent once its death signal is set, to catch a parent that
+    // was gone before it.
+    const parent = c.getpid();
 
     handles.ForkGap.startingAChild();
     const pid = c.fork();
     if (pid == 0) {
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
-        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1]);
+        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent);
     }
     handles.ForkGap.release();
 
@@ -179,6 +183,7 @@ const Failure = extern struct {
         credentials,
         chdir,
         exec,
+        parent_death_signal,
     };
 
     fn toError(record: Failure) SpawnError {
@@ -201,6 +206,7 @@ const Failure = extern struct {
                 else => posix.unexpectedErrno(err),
             },
             .exec => Child.execError(err),
+            .parent_death_signal => posix.unexpectedErrno(err),
         };
     }
 };
@@ -219,8 +225,22 @@ fn childMain(
     envp: [*:null]const ?[*:0]const u8,
     cwd: ?[*:0]const u8,
     report: posix.fd_t,
+    parent: posix.pid_t,
 ) noreturn {
     clearSignals();
+
+    // `spawn` refuses the option anywhere but Linux.
+    if (builtin.os.tag == .linux) if (options.parent_death_signal) |signal| {
+        const sig = signal.toPosix();
+        const rc = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_PDEATHSIG), @intFromEnum(sig), 0, 0, 0);
+        if (std.os.linux.errno(rc) != .SUCCESS) bail(report, .parent_death_signal);
+        // The parent may have ended between the fork and the line above,
+        // and then nothing will send it: the child is an orphan already.
+        if (c.getppid() != parent) {
+            _ = c.kill(c.getpid(), sig);
+            c._exit(127);
+        }
+    };
 
     if (options.detach) {
         switch (options.stdio) {

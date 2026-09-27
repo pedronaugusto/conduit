@@ -172,6 +172,8 @@ const LinuxRelation = struct {
     state: u8,
     ppid: posix.pid_t,
     pgrp: posix.pid_t,
+    /// Field 22: when the process started, in clock ticks after boot.
+    start: ?u64 = null,
 };
 
 fn processRelationLinux(pid: posix.pid_t) ?LinuxRelation {
@@ -197,8 +199,74 @@ fn parseLinuxStat(text: []const u8) ?LinuxRelation {
     if (state.len != 1) return null;
     const ppid = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
     const pgrp = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
-    return .{ .state = state[0], .ppid = ppid, .pgrp = pgrp };
+    // Fields 6 to 21, then 22, the start time. A record that stops short of
+    // it still names the process's relations.
+    var start: ?u64 = null;
+    for (6..22) |_| {
+        if (fields.next() == null) break;
+    } else start = std.fmt.parseInt(u64, fields.next() orelse "", 10) catch null;
+    return .{ .state = state[0], .ppid = ppid, .pgrp = pgrp, .start = start };
 }
+
+/// When the running process `pid` started, as a number no later process
+/// given the same pid shares: with the pid, it names one process for as long
+/// as the system is up, so a pid written down now and read back later can be
+/// told apart from a stranger that was given the number since.
+///
+/// The unit is the system's own and only equality means anything. **Linux**:
+/// field 22 of `/proc/<pid>/stat`, clock ticks after boot. **Darwin**:
+/// `proc_pidinfo`'s `PROC_PIDTBSDINFO`, microseconds since the epoch.
+///
+/// `null` when there is no such process, or it has ended and waits to be
+/// reaped: a zombie runs nothing. `error.Unsupported` on every other system,
+/// where there is no cheap way to ask.
+pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
+    switch (builtin.os.tag) {
+        .linux => {
+            const relation = processRelationLinux(pid) orelse return null;
+            if (relation.state == 'Z' or relation.state == 'X') return null;
+            return relation.start;
+        },
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => {
+            var info: ProcBsdInfo = undefined;
+            const written = proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo));
+            if (written != @sizeOf(ProcBsdInfo)) return null;
+            if (info.status == proc_status_zombie) return null;
+            return info.start_tvsec *% std.time.us_per_s +% info.start_tvusec;
+        },
+        else => return error.Unsupported,
+    }
+}
+
+/// `struct proc_bsdinfo` from `<sys/proc_info.h>`, as far as the start time.
+const ProcBsdInfo = extern struct {
+    flags: u32,
+    status: u32,
+    xstatus: u32,
+    pid: u32,
+    ppid: u32,
+    uid: u32,
+    gid: u32,
+    ruid: u32,
+    rgid: u32,
+    svuid: u32,
+    svgid: u32,
+    rfu_1: u32,
+    comm: [16]u8,
+    name: [32]u8,
+    nfiles: u32,
+    pgid: u32,
+    pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    nice: i32,
+    start_tvsec: u64,
+    start_tvusec: u64,
+};
+
+const proc_pidtbsdinfo = 3;
+/// `SZOMB` from `<sys/proc.h>`.
+const proc_status_zombie = 5;
 
 fn captureChildren(
     parent: posix.pid_t,
@@ -594,4 +662,40 @@ test "a Linux stat record yields its parent and process group" {
     try std.testing.expectEqual(@as(u8, 'S'), relation.state);
     try std.testing.expectEqual(@as(posix.pid_t, 7), relation.ppid);
     try std.testing.expectEqual(@as(posix.pid_t, 9), relation.pgrp);
+    try std.testing.expectEqual(@as(?u64, null), relation.start);
+}
+
+test "a Linux stat record yields its start time, field 22" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt
+    // majflt cmajflt utime stime cutime cstime priority nice threads
+    // itrealvalue starttime vsize
+    const relation = parseLinuxStat("12 (a (b) c) S 7 9 9 0 -1 4194560 100 0 0 0 3 1 0 0 20 0 1 0 987654 4096").?;
+    try std.testing.expectEqual(@as(?u64, 987654), relation.start);
+}
+
+test "a process's start time is its own: the same while it runs, gone once it is reaped" {
+    const testing = std.testing;
+    switch (builtin.os.tag) {
+        .linux, .macos => {},
+        else => return error.SkipZigTest,
+    }
+    const own = (try startTime(c.getpid())).?;
+    try std.testing.expectEqual(own, (try startTime(c.getpid())).?);
+
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(testing.io);
+    const pid = child.id;
+    const started = (try startTime(pid)).?;
+    try std.testing.expectEqual(started, (try startTime(pid)).?);
+    // a process started after this one did not start before it
+    try std.testing.expect(started >= own);
+    child.stdin.?.close(testing.io);
+    child.stdin = null;
+    _ = try child.wait(testing.io);
+    try std.testing.expectEqual(@as(?u64, null), try startTime(pid));
 }

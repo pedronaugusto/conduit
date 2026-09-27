@@ -3087,3 +3087,50 @@ const BorrowedDescriptor = struct {
         _ = c.close(saved);
     }
 };
+
+test "a parent death signal is refused where the system has none" {
+    if (builtin.os.tag == .linux) return error.SkipZigTest;
+    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+        .argv = &script.greeting,
+        .parent_death_signal = .kill,
+    }));
+}
+
+test "a child given a parent death signal ends with the thread that started it" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // The parent the kernel watches is the thread that forked: a thread of
+    // this test's own that spawns and ends stands in for a program that
+    // crashes, since the test runner itself has to live on.
+    const Spawner = struct {
+        child: ?Child = null,
+        failed: ?anyerror = null,
+        fn run(s: *@This()) void {
+            s.child = Child.spawn(io, gpa, .{
+                .argv = &.{ "/bin/sh", "-c", "sleep 30" },
+                .stdio = .ignore,
+                .parent_death_signal = .kill,
+            }) catch |err| {
+                s.failed = err;
+                return;
+            };
+        }
+    };
+    var spawner: Spawner = .{};
+    const thread = try std.Thread.spawn(.{}, Spawner.run, .{&spawner});
+    thread.join();
+    if (spawner.failed) |err| return err;
+    var child = spawner.child.?;
+    defer child.deinit(io);
+    // ended by the kernel, long before its sleep is over
+    try testing.expectEqual(Child.Term{ .signal = .KILL }, try waitWithin(&child));
+}
+
+test "a spawn with a parent death signal takes the fork, where the signal is set" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const spawn_path = @import("posix_spawn.zig");
+    try testing.expect(!spawn_path.suits(.{ .argv = &script.greeting, .parent_death_signal = .kill }));
+    try testing.expectEqual(spawn_path.available, spawn_path.suits(.{ .argv = &script.greeting }));
+}
