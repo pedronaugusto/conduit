@@ -371,6 +371,25 @@ pub const SpawnOptions = struct {
     /// What the child and everything it starts may use. Windows only:
     /// anything set here is `error.Unsupported` elsewhere.
     job_limits: JobLimits = .{},
+    /// The signal the child is sent when its parent ends, however it ends:
+    /// a crash or `SIGKILL` included, which no handler of the parent's sees.
+    /// `.kill` is the usual choice, for a child that must not outlive the
+    /// program that started it.
+    ///
+    /// **Linux only**: `PR_SET_PDEATHSIG`, set in the fork child, so a spawn
+    /// with it never takes the `posix_spawn` path. If the parent has already
+    /// gone by the time it is set, the child sends it to itself before it
+    /// runs anything. The parent it watches is the *thread* that called
+    /// `spawn`: in a program whose threads live as long as it does, as
+    /// `std.Io.Threaded`'s workers do, that is the program; a thread that
+    /// ends earlier takes its children with it. The setting survives
+    /// `execve` except into a set-user-ID or set-group-ID program.
+    ///
+    /// Anywhere else it is `error.Unsupported`: macOS has no such thing, and
+    /// a program there that must not leave children behind a crash keeps
+    /// their pids and start times (`conduit.startTime`) and ends them the
+    /// next time it runs.
+    parent_death_signal: ?Signal = null,
 };
 
 /// What the job object holding the child and its tree may use. Windows only.
@@ -590,8 +609,8 @@ pub const SpawnError = error{
     /// The combination asked for has no meaning on this system: `stderr_to`
     /// together with `.pty` on Windows, a `path_search` other than
     /// `.child_environ` there, `credentials` or `resource_limits` anywhere on
-    /// Windows, or `job_limits` anywhere else. The option that cannot be
-    /// honoured says so.
+    /// Windows, `job_limits` anywhere else, or `parent_death_signal` anywhere
+    /// but Linux. The option that cannot be honoured says so.
     Unsupported,
     /// Windows: `job_limits.cpu_rate` was outside its inclusive 1–10,000
     /// range. No child was started.
@@ -646,6 +665,7 @@ pub fn execError(err: posix.E) SpawnError {
 /// its own terminal.
 pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
     if (options.argv.len == 0) return error.InvalidArgv;
+    if (options.parent_death_signal != null and builtin.os.tag != .linux) return error.Unsupported;
     if (is_windows) return @import("child_windows.zig").spawn(io, allocator, options);
     // A job object is what these bound, and POSIX has no such container.
     // `resource_limits` is the option that exists here.

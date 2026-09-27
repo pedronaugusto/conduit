@@ -37,6 +37,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Child.holdReap` and `HeldReap`: the right to reap a child, taken and held
   by a caller that waits for the end in a way of its own and does something
   between the end and the reap.
+- `startTime`: when a running process started, a number no later process
+  given the same pid shares, so a pid written down with it can be told from
+  a stranger given the number since. `/proc/<pid>/stat` field 22 on Linux,
+  `proc_pidinfo` on Darwin; `null` for a process that is gone or a zombie.
+- `signalDescendants`: what `Child.kill` sends beside the process group,
+  for a process no `Child` is held for — one a crashed run of the program
+  started, found again by its pid and start time.
+- `SpawnOptions.parent_death_signal`: on Linux, the signal the child is sent
+  when the thread that spawned it ends, a crash included
+  (`PR_SET_PDEATHSIG`, set in the fork child, so such a spawn never takes
+  `posix_spawn`). A parent gone before it is set is caught, and the child
+  signals itself. `error.Unsupported` elsewhere.
 
 - `conduit.tty`, the terminal primitives -- `rawMode`, `restore`, `winSize`,
   `setWinSize`, `isTty`, `ttyName`, `foregroundGroup` -- as a module of their
