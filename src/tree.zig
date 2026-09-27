@@ -238,6 +238,44 @@ pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
     }
 }
 
+/// Signal the live members of a Linux process group whose leader was
+/// started at `since`. A crashed parent's death signal can end the leader
+/// before the next process can walk its tree; its group still names the
+/// children it left. A member is captured by pidfd before its group and
+/// start time are checked, and is signalled through that same descriptor.
+/// The leader is left to the caller, which may hold its own identity.
+pub fn signalGroupSince(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
+    if (comptime builtin.os.tag != .linux) return error.Unsupported;
+    if (group <= 1 or since == 0) return 0;
+    const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
+    if (dir < 0) return 0;
+    defer _ = c.close(dir);
+
+    var reached: usize = 0;
+    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
+    while (true) {
+        const rc = std.os.linux.getdents64(dir, &entries, entries.len);
+        if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
+        var offset: usize = 0;
+        while (offset < rc) {
+            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
+            offset += entry.reclen;
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            if (pid <= 1 or pid == leader or pid == c.getpid()) continue;
+            var process = LinuxProcess.capture(pid) orelse continue;
+            defer process.deinit();
+            const relation = processRelationLinux(pid) orelse continue;
+            if (relation.pgrp != group or relation.start == null or relation.start.? < since or
+                relation.state == 'Z' or relation.state == 'X') continue;
+            // The proc path could now name a successor. The pidfd cannot:
+            // an ended capture refuses the signal instead of reaching it.
+            if (process.signal(sig)) reached += 1;
+        }
+    }
+    return reached;
+}
+
 /// `struct proc_bsdinfo` from `<sys/proc_info.h>`, as far as the start time.
 const ProcBsdInfo = extern struct {
     flags: u32,
@@ -698,4 +736,32 @@ test "a process's start time is its own: the same while it runs, gone once it is
     child.stdin = null;
     _ = try child.wait(testing.io);
     try std.testing.expectEqual(@as(?u64, null), try startTime(pid));
+}
+
+test "a leaderless Linux group keeps the child its leader started" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    var leader = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer leader.deinit(testing.io);
+    const group = leader.pgid.?;
+    const since = (try startTime(leader.id)).?;
+    var buffer: [32]u8 = undefined;
+    var output = leader.stdout.?.reader(testing.io, &buffer);
+    const member = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
+    errdefer {
+        if (members(group, leader.id) == .others) _ = c.kill(-group, .KILL);
+    }
+    _ = try leader.wait(testing.io);
+    try testing.expectEqual(Members.others, members(group, leader.id));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSince(group, leader.id, since, .KILL));
+    var waited: u32 = 0;
+    while ((try startTime(member)) != null) : (waited += 20) {
+        if (waited >= 3000) return error.TestMemberStayed;
+        try testing.io.sleep(.fromMilliseconds(20), .awake);
+    }
 }

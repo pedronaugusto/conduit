@@ -213,6 +213,13 @@ pub const signalDescendants = if (is_windows)
 else
     @import("tree.zig").signalDescendants;
 
+/// End the live members of a crashed Linux child's process group even when
+/// its leader is gone. Each member is checked and signalled through a pidfd.
+pub const signalGroupSince = if (is_windows)
+    @compileError("signalGroupSince is POSIX-only")
+else
+    @import("tree.zig").signalGroupSince;
+
 test {
     _ = Pty;
     _ = Child;

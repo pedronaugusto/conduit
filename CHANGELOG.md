@@ -13,6 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `signalGroupSince`: on Linux, end members of a detached child's group
+  after its leader has gone, checking each member's group and start time
+  through a captured pidfd before signalling it through that descriptor.
 - `Reaper.wait` and `Reaper.waitTimeout`: the answer waited for on an event
   the task sets, rather than asked of `exit` again and again. Any number of
   tasks may wait at once, and none of them asks the operating system
