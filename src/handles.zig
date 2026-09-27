@@ -96,10 +96,10 @@ pub const opening_is_two_calls = !is_windows and @TypeOf(c.pipe2) == void;
 ///
 /// **It reaches this package's spawns and no others.** A `fork` somewhere else
 /// in the program is still free to land in the gap, and nothing a library can
-/// hold would stop it. The other two windows are smaller and are written down
-/// where they are: `Pty.open` marks the master in a second call, and a
-/// descriptor the caller opened without the flag is the caller's to close
-/// with `SpawnOptions.fd_policy`.
+/// hold would stop it. The other windows are smaller and are written down
+/// where they are: `Pty.open` marks the master in a second call on a system
+/// whose `posix_openpt` refuses the flag, and a descriptor the caller opened
+/// without the flag is the caller's to close with `SpawnOptions.fd_policy`.
 ///
 /// Where an open carries its own flag this is not compiled at all.
 pub const ForkGap = struct {

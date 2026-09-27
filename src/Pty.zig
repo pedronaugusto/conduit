@@ -411,22 +411,10 @@ pub fn closeMaster(pty: *Pty, io: std.Io) void {
 //======================================================================
 
 fn openPosix(options: OpenOptions) OpenError!Pty {
-    const master_fd = posix_openpt(.{ .ACCMODE = .RDWR, .NOCTTY = true });
-    if (master_fd < 0) return openErrno();
+    const master_fd = try openMaster();
     // Raw closes: `open` has no `std.Io` to hand, because nothing it does is
     // an operation `std.Io` abstracts.
     errdefer _ = c.close(master_fd);
-
-    // Close-on-exec, and not as an afterthought: a master this process is
-    // holding while it spawns some unrelated child would otherwise be
-    // inherited by that child, which would then be keeping the terminal open
-    // -- so a read of the master never finishes even after the child that was
-    // meant to have it exits. POSIX has no flag for `posix_openpt` to carry
-    // (it takes `O_RDWR` and `O_NOCTTY` and nothing else is portable), so it
-    // is a second call, and the window between the two is the one a concurrent
-    // `fork` on another thread could slip through. The slave below has no such
-    // window: `open` takes the flag.
-    handles.setCloseOnExec(master_fd);
 
     // `grantpt` fixes the ownership and mode of the slave device and
     // `unlockpt` clears the lock that keeps it unopenable until then. Both are
@@ -460,6 +448,33 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
         .remembered_size = {},
         .console = {},
     };
+}
+
+/// Opens the master end, close-on-exec from the moment it exists.
+///
+/// Close-on-exec, and not as an afterthought: a master this process is
+/// holding while it spawns some unrelated child would otherwise be inherited
+/// by that child, which would then be keeping the terminal open -- so a read
+/// of the master never finishes even after the child that was meant to have
+/// it exits. POSIX names only `O_RDWR` and `O_NOCTTY` for `posix_openpt`, but
+/// glibc, musl, Darwin and FreeBSD all take `O_CLOEXEC` as well, which makes
+/// the flag part of the open: no window in which a `fork` on another thread
+/// copies a master without it, and one system call fewer. A system that
+/// refuses the flag says `EINVAL`, and there the flag is a second call, held
+/// inside `ForkGap` where this system has one, with the window between the
+/// two that `ForkGap` documents. The slave has no such window anywhere:
+/// `open` takes the flag.
+fn openMaster() OpenError!posix.fd_t {
+    const fd = posix_openpt(.{ .ACCMODE = .RDWR, .NOCTTY = true, .CLOEXEC = true });
+    if (fd >= 0) return fd;
+    if (c.errno(@as(c_int, -1)) != .INVAL) return openErrno();
+
+    handles.ForkGap.openingDescriptors();
+    defer handles.ForkGap.release();
+    const plain_fd = posix_openpt(.{ .ACCMODE = .RDWR, .NOCTTY = true });
+    if (plain_fd < 0) return openErrno();
+    handles.setCloseOnExec(plain_fd);
+    return plain_fd;
 }
 
 /// The current `errno`, as one of `OpenError`. Everything `openPosix` calls

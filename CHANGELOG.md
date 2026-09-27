@@ -82,6 +82,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (cancel it, or let it read to the end) and join it, then close. The suite's
   own readers now do, and the Linux ThreadSanitizer run of the whole suite,
   which reported six such races, reports none.
+- `Pty.open` opens the master close-on-exec in the `posix_openpt` call
+  itself, on the systems that take `O_CLOEXEC` there (glibc, musl, Darwin,
+  FreeBSD). The master no longer spends a moment without the flag, in which
+  a `fork` on another thread could copy it, and the open is one system call
+  shorter. A system that refuses the flag gets the second call as before.
 
 ### Fixed
 

@@ -352,8 +352,9 @@ it**, where the system has a call that says so — `pipe2`, `O_CLOEXEC`,
 two a child started on another thread would inherit a descriptor that has
 nothing to do with it; on Darwin, which has no `pipe2`, this package's own
 spawns and its own pipe-making are held apart so that they cannot overlap. A
-`fork` elsewhere in the program still can, and `Pty.open` marks the master in a
-second call for want of a flag to pass `posix_openpt`. A descriptor the
+`fork` elsewhere in the program still can. `Pty.open` passes `O_CLOEXEC` to
+`posix_openpt`, which glibc, musl, Darwin and FreeBSD take, and marks the
+master in a second call only where the system refuses it. A descriptor the
 *caller* opened without the flag is the caller's, and `fd_policy` is how to
 say the child should not have it.
 
