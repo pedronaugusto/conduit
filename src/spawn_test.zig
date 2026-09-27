@@ -2419,7 +2419,12 @@ test "the posix_spawn path is the faster one" {
         return error.SkipZigTest;
     };
 
-    const rounds = 200;
+    // Under ThreadSanitizer a fork costs its runtime far more than it costs
+    // the kernel -- about 140 ms against 1.4 on the M3 Max, where
+    // `posix_spawn` goes from about 1 ms to 1.6 -- so 200 rounds took some
+    // 27 s of the watchdog's 30. Twenty still measure the same claim, with the
+    // gap a hundredfold there.
+    const rounds: usize = if (builtin.sanitize_thread) 20 else 200;
     // A few of each first, so that neither path pays for a cold cache.
     _ = try timeOneSpawn(program, null);
     _ = try timeOneSpawn(program, "/");
