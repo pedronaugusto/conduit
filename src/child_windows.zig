@@ -15,6 +15,7 @@ const Pty = @import("Pty.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("trace.zig");
 const win32 = @import("win32.zig");
+const windows_search = @import("windows_search.zig");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
@@ -270,41 +271,28 @@ pub fn findBare(
     program: []const u8,
     environment: *const std.process.Environ.Map,
 ) Allocator.Error!?[]const u8 {
-    var directories: std.ArrayList([]const u8) = .empty;
     var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    if (std.process.executableDirPath(io, &path_buffer)) |len| {
-        try directories.append(arena, try arena.dupe(u8, path_buffer[0..len]));
-    } else |_| {}
-    if (std.process.currentPath(io, &path_buffer)) |len| {
-        try directories.append(arena, try arena.dupe(u8, path_buffer[0..len]));
-    } else |_| {}
-
+    const executable_dir: ?[]const u8 = if (std.process.executableDirPath(io, &path_buffer)) |len|
+        try arena.dupe(u8, path_buffer[0..len])
+    else |_|
+        null;
+    const current_dir: ?[]const u8 = if (std.process.currentPath(io, &path_buffer)) |len|
+        try arena.dupe(u8, path_buffer[0..len])
+    else |_|
+        null;
     const system = std.unicode.wtf16LeToWtf8Alloc(arena, windows.getSystemDirectoryWtf16Le()) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
-    try directories.append(arena, system);
-    if (std.fs.path.dirname(system)) |windows_dir| {
-        try directories.append(arena, try std.fs.path.join(arena, &.{ windows_dir, "System" }));
-        try directories.append(arena, windows_dir);
-    }
 
-    if (environment.get("PATH")) |path| {
-        var entries = std.mem.splitScalar(u8, path, ';');
-        while (entries.next()) |entry_raw| {
-            const entry = std.mem.trim(u8, entry_raw, "\"");
-            try directories.append(arena, entry);
-        }
-    }
-
-    const executable = if (std.fs.path.extension(program).len == 0)
-        try std.fmt.allocPrint(arena, "{s}.exe", .{program})
-    else
-        program;
-    for (directories.items) |directory| {
-        const candidate = if (directory.len == 0)
-            executable
-        else
-            try std.fs.path.join(arena, &.{ directory, executable });
+    // The order and the spelling are `windows_search`'s, and tested on every
+    // system; which of them holds a file is asked here.
+    const list = try windows_search.candidates(arena, .{
+        .executable_dir = executable_dir,
+        .current_dir = current_dir,
+        .system_dir = system,
+        .path = environment.get("PATH"),
+    }, program);
+    for (list) |candidate| {
         const wide = std.unicode.wtf8ToWtf16LeAllocZ(arena, candidate) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A name with no UTF-16 spelling names no file here.
@@ -318,9 +306,8 @@ pub fn findBare(
     return null;
 }
 
-pub fn isBareProgram(program: []const u8) bool {
-    return std.mem.indexOfAny(u8, program, "\\/:") == null;
-}
+/// Whether `program` names a program to search for: see `windows_search`.
+pub const isBareProgram = windows_search.isBareProgram;
 
 /// The options this system has no way to honour, refused rather than accepted
 /// and quietly dropped.

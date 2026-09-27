@@ -47,6 +47,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The Windows search for a bare program name — the order of its places and
+  how each path is spelled — is worked out apart from the file system
+  (`windows_search`) and tested on every system; `Child.spawn` and
+  `findProgram` both use it. `findProgram` and `Reaper.end_tree` have tests
+  that run on Windows, where before they were only compiled for it.
 - On POSIX a `Reaper` waits on the child's `pidfd` or kqueue registration
   beside a pipe that `deinit` writes to, rather than in the standard
   library's blocking wait, so `deinit` ends the task at once whatever the

@@ -112,3 +112,40 @@ test "a program on PATH is found where the search finds it, and a missing one is
     defer testing.allocator.free(direct);
     try testing.expectEqualStrings(expected, direct);
 }
+
+test "on Windows a bare name is found on PATH with .exe supplied, and a directory by that name is passed over" {
+    // The Windows half of the test above. Which of the places a search goes
+    // holds the file is the part only a Windows machine can say; the order
+    // of the places is `windows_search`'s, tested everywhere.
+    if (!is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const dir = path_buffer[0..try tmp.dir.realPath(testing.io, &path_buffer)];
+
+    try tmp.dir.createDirPath(testing.io, "early\\conduit-find-probe.exe");
+    try tmp.dir.createDirPath(testing.io, "late");
+    const f = try tmp.dir.createFile(testing.io, "late\\conduit-find-probe.exe", .{});
+    f.close(testing.io);
+
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}\\early;{s}\\late", .{ dir, dir });
+    defer testing.allocator.free(path);
+    try environ.put("PATH", path);
+
+    const expected = try std.fmt.allocPrint(testing.allocator, "{s}\\late\\conduit-find-probe.exe", .{dir});
+    defer testing.allocator.free(expected);
+    for ([_][]const u8{ "conduit-find-probe", "conduit-find-probe.exe" }) |name| {
+        const found = (try findProgram(testing.io, testing.allocator, &environ, name)).?;
+        defer testing.allocator.free(found);
+        try testing.expectEqualStrings(expected, found);
+    }
+    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "conduit-no-such-program") == null);
+    // A name that is a path is itself when it is there, and nothing when not.
+    const direct = (try findProgram(testing.io, testing.allocator, &environ, expected)).?;
+    defer testing.allocator.free(direct);
+    try testing.expectEqualStrings(expected, direct);
+    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "C:\\conduit\\no\\such.exe") == null);
+}

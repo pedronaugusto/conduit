@@ -127,6 +127,7 @@ jobs:
           zig build unit -Doptimize=Debug --test-timeout 45s --summary all
           "-Dtest-filter=Child.test" "-Dtest-filter=child_windows.test"
           "-Dtest-filter=command_line.test"
+          "-Dtest-filter=find.test" "-Dtest-filter=windows_search.test"
           "-Dtest-filter=Reaper.test" "-Dtest-filter=Proxy.test"
           "-Dtest-filter=tty.test"
           "-Dtest-filter=environ.test" "-Dtest-filter=shell.test"
@@ -159,6 +160,7 @@ jobs:
           "-Dtest-filter=process group is the one" "-Dtest-filter=shares the parent"
           "-Dtest-filter=killWait with no grace"
           "-Dtest-filter=reaches what the child started"
+          "-Dtest-filter=end_tree on Windows"
           "-Dtest-filter=waitTree says"
           "-Dtest-filter=deinit ends a grandchild"
 

@@ -199,5 +199,6 @@ test {
     _ = environ_impl;
     _ = shell;
     _ = @import("find.zig");
+    _ = @import("windows_search.zig");
     _ = @import("spawn_test.zig");
 }

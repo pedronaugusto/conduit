@@ -389,6 +389,13 @@ statically rather than looked up. FreeBSD and NetBSD are compiled and never
 run, so what holds there is what the sources say and not what a suite has
 shown.
 
+Windows runs nowhere but the `windows-latest` runner: there is no local
+Windows or emulator run. What only Windows can answer — which directory on
+the search holds a program, a job ended when `Reaper.end_tree` reaps — is
+shown there alone. The order that search goes in, which `findProgram` and a
+spawn share, is worked out without the file system and tested on every
+system.
+
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, glibc on two architectures and musl on one, both macOS
 architectures, FreeBSD and NetBSD. `zig build check -Dtarget=...` is what

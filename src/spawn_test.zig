@@ -821,6 +821,37 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     }
 }
 
+test "end_tree on Windows ends the child's job at the reap, not at deinit" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows only: the job is the tree there. Without `end_tree` a grandchild
+    // outlives the reap and goes at `deinit`, which the test below shows;
+    // with it the job is ended when the child is reaped.
+    if (!is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.detached_grandchild,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdout.?);
+
+    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
+    defer std.os.windows.CloseHandle(grandchild);
+
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    _ = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    // Reaped, and the job ended with it: the grandchild is gone before
+    // anything has called `deinit`.
+    try testing.expect(endedWithin(grandchild));
+}
+
 test "end_tree: a child that leaves nothing is reaped without waiting on its group" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
