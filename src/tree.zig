@@ -601,6 +601,17 @@ pub const knows_leaves = Forks.supported or builtin.os.tag == .linux;
 /// as it would have been.
 pub fn hasChildren(pid: posix.pid_t) bool {
     if (comptime builtin.os.tag != .linux) return true;
+    // The main thread first: a process that forks usually forks from it,
+    // and then one read answers without listing the threads.
+    var main_buffer: [64]u8 = undefined;
+    const main_path = std.fmt.bufPrintZ(&main_buffer, "/proc/{d}/task/{d}/children", .{ pid, pid }) catch return true;
+    const main_fd = c.open(main_path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (main_fd < 0) return true;
+    var first: [1]u8 = undefined;
+    const main_n = c.read(main_fd, &first, 1);
+    _ = c.close(main_fd);
+    if (main_n != 0) return true;
+
     var path_buffer: [64]u8 = undefined;
     const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/task", .{pid}) catch return true;
     const dir = c.open(path, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
@@ -618,8 +629,10 @@ pub fn hasChildren(pid: posix.pid_t) bool {
             const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
             offset += entry.reclen;
             const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
-            _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const tid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             threads += 1;
+            // Read above.
+            if (tid == pid) continue;
             var file_buffer: [32]u8 = undefined;
             const file = std.fmt.bufPrintZ(&file_buffer, "{s}/children", .{name}) catch return true;
             const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
