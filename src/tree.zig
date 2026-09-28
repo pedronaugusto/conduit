@@ -502,6 +502,60 @@ fn childrenOfDarwin(
 /// lets a test say a stop took the plain path.
 pub var walks: std.atomic.Value(usize) = .init(0);
 
+/// Whether this system can say that a child has nothing below it without a
+/// walk: Darwin by the watch on its forks (`Forks`), Linux by `hasChildren`.
+pub const knows_leaves = Forks.supported or builtin.os.tag == .linux;
+
+/// Whether `pid` has a child of its own now, or this cannot be said.
+///
+/// **Linux**: `/proc/<pid>/task/<tid>/children`, one small read per thread
+/// of the process, where the walk is a read of every process's `stat` on
+/// the system. A process's children are the ones its threads made, and only
+/// they could have been named by the walk's first level, so an empty answer
+/// for every thread means the walk would name nothing. It says "none now"
+/// rather than "never", which for the walk is the same thing: a descendant
+/// whose parent has gone belongs to `init` and no walk names it either.
+///
+/// `true` wherever the answer is not known: another system, a `/proc`
+/// without the `children` files (a kernel built without
+/// `CONFIG_PROC_CHILDREN`), a process that cannot be read. That is the walk,
+/// as it would have been.
+pub fn hasChildren(pid: posix.pid_t) bool {
+    if (comptime builtin.os.tag != .linux) return true;
+    var path_buffer: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/task", .{pid}) catch return true;
+    const dir = c.open(path, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
+    if (dir < 0) return true;
+    defer _ = c.close(dir);
+
+    var threads: usize = 0;
+    var entries: [1024]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
+    while (true) {
+        const rc = std.os.linux.getdents64(dir, &entries, entries.len);
+        if (std.os.linux.errno(rc) != .SUCCESS) return true;
+        if (rc == 0) break;
+        var offset: usize = 0;
+        while (offset < rc) {
+            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
+            offset += entry.reclen;
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+            _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            threads += 1;
+            var file_buffer: [32]u8 = undefined;
+            const file = std.fmt.bufPrintZ(&file_buffer, "{s}/children", .{name}) catch return true;
+            const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+            if (fd < 0) return true;
+            var byte: [1]u8 = undefined;
+            const n = c.read(fd, &byte, 1);
+            _ = c.close(fd);
+            // A child's number, or a read that failed: either way, the walk.
+            if (n != 0) return true;
+        }
+    }
+    // A process with no thread to list is one that cannot be read.
+    return threads == 0;
+}
+
 /// Whether a child has ever forked, which is the question that decides
 /// whether a stop needs the walk at all.
 ///
@@ -879,6 +933,36 @@ test "a group is empty but for its leader once what the leader started has ended
         if (waited_ms > 5000) return error.TestMemberStayed;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
+}
+
+test "a Linux process with a child of its own is said to have one, and one without is not" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+
+    var leaf = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sleep", "30" },
+        .stdio = .ignore,
+    });
+    defer leaf.deinit(testing.io);
+    defer _ = leaf.killWait(testing.io, 0) catch {};
+    try testing.expect(!hasChildren(leaf.id));
+
+    // The `;` keeps the shell from replacing itself with `sleep`.
+    var parent = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 30; :" },
+        .stdio = .ignore,
+    });
+    defer parent.deinit(testing.io);
+    defer _ = parent.killWait(testing.io, 0) catch {};
+    var waited_ms: u32 = 0;
+    while (!hasChildren(parent.id)) : (waited_ms += 2) {
+        if (waited_ms > 5000) return error.TestChildNotSeen;
+        try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
+    }
+
+    // Nothing to read is not "nothing below it": the answer is the walk.
+    try testing.expect(hasChildren(std.math.maxInt(posix.pid_t)));
 }
 
 test "a Linux stat record yields its parent and process group" {

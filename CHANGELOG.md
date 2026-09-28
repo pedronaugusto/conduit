@@ -75,7 +75,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   can come before the watch. A child that has forked, even once, is walked as
   before, and `.kill` looks again after its signal for a first fork made
   while it was being sent. Each child holds one more descriptor on Darwin,
-  closed by `deinit`. Linux is unchanged.
+  closed by `deinit`.
+- On Linux a child with no child of its own is stopped with its signal alone,
+  without the descendant walk: before the pass over every process's `/proc`
+  record, `Child.kill` reads the child's `/proc/<pid>/task/<tid>/children`,
+  one small file per thread, and a child they name nobody in is signalled
+  alone. `.kill` reads them again after the signal and walks if a child was
+  made while it was being sent. A kernel without those files walks as
+  before.
 - The Windows search for a bare program name — the order of its places and
   how each path is spelled — is worked out apart from the file system
   (`windows_search`) and tested on every system; `Child.spawn` and

@@ -1229,9 +1229,10 @@ test "a child that has never forked is stopped by its signal alone, without the 
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    // Where there is no watch on a child's forks every stop walks, as it
-    // always did, and there is nothing here to count.
-    if (is_windows or !tree.Forks.supported) return error.SkipZigTest;
+    // Where nothing says a child has no children every stop walks, as it
+    // always did, and there is nothing here to count. Darwin watches the
+    // child's forks; Linux reads the child's `children` files.
+    if (is_windows or !tree.knows_leaves) return error.SkipZigTest;
 
     // `sleep` itself rather than a shell, which may fork to run it. On pipes
     // it goes through `posix_spawn` (unless the build says always fork), on

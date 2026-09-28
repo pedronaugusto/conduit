@@ -333,6 +333,11 @@ its forks with a kqueue registered before the child runs anything — a
 `posix_spawn` child starts suspended until then, a fork child waits before its
 `execve` — so its stop is the signal alone, and one fork, however early, puts
 it back on the walk. The watch is one descriptor per child, closed by `deinit`.
+On Linux the pass reads every process's `/proc` record, and before it `kill`
+reads the child's own `/proc/<pid>/task/<tid>/children`, one small file per
+thread: a child with no child of its own is signalled alone. Either way a
+`.kill` looks again after the signal, and a child made while it was being
+sent puts the stop back on the walk.
 
 **Two ways to start a child on POSIX, and the same child either way.** A spawn
 that needs nothing done between the fork and the exec is handed to

@@ -1147,15 +1147,17 @@ pub const KillError = error{
 /// meant to act on, and sending one twice to a program that is cleaning up is
 /// not containment.
 ///
-/// **A child that has never forked is signalled alone.** It has no
-/// descendants, so there is nothing for the walk to name, and on Darwin the
-/// walk is the cost of this call: `proc_listchildpids` passes over the whole
-/// process table each time it is asked. There `spawn` watches the child's
-/// forks from before it runs (`tree.Forks`), and this sends the signal with
-/// no walk while the watch has seen none — and for `.kill` looks once more
-/// after the signal, so that a first fork made while it was being sent still
-/// gets the passes above. A child that has forked, even once, is walked as
-/// described. Linux walks always: there it is one `/proc` pass.
+/// **A child with nothing below it is signalled alone.** It has no
+/// descendants, so there is nothing for the walk to name, and the walk is the
+/// cost of this call: on Darwin `proc_listchildpids` passes over the whole
+/// process table each time it is asked, and on Linux the pass reads every
+/// process's `/proc` record. On Darwin `spawn` watches the child's forks
+/// from before it runs (`tree.Forks`), and this sends the signal with no walk
+/// while the watch has seen none. On Linux it reads the child's own
+/// `children` files first, one per thread, and sends the signal with no walk
+/// while they name nobody. Either way, for `.kill` it looks once more after
+/// the signal, so that a first child made while it was being sent still gets
+/// the passes above. A child that has a child is walked as described.
 ///
 /// A child that has already ended is not signalled, because its name no longer
 /// belongs to it; that case is not an error, and it may reap the child as a
@@ -1172,15 +1174,14 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
     const sig = signal.toPosix();
     const target: posix.pid_t = if (child.pgid) |pgid| -pgid else child.id;
 
-    // A child that has never forked has no descendants for a walk to name,
-    // and its stop is the signal alone. `tree.Forks` says how that is known
-    // without a window: the watch was in before the child ran.
-    if (!child.forks.any()) {
+    // A child with nothing below it has no descendants for a walk to name,
+    // and its stop is the signal alone. `mayHaveDescendants` says how that is
+    // known on each system.
+    if (!child.mayHaveDescendants()) {
         const answer = child.signalTarget(target, sig);
-        // A first fork made while the signal was being sent is noted before
-        // the process it started can run; then the passes below, as for any
-        // tree.
-        if (sig != .KILL or !child.forks.any()) return answer;
+        // A first child made while the signal was being sent is seen by the
+        // second look; then the passes below, as for any tree.
+        if (sig != .KILL or !child.mayHaveDescendants()) return answer;
         try child.killPasses(target, sig);
         return answer;
     }
@@ -1196,6 +1197,24 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
     if (sig != .KILL) return answer;
     try child.killPasses(target, sig);
     return answer;
+}
+
+/// Whether a walk could name anything below the child, asked without one.
+///
+/// **Darwin**: the watch on the child's forks, registered before it ran
+/// (`tree.Forks`), has seen none: a child that has never forked has no
+/// descendants. A fork made in the kernel is noted before the process it
+/// started can run.
+///
+/// **Linux**: no thread of the child has a child now (`tree.hasChildren`),
+/// one small read per thread where the walk reads every process on the
+/// system. A child made while this is asked is seen by the look `kill` takes
+/// after a `.kill` has been sent, as long as its parent has not yet gone.
+///
+/// **Elsewhere** it cannot be said, and the answer is the walk.
+fn mayHaveDescendants(child: *Child) bool {
+    if (builtin.os.tag == .linux) return tree.hasChildren(child.id);
+    return child.forks.any();
 }
 
 /// `.kill` is the one that promises to leave nothing behind, and
