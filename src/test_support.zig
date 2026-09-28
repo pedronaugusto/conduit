@@ -58,10 +58,10 @@ pub const Watchdog = struct {
     }
 
     fn watch(watchdog: *Watchdog, io: std.Io) std.Io.Cancelable!void {
-        var waited_ms: u32 = 0;
-        while (waited_ms < watchdog.limit_ms) : (waited_ms += 50) {
+        const deadline: @import("deadline.zig").Deadline = .in(io, watchdog.limit_ms);
+        while (deadline.remainingMs(io) > 0) {
             if (watchdog.finished.load(.acquire)) return;
-            try std.Io.sleep(io, .fromMilliseconds(50), .awake);
+            try std.Io.sleep(io, .fromMilliseconds(@min(50, deadline.remainingMs(io))), .awake);
         }
         if (watchdog.finished.load(.acquire)) return;
         std.debug.panic("conduit: {s} in {s} did not finish within {d} ms", .{

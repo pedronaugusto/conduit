@@ -919,12 +919,11 @@ test "a buffer that fills says so, and discard makes room" {
 /// Waits for the child to end, and kills it if it will not within the budget,
 /// so a misbehaving child fails a test rather than stopping the run.
 fn waitWithin(io: std.Io, child: *Child) !Child.Term {
-    var waited: u32 = 0;
+    const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
     while (true) {
         if (try child.tryWait()) |term| return term;
-        if (waited >= budget_ms) break;
+        if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
-        waited += 2;
     }
     _ = child.killWait(io, 0) catch {};
     return error.TestChildDidNotExit;

@@ -35,6 +35,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
+const Deadline = @import("deadline.zig").Deadline;
 
 /// Sends `sig` to every descendant of `root`, deepest first, and returns how
 /// many of them it reached.
@@ -987,8 +988,8 @@ test "a descendant that escaped the process group is still killed" {
     try std.testing.expectEqual(@as(usize, 1), try held.signalDescendants(.KILL, root));
     _ = c.kill(-root, .KILL);
 
-    var waited_ms: u32 = 0;
-    while (waited_ms < 5000) : (waited_ms += 2) {
+    const deadline: Deadline = .in(std.testing.io, 5000);
+    while (deadline.remainingMs(std.testing.io) > 0) {
         if (c.kill(escaped, @as(posix.SIG, @enumFromInt(0))) != 0 and
             c.errno(@as(c_int, -1)) == .SRCH) return;
         try std.Io.sleep(std.testing.io, .fromMilliseconds(2), .awake);
@@ -1048,15 +1049,15 @@ test "a group is empty but for its leader once what the leader started has ended
     defer _ = child.killWait(testing.io, 0) catch {};
     const pgid = child.pgid.?;
 
-    var waited_ms: u32 = 0;
-    while (members(pgid, child.id) != .others) : (waited_ms += 2) {
-        if (waited_ms > 5000) return error.TestMemberNotSeen;
+    var deadline: Deadline = .in(testing.io, 5000);
+    while (members(pgid, child.id) != .others) {
+        if (deadline.remainingMs(testing.io) == 0) return error.TestMemberNotSeen;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
     child.closeStdin(testing.io);
-    waited_ms = 0;
-    while (members(pgid, child.id) != .none) : (waited_ms += 2) {
-        if (waited_ms > 5000) return error.TestMemberStayed;
+    deadline = .in(testing.io, 5000);
+    while (members(pgid, child.id) != .none) {
+        if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
 }
@@ -1081,9 +1082,9 @@ test "a Linux process with a child of its own is said to have one, and one witho
     });
     defer parent.deinit(testing.io);
     defer _ = parent.killWait(testing.io, 0) catch {};
-    var waited_ms: u32 = 0;
-    while (!hasChildren(parent.id)) : (waited_ms += 2) {
-        if (waited_ms > 5000) return error.TestChildNotSeen;
+    const deadline: Deadline = .in(testing.io, 5000);
+    while (!hasChildren(parent.id)) {
+        if (deadline.remainingMs(testing.io) == 0) return error.TestChildNotSeen;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
 
@@ -1191,9 +1192,9 @@ test "a leaderless Linux group keeps the child its leader started" {
     _ = try leader.wait(testing.io);
     try testing.expectEqual(Members.others, members(group, leader.id));
     try testing.expectEqual(@as(usize, 1), try signalGroupSince(group, leader.id, since, .KILL));
-    var waited: u32 = 0;
-    while ((try startTime(member)) != null) : (waited += 20) {
-        if (waited >= 3000) return error.TestMemberStayed;
+    const deadline: Deadline = .in(testing.io, 3000);
+    while ((try startTime(member)) != null) {
+        if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
         try testing.io.sleep(.fromMilliseconds(20), .awake);
     }
 }

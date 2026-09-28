@@ -437,8 +437,8 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     // proxy is reading, exactly as if it had been typed.
     try user.writeFile().writeStreamingAll(io, "\x03");
 
-    var waited_ms: u32 = 0;
-    const term = while (waited_ms < 5000) : (waited_ms += 2) {
+    const deadline: @import("deadline.zig").Deadline = .in(io, 5000);
+    const term = while (deadline.remainingMs(io) > 0) {
         if (try child.tryWait()) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     } else return error.TestChildWasNotInterrupted;
@@ -492,8 +492,8 @@ test "the window size is forwarded onto the pair" {
 }
 
 fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
-    var waited_ms: u32 = 0;
-    while (waited_ms < 5000) : (waited_ms += 2) {
+    const deadline: @import("deadline.zig").Deadline = .in(io, 5000);
+    while (deadline.remainingMs(io) > 0) {
         const now = try pty.size();
         if (now.rows == want.rows and now.cols == want.cols) return;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);

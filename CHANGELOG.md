@@ -14,6 +14,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   descendant walk, before signalling, including its audit token on Darwin.
 - `conduit.console` exposes typed Windows console input records and waits,
   peeks and reads through a small API.
+- Tests that wait for process state now compare a clock deadline rather than
+  counting sleep iterations, so a descheduled test keeps its original budget.
 
 ### Breaking
 

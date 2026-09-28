@@ -25,6 +25,7 @@ const c = std.c;
 
 const conduit = @import("conduit.zig");
 const Child = conduit.Child;
+const Deadline = @import("deadline.zig").Deadline;
 const Pty = conduit.Pty;
 const handles = @import("handles.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
@@ -216,13 +217,19 @@ const Sink = struct {
     /// "nothing that matched" and "nothing at all" are different faults and a
     /// bare error name cannot say which one this was.
     fn expect(sink: *Sink, needle: []const u8) !void {
-        var waited_ms: u32 = 0;
-        while (waited_ms < budget_ms) : (waited_ms += 2) {
-            if (sink.contains(needle)) return;
-            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
-        }
+        if (try sink.containsBefore(needle, .in(io, budget_ms))) return;
         sink.report(needle);
         return error.TestChildSaidNothing;
+    }
+
+    /// The same budget can be made before another operation delays this
+    /// task; a delayed wake does not grant another full set of sleep steps.
+    fn containsBefore(sink: *Sink, needle: []const u8, deadline: Deadline) !bool {
+        while (deadline.remainingMs(io) > 0) {
+            if (sink.contains(needle)) return true;
+            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        }
+        return sink.contains(needle);
     }
 
     /// What was being waited for, why the reading stopped, and the first of
@@ -253,6 +260,14 @@ const Sink = struct {
     }
 };
 
+test "a test wait uses an already elapsed clock deadline" {
+    var sink: Sink = .{};
+    defer sink.deinit();
+    const deadline: Deadline = .in(io, 1);
+    try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    try testing.expect(!try sink.containsBefore("never", deadline));
+}
+
 /// Waits for the child to end, and kills it if it will not within
 /// `budget_ms`.
 ///
@@ -260,12 +275,11 @@ const Sink = struct {
 /// outlast the test, so a child that misbehaves produces a failure rather than
 /// a run that never finishes.
 fn waitWithin(child: *Child) !Child.Term {
-    var waited: u32 = 0;
+    const deadline: Deadline = .in(io, budget_ms);
     while (true) {
         if (try child.tryWait()) |term| return term;
-        if (waited >= budget_ms) break;
+        if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
-        waited += 2;
     }
     _ = child.killWait(io, 0) catch {};
     return error.TestChildDidNotExit;
@@ -464,8 +478,8 @@ test "Reaper.exit becomes non-null once the child has ended" {
 
     // The wait is on another task, so the result arrives when it arrives --
     // but not later than the budget every other wait in this file obeys.
-    var waited: u32 = 0;
-    const term = while (waited < budget_ms) : (waited += 1) {
+    const deadline: Deadline = .in(io, budget_ms);
+    const term = while (deadline.remainingMs(io) > 0) {
         if (try reaper.exit()) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(1), .awake);
     } else return error.TestChildDidNotExit;
@@ -508,8 +522,8 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
 
     // The same term, by both routes, and nothing left to reap: a second wait
     // answers from what was published rather than asking the system again.
-    var waited: u32 = 0;
-    const reaped = while (waited < budget_ms) : (waited += 1) {
+    const deadline: Deadline = .in(io, budget_ms);
+    const reaped = while (deadline.remainingMs(io) > 0) {
         if (try reaper.exit()) |t| break t;
         try std.Io.sleep(io, .fromMilliseconds(1), .awake);
     } else return error.TestChildDidNotExit;
@@ -615,9 +629,9 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     try testing.expect(took_ms >= grace_ms);
     try testing.expect(took_ms < grace_ms + 2000);
 
-    var waited: u32 = 0;
-    while (alive(grandchild)) : (waited += 2) {
-        if (waited >= budget_ms) {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (alive(grandchild)) {
+        if (deadline.remainingMs(io) == 0) {
             _ = c.kill(grandchild, .KILL);
             return error.TestGrandchildOutlivedTheStop;
         }
@@ -707,8 +721,8 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     try sink.start(child.stdout.?);
     const polite = try readPid(&sink);
     const stubborn = stubborn: {
-        var waited_ms: u32 = 0;
-        while (waited_ms < budget_ms) : (waited_ms += 2) {
+        const deadline: Deadline = .in(io, budget_ms);
+        while (deadline.remainingMs(io) > 0) {
             sink.mutex.lockUncancelable(io);
             const said = gpa.dupe(u8, sink.bytes.items) catch "";
             sink.mutex.unlock(io);
@@ -739,9 +753,9 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     if (t0.untilNow(io).raw.toMilliseconds() < grace_ms) return error.TestGraceNotGiven;
     // Ended, both: what is left is their new parent's reaping of them, which
     // this test cannot hurry and only waits out.
-    var waited: u32 = 0;
-    while (alive(polite) or alive(stubborn)) : (waited += 2) {
-        if (waited >= budget_ms) return error.TestLeftBehindOutlivedTheChild;
+    const deadline: Deadline = .in(io, budget_ms);
+    while (alive(polite) or alive(stubborn)) {
+        if (deadline.remainingMs(io) == 0) return error.TestLeftBehindOutlivedTheChild;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }
@@ -770,9 +784,9 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     const left = try readPid(&sink);
     defer _ = c.kill(left, .KILL);
 
-    var waited_ms: u32 = 0;
-    while (wait_for.endedUnreaped(child.id) != .ended) : (waited_ms += 2) {
-        if (waited_ms >= budget_ms) return error.TestChildDidNotExit;
+    var deadline: Deadline = .in(io, budget_ms);
+    while (wait_for.endedUnreaped(child.id) != .ended) {
+        if (deadline.remainingMs(io) == 0) return error.TestChildDidNotExit;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
     try testing.expect(alive(left));
@@ -782,9 +796,9 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     defer reaper.deinit(io);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .exited = 4 }, term);
-    var gone_ms: u32 = 0;
-    while (alive(left)) : (gone_ms += 2) {
-        if (gone_ms >= budget_ms) return error.TestLeftBehindOutlivedTheChild;
+    deadline = .in(io, budget_ms);
+    while (alive(left)) {
+        if (deadline.remainingMs(io) == 0) return error.TestLeftBehindOutlivedTheChild;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }
@@ -1134,8 +1148,8 @@ test "killWait reaches what the child started, not only the child" {
 
     // The shell is gone. If what it started were still running it would still
     // be holding the pipe, and this would wait out the whole budget.
-    var waited: u32 = 0;
-    while (waited < budget_ms) : (waited += 10) {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (deadline.remainingMs(io) > 0) {
         if (sink.ended()) return;
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
@@ -1183,8 +1197,8 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
 
     _ = try child.killWait(io, 0);
 
-    var waited: u32 = 0;
-    while (waited < budget_ms) : (waited += 10) {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (deadline.remainingMs(io) > 0) {
         if (!alive(grandchild)) return;
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
@@ -1275,9 +1289,9 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
         const before = tree.walks.load(.monotonic);
         _ = try child.killWait(io, 0);
 
-        var waited: u32 = 0;
-        while (alive(grandchild)) : (waited += 10) {
-            if (waited >= budget_ms) return error.TestGrandchildOutlivedTheKill;
+        const deadline: Deadline = .in(io, budget_ms);
+        while (alive(grandchild)) {
+            if (deadline.remainingMs(io) == 0) return error.TestGrandchildOutlivedTheKill;
             try std.Io.sleep(io, .fromMilliseconds(10), .awake);
         }
         try testing.expect(tree.walks.load(.monotonic) > before);
@@ -1320,9 +1334,9 @@ fn cgroupsHere() !bool {
 
 /// Waits for `pid` to be gone altogether: not running and not a zombie.
 fn expectGone(pid: posix.pid_t) !void {
-    var waited: u32 = 0;
-    while (alive(pid)) : (waited += 2) {
-        if (waited >= budget_ms) return error.TestGrandchildOutlivedTheKill;
+    const deadline: Deadline = .in(io, budget_ms);
+    while (alive(pid)) {
+        if (deadline.remainingMs(io) == 0) return error.TestGrandchildOutlivedTheKill;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }
@@ -1383,9 +1397,9 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         };
         // Orphaned and in a session of its own before the kill: the case a
         // group signal and a walk down from the child both miss.
-        var waited: u32 = 0;
-        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == child.id or getsid(orphan) != orphan) : (waited += 2) {
-            if (waited >= budget_ms) return error.TestGrandchildNeverLeft;
+        const deadline: Deadline = .in(io, budget_ms);
+        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == child.id or getsid(orphan) != orphan) {
+            if (deadline.remainingMs(io) == 0) return error.TestGrandchildNeverLeft;
             try std.Io.sleep(io, .fromMilliseconds(2), .awake);
         }
         try testing.expect(getpgid(orphan) != child.id);
@@ -1505,8 +1519,8 @@ const leaves_an_orphan = orphan_in_own_session ++ "; printf 'done.'";
 
 /// Waits for `said` to arrive on the sink.
 fn waitSaid(sink: *Sink, said: []const u8) !void {
-    var waited_ms: u32 = 0;
-    while (waited_ms < budget_ms) : (waited_ms += 2) {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (deadline.remainingMs(io) > 0) {
         const found = found: {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
@@ -1520,18 +1534,18 @@ fn waitSaid(sink: *Sink, said: []const u8) !void {
 
 /// Waits for `pid` to be this process's child and in a session of its own.
 fn expectAdopted(pid: posix.pid_t) !void {
-    var waited_ms: u32 = 0;
-    while (parentOf(pid) != c.getpid() or getsid(pid) != pid) : (waited_ms += 2) {
-        if (waited_ms >= budget_ms) return error.TestOrphanNotAdopted;
+    const deadline: Deadline = .in(io, budget_ms);
+    while (parentOf(pid) != c.getpid() or getsid(pid) != pid) {
+        if (deadline.remainingMs(io) == 0) return error.TestOrphanNotAdopted;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }
 
 /// Waits for `Orphans.count` to say `expected`.
 fn expectCount(orphans: *Orphans, expected: usize) !void {
-    var waited_ms: u32 = 0;
-    while (try orphans.count() != expected) : (waited_ms += 2) {
-        if (waited_ms >= budget_ms) return error.TestWrongOrphanCount;
+    const deadline: Deadline = .in(io, budget_ms);
+    while (try orphans.count() != expected) {
+        if (deadline.remainingMs(io) == 0) return error.TestWrongOrphanCount;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }
@@ -1565,9 +1579,9 @@ fn stateOf(pid: posix.pid_t) u8 {
 
 /// Waits for `pid` to have ended and not been reaped.
 fn expectZombie(pid: posix.pid_t) !void {
-    var waited_ms: u32 = 0;
-    while (stateOf(pid) != 'Z') : (waited_ms += 2) {
-        if (waited_ms >= budget_ms) return error.TestOrphanDidNotEnd;
+    const deadline: Deadline = .in(io, budget_ms);
+    while (stateOf(pid) != 'Z') {
+        if (deadline.remainingMs(io) == 0) return error.TestOrphanDidNotEnd;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
 }
@@ -1833,8 +1847,8 @@ fn readPid(sink: *Sink) !posix.pid_t {
 /// an unsigned `DWORD` — and the fixtures print the same thing either way, so
 /// the type is the caller's to ask for.
 fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
-    var waited_ms: u32 = 0;
-    while (waited_ms < budget_ms) : (waited_ms += 2) {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (deadline.remainingMs(io) > 0) {
         const found = found: {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
@@ -1910,8 +1924,8 @@ test "waitTree says the tree has ended, and does not say it early" {
     // that reaped it here would be asking the job to end a tree nothing would
     // then ask it to end. The child's own handle is what says it has exited,
     // and looking at a handle reaps nothing.
-    var waited: u32 = 0;
-    while (waited < budget_ms and runningNow(child.id)) : (waited += 10) {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (deadline.remainingMs(io) > 0 and runningNow(child.id)) {
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
     try testing.expect(!runningNow(child.id));
