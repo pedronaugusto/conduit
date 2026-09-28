@@ -230,9 +230,10 @@ else
 /// Sends a signal to every descendant of a process, deepest first, leaving
 /// alone those in `in_group` (the group the caller signals on its own), and
 /// says how many it reached: what `Child.kill` does beside the group, for a
-/// process this program holds no `Child` for — one a crashed run of it
-/// started. Linux and Darwin name the descendants; elsewhere there are none
-/// to name and the group is the whole reach. POSIX only.
+/// process this program still holds unreaped. For a process recorded by an
+/// earlier run, use `CapturedPid.signalDescendants`; a bare pid can be reused
+/// during this walk. Linux and Darwin name the descendants; elsewhere there
+/// are none to name and the group is the whole reach. POSIX only.
 pub const signalDescendants = if (is_windows)
     @compileError("signalDescendants is POSIX-only")
 else

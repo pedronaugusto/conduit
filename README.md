@@ -187,6 +187,8 @@ it runs ends each one still running as the same process — the group with
 and an audit token on Darwin, taken before the start time is checked (Linux)
 or with it in one lookup (Darwin), so the signal it sends reaches that
 process or nothing; it is `null` for a start time that does not match.
+`captured.signalDescendants(sig, in_group)` walks its descendants only while
+the captured root is still the same process, including after the walk.
 
 `conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
 find `name` for a child given `environ`, by the same rules, or `null`: for a

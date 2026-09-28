@@ -52,7 +52,20 @@ const c = std.c;
 /// that ends between being named and being signalled, is not a failure of the
 /// caller's kill: the answer `Child.kill` reports is the one from the child's
 /// own signal.
+///
+/// Use this by-number form only while holding an unreaped child: that keeps
+/// its pid from being reused. For a process from an earlier run, capture its
+/// identity and call `CapturedPid.signalDescendants` instead.
 pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+    return signalDescendantsGuarded(root, null, sig, in_group);
+}
+
+/// Walk below a held process and signal only while its original identity
+/// still occupies the root. The identity is checked after the walk, before
+/// any descendant is signalled. On Darwin `alive` checks the audit token's
+/// pid version, so a reused root pid cannot turn this into a stranger's walk.
+fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+    if (guard) |held| if (!held.alive()) return 0;
     if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
     // The ordinary tree fits here and never reaches the page allocator. What
     // may grow without a bound still can: exhausting this storage falls back
@@ -66,6 +79,10 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
         found.deinit(allocator);
     }
     try collect(root, in_group, &found, allocator);
+
+    // A read of the process table may have outlived the root. In that case
+    // none of the relationships just read proves whose descendants they are.
+    if (guard) |held| if (!held.alive()) return 0;
 
     var reached: usize = 0;
     var i = found.items.len;
@@ -391,6 +408,10 @@ const LinuxProcess = struct {
         return std.os.linux.errno(rc) == .SUCCESS;
     }
 
+    pub fn signalDescendants(process: *const LinuxProcess, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+        return signalDescendantsGuarded(process.pid, process, sig, in_group);
+    }
+
     /// Whether the process has not ended. A pidfd becomes readable when its
     /// process exits, reaped or not.
     pub fn alive(process: *const LinuxProcess) bool {
@@ -439,6 +460,10 @@ const DarwinProcess = struct {
     pub fn signal(process: *const DarwinProcess, sig: posix.SIG) bool {
         var token = process.token;
         return proc_signal_with_audittoken(&token, @intCast(@intFromEnum(sig))) == 0;
+    }
+
+    pub fn signalDescendants(process: *const DarwinProcess, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+        return signalDescendantsGuarded(process.pid, process, sig, in_group);
     }
 
     /// Whether the process has not ended: the pid still has the version the
@@ -492,6 +517,13 @@ const NoProcess = struct {
         _ = process;
         _ = sig;
         return false;
+    }
+
+    pub fn signalDescendants(process: *const NoProcess, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+        _ = process;
+        _ = sig;
+        _ = in_group;
+        return 0;
     }
 
     pub fn alive(process: *const NoProcess) bool {
@@ -950,7 +982,9 @@ test "a descendant that escaped the process group is still killed" {
     defer _ = c.kill(escaped, .KILL);
 
     try std.testing.expect(getpgid(escaped) != root);
-    try std.testing.expectEqual(@as(usize, 1), try signalDescendants(root, .KILL, root));
+    var held = Process.capture(root).?;
+    defer held.deinit();
+    try std.testing.expectEqual(@as(usize, 1), try held.signalDescendants(.KILL, root));
     _ = c.kill(-root, .KILL);
 
     var waited_ms: u32 = 0;

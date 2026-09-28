@@ -10,6 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and remove the same Linux cgroup its earlier run recorded, after checking
   the directory inode. A record must also carry the boot id.
 - Bounded waits on every platform now use one clock-based deadline type.
+- `CapturedPid.signalDescendants` checks the captured root again after the
+  descendant walk, before signalling, including its audit token on Darwin.
 
 ### Breaking
 
