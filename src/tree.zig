@@ -1123,12 +1123,15 @@ test "a leaderless Linux group keeps the child its leader started" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
     const Child = @import("Child.zig");
+    // The leader waits on its input, so it is still running when its start
+    // time is read, and ends when that input closes.
     var leader = try Child.spawn(testing.io, testing.allocator, .{
-        .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!" },
-        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!; read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         .detach = true,
     });
     defer leader.deinit(testing.io);
+    defer _ = leader.killWait(testing.io, 0) catch {};
     const group = leader.pgid.?;
     const since = (try startTime(leader.id)).?;
     var buffer: [32]u8 = undefined;
@@ -1137,6 +1140,7 @@ test "a leaderless Linux group keeps the child its leader started" {
     errdefer {
         if (members(group, leader.id) == .others) _ = c.kill(-group, .KILL);
     }
+    leader.closeStdin(testing.io);
     _ = try leader.wait(testing.io);
     try testing.expectEqual(Members.others, members(group, leader.id));
     try testing.expectEqual(@as(usize, 1), try signalGroupSince(group, leader.id, since, .KILL));
