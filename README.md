@@ -94,7 +94,9 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 `conduit.Cgroup` is the cgroup a Linux child holds. `cgroup.id()` gives its
 directory identity; `Cgroup.openRecorded(path, id)` holds a cgroup from an
 earlier run only when that identity still matches. `cgroup.remove()` removes
-an empty cgroup, and `release()` closes the handle. On systems without
+an empty cgroup, `cgroup.isRecorded()` confirms the held record's identity,
+and `release()` closes the handle and tries to remove an empty directory. On
+systems without
 cgroups these calls have the same surface and answer `null` or no cgroup.
 
 `conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
@@ -181,8 +183,8 @@ child when the thread that spawned it ends, however it ends: Linux's
 `PR_SET_PDEATHSIG`, and `error.Unsupported` anywhere else. Where there is no
 such thing, a program that must not leave children running behind a crash
 writes down each child's pid and `conduit.startTime(pid)`, and the next time
-it runs ends each one still running as the same process — the group with
-`kill(-pid)` and what left it with `conduit.signalDescendants(pid, sig, pid)`.
+it runs uses `conduit.endRecorded` to end what it can still prove belongs to
+that process. A recorded cgroup reaches the complete Linux tree.
 `conduit.captureStarted(pid, start)` holds such a process by a pidfd on Linux
 and an audit token on Darwin, taken before the start time is checked (Linux)
 or with it in one lookup (Darwin), so the signal it sends reaches that
@@ -194,6 +196,16 @@ leader's group while that leader is still held. On Darwin it reaches a
 captured session leader's group through audit tokens: no process outside a
 new session can join it. For an ordinary group in an existing session it
 returns `error.Unsupported`, since another process there can join the group.
+`captured.wait(io, timeout_ms)` waits for its process to end without reaping
+it. `cgroup.waitEmpty(io, timeout_ms)` waits for a recorded Linux cgroup to
+empty. Both return `true` when done and `false` at the deadline.
+`conduit.endRecorded(io, .{ .pid, .start, .group, .cgroup, .grace_ms })`
+asks a recorded process and its provable descendants to end, waits the grace,
+then forces survivors. Pass `&recorded`, from `Cgroup.openRecorded`, for a
+complete Linux tree, including orphans. Without one, an unproven group member is left
+alone and reported as `error.Unproven` on Linux; Darwin reports
+`error.Unsupported` for a requested group after ending provable processes,
+since a member cannot be held after the leader's exit by this call.
 
 `conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
 find `name` for a child given `environ`, by the same rules, or `null`: for a

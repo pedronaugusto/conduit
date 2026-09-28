@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process in that session can join it.
 - `conduit.console` exposes typed Windows console input records and waits,
   peeks and reads through a small API.
+- `CapturedPid.wait` and `Cgroup.waitEmpty` wait on kernel events with clock
+  deadlines. `endRecorded` asks and then forces a recorded process and the
+  descendants it can prove, using a verified cgroup for a complete Linux tree.
 - Tests that wait for process state now compare a clock deadline rather than
   counting sleep iterations, so a descheduled test keeps its original budget.
 

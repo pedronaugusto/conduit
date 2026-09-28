@@ -36,6 +36,7 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 const Deadline = @import("deadline.zig").Deadline;
+const wait_for = @import("wait.zig");
 
 /// Sends `sig` to every descendant of `root`, deepest first, and returns how
 /// many of them it reached.
@@ -98,6 +99,77 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
         if (process.signal(sig)) reached += 1;
     }
     return reached;
+}
+
+/// Wait for a held process to end without reaping it. Linux polls the held
+/// pidfd; Darwin registers NOTE_EXIT with kqueue while the audit token still
+/// matches. If registration is unavailable, a bounded 1–4 ms clock-based
+/// check is used. True means gone; false means the deadline passed.
+fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+    if (!process.alive()) return true;
+    const deadline: Deadline = .in(io, timeout_ms);
+    const watch: ?wait_for.Watch = if (builtin.os.tag == .linux)
+        .{ .handle = process.pidfd }
+    else
+        wait_for.Watch.open(process.pid);
+    defer if (builtin.os.tag != .linux) if (watch) |opened| opened.close();
+    // Registration by number on Darwin is checked against the held audit
+    // token immediately afterward; it cannot turn a reused pid into a wait
+    // for the wrong process.
+    if (!process.alive()) return true;
+    var interval_ms: u32 = 1;
+    while (true) {
+        const left = deadline.remainingMs(io);
+        if (left == 0) return !process.alive();
+        if (watch) |opened| {
+            _ = opened.ended(@min(left, wait_for.slice_ms));
+            try std.Io.checkCancel(io);
+        } else {
+            try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+            interval_ms = @min(interval_ms * 2, 4);
+        }
+        if (!process.alive()) return true;
+    }
+}
+
+/// A child list is only a snapshot. Recheck each link through held process
+/// identities so a parent that ended, or a reused pid, cannot turn an entry
+/// in that list into permission to signal a stranger.
+fn provenBelow(root: *const Process, candidate: *const Process, allocator: std.mem.Allocator) std.mem.Allocator.Error!bool {
+    var chain: std.ArrayList(Process) = .empty;
+    defer {
+        for (chain.items) |*held| held.deinit();
+        chain.deinit(allocator);
+    }
+    var current = candidate;
+    while (current.alive()) {
+        const parent_pid = parentOf(current.pid) orelse return false;
+        if (parent_pid <= 1 or parent_pid == current.pid) return false;
+        if (parent_pid == root.pid) {
+            return root.alive() and current.alive() and parentOf(current.pid) == root.pid;
+        }
+        var parent = Process.capture(parent_pid) orelse return false;
+        if (!parent.alive() or !current.alive() or parentOf(current.pid) != parent_pid) {
+            parent.deinit();
+            return false;
+        }
+        chain.append(allocator, parent) catch |err| {
+            parent.deinit();
+            return err;
+        };
+        current = &chain.items[chain.items.len - 1];
+    }
+    return false;
+}
+
+fn parentOf(pid: posix.pid_t) ?posix.pid_t {
+    if (comptime builtin.os.tag == .linux) return (processRelationLinux(pid) orelse return null).ppid;
+    if (comptime builtin.os.tag == .macos) {
+        var info: ProcBsdInfo = undefined;
+        if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) return null;
+        return @intCast(info.ppid);
+    }
+    return null;
 }
 
 /// Fills `into` with the descendants of `root`, breadth first, and returns how
@@ -262,7 +334,10 @@ pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
 /// nothing — once it has ended, never a process given the same pid since.
 /// `alive` says whether it has ended (a zombie has); ask it rather than
 /// sending signal 0, which Darwin refuses through a token. `pid` is the
-/// number it had, for reports. `deinit` lets go of it.
+/// number it had, for reports. `wait(io, timeout_ms)` waits without reaping:
+/// poll on the held pidfd on Linux, kqueue NOTE_EXIT on Darwin, and bounded
+/// 1–4 ms clock-based checks only if no event registration is available.
+/// `deinit` lets go of it.
 pub const CapturedPid = Process;
 
 /// Holds the process `pid` names if it is the one that started at `since`
@@ -297,6 +372,108 @@ pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?Captured
         },
         else => return error.Unsupported,
     }
+}
+
+pub const RecordedOptions = struct {
+    pid: posix.pid_t,
+    start: u64,
+    group: ?posix.pid_t = null,
+    /// A handle returned by `Cgroup.openRecorded`, borrowed for this call.
+    cgroup: ?*@import("cgroup.zig").Cgroup = null,
+    grace_ms: u32,
+};
+
+/// Ask a recorded process and every descendant still provably below it to
+/// end, wait for the grace, then make any held survivors end. A verified
+/// recorded cgroup is the complete reach on Linux, including orphans and
+/// new forks. Without one, each descendant is captured while the recorded
+/// root is still alive and held through both signals. A group member with no
+/// captured parent link is never signalled; `error.Unproven` reports one on
+/// Linux after the proven processes have ended. Darwin cannot enumerate a
+/// group by proven descent after reparenting and reports `error.Unsupported`
+/// for a requested group. A successful return means the processes this call
+/// proved and held have all ended; `true` means there was something to end.
+pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
+    if (options.cgroup) |contained| {
+        if (!contained.isRecorded()) return error.Unproven;
+        const had_members = contained.populated() != .none;
+        if (had_members) {
+            // Even if the member list cannot be read, the verified cgroup
+            // can still be ended with cgroup.kill after the grace.
+            _ = try contained.signalMembers(.TERM, 0, null);
+            if (!try contained.waitEmpty(io, options.grace_ms)) {
+                if (!contained.kill()) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, 1000)) return error.UnableToEnd;
+            }
+        }
+        _ = contained.remove();
+        // A process with permission to leave its cgroup may still be the
+        // recorded root outside it. The pid and start record remains useful.
+        var fallback = options;
+        fallback.cgroup = null;
+        return (try endRecorded(io, fallback)) or had_members;
+    }
+
+    var root = (try captureStarted(options.pid, options.start)) orelse {
+        if (options.group) |group| {
+            if (group != options.pid) return error.Unproven;
+            if (comptime builtin.os.tag == .linux) {
+                if ((try signalGroupSince(group, options.pid, options.start, @enumFromInt(0))) > 0) return error.Unproven;
+            } else return error.Unsupported;
+        }
+        return false;
+    };
+    defer root.deinit();
+    var scratch = std.heap.stackFallback(16 * 1024, std.heap.page_allocator);
+    const allocator = scratch.get();
+    var found: std.ArrayList(Process) = .empty;
+    defer {
+        for (found.items) |*process| process.deinit();
+        found.deinit(allocator);
+    }
+    try collect(root.pid, null, &found, allocator);
+    if (!root.alive()) return error.Unproven;
+
+    var verified: std.ArrayList(bool) = .empty;
+    defer verified.deinit(allocator);
+    var unproven = false;
+    for (found.items) |*process| {
+        const holds = try provenBelow(&root, process, allocator);
+        try verified.append(allocator, holds);
+        if (!holds and process.alive()) unproven = true;
+    }
+
+    var i = found.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (verified.items[i]) _ = found.items[i].signal(.TERM);
+    }
+    _ = root.signal(.TERM);
+
+    const grace: Deadline = .in(io, options.grace_ms);
+    for (found.items, verified.items) |*process, holds| {
+        if (holds and process.alive()) _ = try process.wait(io, grace.remainingMs(io));
+    }
+    if (root.alive()) _ = try root.wait(io, grace.remainingMs(io));
+
+    for (found.items, verified.items) |*process, holds| {
+        if (holds and process.alive()) _ = process.signal(.KILL);
+    }
+    if (root.alive()) _ = root.signal(.KILL);
+    const finish: Deadline = .in(io, 1000);
+    for (found.items, verified.items) |*process, holds| {
+        if (holds and process.alive() and !try process.wait(io, finish.remainingMs(io))) return error.UnableToEnd;
+    }
+    if (root.alive() and !try root.wait(io, finish.remainingMs(io))) return error.UnableToEnd;
+
+    if (options.group) |group| {
+        if (group != options.pid) return error.Unproven;
+        if (comptime builtin.os.tag == .linux) {
+            if ((try signalGroupSince(group, options.pid, options.start, @enumFromInt(0))) > 0) return error.Unproven;
+        } else return error.Unsupported;
+    }
+    if (unproven) return error.Unproven;
+    return true;
 }
 
 /// Signal the live members of a Linux process group whose leader was
@@ -430,6 +607,10 @@ const LinuxProcess = struct {
         return signalGroupSinceImpl(group, process.pid, since, sig);
     }
 
+    pub fn wait(process: *const LinuxProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        return waitCaptured(process, io, timeout_ms);
+    }
+
     /// Whether the process has not ended. A pidfd becomes readable when its
     /// process exits, reaped or not.
     pub fn alive(process: *const LinuxProcess) bool {
@@ -533,6 +714,10 @@ const DarwinProcess = struct {
         return reached;
     }
 
+    pub fn wait(process: *const DarwinProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        return waitCaptured(process, io, timeout_ms);
+    }
+
     /// Whether the process has not ended: the pid still has the version the
     /// token holds, and what holds it is not a zombie.
     pub fn alive(process: *const DarwinProcess) bool {
@@ -599,6 +784,13 @@ const NoProcess = struct {
         _ = since;
         _ = sig;
         return error.Unsupported;
+    }
+
+    pub fn wait(process: *const NoProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        _ = process;
+        _ = io;
+        _ = timeout_ms;
+        return true;
     }
 
     pub fn alive(process: *const NoProcess) bool {
@@ -1243,6 +1435,52 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     try testing.expect(!captured.alive());
     try testing.expect(!captured.signal(.CONT));
     try testing.expect((try captureStarted(child.id, started)) == null);
+}
+
+test "a captured pid wait expires while it runs and wakes when it ends" {
+    switch (builtin.os.tag) {
+        .linux, .macos => {},
+        else => return error.SkipZigTest,
+    }
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sleep", "30" },
+        .stdio = .ignore,
+    });
+    defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
+    const since = (try startTime(child.id)).?;
+    var captured = (try captureStarted(child.id, since)).?;
+    defer captured.deinit();
+    if (try captured.wait(testing.io, 20)) return error.TestCapturedWaitEndedTooSoon;
+    try testing.expect(captured.signal(.TERM));
+    if (!try captured.wait(testing.io, 5000)) return error.TestCapturedWaitMissedExit;
+    _ = try child.wait(testing.io);
+}
+
+test "endRecorded waits for a recorded root and a descendant it captured" {
+    switch (builtin.os.tag) {
+        .linux, .macos => {},
+        else => return error.SkipZigTest,
+    }
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!; wait" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
+    var buffer: [32]u8 = undefined;
+    var output = child.stdout.?.reader(testing.io, &buffer);
+    const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
+    const since = (try startTime(child.id)).?;
+    try testing.expect(!try endRecorded(testing.io, .{ .pid = child.id, .start = since +% 1, .grace_ms = 20 }));
+    try testing.expect((try startTime(child.id)) != null);
+    try testing.expect(try endRecorded(testing.io, .{ .pid = child.id, .start = since, .grace_ms = 20 }));
+    try testing.expect((try startTime(descendant)) == null);
+    _ = try child.wait(testing.io);
 }
 
 test "a leaderless Linux group keeps the child its leader started" {

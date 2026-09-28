@@ -51,6 +51,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
+const Deadline = @import("deadline.zig").Deadline;
 
 /// Whether this system has cgroups for `spawn` to use at all.
 pub const supported = builtin.os.tag == .linux;
@@ -304,6 +305,7 @@ const LinuxCgroup = struct {
     name: Name,
     /// An opened record owns this copy; a newly made cgroup uses `name`.
     recorded_path: ?[:0]u8 = null,
+    recorded_id: u64 = 0,
 
     pub const none: LinuxCgroup = .{ .dir = -1, .name = .{ .owner = 0, .sequence = 0 } };
 
@@ -320,6 +322,12 @@ const LinuxCgroup = struct {
         return st.ino;
     }
 
+    /// Whether this handle was opened from a verified record and still
+    /// names that directory, even if its old path was replaced.
+    pub fn isRecorded(cgroup: *const LinuxCgroup) bool {
+        return cgroup.recorded_id != 0 and cgroup.id() == cgroup.recorded_id;
+    }
+
     /// Open a cgroup recorded by an earlier run only while `path` still
     /// names the cgroup with `recorded_id`. The returned handle holds that
     /// directory for all member operations; a replacement at the same path
@@ -333,7 +341,7 @@ const LinuxCgroup = struct {
             std.heap.page_allocator.free(path_z);
             return null;
         }
-        var result: LinuxCgroup = .{ .dir = dir, .name = .{ .owner = 0, .sequence = 0 }, .recorded_path = path_z };
+        const result: LinuxCgroup = .{ .dir = dir, .name = .{ .owner = 0, .sequence = 0 }, .recorded_path = path_z, .recorded_id = recorded_id };
         if (result.id() != recorded_id) {
             _ = c.close(dir);
             std.heap.page_allocator.free(path_z);
@@ -538,6 +546,43 @@ const LinuxCgroup = struct {
         return .unknown;
     }
 
+    /// Wait for `cgroup.events` to say the cgroup is empty. The event file
+    /// wakes a poll when `populated` changes. If it cannot be opened or
+    /// polled, only then use bounded 1–4 ms clock-based checks. True means
+    /// empty; false means the deadline passed or the state could not be read.
+    pub fn waitEmpty(cgroup: *const LinuxCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        if (!cgroup.active()) return true;
+        const deadline: Deadline = .in(io, timeout_ms);
+        const events = c.openat(cgroup.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+        defer {
+            if (events >= 0) _ = c.close(events);
+        }
+        var watching = events >= 0;
+        var text: [256]u8 = undefined;
+        if (watching) _ = c.read(events, &text, text.len);
+        var interval_ms: u32 = 1;
+        while (true) {
+            if (cgroup.populated() == .none) return true;
+            const left = deadline.remainingMs(io);
+            if (left == 0) return false;
+            if (watching) {
+                var fds = [_]posix.pollfd{.{ .fd = events, .events = posix.POLL.PRI, .revents = 0 }};
+                const rc = std.os.linux.poll(&fds, 1, @intCast(@min(left, 5)));
+                if (std.os.linux.errno(rc) == .SUCCESS) {
+                    if (rc > 0) {
+                        _ = std.os.linux.lseek(events, 0, std.os.linux.SEEK.SET);
+                        _ = c.read(events, &text, text.len);
+                    }
+                    try std.Io.checkCancel(io);
+                    continue;
+                }
+                watching = false;
+            }
+            try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+            interval_ms = @min(interval_ms * 2, 4);
+        }
+    }
+
     /// Lets go of the cgroup and removes it, or leaves it to be removed once
     /// what is in it has ended. Idempotent.
     pub fn release(cgroup: *LinuxCgroup) void {
@@ -597,6 +642,11 @@ const NoCgroup = struct {
         return null;
     }
 
+    pub fn isRecorded(cgroup: *const NoCgroup) bool {
+        _ = cgroup;
+        return false;
+    }
+
     pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?NoCgroup {
         _ = path_name;
         _ = recorded_id;
@@ -639,6 +689,13 @@ const NoCgroup = struct {
     pub fn populated(cgroup: *const NoCgroup) Populated {
         _ = cgroup;
         return .unknown;
+    }
+
+    pub fn waitEmpty(cgroup: *const NoCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        _ = cgroup;
+        _ = io;
+        _ = timeout_ms;
+        return true;
     }
 
     pub fn release(cgroup: *NoCgroup) void {

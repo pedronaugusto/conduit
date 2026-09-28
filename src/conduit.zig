@@ -228,6 +228,12 @@ pub const captureStarted = if (is_windows)
     @compileError("captureStarted is POSIX-only")
 else
     @import("tree.zig").captureStarted;
+/// End a process recorded by an earlier run, together with its provable
+/// descendants, preferring a verified recorded cgroup when one is available.
+pub const endRecorded = if (is_windows)
+    @compileError("endRecorded is POSIX-only")
+else
+    @import("tree.zig").endRecorded;
 
 /// Sends a signal to every descendant of a process, deepest first, leaving
 /// alone those in `in_group` (the group the caller signals on its own), and

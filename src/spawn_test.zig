@@ -1363,6 +1363,43 @@ test "a recorded cgroup opens only at its original directory identity and remove
     try testing.expect(cgroup.Cgroup.openRecorded(path, identity) == null);
 }
 
+test "a recorded cgroup waits on population changes" {
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var recorded = cgroup.Cgroup.openRecorded(child.cgroup.path(&where).?, child.cgroup.id().?).?;
+    defer recorded.release();
+    try testing.expect(!try recorded.waitEmpty(io, 20));
+    _ = try child.killWait(io, 0);
+    try testing.expect(try recorded.waitEmpty(io, 1000));
+}
+
+test "endRecorded ends a verified Linux cgroup and its detached grandchild" {
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 30 & wait" },
+        .stdio = .ignore,
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var recorded = cgroup.Cgroup.openRecorded(child.cgroup.path(&where).?, child.cgroup.id().?).?;
+    defer recorded.release();
+    const since = (try tree.startTime(child.id)).?;
+    try testing.expect(try conduit.endRecorded(io, .{
+        .pid = child.id,
+        .start = since,
+        .group = child.pgid,
+        .cgroup = &recorded,
+        .grace_ms = 20,
+    }));
+    _ = try child.wait(io);
+    try testing.expect(!recorded.active());
+}
+
 test "a grandchild that double-forks and setsid()s away is still ended with the tree, in the child's cgroup" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
