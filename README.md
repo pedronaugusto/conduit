@@ -92,12 +92,15 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
 
 `conduit.Cgroup` is the cgroup a Linux child holds. `cgroup.id()` gives its
-directory identity; `Cgroup.openRecorded(path, id)` holds a cgroup from an
-earlier run only when that identity still matches. `cgroup.remove()` removes
-an empty cgroup, `cgroup.isRecorded()` confirms the held record's identity,
-and `release()` closes the handle and tries to remove an empty directory. On
-systems without
-cgroups these calls have the same surface and answer `null` or no cgroup.
+directory identity. `Cgroup.openRecorded(path, id)` returns a separate
+`Cgroup.Recorded` handle only when the saved inode matches. It holds both the
+cgroup and its parent by descriptor, and copies only the final name into a
+fixed buffer; it allocates nothing. `recorded.remove()` checks the name's
+inode through that parent and removes an empty cgroup with `unlinkat`;
+`recorded.release()` tries removal and closes both descriptors. A replacement
+between the inode check and `unlinkat` can still change the final entry.
+The caller must also compare the boot id saved with the inode. On systems
+without cgroups, `openRecorded` returns `null`.
 
 `conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
 `Term` holds without matching on it. `Term` is `std.process.Child.Term`, not a
@@ -197,7 +200,7 @@ captured session leader's group through audit tokens: no process outside a
 new session can join it. For an ordinary group in an existing session it
 returns `error.Unsupported`, since another process there can join the group.
 `captured.wait(io, timeout_ms)` waits for its process to end without reaping
-it. `cgroup.waitEmpty(io, timeout_ms)` waits for a recorded Linux cgroup to
+it. `recorded.waitEmpty(io, timeout_ms)` waits for a recorded Linux cgroup to
 empty. Both return `true` when done and `false` at the deadline.
 `conduit.endRecorded(io, .{ .pid, .start, .group, .cgroup, .grace_ms })`
 asks a recorded process and its provable descendants to end, waits the grace,
@@ -479,12 +482,14 @@ say the child should not have it.
 **Allocation.** `Child.spawn` and `spawnShell` take an allocator, use it for the
 call only — the argument, environment and search-path arrays that must exist
 before the child does — and retain nothing. `Child.output` allocates the bytes
-it collects and `environ` the map it returns; both say whose they are. POSIX
-`Child.kill` uses the page allocator for its exhaustive descendant snapshot
-and reports `error.OutOfMemory` if that snapshot cannot be made. `Orphans`
-keeps its lists with the allocator it is given until `deinit`, from spawns
-on any thread, so that one must be thread-safe. Everything
-else works in buffers the caller passes, `Expect` included.
+it collects and `environ` the map it returns; both say whose they are.
+Process snapshots for POSIX signalling and `endRecorded` use bounded stack
+buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
+cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
+lists with the allocator it is given until `deinit`, from spawns on any
+thread, so that one must be thread-safe. Every heap allocation made by the
+package uses an allocator the caller passed; other operations use fixed or
+caller supplied buffers, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
 which is one call; `Reaper`, which exists so a wait can be in flight while

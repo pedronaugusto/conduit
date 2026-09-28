@@ -6,9 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- `Cgroup.id`, `Cgroup.openRecorded` and `Cgroup.remove` let a later run hold
-  and remove the same Linux cgroup its earlier run recorded, after checking
-  the directory inode. A record must also carry the boot id.
+- `Cgroup.openRecorded` returns a separate, allocation-free `Cgroup.Recorded`
+  handle. It holds the cgroup and its parent by descriptor, checks the saved
+  inode through that parent, and removes the empty directory with `unlinkat`.
+  A record must also carry the boot id. POSIX process snapshots now use
+  bounded stack storage and report `error.OutOfMemory` when it is exhausted.
 - Bounded waits on every platform now use one clock-based deadline type.
 - `CapturedPid.signalDescendants` checks the captured root again after the
   descendant walk, before signalling, including its audit token on Darwin.

@@ -110,8 +110,9 @@ pub const Reaper = @import("Reaper.zig");
 /// of them ended by `end`, for a program that starts every child through
 /// this package. No task, no timer.
 pub const Orphans = @import("Orphans.zig");
-/// A Linux cgroup held by directory identity, including one recorded by an
-/// earlier run. On other systems the same surface is always empty.
+/// A Linux child's cgroup. `Cgroup.openRecorded` returns the separate
+/// `Cgroup.Recorded` handle for a cgroup saved by an earlier run. On other
+/// systems the handles are empty.
 pub const Cgroup = @import("cgroup.zig").Cgroup;
 /// Windows console input records and bounded waits on a console input handle.
 pub const console = tty.console;

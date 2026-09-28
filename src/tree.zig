@@ -24,10 +24,11 @@
 //! before anyone looked: an orphan belongs to `init`, and nothing relates it
 //! to the child any more.
 //!
-//! POSIX only. The walk allocates enough storage to name the whole tree, and
-//! reports allocation failure rather than silently leaving a suffix of it
-//! alive. A process is captured as a stable kernel identity before the walk
-//! retains it: a pidfd on Linux and an audit token on Darwin. A PID alone is
+//! POSIX only. The walk uses a bounded stack buffer to name the tree, and
+//! reports `error.OutOfMemory` if it cannot hold the whole snapshot rather
+//! than silently leaving a suffix of it alive. A process is captured as a
+//! stable kernel identity before the walk retains it: a pidfd on Linux and
+//! an audit token on Darwin. A PID alone is
 //! never used as a later signal target because it may have been recycled by
 //! then.
 
@@ -69,11 +70,11 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
 fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
     if (guard) |held| if (!held.alive()) return 0;
     if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
-    // The ordinary tree fits here and never reaches the page allocator. What
-    // may grow without a bound still can: exhausting this storage falls back
-    // to pages and reports that failure before a partial pass is sent.
-    var scratch = std.heap.stackFallback(16 * 1024, std.heap.page_allocator);
-    const allocator = scratch.get();
+    // Exhausting this bounded workspace reports OutOfMemory before sending
+    // a partial pass.
+    var storage: [64 * 1024]u8 = undefined;
+    var scratch = std.heap.FixedBufferAllocator.init(&storage);
+    const allocator = scratch.allocator();
 
     var found: std.ArrayList(Process) = .empty;
     defer {
@@ -379,7 +380,7 @@ pub const RecordedOptions = struct {
     start: u64,
     group: ?posix.pid_t = null,
     /// A handle returned by `Cgroup.openRecorded`, borrowed for this call.
-    cgroup: ?*@import("cgroup.zig").Cgroup = null,
+    cgroup: ?*@import("cgroup.zig").Cgroup.Recorded = null,
     grace_ms: u32,
 };
 
@@ -395,7 +396,6 @@ pub const RecordedOptions = struct {
 /// proved and held have all ended; `true` means there was something to end.
 pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
     if (options.cgroup) |contained| {
-        if (!contained.isRecorded()) return error.Unproven;
         const had_members = contained.populated() != .none;
         if (had_members) {
             // Even if the member list cannot be read, the verified cgroup
@@ -424,8 +424,9 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
         return false;
     };
     defer root.deinit();
-    var scratch = std.heap.stackFallback(16 * 1024, std.heap.page_allocator);
-    const allocator = scratch.get();
+    var storage: [64 * 1024]u8 = undefined;
+    var scratch = std.heap.FixedBufferAllocator.init(&storage);
+    const allocator = scratch.allocator();
     var found: std.ArrayList(Process) = .empty;
     defer {
         for (found.items) |*process| process.deinit();
@@ -674,8 +675,9 @@ const DarwinProcess = struct {
         if (getsid(process.pid) != process.pid or getpgid(process.pid) != group or
             (try startTime(process.pid)) != since) return error.Unsupported;
 
-        var scratch = std.heap.stackFallback(8 * 1024, std.heap.page_allocator);
-        const allocator = scratch.get();
+        var storage: [32 * 1024]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&storage);
+        const allocator = scratch.allocator();
         var pids: std.ArrayList(posix.pid_t) = .empty;
         defer pids.deinit(allocator);
         var capacity: usize = 64;
@@ -1283,8 +1285,9 @@ test "the descendants of this process include a child it just started" {
     defer _ = child.killWait(testing.io, 0) catch {};
 
     var found: std.ArrayList(Process) = .empty;
-    var scratch = std.heap.stackFallback(16 * 1024, std.heap.page_allocator);
-    const allocator = scratch.get();
+    var storage: [64 * 1024]u8 = undefined;
+    var scratch = std.heap.FixedBufferAllocator.init(&storage);
+    const allocator = scratch.allocator();
     defer {
         for (found.items) |*process| process.deinit();
         found.deinit(allocator);

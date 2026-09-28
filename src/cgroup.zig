@@ -303,9 +303,7 @@ const LinuxCgroup = struct {
     /// The child's cgroup directory, opened `O_PATH`, or -1 for none.
     dir: posix.fd_t,
     name: Name,
-    /// An opened record owns this copy; a newly made cgroup uses `name`.
-    recorded_path: ?[:0]u8 = null,
-    recorded_id: u64 = 0,
+    pub const Recorded = LinuxRecorded;
 
     pub const none: LinuxCgroup = .{ .dir = -1, .name = .{ .owner = 0, .sequence = 0 } };
 
@@ -317,15 +315,9 @@ const LinuxCgroup = struct {
     pub fn id(cgroup: *const LinuxCgroup) ?u64 {
         if (!cgroup.active()) return null;
         var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(cgroup.dir, "", 0x1000, .{ .INO = true }, &st);
+        const rc = std.os.linux.statx(cgroup.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
         if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
         return st.ino;
-    }
-
-    /// Whether this handle was opened from a verified record and still
-    /// names that directory, even if its old path was replaced.
-    pub fn isRecorded(cgroup: *const LinuxCgroup) bool {
-        return cgroup.recorded_id != 0 and cgroup.id() == cgroup.recorded_id;
     }
 
     /// Open a cgroup recorded by an earlier run only while `path` still
@@ -333,28 +325,8 @@ const LinuxCgroup = struct {
     /// directory for all member operations; a replacement at the same path
     /// can never become their target. The caller must also compare a recorded
     /// boot id, since inode identities are only valid within one boot.
-    pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?LinuxCgroup {
-        if (recorded_id == 0 or path_name.len == 0) return null;
-        const path_z = std.heap.page_allocator.dupeZ(u8, path_name) catch return null;
-        const dir = c.open(path_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
-        if (dir < 0) {
-            std.heap.page_allocator.free(path_z);
-            return null;
-        }
-        const result: LinuxCgroup = .{ .dir = dir, .name = .{ .owner = 0, .sequence = 0 }, .recorded_path = path_z, .recorded_id = recorded_id };
-        if (result.id() != recorded_id) {
-            _ = c.close(dir);
-            std.heap.page_allocator.free(path_z);
-            return null;
-        }
-        const events = c.openat(dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
-        if (events < 0) {
-            _ = c.close(dir);
-            std.heap.page_allocator.free(path_z);
-            return null;
-        }
-        _ = c.close(events);
-        return result;
+    pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?Recorded {
+        return Recorded.open(path_name, recorded_id);
     }
 
     /// A new cgroup for a child about to be started, and the descriptor the
@@ -406,12 +378,6 @@ const LinuxCgroup = struct {
     /// Where the cgroup is, for a report or a test.
     pub fn path(cgroup: *const LinuxCgroup, buffer: []u8) ?[:0]const u8 {
         if (!cgroup.active()) return null;
-        if (cgroup.recorded_path) |recorded| {
-            if (recorded.len >= buffer.len) return null;
-            @memcpy(buffer[0..recorded.len], recorded);
-            buffer[recorded.len] = 0;
-            return buffer[0..recorded.len :0];
-        }
         return cgroup.name.path(buffer);
     }
 
@@ -428,14 +394,154 @@ const LinuxCgroup = struct {
         if (check.id() != cgroup.id()) return false;
         if (c.rmdir(at) != 0) return false;
         _ = c.close(cgroup.dir);
-        if (cgroup.recorded_path) |recorded| std.heap.page_allocator.free(recorded);
         cgroup.* = none;
         return true;
     }
 
+    pub fn kill(cgroup: *const LinuxCgroup) bool {
+        return (MemberOps{ .dir = cgroup.dir }).kill();
+    }
+
+    pub fn signalMembers(cgroup: *const LinuxCgroup, sig: posix.SIG, leader: posix.pid_t, in_group: ?posix.pid_t) std.mem.Allocator.Error!?usize {
+        return (MemberOps{ .dir = cgroup.dir }).signalMembers(sig, leader, in_group);
+    }
+
+    pub fn populated(cgroup: *const LinuxCgroup) Populated {
+        return (MemberOps{ .dir = cgroup.dir }).populated();
+    }
+
+    pub fn waitEmpty(cgroup: *const LinuxCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        return (MemberOps{ .dir = cgroup.dir }).waitEmpty(io, timeout_ms);
+    }
+
+    /// Lets go of the cgroup and removes it, or leaves it to be removed once
+    /// what is in it has ended. Idempotent.
+    pub fn release(cgroup: *LinuxCgroup) void {
+        if (!cgroup.active()) return;
+        if (cgroup.remove()) return;
+        _ = c.close(cgroup.dir);
+        const name = cgroup.name;
+        cgroup.* = none;
+        if (!name.remove()) Leftovers.add(name);
+        Leftovers.sweep();
+    }
+};
+
+/// A cgroup found from a saved path and inode, with its parent held open.
+/// The caller must check the saved boot id before using an inode from a record.
+const LinuxRecorded = struct {
+    parent: posix.fd_t,
+    dir: posix.fd_t,
+    name: [std.fs.max_name_bytes + 1]u8,
+    name_len: usize,
+    recorded_id: u64,
+
+    fn open(path_name: []const u8, recorded_id: u64) ?LinuxRecorded {
+        if (recorded_id == 0 or path_name.len < 2 or path_name.len >= std.fs.max_path_bytes or path_name[0] != '/' or
+            std.mem.indexOfScalar(u8, path_name, 0) != null) return null;
+        const slash = std.mem.lastIndexOfScalar(u8, path_name, '/') orelse return null;
+        const base = path_name[slash + 1 ..];
+        if (base.len == 0 or base.len > std.fs.max_name_bytes or
+            std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return null;
+
+        var parent_name: [std.fs.max_path_bytes]u8 = undefined;
+        const parent_len = if (slash == 0) 1 else slash;
+        @memcpy(parent_name[0..parent_len], path_name[0..parent_len]);
+        parent_name[parent_len] = 0;
+        const parent = c.open(parent_name[0..parent_len :0], .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
+        if (parent < 0) return null;
+        var keep = false;
+        defer {
+            if (!keep) _ = c.close(parent);
+        }
+
+        var result: LinuxRecorded = .{ .parent = parent, .dir = -1, .name = undefined, .name_len = base.len, .recorded_id = recorded_id };
+        @memcpy(result.name[0..base.len], base);
+        result.name[base.len] = 0;
+        result.dir = c.openat(parent, result.name[0..base.len :0], .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .NOFOLLOW = true, .CLOEXEC = true });
+        if (result.dir < 0) return null;
+        defer {
+            if (!keep) _ = c.close(result.dir);
+        }
+        if (result.id() != recorded_id or !result.namedIdentityMatches()) return null;
+        const events = c.openat(result.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+        if (events < 0) return null;
+        _ = c.close(events);
+        keep = true;
+        return result;
+    }
+
+    pub fn active(recorded: *const LinuxRecorded) bool {
+        return recorded.dir >= 0;
+    }
+
+    pub fn id(recorded: *const LinuxRecorded) ?u64 {
+        if (!recorded.active()) return null;
+        var st: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(recorded.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
+        if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
+        return st.ino;
+    }
+
+    /// Whether the name in the held parent is still the recorded
+    /// directory: `statx` on the name, not following a link.
+    fn namedIdentityMatches(recorded: *const LinuxRecorded) bool {
+        var st: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(recorded.parent, recorded.name[0..recorded.name_len :0], std.os.linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &st);
+        return std.os.linux.errno(rc) == .SUCCESS and st.ino == recorded.recorded_id;
+    }
+
+    /// Remove the empty directory through the held parent only if its name
+    /// still has the recorded inode. A rename or replacement between this
+    /// check and unlinkat can still change the final entry; Linux has no
+    /// conditional unlinkat that compares the inode atomically.
+    pub fn remove(recorded: *LinuxRecorded) bool {
+        if (!recorded.active()) return true;
+        if (!recorded.namedIdentityMatches()) return false;
+        if (c.unlinkat(recorded.parent, recorded.name[0..recorded.name_len :0], c.AT.REMOVEDIR) != 0) return false;
+        _ = c.close(recorded.dir);
+        _ = c.close(recorded.parent);
+        recorded.dir = -1;
+        recorded.parent = -1;
+        return true;
+    }
+
+    pub fn release(recorded: *LinuxRecorded) void {
+        if (!recorded.active()) return;
+        if (recorded.remove()) return;
+        _ = c.close(recorded.dir);
+        _ = c.close(recorded.parent);
+        recorded.dir = -1;
+        recorded.parent = -1;
+    }
+
+    pub fn kill(recorded: *const LinuxRecorded) bool {
+        return (MemberOps{ .dir = recorded.dir }).kill();
+    }
+
+    pub fn signalMembers(recorded: *const LinuxRecorded, sig: posix.SIG, leader: posix.pid_t, in_group: ?posix.pid_t) std.mem.Allocator.Error!?usize {
+        return (MemberOps{ .dir = recorded.dir }).signalMembers(sig, leader, in_group);
+    }
+
+    pub fn populated(recorded: *const LinuxRecorded) Populated {
+        return (MemberOps{ .dir = recorded.dir }).populated();
+    }
+
+    pub fn waitEmpty(recorded: *const LinuxRecorded, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        return (MemberOps{ .dir = recorded.dir }).waitEmpty(io, timeout_ms);
+    }
+};
+
+const MemberOps = struct {
+    dir: posix.fd_t,
+
+    fn active(ops: *const MemberOps) bool {
+        return ops.dir >= 0;
+    }
+
     /// Ends everything in the cgroup, the child with it: `cgroup.kill`.
     /// `false` if the kernel refused, and the caller has the walk.
-    pub fn kill(cgroup: *const LinuxCgroup) bool {
+    pub fn kill(cgroup: *const MemberOps) bool {
         const fd = c.openat(cgroup.dir, "cgroup.kill", .{ .ACCMODE = .WRONLY, .CLOEXEC = true });
         if (fd < 0) return false;
         defer _ = c.close(fd);
@@ -448,13 +554,14 @@ const LinuxCgroup = struct {
     /// many it reached, or `null` when the members could not be read and the
     /// caller has the walk.
     pub fn signalMembers(
-        cgroup: *const LinuxCgroup,
+        cgroup: *const MemberOps,
         sig: posix.SIG,
         leader: posix.pid_t,
         in_group: ?posix.pid_t,
     ) std.mem.Allocator.Error!?usize {
-        var scratch = std.heap.stackFallback(8 * 1024, std.heap.page_allocator);
-        const allocator = scratch.get();
+        var storage: [64 * 1024]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&storage);
+        const allocator = scratch.allocator();
 
         var named: std.ArrayList(posix.pid_t) = .empty;
         defer named.deinit(allocator);
@@ -500,7 +607,7 @@ const LinuxCgroup = struct {
 
     /// `cgroup.procs`, every pid in it. `false` if it cannot be read.
     fn readMembers(
-        cgroup: *const LinuxCgroup,
+        cgroup: *const MemberOps,
         into: *std.ArrayList(posix.pid_t),
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!bool {
@@ -531,7 +638,7 @@ const LinuxCgroup = struct {
     /// Whether anything is still running in the cgroup, from
     /// `cgroup.events`. A process that has ended and waits to be reaped is
     /// not.
-    pub fn populated(cgroup: *const LinuxCgroup) Populated {
+    pub fn populated(cgroup: *const MemberOps) Populated {
         const fd = c.openat(cgroup.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (fd < 0) return .unknown;
         defer _ = c.close(fd);
@@ -550,7 +657,7 @@ const LinuxCgroup = struct {
     /// wakes a poll when `populated` changes. If it cannot be opened or
     /// polled, only then use bounded 1–4 ms clock-based checks. True means
     /// empty; false means the deadline passed or the state could not be read.
-    pub fn waitEmpty(cgroup: *const LinuxCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+    pub fn waitEmpty(cgroup: *const MemberOps, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
         if (!cgroup.active()) return true;
         const deadline: Deadline = .in(io, timeout_ms);
         const events = c.openat(cgroup.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
@@ -581,21 +688,6 @@ const LinuxCgroup = struct {
             try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
             interval_ms = @min(interval_ms * 2, 4);
         }
-    }
-
-    /// Lets go of the cgroup and removes it, or leaves it to be removed once
-    /// what is in it has ended. Idempotent.
-    pub fn release(cgroup: *LinuxCgroup) void {
-        if (!cgroup.active()) return;
-        if (cgroup.remove()) return;
-        _ = c.close(cgroup.dir);
-        const name = cgroup.name;
-        const recorded = cgroup.recorded_path;
-        cgroup.* = none;
-        if (recorded) |path_name| {
-            std.heap.page_allocator.free(path_name);
-        } else if (!name.remove()) Leftovers.add(name);
-        Leftovers.sweep();
     }
 };
 
@@ -630,6 +722,7 @@ pub fn join(procs: posix.fd_t) bool {
 }
 
 const NoCgroup = struct {
+    pub const Recorded = NoRecorded;
     pub const none: NoCgroup = .{};
 
     pub fn active(cgroup: *const NoCgroup) bool {
@@ -642,12 +735,7 @@ const NoCgroup = struct {
         return null;
     }
 
-    pub fn isRecorded(cgroup: *const NoCgroup) bool {
-        _ = cgroup;
-        return false;
-    }
-
-    pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?NoCgroup {
+    pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?Recorded {
         _ = path_name;
         _ = recorded_id;
         return null;
@@ -700,6 +788,31 @@ const NoCgroup = struct {
 
     pub fn release(cgroup: *NoCgroup) void {
         _ = cgroup;
+    }
+};
+
+const NoRecorded = struct {
+    pub fn active(_: *const NoRecorded) bool {
+        return false;
+    }
+    pub fn id(_: *const NoRecorded) ?u64 {
+        return null;
+    }
+    pub fn remove(_: *NoRecorded) bool {
+        return true;
+    }
+    pub fn release(_: *NoRecorded) void {}
+    pub fn kill(_: *const NoRecorded) bool {
+        return false;
+    }
+    pub fn signalMembers(_: *const NoRecorded, _: posix.SIG, _: posix.pid_t, _: ?posix.pid_t) std.mem.Allocator.Error!?usize {
+        return null;
+    }
+    pub fn populated(_: *const NoRecorded) Populated {
+        return .unknown;
+    }
+    pub fn waitEmpty(_: *const NoRecorded, _: std.Io, _: u32) std.Io.Cancelable!bool {
+        return true;
     }
 };
 

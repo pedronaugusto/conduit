@@ -1357,10 +1357,32 @@ test "a recorded cgroup opens only at its original directory identity and remove
     var recorded = cgroup.Cgroup.openRecorded(path, identity).?;
     defer recorded.release();
     try testing.expectEqual(identity, recorded.id().?);
+    try testing.expectEqual(cgroup.Populated.others, recorded.populated());
     try testing.expect(!recorded.remove());
+
     _ = try child.killWait(io, 0);
     try testing.expect(recorded.remove());
     try testing.expect(cgroup.Cgroup.openRecorded(path, identity) == null);
+}
+
+test "a recorded cgroup whose name now holds another is not removed through it" {
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const path = child.cgroup.path(&where).?;
+    var recorded = cgroup.Cgroup.openRecorded(path, child.cgroup.id().?).?;
+    defer recorded.release();
+
+    // The recorded cgroup empties and goes, and a new empty one takes its
+    // name: only the inode check stands between the handle and removing it.
+    _ = try child.killWait(io, 0);
+    try testing.expectEqual(@as(c_int, 0), c.rmdir(path));
+    try testing.expectEqual(@as(c_int, 0), c.mkdir(path, 0o755));
+    defer _ = c.rmdir(path);
+    try testing.expect(!recorded.remove());
+    try testing.expect(cgroupExists(path));
 }
 
 test "a recorded cgroup waits on population changes" {
