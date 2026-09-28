@@ -26,6 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `conduit.signalDescendants` and `conduit.signalGroupSince` on a bare pid are
+  gone: a pid can be reused during the walk. `CapturedPid.signalDescendants`,
+  `CapturedPid.signalGroupSince` and `endRecorded` reach a recorded process
+  through a held identity; a live child is ended with `Child.kill`.
+
 - `Reaper.init` takes `Reaper.Options`: `.init(&child, .{})` is the
   behaviour it had.
 

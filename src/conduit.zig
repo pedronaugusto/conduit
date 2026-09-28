@@ -235,25 +235,6 @@ pub const endRecorded = if (is_windows)
 else
     @import("tree.zig").endRecorded;
 
-/// Sends a signal to every descendant of a process, deepest first, leaving
-/// alone those in `in_group` (the group the caller signals on its own), and
-/// says how many it reached: what `Child.kill` does beside the group, for a
-/// process this program still holds unreaped. For a process recorded by an
-/// earlier run, use `CapturedPid.signalDescendants`; a bare pid can be reused
-/// during this walk. Linux and Darwin name the descendants; elsewhere there
-/// are none to name and the group is the whole reach. POSIX only.
-pub const signalDescendants = if (is_windows)
-    @compileError("signalDescendants is POSIX-only")
-else
-    @import("tree.zig").signalDescendants;
-
-/// End the live members of a crashed Linux child's process group even when
-/// its leader is gone. Each member is checked and signalled through a pidfd.
-pub const signalGroupSince = if (is_windows)
-    @compileError("signalGroupSince is POSIX-only")
-else
-    @import("tree.zig").signalGroupSince;
-
 test {
     _ = Pty;
     _ = Child;
