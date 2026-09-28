@@ -12,6 +12,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Bounded waits on every platform now use one clock-based deadline type.
 - `CapturedPid.signalDescendants` checks the captured root again after the
   descendant walk, before signalling, including its audit token on Darwin.
+- `CapturedPid.signalGroupSince` anchors a Linux group reach to its captured
+  leader. Darwin reaches a captured session leader's group through audit
+  tokens; an ordinary group remains `error.Unsupported` because another
+  process in that session can join it.
 - `conduit.console` exposes typed Windows console input records and waits,
   peeks and reads through a small API.
 - Tests that wait for process state now compare a clock deadline rather than

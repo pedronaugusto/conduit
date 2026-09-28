@@ -305,7 +305,18 @@ pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?Captured
 /// children it left. A member is captured by pidfd before its group and
 /// start time are checked, and is signalled through that same descriptor.
 /// The leader is left to the caller, which may hold its own identity.
+/// On Darwin this by-number call is `error.Unsupported`:
+/// `proc_listpgrppids` identifies current members, and audit tokens hold
+/// each member's identity, but an ordinary group's membership and a later
+/// start time do not prove descent. POSIX permits another process in the
+/// session to join the group, and Darwin exposes no parent history after
+/// reparenting. `CapturedPid.signalGroupSince` handles the narrower case
+/// where the captured leader created the session itself.
 pub fn signalGroupSince(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
+    return signalGroupSinceImpl(group, leader, since, sig);
+}
+
+fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
     if (comptime builtin.os.tag != .linux) return error.Unsupported;
     if (group <= 1 or since == 0) return 0;
     const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
@@ -413,6 +424,12 @@ const LinuxProcess = struct {
         return signalDescendantsGuarded(process.pid, process, sig, in_group);
     }
 
+    /// Reach a recorded Linux group only while this is still its leader.
+    pub fn signalGroupSince(process: *const LinuxProcess, group: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
+        if (process.pid != group or !process.alive() or (try startTime(process.pid)) != since) return 0;
+        return signalGroupSinceImpl(group, process.pid, since, sig);
+    }
+
     /// Whether the process has not ended. A pidfd becomes readable when its
     /// process exits, reaped or not.
     pub fn alive(process: *const LinuxProcess) bool {
@@ -465,6 +482,55 @@ const DarwinProcess = struct {
 
     pub fn signalDescendants(process: *const DarwinProcess, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
         return signalDescendantsGuarded(process.pid, process, sig, in_group);
+    }
+
+    /// A session created by this leader cannot be joined from outside it:
+    /// every later member is a descendant, even if its parent has gone.
+    /// An ordinary group in an older session can be joined by an unrelated
+    /// process there, so that group remains `error.Unsupported`.
+    pub fn signalGroupSince(process: *const DarwinProcess, group: posix.pid_t, since: u64, sig: posix.SIG) error{ Unsupported, OutOfMemory }!usize {
+        if (group <= 1 or process.pid != group or !process.alive()) return 0;
+        if (getsid(process.pid) != process.pid or getpgid(process.pid) != group or
+            (try startTime(process.pid)) != since) return error.Unsupported;
+
+        var scratch = std.heap.stackFallback(8 * 1024, std.heap.page_allocator);
+        const allocator = scratch.get();
+        var pids: std.ArrayList(posix.pid_t) = .empty;
+        defer pids.deinit(allocator);
+        var capacity: usize = 64;
+        while (true) {
+            try pids.resize(allocator, capacity);
+            const count = proc_listpgrppids(group, pids.items.ptr, @intCast(capacity * @sizeOf(posix.pid_t)));
+            if (count < 0) return error.Unsupported;
+            if (@as(usize, @intCast(count)) < capacity) {
+                pids.shrinkRetainingCapacity(@intCast(count));
+                break;
+            }
+            capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
+            if (capacity > @as(usize, std.math.maxInt(c_int)) / @sizeOf(posix.pid_t)) return error.OutOfMemory;
+        }
+
+        var held: std.ArrayList(DarwinProcess) = .empty;
+        defer held.deinit(allocator);
+        for (pids.items) |pid| {
+            if (pid <= 1 or pid == process.pid or pid == c.getpid()) continue;
+            const member = DarwinProcess.capture(pid) orelse continue;
+            var info: ProcBsdInfo = undefined;
+            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo) or
+                info.pgid != @as(u32, @intCast(group)) or
+                info.start_tvsec *% std.time.us_per_s +% info.start_tvusec < since or
+                getsid(pid) != process.pid or !member.alive()) continue;
+            try held.append(allocator, member);
+        }
+        // The group and session may be re-used only after the original one
+        // has gone. This audit-token check is after enumeration and before
+        // the first signal; every member is also signalled through its token.
+        if (!process.alive()) return 0;
+        var reached: usize = 0;
+        for (held.items) |*member| {
+            if (member.signal(sig)) reached += 1;
+        }
+        return reached;
     }
 
     /// Whether the process has not ended: the pid still has the version the
@@ -525,6 +591,14 @@ const NoProcess = struct {
         _ = sig;
         _ = in_group;
         return 0;
+    }
+
+    pub fn signalGroupSince(process: *const NoProcess, group: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
+        _ = process;
+        _ = group;
+        _ = since;
+        _ = sig;
+        return error.Unsupported;
     }
 
     pub fn alive(process: *const NoProcess) bool {
@@ -927,6 +1001,7 @@ fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
 /// Not declared in `std.c`, and the one question that tells a descendant which
 /// `Child.kill` is about to reach anyway from one that has left the group.
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
+extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
 extern "c" fn pause() c_int;
 
 test "a descendant that escaped the process group is still killed" {
@@ -1156,6 +1231,9 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     defer captured.deinit();
     try testing.expectEqual(child.id, captured.pid);
     try testing.expect(captured.alive());
+    if (builtin.os.tag == .macos) {
+        try testing.expectError(error.Unsupported, captured.signalGroupSince(child.id, started, .CONT));
+    }
     // A signal the shell's default action ignores, sent through the capture.
     try testing.expect(captured.signal(.CONT));
     child.stdin.?.close(testing.io);
@@ -1182,9 +1260,12 @@ test "a leaderless Linux group keeps the child its leader started" {
     defer _ = leader.killWait(testing.io, 0) catch {};
     const group = leader.pgid.?;
     const since = (try startTime(leader.id)).?;
+    var captured = (try captureStarted(leader.id, since)).?;
+    defer captured.deinit();
     var buffer: [32]u8 = undefined;
     var output = leader.stdout.?.reader(testing.io, &buffer);
     const member = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
+    try testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(group, since, .CONT));
     errdefer {
         if (members(group, leader.id) == .others) _ = c.kill(-group, .KILL);
     }
@@ -1197,4 +1278,45 @@ test "a leaderless Linux group keeps the child its leader started" {
         if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
         try testing.io.sleep(.fromMilliseconds(20), .awake);
     }
+}
+
+test "a captured Darwin session leader proves its group's member" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    var report: [2]posix.fd_t = undefined;
+    if (c.pipe(&report) != 0) return error.SkipZigTest;
+    const leader = c.fork();
+    if (leader < 0) {
+        _ = c.close(report[0]);
+        _ = c.close(report[1]);
+        return error.SkipZigTest;
+    }
+    if (leader == 0) {
+        _ = c.close(report[0]);
+        if (c.setsid() < 0) c._exit(120);
+        const member = c.fork();
+        if (member < 0) c._exit(121);
+        if (member == 0) {
+            _ = c.close(report[1]);
+            while (true) _ = pause();
+        }
+        _ = c.write(report[1], std.mem.asBytes(&member), @sizeOf(posix.pid_t));
+        _ = c.close(report[1]);
+        while (true) _ = pause();
+    }
+    _ = c.close(report[1]);
+    defer _ = c.close(report[0]);
+    defer {
+        _ = c.kill(leader, .KILL);
+        var status: c_int = undefined;
+        _ = c.waitpid(leader, &status, 0);
+    }
+    var member: posix.pid_t = undefined;
+    if (c.read(report[0], std.mem.asBytes(&member), @sizeOf(posix.pid_t)) != @sizeOf(posix.pid_t))
+        return error.TestChildSaidNothing;
+    defer _ = c.kill(member, .KILL);
+    const since = (try startTime(leader)).?;
+    var captured = (try captureStarted(leader, since)).?;
+    defer captured.deinit();
+    try std.testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(leader, since, .CONT));
+    try std.testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(leader, since, .KILL));
 }

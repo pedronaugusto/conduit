@@ -189,6 +189,11 @@ or with it in one lookup (Darwin), so the signal it sends reaches that
 process or nothing; it is `null` for a start time that does not match.
 `captured.signalDescendants(sig, in_group)` walks its descendants only while
 the captured root is still the same process, including after the walk.
+`captured.signalGroupSince(group, start, sig)` reaches a recorded Linux
+leader's group while that leader is still held. On Darwin it reaches a
+captured session leader's group through audit tokens: no process outside a
+new session can join it. For an ordinary group in an existing session it
+returns `error.Unsupported`, since another process there can join the group.
 
 `conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
 find `name` for a child given `environ`, by the same rules, or `null`: for a
