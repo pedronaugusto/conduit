@@ -1331,6 +1331,24 @@ fn cgroupExists(path: [:0]const u8) bool {
     return c.access(path, 0) == 0;
 }
 
+test "a recorded cgroup opens only at its original directory identity and removes when empty" {
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const path = child.cgroup.path(&where).?;
+    const identity = child.cgroup.id().?;
+    try testing.expect(cgroup.Cgroup.openRecorded(path, identity +% 1) == null);
+    var recorded = cgroup.Cgroup.openRecorded(path, identity).?;
+    defer recorded.release();
+    try testing.expectEqual(identity, recorded.id().?);
+    try testing.expect(!recorded.remove());
+    _ = try child.killWait(io, 0);
+    try testing.expect(recorded.remove());
+    try testing.expect(cgroup.Cgroup.openRecorded(path, identity) == null);
+}
+
 test "a grandchild that double-forks and setsid()s away is still ended with the tree, in the child's cgroup" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);

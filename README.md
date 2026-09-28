@@ -91,6 +91,12 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
 
+`conduit.Cgroup` is the cgroup a Linux child holds. `cgroup.id()` gives its
+directory identity; `Cgroup.openRecorded(path, id)` holds a cgroup from an
+earlier run only when that identity still matches. `cgroup.remove()` removes
+an empty cgroup, and `release()` closes the handle. On systems without
+cgroups these calls have the same surface and answer `null` or no cgroup.
+
 `conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
 `Term` holds without matching on it. `Term` is `std.process.Child.Term`, not a
 parallel type of this package's own. `signalName` is `null` on Windows, where a

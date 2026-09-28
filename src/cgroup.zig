@@ -302,11 +302,51 @@ const LinuxCgroup = struct {
     /// The child's cgroup directory, opened `O_PATH`, or -1 for none.
     dir: posix.fd_t,
     name: Name,
+    /// An opened record owns this copy; a newly made cgroup uses `name`.
+    recorded_path: ?[:0]u8 = null,
 
     pub const none: LinuxCgroup = .{ .dir = -1, .name = .{ .owner = 0, .sequence = 0 } };
 
     pub fn active(cgroup: *const LinuxCgroup) bool {
         return cgroup.dir >= 0;
+    }
+
+    /// The directory inode that identifies this cgroup for this boot.
+    pub fn id(cgroup: *const LinuxCgroup) ?u64 {
+        if (!cgroup.active()) return null;
+        var st: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(cgroup.dir, "", 0x1000, .{ .INO = true }, &st);
+        if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
+        return st.ino;
+    }
+
+    /// Open a cgroup recorded by an earlier run only while `path` still
+    /// names the cgroup with `recorded_id`. The returned handle holds that
+    /// directory for all member operations; a replacement at the same path
+    /// can never become their target. The caller must also compare a recorded
+    /// boot id, since inode identities are only valid within one boot.
+    pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?LinuxCgroup {
+        if (recorded_id == 0 or path_name.len == 0) return null;
+        const path_z = std.heap.page_allocator.dupeZ(u8, path_name) catch return null;
+        const dir = c.open(path_z, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
+        if (dir < 0) {
+            std.heap.page_allocator.free(path_z);
+            return null;
+        }
+        var result: LinuxCgroup = .{ .dir = dir, .name = .{ .owner = 0, .sequence = 0 }, .recorded_path = path_z };
+        if (result.id() != recorded_id) {
+            _ = c.close(dir);
+            std.heap.page_allocator.free(path_z);
+            return null;
+        }
+        const events = c.openat(dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+        if (events < 0) {
+            _ = c.close(dir);
+            std.heap.page_allocator.free(path_z);
+            return null;
+        }
+        _ = c.close(events);
+        return result;
     }
 
     /// A new cgroup for a child about to be started, and the descriptor the
@@ -358,7 +398,31 @@ const LinuxCgroup = struct {
     /// Where the cgroup is, for a report or a test.
     pub fn path(cgroup: *const LinuxCgroup, buffer: []u8) ?[:0]const u8 {
         if (!cgroup.active()) return null;
+        if (cgroup.recorded_path) |recorded| {
+            if (recorded.len >= buffer.len) return null;
+            @memcpy(buffer[0..recorded.len], recorded);
+            buffer[recorded.len] = 0;
+            return buffer[0..recorded.len :0];
+        }
         return cgroup.name.path(buffer);
+    }
+
+    /// Remove an empty cgroup, refusing a path that now names another one.
+    /// Returns false while it is populated or the path cannot be verified.
+    pub fn remove(cgroup: *LinuxCgroup) bool {
+        if (!cgroup.active()) return true;
+        var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+        const at = cgroup.path(&buffer) orelse return false;
+        const current = c.open(at, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
+        if (current < 0) return false;
+        defer _ = c.close(current);
+        var check: LinuxCgroup = .{ .dir = current, .name = cgroup.name };
+        if (check.id() != cgroup.id()) return false;
+        if (c.rmdir(at) != 0) return false;
+        _ = c.close(cgroup.dir);
+        if (cgroup.recorded_path) |recorded| std.heap.page_allocator.free(recorded);
+        cgroup.* = none;
+        return true;
     }
 
     /// Ends everything in the cgroup, the child with it: `cgroup.kill`.
@@ -478,10 +542,14 @@ const LinuxCgroup = struct {
     /// what is in it has ended. Idempotent.
     pub fn release(cgroup: *LinuxCgroup) void {
         if (!cgroup.active()) return;
+        if (cgroup.remove()) return;
         _ = c.close(cgroup.dir);
         const name = cgroup.name;
+        const recorded = cgroup.recorded_path;
         cgroup.* = none;
-        if (!name.remove()) Leftovers.add(name);
+        if (recorded) |path_name| {
+            std.heap.page_allocator.free(path_name);
+        } else if (!name.remove()) Leftovers.add(name);
         Leftovers.sweep();
     }
 };
@@ -522,6 +590,22 @@ const NoCgroup = struct {
     pub fn active(cgroup: *const NoCgroup) bool {
         _ = cgroup;
         return false;
+    }
+
+    pub fn id(cgroup: *const NoCgroup) ?u64 {
+        _ = cgroup;
+        return null;
+    }
+
+    pub fn openRecorded(path_name: []const u8, recorded_id: u64) ?NoCgroup {
+        _ = path_name;
+        _ = recorded_id;
+        return null;
+    }
+
+    pub fn remove(cgroup: *NoCgroup) bool {
+        _ = cgroup;
+        return true;
     }
 
     pub fn prepare() ?Pending {

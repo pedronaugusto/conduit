@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Cgroup.id`, `Cgroup.openRecorded` and `Cgroup.remove` let a later run hold
+  and remove the same Linux cgroup its earlier run recorded, after checking
+  the directory inode. A record must also carry the boot id.
+
 ### Breaking
 
 - `Reaper.init` takes `Reaper.Options`: `.init(&child, .{})` is the

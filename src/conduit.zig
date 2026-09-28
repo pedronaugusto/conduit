@@ -110,6 +110,9 @@ pub const Reaper = @import("Reaper.zig");
 /// of them ended by `end`, for a program that starts every child through
 /// this package. No task, no timer.
 pub const Orphans = @import("Orphans.zig");
+/// A Linux cgroup held by directory identity, including one recorded by an
+/// earlier run. On other systems the same surface is always empty.
+pub const Cgroup = @import("cgroup.zig").Cgroup;
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master
 /// and a pair of files.
 pub const Proxy = @import("Proxy.zig");
