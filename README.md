@@ -208,7 +208,10 @@ a system call. The `Child` must outlive it, it must not move once started, and
 a wait error is final and returned by every later `exit()`.
 
 `Options.end_tree` ends what the child leaves running when it ends by itself,
-before it is reaped. On POSIX, for a detached child: what is left in its
+before it is reaped. On Linux, for a child in a cgroup of its own (below),
+detached or not: what is still running in the cgroup is sent `SIGTERM`, given
+`tree_grace_ms`, then ended with `cgroup.kill`, wherever its group and session
+went. On POSIX otherwise, for a detached child: what is left in its
 process group is sent `SIGTERM`, given `tree_grace_ms`, then `SIGKILL` — while
 the ended child, not yet reaped, still holds the group's id, so the signal
 cannot reach a group that has been given the same number since. On Windows the
@@ -307,17 +310,45 @@ A container the system keeps can also be asked about, which is `waitTree`: the
 job reports to a completion port from before the child is assigned to it, and
 the wait ends when the job says it holds nothing. So a program can watch the
 whole tree go rather than only the child — and it has to ask before `deinit`,
-which is what closes the job and the port. POSIX has nothing to ask. A process
-group is an address to send signals to and the system accounts nothing to it,
-and the walk `kill` uses goes down from the child, where a grandchild whose
-parent has exited belongs to `init` and is related to the child by nothing that
-can be looked up; a walk that named nothing would mean "ended" and "orphaned"
-in the same breath. `waitTree` is a compile error there, with a message that
-says so.
+which is what closes the job and the port. POSIX, for a child with no cgroup
+of its own (below), has nothing to ask. A process group is an address to send
+signals to and the system accounts nothing to it, and the walk `kill` uses goes
+down from the child, where a grandchild whose parent has exited belongs to
+`init` and is related to the child by nothing that can be looked up; a walk
+that named nothing would mean "ended" and "orphaned" in the same breath. `waitTree` is a compile error there, with a message that
+says so, and on Linux too: a child's cgroup could answer it, and is not yet
+asked.
 
-POSIX has no container for a tree, so `kill` reaches three things: the child,
-the child's process group when `detach` made one, and every descendant the
-system will name — one `/proc` process-table pass on Linux,
+**On Linux a child gets a cgroup of its own, where the system allows one.**
+A cgroup v2 is a set the kernel keeps: a process is born into its parent's
+and stays there whatever it does with its group, its session or its parent.
+So where this process may make a cgroup below its own — a subtree delegated to
+it, as systemd does for a user's session manager and for `Delegate=yes` units,
+or a container with a writable cgroup mount — `spawn` makes one per child and
+the fork child joins it before it does anything else, so nothing the child
+ever starts is outside it. `kill(.kill)` is then one write to `cgroup.kill`
+(Linux 5.14), which ends everything in it and is safe against a fork while it
+is being delivered; `.terminate` and `.interrupt` go to each member through a
+pidfd, the member confirmed still in the cgroup after the pidfd was opened. A
+grandchild that forked twice and called `setsid` is reached like any other.
+Whether this process may is found out at the first spawn, from
+`/proc/self/cgroup`, `/proc/self/mountinfo` and the first `mkdir`, never
+assumed; a refusal (a read-only cgroup mount, as in a default container; a
+cgroup owned by root, as in an SSH session; a cgroup v1 system; a kernel
+before 5.14) is remembered, and every child is started as before and reached
+as below. What a caller may observe: `Child.cgroup` says which a child has; a
+contained spawn always takes the fork, never `posix_spawn`, since joining a
+cgroup is a write and there is no file action for one; this process holds
+one more descriptor per child, and makes and removes one directory per child
+under its own cgroup, named `conduit-<pid>-<n>`; `deinit` removes it, and
+one whose processes outlive the child is left to them and removed by a later
+spawn or `deinit` once they have ended. A descendant that moves itself to
+another cgroup it may write to — asks systemd for a scope of its own — has
+left the reach.
+
+Otherwise POSIX has no container for a tree, so `kill` reaches three things:
+the child, the child's process group when `detach` made one, and every
+descendant the system will name — one `/proc` process-table pass on Linux,
 `proc_listchildpids` on Darwin, and on the BSDs and illumos neither, where the
 process group is the whole of the reach. Descendants are signalled deepest
 first and before the child, because a process signalled before the ones below
@@ -352,7 +383,8 @@ fork — a pseudo-terminal, which needs `setsid` and an ioctl; `credentials` and
 `resource_limits`, which a process sets on itself; `cwd`, `Stream.close`, a
 caller's file at descriptor 0, 1 or 2, and `fd_policy = .close_all`. The fast
 path runs on Linux and macOS, which are the systems the suite runs on; the BSDs
-number the attribute flags differently and keep the fork. `zig build test
+number the attribute flags differently and keep the fork. A child put in a
+cgroup of its own on Linux is forked too (above). `zig build test
 -Dfork-spawn` runs the whole suite with it turned off.
 
 **A spawn that cannot run the program is an error**, not a child that exits
@@ -402,7 +434,7 @@ the `Reaper` exists for.
 
 | | Mechanism | Suite |
 |---|---|---|
-| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve` | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
+| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 per child where one may be made | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
 | Linux (musl) | the same | Alpine, in CI and with `ci/linux.sh --musl` |
 | macOS | the same | `macos-latest` |
 | Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |
@@ -444,7 +476,8 @@ zig build test --fuzz            # the three properties, under the fuzzer
 zig build unit -Dthread-sanitizer   # the suite under ThreadSanitizer
 zig build examples               # the examples alone
 zig fmt --check src examples build.zig
-ci/linux.sh --both               # the suite on glibc and musl Linux, in Docker
+ci/linux.sh --both               # the suite on glibc and musl Linux, in Docker,
+                                 # then once more with a writable cgroup
 ```
 
 Most of the suite starts a real child process and reaps it, and CI runs it on

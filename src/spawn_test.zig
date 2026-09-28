@@ -29,6 +29,7 @@ const Pty = conduit.Pty;
 const handles = @import("handles.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
 const tree = if (is_windows) struct {} else @import("tree.zig");
+const cgroup = if (is_windows) struct {} else @import("cgroup.zig");
 const trace = @import("trace.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
 
@@ -1271,6 +1272,11 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     // one of a child with no group of its own (through `posix_spawn`, unless
     // the build says always fork); on a pair, one that job control has put
     // in a group of its own (through the fork).
+    //
+    // About the walk, so not in a cgroup, which would reach the grandchild
+    // with no walk at all.
+    cgroup.testing_hook.off = true;
+    defer cgroup.testing_hook.off = false;
     for ([_]bool{ false, true }) |on_pty| {
         var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
         defer pty.close(io);
@@ -1314,6 +1320,204 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
         if (tree.Forks.supported) try testing.expectEqual(@as(?bool, false), ran_before_watch);
     }
 }
+
+//======================================================================
+// A cgroup of the child's own (Linux, where one may be made).
+//======================================================================
+
+/// A shell line that starts a grandchild the classic way a daemon leaves:
+/// a subshell starts it and exits, so it is orphaned, and it calls `setsid`,
+/// so it is in a session and a group of its own. The only thing it still
+/// shares with the child is what it was born into. It prints its pid.
+const orphan_in_own_session = "(setsid sleep 100 & printf 'pid %d.' \"$!\")";
+
+/// The `setsid` program, or `null` where the system has none.
+fn setsidProgram() ?[]const u8 {
+    for ([_][]const u8{ "/usr/bin/setsid", "/bin/setsid" }) |path| {
+        std.Io.Dir.accessAbsolute(io, path, .{}) catch continue;
+        return path;
+    }
+    return null;
+}
+
+/// Whether a child started here now is put in a cgroup of its own. Asked of a
+/// child that leaves nothing behind, so a test can skip before it starts one
+/// that would, and that only a cgroup would end.
+fn cgroupsHere() !bool {
+    if (is_windows or !cgroup.supported) return false;
+    if (setsidProgram() == null) return false;
+    var looked = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
+    defer looked.deinit(io);
+    _ = try looked.wait(io);
+    return looked.cgroup.active();
+}
+
+/// Waits for `pid` to be gone altogether: not running and not a zombie.
+fn expectGone(pid: posix.pid_t) !void {
+    var waited: u32 = 0;
+    while (alive(pid)) : (waited += 2) {
+        if (waited >= budget_ms) return error.TestGrandchildOutlivedTheKill;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+fn cgroupExists(path: [:0]const u8) bool {
+    return c.access(path, 0) == 0;
+}
+
+test "a grandchild that double-forks and setsid()s away is still ended with the tree, in the child's cgroup" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // A system where this process may not make one: the walk, which does
+    // not reach this grandchild, and nothing here to show.
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+
+    // `.kill` (a grace of zero) is `cgroup.kill`; `.terminate` first (a
+    // grace) reaches each member on its own. Both with and without a group,
+    // since a member in the child's group is left to the group signal.
+    for ([_]u32{ 0, 2000 }) |grace_ms| for ([_]bool{ false, true }) |detach| {
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", orphan_in_own_session ++ "; exec sleep 100" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+            .detach = detach,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        try testing.expect(child.cgroup.active());
+
+        // The reader is done with the child's output before `deinit` below
+        // closes it.
+        const orphan = orphan: {
+            var sink: Sink = .{};
+            defer sink.deinit();
+            try sink.start(child.stdout.?);
+            break :orphan try readPid(&sink);
+        };
+        defer if (alive(orphan)) {
+            _ = c.kill(orphan, .KILL);
+        };
+        // Orphaned and in a session of its own before the kill: the case a
+        // group signal and a walk down from the child both miss.
+        var waited: u32 = 0;
+        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == child.id or getsid(orphan) != orphan) : (waited += 2) {
+            if (waited >= budget_ms) return error.TestGrandchildNeverLeft;
+            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        }
+        try testing.expect(getpgid(orphan) != child.id);
+
+        var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+        const path = try gpa.dupeZ(u8, child.cgroup.path(&where).?);
+        defer gpa.free(path);
+        try testing.expect(cgroupExists(path));
+
+        const walks_before = tree.walks.load(.monotonic);
+        const term = try child.killWait(io, grace_ms);
+        try expectKilled(term, if (grace_ms == 0) .KILL else .TERM);
+        try expectGone(orphan);
+        // The cgroup did it: no walk was asked.
+        try testing.expectEqual(walks_before, tree.walks.load(.monotonic));
+
+        // Nothing left in it, so `deinit` removes it.
+        child.deinit(io);
+        try testing.expect(!cgroupExists(path));
+    };
+}
+
+test "end_tree: what a child left in its cgroup ends with it, orphaned and in a session of its own" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+
+    // Not detached: there is no group to end, and before the cgroup a child
+    // like this one left its tree running.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", orphan_in_own_session ++ "; read x; exit 3" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expect(child.cgroup.active());
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdout.?);
+    const orphan = try readPid(&sink);
+    defer if (alive(orphan)) {
+        _ = c.kill(orphan, .KILL);
+    };
+
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = 2000 });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    child.closeStdin(io);
+    const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+    try testing.expectEqual(Child.Term{ .exited = 3 }, term);
+    try expectGone(orphan);
+}
+
+test "deinit signals nothing in a child's cgroup, and the cgroup goes once what is in it has ended" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", orphan_in_own_session },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expect(child.cgroup.active());
+
+    // The reader is done with the child's output before `deinit` below
+    // closes it.
+    const orphan = orphan: {
+        var sink: Sink = .{};
+        defer sink.deinit();
+        try sink.start(child.stdout.?);
+        break :orphan try readPid(&sink);
+    };
+    defer if (alive(orphan)) {
+        _ = c.kill(orphan, .KILL);
+    };
+    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const path = try gpa.dupeZ(u8, child.cgroup.path(&where).?);
+    defer gpa.free(path);
+
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+    child.deinit(io);
+    // Still running, still in the cgroup, which is still there.
+    try testing.expect(alive(orphan));
+    try testing.expect(cgroupExists(path));
+
+    _ = c.kill(orphan, .KILL);
+    try expectGone(orphan);
+    // The next spawn here looks, and removes it.
+    var next = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
+    defer next.deinit(io);
+    _ = try next.wait(io);
+    try testing.expect(!cgroupExists(path));
+}
+
+/// The parent a Linux process has now, from `/proc`.
+fn parentOf(pid: posix.pid_t) posix.pid_t {
+    var path_buffer: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/stat", .{pid}) catch return 0;
+    const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) return 0;
+    defer _ = c.close(fd);
+    var text: [512]u8 = undefined;
+    const n = c.read(fd, &text, text.len);
+    if (n <= 0) return 0;
+    const close = std.mem.lastIndexOfScalar(u8, text[0..@intCast(n)], ')') orelse return 0;
+    var fields = std.mem.tokenizeScalar(u8, text[close + 1 .. @intCast(n)], ' ');
+    _ = fields.next();
+    return std.fmt.parseInt(posix.pid_t, fields.next() orelse return 0, 10) catch 0;
+}
+
+extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
 
 /// The number the child printed between `pid ` and `.`, as a process id.
 fn readPid(sink: *Sink) !posix.pid_t {
@@ -2509,6 +2713,10 @@ test "both spawn paths start the same child" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
+    // A child in a cgroup of its own is always forked, so this is about the
+    // spawns that take `posix_spawn`: those where no cgroup is made.
+    cgroup.testing_hook.off = true;
+    defer cgroup.testing_hook.off = false;
 
     // The same spawn twice, once down each path. `cwd` is what sends the
     // second one back to the fork -- there is no file action for a working
@@ -2541,6 +2749,10 @@ test "a child on the posix_spawn path starts with the same clean slate" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
+    // A child in a cgroup of its own is always forked, so this is about the
+    // spawns that take `posix_spawn`: those where no cgroup is made.
+    cgroup.testing_hook.off = true;
+    defer cgroup.testing_hook.off = false;
 
     // The claim the fork child makes by hand, made here by an attribute: an
     // ignored signal is back at its default action.
@@ -2571,6 +2783,10 @@ test "the posix_spawn path is the faster one" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
+    // A child in a cgroup of its own is always forked, so this is about the
+    // spawns that take `posix_spawn`: those where no cgroup is made.
+    cgroup.testing_hook.off = true;
+    defer cgroup.testing_hook.off = false;
 
     // A budget, not a measurement, and a relative one so that a loaded machine
     // moves both numbers together. `fork` copies a process's page tables and

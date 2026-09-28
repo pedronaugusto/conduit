@@ -83,7 +83,13 @@ pub const Options = struct {
     /// End what the child leaves running when it ends, and reap the child only
     /// once that is done.
     ///
-    /// **POSIX**, for a child spawned with `detach`: once the child has
+    /// **Linux, for a child in a cgroup of its own** (`Child.cgroup`, detached
+    /// or not): once the child has ended, and before it is reaped, whatever
+    /// is still running in the cgroup is asked to end with `SIGTERM`, given
+    /// `tree_grace_ms`, and ended with `cgroup.kill` if it has not — however
+    /// it had changed its group or session, and orphaned or not.
+    ///
+    /// **POSIX otherwise**, for a child spawned with `detach`: once the child has
     /// ended, and before it is reaped, what is left in its process group is
     /// asked to end with `SIGTERM`, given `tree_grace_ms` to do so, and sent
     /// `SIGKILL` if it has not. The child, ended but not reaped, still holds
@@ -278,11 +284,43 @@ fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
         };
     }
     // Ended, and not yet reaped: the group's id is still the child's, and
-    // what is left in the group can be addressed by it.
-    if (reaper.options.end_tree) if (reaper.child.pgid) |pgid| {
-        if (!reaper.endGroup(pgid, wake[0])) return error.Canceled;
-    };
+    // what is left in the group can be addressed by it. A child in a cgroup
+    // of its own has what it left in there, wherever its group went.
+    if (reaper.options.end_tree) {
+        if (reaper.child.cgroup.active()) {
+            if (!reaper.endContained(wake[0])) return error.Canceled;
+        } else if (reaper.child.pgid) |pgid| {
+            if (!reaper.endGroup(pgid, wake[0])) return error.Canceled;
+        }
+    }
     return held.wait(io);
+}
+
+/// What the child left in its cgroup: asked, given the grace, then made.
+/// The child itself, ended and unreaped, is not counted as running there.
+/// False when the wake came first.
+fn endContained(reaper: *Reaper, wake: posix.fd_t) bool {
+    const contained = &reaper.child.cgroup;
+    switch (contained.populated()) {
+        .none => return true,
+        .others => {
+            _ = contained.signalMembers(.TERM, reaper.child.id, null) catch {};
+            var waited_ms: u32 = 0;
+            var slice_ms: u32 = 1;
+            while (waited_ms < reaper.options.tree_grace_ms) {
+                if (!pause(wake, slice_ms)) return false;
+                waited_ms += slice_ms;
+                slice_ms = @min(slice_ms * 2, tree_slice_ms);
+                if (contained.populated() == .none) return true;
+            }
+        },
+        .unknown => {},
+    }
+    // One write, and safe against a fork while it is delivered. A cgroup the
+    // kernel will not end leaves the group to be ended as before.
+    if (contained.kill()) return true;
+    if (reaper.child.pgid) |pgid| return reaper.endGroup(pgid, wake);
+    return true;
 }
 
 /// What the child left in its group: asked, given the grace, then made.

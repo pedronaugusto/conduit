@@ -13,6 +13,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- On Linux, a cgroup of its own for every child, where this process may make
+  one below its own (a delegated subtree, or a container with a writable
+  cgroup mount): `spawn` makes it and the fork child joins it before it does
+  anything else, so nothing the child starts is outside it, and
+  `Child.kill(.kill)` ends the whole of it with one write to `cgroup.kill` --
+  a grandchild that double-forked and called `setsid` included, which no
+  group signal or walk reaches. `.terminate` and `.interrupt` go to each
+  member through a pidfd, and `Reaper.Options.end_tree` ends what is left in
+  the cgroup, detached child or not. Found out at the first spawn from
+  `/proc/self/cgroup`, `/proc/self/mountinfo`, `cgroup.kill` (Linux 5.14) and
+  the first `mkdir`, never assumed; where it is refused every child is
+  started and reached as before. `Child.cgroup` says which a child has. A
+  contained spawn always forks (there is no `posix_spawn` file action that
+  writes), holds one more descriptor, and makes one directory,
+  `conduit-<pid>-<n>`, which `deinit` removes -- or, while processes the
+  child left still run in it, a later spawn or `deinit` removes once they
+  have ended.
 - `captureStarted`: open a pidfd before checking a recorded process's start
   time on Linux, and on Darwin take the start time and the pid's version in
   one `proc_pidinfo` lookup and hold an audit token made from it; then

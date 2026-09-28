@@ -18,6 +18,7 @@ const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
+const cgroup = @import("cgroup.zig");
 
 const file = handles.file;
 
@@ -80,12 +81,20 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     });
     errdefer plan.closeAll(io);
 
+    // A cgroup of the child's own, where this process may make one: the
+    // fork child joins it before it does anything else, so nothing it ever
+    // starts is outside it. `null` elsewhere, and on every system but Linux.
+    var contained: ?cgroup.Pending = cgroup.Cgroup.prepare();
+    errdefer if (contained) |*pending| pending.abandon();
+
     // Nothing has to happen between a fork and an exec for this one, so it
     // need not be a fork at all. `posix_spawn` describes the child with file
     // actions instead, and on the systems that have it that is a third less
     // work per spawn. It answers `null` for a set of descriptors it cannot
-    // describe, and then this falls through to the fork below.
-    if (posix_spawn.suits(options)) {
+    // describe, and then this falls through to the fork below. A contained
+    // child is always forked: joining its cgroup is a write, and there is no
+    // file action for one.
+    if (contained == null and posix_spawn.suits(options)) {
         const started_child = child: {
             handles.ForkGap.startingAChild();
             defer handles.ForkGap.release();
@@ -93,7 +102,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         };
         if (started_child) |child| {
             plan.closeChildSide(io);
-            return started(child.pid, child.forks, &plan, options);
+            return started(child.pid, child.forks, .none, &plan, options);
         }
     }
 
@@ -117,7 +126,8 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     if (pid == 0) {
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
-        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent, go);
+        const join: posix.fd_t = if (contained) |pending| pending.procs else -1;
+        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent, go, join);
     }
     handles.ForkGap.release();
 
@@ -155,7 +165,14 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // until this function returns it, and there is no point in between at
     // which it would be safe to stop.
     var record: Failure = undefined;
-    const n = readAll(report[0], std.mem.asBytes(&record));
+    var n = readAll(report[0], std.mem.asBytes(&record));
+    // A child that could not join its cgroup says so and carries on; the
+    // record after it, if any, is the one that ends the spawn.
+    var joined = contained != null;
+    if (n == @sizeOf(Failure) and record.stage == .containment) {
+        joined = false;
+        n = readAll(report[0], std.mem.asBytes(&record));
+    }
     file(report[0]).close(io);
 
     if (n == @sizeOf(Failure)) {
@@ -167,11 +184,19 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         return record.toError();
     }
 
-    return started(pid, forks, &plan, options);
+    const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
+    contained = null;
+    return started(pid, forks, kept, &plan, options);
 }
 
 /// The `Child` a started process is, whichever path started it.
-fn started(pid: posix.pid_t, forks: tree.Forks, plan: *const Plan, options: SpawnOptions) Child {
+fn started(
+    pid: posix.pid_t,
+    forks: tree.Forks,
+    contained: cgroup.Cgroup,
+    plan: *const Plan,
+    options: SpawnOptions,
+) Child {
     return .{
         .id = pid,
         .thread = {},
@@ -181,6 +206,7 @@ fn started(pid: posix.pid_t, forks: tree.Forks, plan: *const Plan, options: Spaw
         .tree_ended = {},
         .pgid = if (options.detach) pid else null,
         .forks = forks,
+        .cgroup = contained,
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -208,6 +234,10 @@ const Failure = extern struct {
         chdir,
         exec,
         parent_death_signal,
+        /// Not a failure: the child could not join its cgroup and runs
+        /// without one. Written before the exec, and followed by a failure
+        /// or by nothing.
+        containment,
     };
 
     fn toError(record: Failure) SpawnError {
@@ -231,6 +261,8 @@ const Failure = extern struct {
             },
             .exec => Child.execError(err),
             .parent_death_signal => posix.unexpectedErrno(err),
+            // Never the record that ends a spawn; a second one would be.
+            .containment => posix.unexpectedErrno(err),
         };
     }
 };
@@ -251,11 +283,17 @@ fn childMain(
     report: posix.fd_t,
     parent: posix.pid_t,
     go: ?[2]posix.fd_t,
+    join: posix.fd_t,
 ) noreturn {
     // Only the parent writes the word to go on. With this copy of the writing
     // end closed, a parent that has gone reads as end of file rather than as
     // a wait with no end.
     if (go) |ends| _ = c.close(ends[1]);
+
+    // Into the child's cgroup before anything else, so that nothing it
+    // starts, from here to the end of its tree, is started outside it. The
+    // descriptor is close-on-exec and goes with the `execve`.
+    if (join >= 0 and !cgroup.join(join)) note(report, .containment);
 
     clearSignals();
 
@@ -467,6 +505,15 @@ fn closeFromThreeExcept(kept: posix.fd_t) void {
 fn place(fd: posix.fd_t, target: posix.fd_t) bool {
     if (fd == target) return c.fcntl(target, c.F.SETFD, @as(c_int, 0)) != -1;
     return c.dup2(fd, target) != -1;
+}
+
+/// Tells the parent something that is not a failure, and goes on.
+fn note(report: posix.fd_t, stage: Failure.Stage) void {
+    const record: Failure = .{
+        .stage = stage,
+        .errno = @intFromEnum(c.errno(@as(c_int, -1))),
+    };
+    _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
 }
 
 fn bail(report: posix.fd_t, stage: Failure.Stage) noreturn {

@@ -10,6 +10,12 @@
 # `execve` is the kind a different inlining decision can change. The native
 # suite runs all four too; a Linux kernel is the reason to run them again.
 #
+# A default container mounts the cgroup hierarchy read-only, so there no child
+# can be given a cgroup of its own and the suite runs the walk. One more Debug
+# run in a privileged container, whose cgroup mount is writable, runs it with
+# every child contained, and the tests that need a cgroup run there and skip
+# elsewhere.
+#
 # Usage: ci/linux.sh           # glibc (Debian)
 #        ci/linux.sh --musl    # musl (Alpine), where ptsname_r differs
 #        ci/linux.sh --both    # one after the other
@@ -26,7 +32,7 @@ readonly zig_version=0.16.0
 readonly modes=(Debug ReleaseSafe ReleaseFast ReleaseSmall)
 
 usage() {
-    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # Builds the image if it is not already there, then runs the suite in it.
@@ -58,6 +64,17 @@ run_in() {
             --global-cache-dir /tmp/zg \
             --summary all
     done
+
+    echo "==> $libc: zig build test, with a writable cgroup"
+    docker run --rm --init --privileged \
+        --volume "$PWD:/src" \
+        --workdir /src \
+        "$image" \
+        zig build test \
+        --test-timeout 45s \
+        --cache-dir /tmp/zc \
+        --global-cache-dir /tmp/zg \
+        --summary all
 
     echo "==> $libc: zig fmt --check"
     docker run --rm --init \

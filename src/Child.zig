@@ -44,6 +44,7 @@ const tty = @import("conduit.tty");
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 const tree = if (is_windows) struct {} else @import("tree.zig");
+const cgroups = if (is_windows) struct {} else @import("cgroup.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
 
 /// The operating system's name for the child: the process id on POSIX, the
@@ -92,6 +93,11 @@ pgid: ?ProcessGroupId,
 /// `tree.Forks` says where there is a watch; elsewhere it answers that the
 /// walk is needed. Closed by `deinit`.
 forks: if (is_windows) void else tree.Forks,
+/// Linux: the cgroup the child was put in before it ran, where this process
+/// may make one, and which everything the child starts is born into. `kill`
+/// ends the whole of it. Elsewhere, and where none could be made, it is
+/// none, and `kill` walks. `deinit` removes it.
+cgroup: if (is_windows) void else cgroups.Cgroup,
 /// The writing end of the child's standard input, when `.pipes` asked for one.
 /// Owned by this `Child`.
 stdin: ?std.Io.File,
@@ -695,6 +701,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 /// `waitTree` is how to watch that happen, and it has to be asked before this:
 /// the job is what reports, and this is what closes it.
 ///
+/// On Linux it removes the cgroup the child was put in, if it was put in one.
+/// It signals nothing there either: a cgroup whose processes outlive the
+/// child cannot be removed while they run, and is left to them and removed
+/// once they have ended, by a later spawn or `deinit` in this process.
+///
 /// Safe to call more than once, and safe to call before the child has been
 /// reaped, though closing a pipe the child is still writing to earns it a
 /// `SIGPIPE` on POSIX and a broken-pipe error on Windows.
@@ -710,6 +721,7 @@ pub fn deinit(child: *Child, io: std.Io) void {
         child.closeJob();
     } else {
         child.forks.close();
+        child.cgroup.release();
     }
 }
 
@@ -1126,7 +1138,18 @@ pub const KillError = error{
 /// and `.kill` ends the job, so it reaches the whole tree whether or not the
 /// child was detached.
 ///
-/// On POSIX there is no container for a tree, and this reaches three things:
+/// On Linux, where this process may make a cgroup below its own, every child
+/// is put in one of its own before it runs (`Child.cgroup`, and `cgroup.zig`
+/// says how that is found out), and the cgroup is the reach: `.kill` writes
+/// `cgroup.kill`, which ends everything in it at once and is safe against a
+/// fork while it is delivered, and the other two signal each member. A
+/// descendant that changed its group or session, or was orphaned, is still
+/// in it. What leaves it is a process that moves itself to another cgroup it
+/// may write to. Where no cgroup could be made — a read-only cgroup mount, as
+/// in a default container, a cgroup owned by another user, a kernel before
+/// 5.14 — a child is reached as on the other POSIX systems, below.
+///
+/// Otherwise POSIX has no container for a tree, and this reaches three things:
 /// the child, the child's process group when `detach` made one, and every
 /// descendant the operating system will name — from one `/proc` process-table
 /// pass on Linux and from `proc_listchildpids` on Darwin. The descendants are
@@ -1173,6 +1196,21 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
 
     const sig = signal.toPosix();
     const target: posix.pid_t = if (child.pgid) |pgid| -pgid else child.id;
+
+    // A child in a cgroup of its own: the cgroup is the tree, whatever the
+    // processes in it have done with their groups, sessions and parents.
+    // `.kill` ends it in one write, safe against a fork during delivery;
+    // anything else goes to each member not in the group, then to the group
+    // or the child, so none of them is asked twice. A cgroup the kernel will
+    // not act on leaves the child to the walk below.
+    if (child.cgroup.active()) contained: {
+        if (sig == .KILL) {
+            if (!child.cgroup.kill()) break :contained;
+        } else {
+            _ = (try child.cgroup.signalMembers(sig, child.id, child.pgid)) orelse break :contained;
+        }
+        return child.signalTarget(target, sig);
+    }
 
     // A child with nothing below it has no descendants for a walk to name,
     // and its stop is the signal alone. `mayHaveDescendants` says how that is
@@ -1950,6 +1988,7 @@ test {
         _ = @import("child_windows.zig");
     } else {
         _ = @import("child_posix.zig");
+        _ = @import("cgroup.zig");
         _ = @import("tree.zig");
         _ = @import("wait.zig");
     }
