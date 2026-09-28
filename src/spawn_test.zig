@@ -135,16 +135,12 @@ const Sink = struct {
     mutex: std.Io.Mutex = .init,
     bytes: std.ArrayList(u8) = .empty,
     group: std.Io.Group = .init,
-    /// The file being read, for `deinit`.
-    file: ?std.Io.File = null,
     /// Set by `deinit`, read by the task before every read it starts, so a
-    /// reader that is between reads when the asking begins does not start
+    /// reader that is between reads when `deinit` begins does not start
     /// another one.
     stopping: std.atomic.Value(bool) = .init(false),
-    /// The reading has stopped, for any reason. Atomic and not under `mutex`:
-    /// `deinit` waits on it while the task is inside a read, and a wait that
-    /// took a lock the task also takes would be a wait on the task rather than
-    /// on the read.
+    /// The reading has stopped, for any reason. Atomic and not under `mutex`,
+    /// so it can be read without taking anything the task holds.
     finished: std.atomic.Value(bool) = .init(false),
     /// Why the reading stopped, when it stopped for a reason other than the
     /// end. The difference between "the child said nothing" and "nobody was
@@ -152,52 +148,22 @@ const Sink = struct {
     failed: ?anyerror = null,
 
     fn start(sink: *Sink, file: std.Io.File) !void {
-        sink.file = file;
         try sink.group.concurrent(io, read, .{ sink, file });
     }
 
     /// Stops reading and releases the task.
     ///
     /// The task is blocked in a read that only the far end finishing, the
-    /// handle going away, or the operating system being told to abandon it
-    /// will end. On Windows the last of those is `CancelIoEx`, which ends the
-    /// reads this process has pending on the handle whichever thread issued
-    /// them, and is the one that does not involve closing a handle another
-    /// thread is inside.
-    ///
-    /// **Once is not enough.** `CancelIoEx` reaches only what is pending when
-    /// it is called, and a reader spends part of its time between reads, with
-    /// the bytes it just got. Asking once ends the read about two times in
-    /// three and leaves the reader to start another one that nothing will end
-    /// — a pseudoconsole's output pipe has a writer for as long as the console
-    /// does. So it is asked again each time round the wait, until the reader
-    /// says it has stopped.
+    /// handle going away, or the task being cancelled will end, and a
+    /// pseudoconsole's output pipe has a writer for as long as the console
+    /// does. So this cancels, which is the one request the read answers:
+    /// `std.Io.Threaded` interrupts it (`NtCancelSynchronousIoFile` on
+    /// Windows, a signal on POSIX) and asks again until the task has seen it.
+    /// `CancelIoEx` from here would abort the read too, but the read is
+    /// issued again at once unless the task itself was cancelled.
     fn deinit(sink: *Sink) void {
         sink.stopping.store(true, .release);
-        if (is_windows) {
-            if (sink.file) |f| {
-                trace.print("sink: asking the read to stop", .{});
-                var waited_ms: u32 = 0;
-                while (waited_ms < budget_ms and !sink.ended()) : (waited_ms += 2) {
-                    const asked = win32.CancelIoEx(f.handle, null);
-                    if (trace.enabled() and waited_ms == 0) {
-                        trace.print("sink: CancelIoEx returned {s}, last error {d}", .{
-                            if (asked.toBool()) "TRUE" else "FALSE",
-                            @intFromEnum(std.os.windows.GetLastError()),
-                        });
-                    }
-                    std.Io.sleep(io, .fromMilliseconds(2), .awake) catch break;
-                }
-                trace.print("sink: done asking", .{});
-            }
-        }
-        // Said out loud rather than traced: a join that is about to block is
-        // the one thing a failure here has to be able to name, and by then
-        // there may be no second chance to print anything.
-        if (is_windows and !sink.ended()) {
-            std.debug.print("\nsink: the read would not stop; joining anyway\n", .{});
-        }
-        trace.print("sink: joining the reader", .{});
+        trace.print("sink: cancelling the reader", .{});
         sink.group.cancel(io);
         trace.print("sink: reader joined", .{});
         sink.bytes.deinit(gpa);
@@ -220,7 +186,7 @@ const Sink = struct {
 
     /// Records how the reading ended: the end of the stream, or an error.
     ///
-    /// The flag is stored last and outside the lock, so `deinit` can see it
+    /// The flag is stored last and outside the lock, so `ended` can see it
     /// without taking anything the task holds.
     fn stop(sink: *Sink, err: ?anyerror) void {
         if (err) |e| {

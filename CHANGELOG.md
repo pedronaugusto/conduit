@@ -145,6 +145,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `Expect.deinit` on Windows did not return within thirty seconds when the
+  console was still open. It asked the read to stop with `CancelIoEx`, and
+  `std.Io.Threaded` issues a synchronous read that was aborted that way
+  again unless its own task was cancelled, so the ask was never answered;
+  the loop around it counted two-millisecond sleeps that each take at least
+  a timer tick on Windows, so its two-second budget ran far longer before it
+  fell through to the join. It now cancels the task and nothing else, which
+  the Io delivers with `NtCancelSynchronousIoFile`, and returns at once.
 - A `Reaper` with `end_tree` whose child had already ended when its task
   first looked reaped the child and left what it had started running.
   Darwin refuses a kqueue watch on a process that has ended and not been

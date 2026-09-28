@@ -56,7 +56,6 @@ const Pty = @import("Pty.zig");
 const handles = @import("handles.zig");
 
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
 
 /// What the child says, and where a reply goes.
 ///
@@ -79,10 +78,9 @@ consumed: usize,
 ended: bool,
 /// The reading task could not read, for a reason other than the end.
 failed: bool,
-/// The reading task has stopped, for either of those reasons. Atomic and not
-/// under `mutex`: `deinit` waits on it while the task is inside a read, and a
-/// wait that took a lock the task also takes would be a wait on the task
-/// rather than on the read.
+/// The reading task has stopped, for any reason, cancellation included.
+/// Atomic and not under `mutex`, so it can be read without taking anything
+/// the task holds.
 finished: std.atomic.Value(bool),
 /// Guards the four fields above: the reading task appends to them, and the
 /// caller's task consumes from them.
@@ -170,33 +168,21 @@ pub fn start(expect: *Expect, io: std.Io) StartError!void {
 /// untouched.
 ///
 /// The task is inside a read, and a read ends when the far end finishes, when
-/// the handle goes away, or when the operating system is told to abandon it.
-/// For a pseudo-terminal master whose console is still open the first two do
-/// not happen, so on Windows this asks for the third — `CancelIoEx`, which
-/// reaches only what is pending when it is called, so it is asked again until
-/// the task says it has stopped. A reader between reads is told by `stopping`
-/// not to start another.
+/// the handle goes away, or when the task is cancelled. For a pseudo-terminal
+/// master whose console is still open the first two do not happen, so this
+/// cancels: the `std.Io` implementation interrupts the read and keeps at it
+/// until the task has seen the request (on Windows `std.Io.Threaded` does it
+/// with `NtCancelSynchronousIoFile`, on POSIX with a signal). A reader between
+/// reads is told by `stopping` not to start another.
 ///
-/// **`Pty.close` first is the order that needs none of that.** Closing the
-/// pair ends the stream, and a read of a stream that has ended comes back on
-/// its own; the asking above is for a caller who lets the `Expect` go while
-/// the pair stays open.
+/// Cancelling is the only request a read here answers. `CancelIoEx` from
+/// another thread does abort the pending read on Windows, but `std.Io.Threaded`
+/// issues it again straight away unless its own task was cancelled, so a
+/// reader asked that way never stops.
 pub fn deinit(expect: *Expect, io: std.Io) void {
     expect.stopping.store(true, .release);
-    if (is_windows) {
-        var waited_ms: u32 = 0;
-        while (waited_ms < stop_budget_ms and !expect.finished.load(.acquire)) : (waited_ms += 2) {
-            _ = win32.CancelIoEx(expect.master.read.handle, null);
-            std.Io.sleep(io, .fromMilliseconds(2), .awake) catch break;
-        }
-    }
     expect.group.cancel(io);
 }
-
-/// How long `deinit` will keep asking before it joins anyway. Generous: the
-/// first ask is usually the one that lands, and closing the pair first means
-/// there is nothing to ask for at all.
-const stop_budget_ms: u32 = 2000;
 
 pub const WaitError = error{
     /// The deadline passed with the pattern still not there. The bytes that
@@ -493,7 +479,7 @@ fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
 }
 
 /// Published on every exit from the reading task. Stored outside the mutex so
-/// `deinit` can observe it without taking anything the task might hold.
+/// it can be observed without taking anything the task might hold.
 fn markFinished(expect: *Expect, io: std.Io) void {
     expect.finished.store(true, .release);
     expect.arrived.set(io);
@@ -674,6 +660,49 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
     try testing.expectEqualStrings("got one and two", match.found);
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
+
+test "deinit stops the reader while the terminal is still open" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Both systems, and Windows is the one this is about. The child says its
+    // piece and waits for a line, so its console stays open and nothing but
+    // `deinit` will end the read the task is in. Asked with `CancelIoEx`, a
+    // Windows read of the master was issued again at once, and `deinit` did
+    // not return within the watchdog's thirty seconds.
+    const argv: []const []const u8 = if (is_windows)
+        &.{ "cmd.exe", "/c", "echo ready& set /p ignored=" }
+    else
+        &.{ "/bin/sh", "-c", "printf 'ready\\n'; read ignored" };
+
+    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = argv,
+        .stdio = .{ .pty = &pty },
+        .detach = !is_windows,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    if (!is_windows) pty.closeSlave(io);
+
+    var buffer: [1024]u8 = undefined;
+    var expect: Expect = .init(child.pty.?, &buffer);
+    try expect.start(io);
+    defer expect.deinit(io);
+    _ = try expect.until(io, "ready", budget_ms);
+
+    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
+    expect.deinit(io);
+    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
+    try testing.expect(expect.finished.load(.acquire));
+    // Still running: the read ended because it was asked to, not because the
+    // stream did.
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
 }
 
 test "untilAny says which of several answers came, and leaves the rest" {
