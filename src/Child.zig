@@ -900,24 +900,7 @@ pub fn waitTimeout(child: *Child, io: std.Io, timeout_ms: u32) WaitTimeoutError!
     return child.reapWithin(io, deadline);
 }
 
-/// A deadline, however this system counts to one. `Deadline` does not exist on
-/// Windows, where nothing here needs to count.
-const Deadline = if (is_windows) struct {
-    at: std.Io.Clock.Timestamp,
-
-    fn in(io: std.Io, milliseconds: u32) @This() {
-        return .{ .at = .fromNow(io, .{
-            .raw = .fromMilliseconds(milliseconds),
-            .clock = .awake,
-        }) };
-    }
-
-    fn remainingMs(deadline: @This(), io: std.Io) u32 {
-        const left = deadline.at.durationFromNow(io).raw.toMilliseconds();
-        if (left <= 0) return 0;
-        return std.math.lossyCast(u32, left);
-    }
-} else wait_for.Deadline;
+const Deadline = @import("deadline.zig").Deadline;
 
 /// How long one wait on the child's process handle lasts before the caller is
 /// given a chance to notice it has been cancelled. `wait.zig` keeps the same

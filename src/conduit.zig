@@ -250,6 +250,7 @@ test {
     _ = Child;
     _ = Reaper;
     _ = Orphans;
+    _ = @import("deadline.zig");
     _ = Proxy;
     _ = Expect;
     // A module of its own, so its declarations are named here to be

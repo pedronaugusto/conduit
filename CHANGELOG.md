@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Cgroup.id`, `Cgroup.openRecorded` and `Cgroup.remove` let a later run hold
   and remove the same Linux cgroup its earlier run recorded, after checking
   the directory inode. A record must also carry the boot id.
+- Bounded waits on every platform now use one clock-based deadline type.
 
 ### Breaking
 
