@@ -177,6 +177,10 @@ such thing, a program that must not leave children running behind a crash
 writes down each child's pid and `conduit.startTime(pid)`, and the next time
 it runs ends each one still running as the same process — the group with
 `kill(-pid)` and what left it with `conduit.signalDescendants(pid, sig, pid)`.
+`conduit.captureStarted(pid, start)` holds such a process by a pidfd on Linux
+and an audit token on Darwin, taken before the start time is checked (Linux)
+or with it in one lookup (Darwin), so the signal it sends reaches that
+process or nothing; it is `null` for a start time that does not match.
 
 `conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
 find `name` for a child given `environ`, by the same rules, or `null`: for a

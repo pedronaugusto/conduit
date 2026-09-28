@@ -201,10 +201,19 @@ pub const startTime = if (is_windows)
     @compileError("startTime is POSIX-only")
 else
     @import("tree.zig").startTime;
+/// A process held by a kernel identity rather than by its number — a pidfd
+/// on Linux, an audit token on Darwin — so that `signal` reaches it or
+/// nothing, and never a process given the same pid since. `alive` says
+/// whether it has ended; `deinit` lets go of it. POSIX only.
 pub const CapturedPid = if (is_windows)
     @compileError("CapturedPid is POSIX-only")
 else
     @import("tree.zig").CapturedPid;
+/// Holds the process a pid names if it started when `startTime` said it did,
+/// and `null` if nothing runs there or what does started at another time:
+/// how a program ends what a crashed run of it left, with no window in which
+/// the number could be someone else's. Linux and Darwin; `error.Unsupported`
+/// elsewhere. POSIX only.
 pub const captureStarted = if (is_windows)
     @compileError("captureStarted is POSIX-only")
 else

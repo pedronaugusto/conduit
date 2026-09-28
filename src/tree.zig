@@ -239,20 +239,46 @@ pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
     }
 }
 
-/// A Linux process captured before its recorded start time is checked.
-/// Signals through the pidfd stay bound to that process even if its pid is
-/// later reused. Close the capture when the sweep is done with it.
-pub const CapturedPid = LinuxProcess;
+/// A process held by a kernel identity rather than by its number: a pidfd on
+/// Linux, an audit token on Darwin. `signal` reaches that process or
+/// nothing — once it has ended, never a process given the same pid since.
+/// `alive` says whether it has ended (a zombie has); ask it rather than
+/// sending signal 0, which Darwin refuses through a token. `pid` is the
+/// number it had, for reports. `deinit` lets go of it.
+pub const CapturedPid = Process;
 
+/// Holds the process `pid` names if it is the one that started at `since`
+/// (a `startTime` answer written down earlier), so that a program sweeping
+/// up after a crashed run of itself can signal what it recorded with no
+/// window in which the number could be given to someone else. `null` when
+/// nothing runs at `pid` or what does started at another time.
+///
+/// **Linux**: the pidfd is opened first and the start time read after it;
+/// the pidfd is then asked whether its process is still there, so a start
+/// time read from a successor, after the captured process had ended, is
+/// never taken for the captured one's. **Darwin**: one `proc_pidinfo` call
+/// answers the start time and the pid's version together, and the audit
+/// token is made from that version; a signal through it is refused by the
+/// kernel for any other process at that pid. `error.Unsupported` elsewhere.
 pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?CapturedPid {
-    if (comptime builtin.os.tag != .linux) return error.Unsupported;
-    if (pid <= 1 or since == 0) return null;
-    var process = LinuxProcess.capture(pid) orelse return null;
-    if ((try startTime(pid)) != since or !process.signal(@enumFromInt(0))) {
-        process.deinit();
-        return null;
+    if (pid <= 1 or since == 0) return switch (builtin.os.tag) {
+        .linux, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => null,
+        else => error.Unsupported,
+    };
+    switch (builtin.os.tag) {
+        .linux => {
+            var process = LinuxProcess.capture(pid) orelse return null;
+            if ((try startTime(pid)) != since or !process.signal(@enumFromInt(0))) {
+                process.deinit();
+                return null;
+            }
+            return process;
+        },
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => {
+            return DarwinProcess.captureStarted(pid, since);
+        },
+        else => return error.Unsupported,
     }
-    return process;
 }
 
 /// Signal the live members of a Linux process group whose leader was
@@ -365,6 +391,14 @@ const LinuxProcess = struct {
         return std.os.linux.errno(rc) == .SUCCESS;
     }
 
+    /// Whether the process has not ended. A pidfd becomes readable when its
+    /// process exits, reaped or not.
+    pub fn alive(process: *const LinuxProcess) bool {
+        var fds = [_]posix.pollfd{.{ .fd = process.pidfd, .events = posix.POLL.IN, .revents = 0 }};
+        const rc = std.os.linux.poll(&fds, 1, 0);
+        return std.os.linux.errno(rc) == .SUCCESS and rc == 0;
+    }
+
     pub fn deinit(process: *LinuxProcess) void {
         _ = std.os.linux.close(process.pidfd);
     }
@@ -386,15 +420,55 @@ const DarwinProcess = struct {
         return .{ .pid = pid, .token = token };
     }
 
-    fn signal(process: *const DarwinProcess, sig: posix.SIG) bool {
+    /// The process at `pid` if it started at `since`, from one lookup that
+    /// answers the start time and the version of the pid together.
+    fn captureStarted(pid: posix.pid_t, since: u64) ?DarwinProcess {
+        var info: BsdInfoWithUniqueId = undefined;
+        const written = proc_pidinfo(pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
+        if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
+        if (info.bsd.status == proc_status_zombie) return null;
+        if (info.bsd.start_tvsec *% std.time.us_per_s +% info.bsd.start_tvusec != since) return null;
+        var token: AuditToken = .{ .val = @splat(0) };
+        token.val[5] = @bitCast(pid);
+        token.val[7] = @bitCast(info.unique.id_version);
+        return .{ .pid = pid, .token = token };
+    }
+
+    /// The kernel refuses signal 0 through a token (`EINVAL`), so `alive`
+    /// and not this is how to ask whether the process is still there.
+    pub fn signal(process: *const DarwinProcess, sig: posix.SIG) bool {
         var token = process.token;
         return proc_signal_with_audittoken(&token, @intCast(@intFromEnum(sig))) == 0;
     }
 
-    fn deinit(process: *DarwinProcess) void {
+    /// Whether the process has not ended: the pid still has the version the
+    /// token holds, and what holds it is not a zombie.
+    pub fn alive(process: *const DarwinProcess) bool {
+        var info: BsdInfoWithUniqueId = undefined;
+        const written = proc_pidinfo(process.pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
+        if (written != @sizeOf(BsdInfoWithUniqueId)) return false;
+        return info.unique.id_version == @as(i32, @bitCast(process.token.val[7])) and
+            info.bsd.status != proc_status_zombie;
+    }
+
+    pub fn deinit(process: *DarwinProcess) void {
         _ = process;
     }
 };
+
+/// `struct proc_bsdinfowithuniqid` from `<sys/proc_info.h>`.
+const BsdInfoWithUniqueId = extern struct {
+    bsd: ProcBsdInfo,
+    unique: ProcUniqueInfo,
+};
+const proc_pidt_bsdinfowithuniqid = 18;
+
+comptime {
+    // The sizes `proc_pidinfo` checks the buffer against.
+    std.debug.assert(@sizeOf(ProcBsdInfo) == 136);
+    std.debug.assert(@sizeOf(ProcUniqueInfo) == 56);
+    std.debug.assert(@sizeOf(BsdInfoWithUniqueId) == 192);
+}
 
 const ProcUniqueInfo = extern struct {
     executable_uuid: [16]u8,
@@ -414,13 +488,18 @@ const NoProcess = struct {
         return null;
     }
 
-    fn signal(process: *const NoProcess, sig: posix.SIG) bool {
+    pub fn signal(process: *const NoProcess, sig: posix.SIG) bool {
         _ = process;
         _ = sig;
         return false;
     }
 
-    fn deinit(process: *NoProcess) void {
+    pub fn alive(process: *const NoProcess) bool {
+        _ = process;
+        return false;
+    }
+
+    pub fn deinit(process: *NoProcess) void {
         _ = process;
     }
 };
@@ -1009,8 +1088,11 @@ test "a process's start time is its own: the same while it runs, gone once it is
     try std.testing.expectEqual(@as(?u64, null), try startTime(pid));
 }
 
-test "a captured Linux pid stays bound to the recorded process" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+test "a captured pid stays bound to the recorded process, and a start time that does not match refuses" {
+    switch (builtin.os.tag) {
+        .linux, .macos => {},
+        else => return error.SkipZigTest,
+    }
     const testing = std.testing;
     const Child = @import("Child.zig");
     var child = try Child.spawn(testing.io, testing.allocator, .{
@@ -1018,15 +1100,23 @@ test "a captured Linux pid stays bound to the recorded process" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
     const started = (try startTime(child.id)).?;
     try testing.expect((try captureStarted(child.id, started + 1)) == null);
+    try testing.expect((try captureStarted(child.id, started -% 1)) == null);
     var captured = (try captureStarted(child.id, started)).?;
     defer captured.deinit();
-    try testing.expect(captured.signal(@enumFromInt(0)));
+    try testing.expectEqual(child.id, captured.pid);
+    try testing.expect(captured.alive());
+    // A signal the shell's default action ignores, sent through the capture.
+    try testing.expect(captured.signal(.CONT));
     child.stdin.?.close(testing.io);
     child.stdin = null;
     _ = try child.wait(testing.io);
-    try testing.expect(!captured.signal(@enumFromInt(0)));
+    // Ended and reaped: the capture reaches nothing, whoever has the number.
+    try testing.expect(!captured.alive());
+    try testing.expect(!captured.signal(.CONT));
+    try testing.expect((try captureStarted(child.id, started)) == null);
 }
 
 test "a leaderless Linux group keeps the child its leader started" {
