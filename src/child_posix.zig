@@ -17,6 +17,7 @@ const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
+const tree = @import("tree.zig");
 
 const file = handles.file;
 
@@ -90,9 +91,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             defer handles.ForkGap.release();
             break :child try posix_spawn.spawn(plan.child, candidates, argv.ptr, envp, options);
         };
-        if (started_child) |pid| {
+        if (started_child) |child| {
             plan.closeChildSide(io);
-            return started(pid, &plan, options);
+            return started(child.pid, child.forks, &plan, options);
         }
     }
 
@@ -100,6 +101,12 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
     const report = try makePipe();
+    // Where there is a watch on the child's forks (`tree.Forks`), the fork
+    // child waits on this before its `execve` until the parent has registered
+    // it, so the program the child becomes cannot fork before the watch is
+    // in. Without a pipe there is no watch, and `kill` walks as it always
+    // did.
+    const go: ?[2]posix.fd_t = if (tree.Forks.supported) makePipe() catch null else null;
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -110,13 +117,17 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     if (pid == 0) {
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
-        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent);
+        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent, go);
     }
     handles.ForkGap.release();
 
     if (pid < 0) {
         file(report[0]).close(io);
         file(report[1]).close(io);
+        if (go) |ends| {
+            file(ends[0]).close(io);
+            file(ends[1]).close(io);
+        }
         switch (c.errno(@as(c_int, -1))) {
             .AGAIN => return error.ResourceLimitReached,
             .NOMEM => return error.SystemResources,
@@ -125,6 +136,17 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     }
     file(report[1]).close(io);
     plan.closeChildSide(io);
+
+    // The watch, then the word to go on. This end of the pipe's reading side
+    // is still open while the byte is written, so the write cannot meet a
+    // pipe with no reader however the child has fared.
+    var forks: tree.Forks = .none;
+    if (go) |ends| {
+        forks = .watch(pid);
+        while (c.write(ends[1], "g", 1) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+        file(ends[1]).close(io);
+        file(ends[0]).close(io);
+    }
 
     // One report or end of file. A short read cannot happen: the child writes
     // the whole record with one `write` to a pipe, and eight bytes is far below
@@ -141,14 +163,15 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         // not linger as a zombie nobody is going to wait for.
         var status: c_int = undefined;
         while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+        forks.close();
         return record.toError();
     }
 
-    return started(pid, &plan, options);
+    return started(pid, forks, &plan, options);
 }
 
 /// The `Child` a started process is, whichever path started it.
-fn started(pid: posix.pid_t, plan: *const Plan, options: SpawnOptions) Child {
+fn started(pid: posix.pid_t, forks: tree.Forks, plan: *const Plan, options: SpawnOptions) Child {
     return .{
         .id = pid,
         .thread = {},
@@ -157,6 +180,7 @@ fn started(pid: posix.pid_t, plan: *const Plan, options: SpawnOptions) Child {
         .job_port = {},
         .tree_ended = {},
         .pgid = if (options.detach) pid else null,
+        .forks = forks,
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -226,7 +250,13 @@ fn childMain(
     cwd: ?[*:0]const u8,
     report: posix.fd_t,
     parent: posix.pid_t,
+    go: ?[2]posix.fd_t,
 ) noreturn {
+    // Only the parent writes the word to go on. With this copy of the writing
+    // end closed, a parent that has gone reads as end of file rather than as
+    // a wait with no end.
+    if (go) |ends| _ = c.close(ends[1]);
+
     clearSignals();
 
     // `spawn` refuses the option anywhere but Linux.
@@ -252,6 +282,16 @@ fn childMain(
             },
             else => if (c.setpgid(0, 0) != 0) bail(report, .detach),
         }
+    }
+
+    // Before the descriptors are placed, which may write over a low one, and
+    // after the work above, which gives the parent the time it needs: the
+    // byte is usually there by now. End of file is a parent that is gone,
+    // and the child goes on as it would have without a watch.
+    if (go) |ends| {
+        var byte: [1]u8 = undefined;
+        while (c.read(ends[0], &byte, 1) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+        _ = c.close(ends[0]);
     }
 
     if (!placeDescriptors(plan)) bail(report, .descriptors);

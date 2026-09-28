@@ -28,6 +28,7 @@ const Child = conduit.Child;
 const Pty = conduit.Pty;
 const handles = @import("handles.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
+const tree = if (is_windows) struct {} else @import("tree.zig");
 const trace = @import("trace.zig");
 const Watchdog = @import("test_support.zig").Watchdog;
 
@@ -1222,6 +1223,95 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     }
     _ = c.kill(grandchild, .KILL);
     return error.TestGrandchildOutlivedTheKill;
+}
+
+test "a child that has never forked is stopped by its signal alone, without the walk" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Where there is no watch on a child's forks every stop walks, as it
+    // always did, and there is nothing here to count.
+    if (is_windows or !tree.Forks.supported) return error.SkipZigTest;
+
+    // `sleep` itself rather than a shell, which may fork to run it. On pipes
+    // it goes through `posix_spawn` (unless the build says always fork), on
+    // a pair through the fork, and both ways with and without a group.
+    for ([_]bool{ false, true }) |on_pty| for ([_]bool{ false, true }) |detach| {
+        var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+        defer pty.close(io);
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sleep", "100" },
+            .stdio = if (on_pty) .{ .pty = &pty } else .ignore,
+            .detach = detach,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+
+        const before = tree.walks.load(.monotonic);
+        try child.kill(.kill);
+        try testing.expectEqual(before, tree.walks.load(.monotonic));
+        try expectKilled(try child.wait(io), .KILL);
+    };
+}
+
+test "a grandchild started at once, out of reach of the signal, still ends with the child" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    // The watch on the child's forks is registered late on purpose: long
+    // after a child that was not being held would have started its shell,
+    // forked, and said so. Held, the child has run nothing by then, and the
+    // fork that follows is noted; a watch with a window would note nothing,
+    // the stop would be the signal alone, and the grandchild would survive.
+    //
+    // Two grandchildren the signal to the child does not reach: on pipes,
+    // one of a child with no group of its own (through `posix_spawn`, unless
+    // the build says always fork); on a pair, one that job control has put
+    // in a group of its own (through the fork).
+    for ([_]bool{ false, true }) |on_pty| {
+        var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+        defer pty.close(io);
+        if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
+        defer tree.testing_hook.hold_ms = 0;
+        var child = try Child.spawn(io, gpa, .{
+            .argv = if (on_pty)
+                &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf 'pid %d.' \"$!\"; wait" }
+            else
+                &.{ "/bin/sh", "-c", "sleep 100 & printf 'pid %d.' \"$!\"; wait" },
+            .stdio = if (on_pty) .{ .pty = &pty } else .{ .pipes = .{ .stdin = false, .stderr = false } },
+            .detach = on_pty,
+        });
+        tree.testing_hook.hold_ms = 0;
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const ran_before_watch = tree.testing_hook.ran_before_watch;
+        if (on_pty) pty.closeSlave(io);
+
+        var sink: Sink = .{};
+        defer sink.deinit();
+        try sink.start(if (on_pty) pty.readFile() else child.stdout.?);
+        const grandchild = try readPid(&sink);
+        // Whatever this test finds, it leaves nothing behind.
+        defer if (alive(grandchild)) {
+            _ = c.kill(grandchild, .KILL);
+        };
+        if (on_pty and getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
+
+        const before = tree.walks.load(.monotonic);
+        _ = try child.killWait(io, 0);
+
+        var waited: u32 = 0;
+        while (alive(grandchild)) : (waited += 10) {
+            if (waited >= budget_ms) return error.TestGrandchildOutlivedTheKill;
+            try std.Io.sleep(io, .fromMilliseconds(10), .awake);
+        }
+        try testing.expect(tree.walks.load(.monotonic) > before);
+        // Held until the watch was in: the child had run nothing when it was
+        // registered, the shell was the one waiting and not the watch.
+        if (tree.Forks.supported) try testing.expectEqual(@as(?bool, false), ran_before_watch);
+    }
 }
 
 /// The number the child printed between `pid ` and `.`, as a process id.

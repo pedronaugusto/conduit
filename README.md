@@ -326,7 +326,13 @@ system, and a grandchild of a child that was already reaped keeps running. The
 walk signals stable process identities — pidfds on Linux and audit tokens on
 Darwin — so a descendant that exits cannot turn a recycled PID into a signal
 for an unrelated process. The walk grows to hold the whole tree; if it cannot,
-`kill` reports `error.OutOfMemory` before sending a partial descendant pass.
+`kill` reports `error.OutOfMemory` before sending a partial descendant pass. On
+Darwin, where the walk is a pass over the whole process table each time it
+is asked, a child that has never forked is not walked at all: `spawn` watches
+its forks with a kqueue registered before the child runs anything — a
+`posix_spawn` child starts suspended until then, a fork child waits before its
+`execve` — so its stop is the signal alone, and one fork, however early, puts
+it back on the walk. The watch is one descriptor per child, closed by `deinit`.
 
 **Two ways to start a child on POSIX, and the same child either way.** A spawn
 that needs nothing done between the fork and the exec is handed to

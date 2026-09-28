@@ -64,6 +64,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- On Darwin a child that has never forked is stopped with its signal alone,
+  without the descendant walk: `Child.kill` walked with `proc_listchildpids`,
+  a pass over the whole process table, twice for `.kill`, and a child with no
+  descendants has nothing for it to name. `spawn` registers a kqueue
+  `NOTE_FORK` watch before the child runs a single instruction of its program
+  -- a `posix_spawn` child is started with `POSIX_SPAWN_START_SUSPENDED` and
+  resumed with `SIGCONT` once the watch is in, and a fork child waits on a
+  pipe before its `execve` until the parent has registered it -- so no fork
+  can come before the watch. A child that has forked, even once, is walked as
+  before, and `.kill` looks again after its signal for a first fork made
+  while it was being sent. Each child holds one more descriptor on Darwin,
+  closed by `deinit`. Linux is unchanged.
 - The Windows search for a bare program name — the order of its places and
   how each path is spelled — is worked out apart from the file system
   (`windows_search`) and tested on every system; `Child.spawn` and

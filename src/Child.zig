@@ -87,6 +87,11 @@ tree_ended: if (is_windows) bool else void,
 /// child is in the process group it inherited, and a signal is addressed to
 /// the child alone.
 pgid: ?ProcessGroupId,
+/// POSIX: whether the child has forked, watched from before it ran, so that
+/// `kill` can leave out the descendant walk for a child that never has.
+/// `tree.Forks` says where there is a watch; elsewhere it answers that the
+/// walk is needed. Closed by `deinit`.
+forks: if (is_windows) void else tree.Forks,
 /// The writing end of the child's standard input, when `.pipes` asked for one.
 /// Owned by this `Child`.
 stdin: ?std.Io.File,
@@ -703,6 +708,8 @@ pub fn deinit(child: *Child, io: std.Io) void {
     if (is_windows) {
         if (child.handles_open) child.closeHandles();
         child.closeJob();
+    } else {
+        child.forks.close();
     }
 }
 
@@ -1140,6 +1147,16 @@ pub const KillError = error{
 /// meant to act on, and sending one twice to a program that is cleaning up is
 /// not containment.
 ///
+/// **A child that has never forked is signalled alone.** It has no
+/// descendants, so there is nothing for the walk to name, and on Darwin the
+/// walk is the cost of this call: `proc_listchildpids` passes over the whole
+/// process table each time it is asked. There `spawn` watches the child's
+/// forks from before it runs (`tree.Forks`), and this sends the signal with
+/// no walk while the watch has seen none — and for `.kill` looks once more
+/// after the signal, so that a first fork made while it was being sent still
+/// gets the passes above. A child that has forked, even once, is walked as
+/// described. Linux walks always: there it is one `/proc` pass.
+///
 /// A child that has already ended is not signalled, because its name no longer
 /// belongs to it; that case is not an error, and it may reap the child as a
 /// side effect. On Windows that also means nothing else in its job is ended:
@@ -1155,6 +1172,19 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
     const sig = signal.toPosix();
     const target: posix.pid_t = if (child.pgid) |pgid| -pgid else child.id;
 
+    // A child that has never forked has no descendants for a walk to name,
+    // and its stop is the signal alone. `tree.Forks` says how that is known
+    // without a window: the watch was in before the child ran.
+    if (!child.forks.any()) {
+        const answer = child.signalTarget(target, sig);
+        // A first fork made while the signal was being sent is noted before
+        // the process it started can run; then the passes below, as for any
+        // tree.
+        if (sig != .KILL or !child.forks.any()) return answer;
+        try child.killPasses(target, sig);
+        return answer;
+    }
+
     // The descendants that the group does not cover, deepest first, and before
     // the child itself: a leader signalled before the processes below it
     // leaves them orphaned, and an orphan belongs to `init` and is named by no
@@ -1164,20 +1194,22 @@ pub fn kill(child: *Child, signal: Signal) KillError!void {
 
     const answer = child.signalTarget(target, sig);
     if (sig != .KILL) return answer;
+    try child.killPasses(target, sig);
+    return answer;
+}
 
-    // `.kill` is the one that promises to leave nothing behind, and
-    // `kill(-pgid)` is not atomic against a `fork` inside the group: a process
-    // started while the signal was being delivered is in the group without
-    // having been in it when the signal was sent. So it is asked again until a
-    // pass names no descendant, which for a tree that is already dead is the
-    // very next one.
+/// `.kill` is the one that promises to leave nothing behind, and
+/// `kill(-pgid)` is not atomic against a `fork` inside the group: a process
+/// started while the signal was being delivered is in the group without having
+/// been in it when the signal was sent. So it is asked again until a pass names
+/// no descendant, which for a tree that is already dead is the very next one.
+fn killPasses(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void {
     var pass: u8 = 0;
     while (pass < kill_passes) : (pass += 1) {
         const reached = try tree.signalDescendants(child.id, sig, null);
         _ = c.kill(target, sig);
         if (reached == 0) break;
     }
-    return answer;
 }
 
 /// How many times after the first `.kill` will look again for something that

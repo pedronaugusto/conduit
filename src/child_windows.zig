@@ -130,6 +130,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         // `CREATE_NEW_PROCESS_GROUP` makes a group whose id is the process id,
         // which is what `GenerateConsoleCtrlEvent` is addressed to.
         .pgid = if (options.detach) information.dwProcessId else null,
+        .forks = {},
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],

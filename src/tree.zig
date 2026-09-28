@@ -53,6 +53,7 @@ const c = std.c;
 /// caller's kill: the answer `Child.kill` reports is the one from the child's
 /// own signal.
 pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+    if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
     // The ordinary tree fits here and never reaches the page allocator. What
     // may grow without a bound still can: exhausting this storage falls back
     // to pages and reports that failure before a partial pass is sent.
@@ -492,6 +493,176 @@ fn childrenOfDarwin(
         capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
     }
 }
+
+//======================================================================
+// Whether a child has forked.
+//======================================================================
+
+/// How many walks `signalDescendants` has started, in a test build: what
+/// lets a test say a stop took the plain path.
+pub var walks: std.atomic.Value(usize) = .init(0);
+
+/// Whether a child has ever forked, which is the question that decides
+/// whether a stop needs the walk at all.
+///
+/// A child that has never forked has no descendants: nothing but the child
+/// itself can make one. Its stop is then the signal alone, and on Darwin that
+/// saves the walk's two passes over the whole process table
+/// (`proc_listchildpids` is one each time it is asked). A child that has
+/// forked, even once, gets the walk exactly as before.
+///
+/// **Darwin**: a kqueue with an `EVFILT_PROC`/`NOTE_FORK` registration on the
+/// child, made by `spawn` before the child runs one instruction of the program
+/// it executes: `posix_spawn` starts it suspended and `spawn` resumes it once
+/// the registration is in, and the fork path holds the child before its
+/// `execve` until the parent says the registration is in. So there is no
+/// fork the watch was too late for. The kernel posts the note in the parent's
+/// `fork` before the new process can run, so a process that has run — and
+/// could have left the group — was always noted first. Darwin has no
+/// `NOTE_TRACK`, so the note says *that* the child forked and not what it
+/// started; that is enough to decide.
+///
+/// It is a queue of its own and not the one `Reaper` waits on for the end:
+/// that one is opened when the `Reaper`'s task first runs, which is after
+/// the child has, and a note taken off a queue by a wait is gone for the
+/// next reader, so the two questions would race for it.
+///
+/// **Everywhere else** there is no watch, and `any` answers `true`: the walk,
+/// as it always was.
+pub const Forks = switch (builtin.os.tag) {
+    .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => DarwinForks,
+    else => NoForks,
+};
+
+const DarwinForks = struct {
+    /// The kqueue, or `null` where none could be had: then every question
+    /// answers `true`. Not inherited by any child: the kernel confines a
+    /// kqueue to the process that made it.
+    queue: ?posix.fd_t,
+    /// A note once taken off the queue. The registration clears on reading
+    /// (the kernel makes every `EVFILT_PROC` one `EV_CLEAR`), so what one
+    /// question learned is kept here for the next.
+    seen: std.atomic.Value(bool) = .init(false),
+    /// Held by the task reading the queue. A second task that asks meanwhile
+    /// could otherwise find the queue emptied by the first and the note not
+    /// yet kept, so it answers `true` instead, which is the walk.
+    reading: std.atomic.Value(bool) = .init(false),
+
+    pub const supported = true;
+    pub const none: DarwinForks = .{ .queue = null };
+
+    /// Registers the watch on `pid`, which must not have run yet. `none`
+    /// when the system refuses one; the caller starts the child all the same.
+    pub fn watch(pid: posix.pid_t) DarwinForks {
+        if (builtin.is_test) testing_hook.atWatch(pid);
+        const queue = c.kqueue();
+        if (queue < 0) return none;
+        // `kevent64` here as in `any`: a kqueue takes one of the two forms
+        // and refuses the other.
+        var change = [_]c.kevent64_s{.{
+            .ident = @intCast(pid),
+            .filter = c.EVFILT.PROC,
+            .flags = c.EV.ADD | c.EV.ENABLE,
+            .fflags = c.NOTE.FORK,
+            .data = 0,
+            .udata = 0,
+            .ext = .{ 0, 0 },
+        }};
+        var nothing: [0]c.kevent64_s = undefined;
+        if (c.kevent64(queue, &change, 1, &nothing, 0, .{ .IMMEDIATE = true }, null) < 0) {
+            _ = c.close(queue);
+            return none;
+        }
+        return .{ .queue = queue };
+    }
+
+    /// Whether the child has forked since `watch`, or this cannot be said.
+    /// Never blocks.
+    ///
+    /// After the child has ended the registration is gone, and every fork it
+    /// made was noted before that: a `fork` posts its note before it returns
+    /// to the process that called it.
+    pub fn any(forks: *DarwinForks) bool {
+        if (forks.seen.load(.acquire)) return true;
+        const queue = forks.queue orelse return true;
+        if (forks.reading.swap(true, .acquire)) return true;
+        defer forks.reading.store(false, .release);
+        // `KEVENT_FLAG_IMMEDIATE` rather than a timeout of zero, which only
+        // `kevent64` takes: measured here, a zero timeout still costs 14 µs
+        // a call, the flag 0.3 µs.
+        var events: [2]c.kevent64_s = undefined;
+        var nothing: [0]c.kevent64_s = undefined;
+        const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{ .IMMEDIATE = true }, null);
+        if (ready < 0) return true;
+        for (events[0..@intCast(ready)]) |event| {
+            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
+        }
+        return forks.seen.load(.acquire);
+    }
+
+    pub fn close(forks: *DarwinForks) void {
+        if (forks.queue) |queue| _ = c.close(queue);
+        forks.queue = null;
+    }
+};
+
+/// Test builds only: what a test needs to show the watch has no window.
+pub const testing_hook = struct {
+    /// How long `Forks.watch` waits before it registers: time in which a
+    /// child that was not being held would run its program, and fork.
+    pub var hold_ms: u32 = 0;
+    /// Whether the child had run its program by the time `Forks.watch`
+    /// registered, for the last watch made: `null` before the first.
+    pub var ran_before_watch: ?bool = null;
+
+    fn atWatch(pid: posix.pid_t) void {
+        if (hold_ms > 0) {
+            const pause_for: c.timespec = .{
+                .sec = @intCast(hold_ms / 1000),
+                .nsec = @intCast(@as(u64, hold_ms % 1000) * std.time.ns_per_ms),
+            };
+            _ = c.nanosleep(&pause_for, null);
+        }
+        ran_before_watch = ranProgram(pid);
+    }
+
+    /// A child held by `posix_spawn` is stopped (`SSTOP`), and one held by
+    /// the fork path has not executed yet, so it is still this program.
+    fn ranProgram(pid: posix.pid_t) bool {
+        var info: ProcBsdInfo = undefined;
+        if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) return true;
+        if (info.status == proc_status_stopped) return false;
+        var own: [4096]u8 = undefined;
+        var its: [4096]u8 = undefined;
+        const own_len = proc_pidpath(c.getpid(), &own, own.len);
+        const its_len = proc_pidpath(pid, &its, its.len);
+        if (own_len <= 0 or its_len <= 0) return true;
+        return !std.mem.eql(u8, own[0..@intCast(own_len)], its[0..@intCast(its_len)]);
+    }
+
+    /// `SSTOP` from `<sys/proc.h>`.
+    const proc_status_stopped = 4;
+    extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, size: u32) c_int;
+};
+
+const NoForks = struct {
+    pub const supported = false;
+    pub const none: NoForks = .{};
+
+    pub fn watch(pid: posix.pid_t) NoForks {
+        _ = pid;
+        return .{};
+    }
+
+    pub fn any(forks: *NoForks) bool {
+        _ = forks;
+        return true;
+    }
+
+    pub fn close(forks: *NoForks) void {
+        _ = forks;
+    }
+};
 
 //======================================================================
 // A process group's members.

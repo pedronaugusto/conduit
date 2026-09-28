@@ -43,6 +43,7 @@ const posix = std.posix;
 const c = std.c;
 
 const Child = @import("Child.zig");
+const tree = @import("tree.zig");
 const options_for_build = @import("conduit_options");
 
 const SpawnError = Child.SpawnError;
@@ -80,18 +81,33 @@ pub fn suits(options: SpawnOptions) bool {
     return true;
 }
 
+/// A child `spawn` started, and the watch on its forks.
+pub const Started = struct {
+    pid: posix.pid_t,
+    forks: tree.Forks,
+};
+
 /// Starts the child, or returns `null` if the descriptors it was given cannot
 /// be described as file actions.
 ///
 /// `null` is not a failure: the caller starts the same child through `fork`
 /// and `execve` instead, and nothing the child sees is different.
+///
+/// Where `tree.Forks` has a watch (Darwin), the child is started suspended,
+/// with `POSIX_SPAWN_START_SUSPENDED`, the watch is registered, and only then
+/// is it resumed with `SIGCONT`: so the watch is in before the program runs
+/// its first instruction, and no fork it makes goes unnoted. The kernel stops
+/// the task before it returns to user space for the first time, and the
+/// `SIGCONT` that resumes it is discarded at its default action — every
+/// signal is at its default in the child — and sends the parent no
+/// `SIGCHLD`.
 pub fn spawn(
     plan: [3]PlanTarget,
     candidates: []const [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
     options: SpawnOptions,
-) SpawnError!?posix.pid_t {
+) SpawnError!?Started {
     var actions: FileActions = undefined;
     if (posix_spawn_file_actions_init(&actions) != 0) return error.SystemResources;
     defer _ = posix_spawn_file_actions_destroy(&actions);
@@ -113,7 +129,11 @@ pub fn spawn(
     if (posix_spawnattr_init(&attr) != 0) return error.SystemResources;
     defer _ = posix_spawnattr_destroy(&attr);
 
-    var flags: Flags = .{ .setsigdef = true, .setsigmask = true };
+    var flags: Flags = .{
+        .setsigdef = true,
+        .setsigmask = true,
+        .start_suspended = tree.Forks.supported,
+    };
     if (options.detach) {
         flags.setpgroup = true;
         // Zero is "a new group whose leader is the child", which is what
@@ -141,13 +161,30 @@ pub fn spawn(
     for (candidates) |candidate| {
         var pid: posix.pid_t = undefined;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
-        if (rc == 0) return pid;
+        if (rc == 0) return try started(pid);
         switch (@as(posix.E, @enumFromInt(rc))) {
             .NOENT, .NOTDIR => {},
             else => |err| best = err,
         }
     }
     return spawnError(best);
+}
+
+/// The watch on a child started suspended, and the child resumed.
+fn started(pid: posix.pid_t) SpawnError!Started {
+    if (!tree.Forks.supported) return .{ .pid = pid, .forks = .none };
+    var forks: tree.Forks = .watch(pid);
+    if (c.kill(pid, .CONT) != 0) {
+        // Nothing but a stopped child of this process, unreaped, is there to
+        // refuse this. A child that cannot be resumed is not one to hand back.
+        const err = c.errno(@as(c_int, -1));
+        forks.close();
+        _ = c.kill(pid, .KILL);
+        var status: c_int = undefined;
+        while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+        return posix.unexpectedErrno(err);
+    }
+    return .{ .pid = pid, .forks = forks };
 }
 
 /// `posix_spawn` reports a failure in the child by returning its error number,
@@ -179,14 +216,18 @@ pub const PlanTarget = @import("stdio_plan.zig").Target;
 const Attr = extern struct { opaque_storage: [512]u8 align(16) };
 const FileActions = extern struct { opaque_storage: [256]u8 align(16) };
 
-/// The four attribute flags this file sets, which Linux and Darwin number the
-/// same way. The BSDs do not, and `available` is false there.
+/// The attribute flags this file sets. The first four Linux and Darwin number
+/// the same way; the BSDs do not, and `available` is false there.
 const Flags = packed struct(c_short) {
     resetids: bool = false,
     setpgroup: bool = false,
     setsigdef: bool = false,
     setsigmask: bool = false,
-    _rest: u12 = 0,
+    _unused: u3 = 0,
+    /// `POSIX_SPAWN_START_SUSPENDED`, an Apple extension, and set only on
+    /// Darwin: the same bit is `POSIX_SPAWN_SETSID` in glibc and musl.
+    start_suspended: bool = false,
+    _rest: u8 = 0,
 };
 
 extern "c" fn posix_spawnattr_init(attr: *Attr) c_int;
