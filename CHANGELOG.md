@@ -12,6 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Bounded waits on every platform now use one clock-based deadline type.
 - `CapturedPid.signalDescendants` checks the captured root again after the
   descendant walk, before signalling, including its audit token on Darwin.
+- `conduit.console` exposes typed Windows console input records and waits,
+  peeks and reads through a small API.
 
 ### Breaking
 

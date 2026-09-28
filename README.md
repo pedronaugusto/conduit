@@ -244,6 +244,10 @@ otherwise it returns `error.BufferTooSmall`.
 
 ### Terminal helpers
 
+`conduit.console` exposes Windows `InputRecord` and `KeyEvent`, with
+`keyDown()`, `waitInput(handle, timeout_ms)`, `peekInput(handle, buffer)` and
+`readInput(handle, buffer)` for programs reading console input records.
+
 `rawMode(handle)`, `restore(handle, saved)`, `winSize(handle)`, `isTty(handle)`,
 and — POSIX only — `setWinSize(handle, size)`, `ttyName(handle, buffer)` and
 `foregroundGroup(handle)`, which asks not whether a handle is a terminal but

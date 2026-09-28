@@ -113,6 +113,8 @@ pub const Orphans = @import("Orphans.zig");
 /// A Linux cgroup held by directory identity, including one recorded by an
 /// earlier run. On other systems the same surface is always empty.
 pub const Cgroup = @import("cgroup.zig").Cgroup;
+/// Windows console input records and bounded waits on a console input handle.
+pub const console = tty.console;
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master
 /// and a pair of files.
 pub const Proxy = @import("Proxy.zig");
@@ -252,6 +254,7 @@ test {
     _ = Reaper;
     _ = Orphans;
     _ = @import("deadline.zig");
+    _ = console;
     _ = Proxy;
     _ = Expect;
     // A module of its own, so its declarations are named here to be

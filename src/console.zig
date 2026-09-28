@@ -77,3 +77,85 @@ pub extern "kernel32" fn GetConsoleScreenBufferInfo(
     hConsoleOutput: HANDLE,
     lpConsoleScreenBufferInfo: *CONSOLE_SCREEN_BUFFER_INFO,
 ) callconv(.winapi) BOOL;
+
+/// A key event from a Windows console input buffer. Other input record
+/// kinds are retained in `InputRecord.raw` so they can be discarded without
+/// losing their size or alignment.
+pub const KeyEvent = extern struct {
+    down: i32,
+    repeat_count: u16,
+    virtual_key: u16,
+    scan_code: u16,
+    character: u16,
+    control_keys: u32,
+};
+
+pub const InputRecord = extern struct {
+    event_type: u16,
+    event: extern union {
+        key: KeyEvent,
+        raw: [16]u8,
+    },
+
+    pub fn keyDown(record: InputRecord) bool {
+        return record.event_type == key_event and record.event.key.down != 0;
+    }
+};
+
+pub const key_event: u16 = 0x0001;
+
+comptime {
+    std.debug.assert(@sizeOf(InputRecord) == 20);
+    std.debug.assert(@offsetOf(InputRecord, "event") == 4);
+}
+
+extern "kernel32" fn WaitForSingleObject(handle: HANDLE, milliseconds: DWORD) callconv(.winapi) DWORD;
+extern "kernel32" fn PeekConsoleInputW(handle: HANDLE, buffer: [*]InputRecord, capacity: DWORD, read_count: *DWORD) callconv(.winapi) BOOL;
+extern "kernel32" fn ReadConsoleInputW(handle: HANDLE, buffer: [*]InputRecord, capacity: DWORD, read_count: *DWORD) callconv(.winapi) BOOL;
+
+pub const WaitResult = enum { ready, timed_out };
+
+/// Wait for any console input record to arrive, up to `milliseconds`.
+pub fn waitInput(handle: HANDLE, milliseconds: u32) std.Io.UnexpectedError!WaitResult {
+    return switch (WaitForSingleObject(handle, milliseconds)) {
+        0 => .ready,
+        0x102 => .timed_out,
+        else => unexpected(windows.GetLastError()),
+    };
+}
+
+/// Look at queued records without consuming them. A caller can ignore
+/// non-key records and then drain them with `readInput` before waiting again.
+pub fn peekInput(handle: HANDLE, buffer: []InputRecord) std.Io.UnexpectedError!usize {
+    if (buffer.len == 0) return 0;
+    var count: DWORD = 0;
+    if (PeekConsoleInputW(handle, buffer.ptr, @intCast(@min(buffer.len, std.math.maxInt(DWORD))), &count) == .FALSE)
+        return unexpected(windows.GetLastError());
+    return count;
+}
+
+/// Consume up to `buffer.len` records from a console input buffer.
+pub fn readInput(handle: HANDLE, buffer: []InputRecord) std.Io.UnexpectedError!usize {
+    if (buffer.len == 0) return 0;
+    var count: DWORD = 0;
+    if (ReadConsoleInputW(handle, buffer.ptr, @intCast(@min(buffer.len, std.math.maxInt(DWORD))), &count) == .FALSE)
+        return unexpected(windows.GetLastError());
+    return count;
+}
+
+test "a key-down input record has the Windows layout" {
+    try std.testing.expectEqual(@as(usize, 20), @sizeOf(InputRecord));
+    try std.testing.expectEqual(@as(usize, 4), @offsetOf(InputRecord, "event"));
+    const key: InputRecord = .{ .event_type = key_event, .event = .{ .key = .{
+        .down = 1,
+        .repeat_count = 1,
+        .virtual_key = 0,
+        .scan_code = 0,
+        .character = 'a',
+        .control_keys = 0,
+    } } };
+    try std.testing.expect(key.keyDown());
+    var up = key;
+    up.event.key.down = 0;
+    try std.testing.expect(!up.keyDown());
+}
