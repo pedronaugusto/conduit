@@ -13,6 +13,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Orphans`: on Linux, opt-in, this process as the parent of every orphan
+  below it (`PR_SET_CHILD_SUBREAPER`), for a program that starts every child
+  through conduit. No task and no timer: when conduit reaps a child or a
+  spawn returns one, and in `count()`, it reads this process's children,
+  takes in the new orphans (a pidfd each) and reaps the ended ones, so an
+  orphan that ends while nothing of conduit's happens stays a zombie until
+  the next such moment or `end`. `end(io, grace_ms)` ends them all
+  through their pidfds, `SIGTERM`, the grace, then `SIGKILL`, with what
+  each started. A `Child`'s own status is never taken: every Linux spawn
+  holds a lock from before its fork until the child is on the list of
+  conduit's own, and the children this process had at `start` are on it
+  too. `Child.kill` does not reach an adopted process on a child's account
+  (nothing says which child it came from) except through the child's
+  cgroup. Off unless started; `error.Unsupported` outside Linux and before
+  5.4.
 - On Linux, a cgroup of its own for every child, where this process may make
   one below its own (a delegated subtree, or a container with a writable
   cgroup mount): `spawn` makes it and the fork child joins it before it does

@@ -105,6 +105,11 @@ pub const Pty = @import("Pty.zig");
 pub const Child = @import("Child.zig");
 /// A background wait, so a caller can poll for a child's death.
 pub const Reaper = @import("Reaper.zig");
+/// Linux, opt-in: this process as the parent of every orphan below it, the
+/// ended ones reaped whenever this package reaps or spawns a child, and all
+/// of them ended by `end`, for a program that starts every child through
+/// this package. No task, no timer.
+pub const Orphans = @import("Orphans.zig");
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master
 /// and a pair of files.
 pub const Proxy = @import("Proxy.zig");
@@ -241,6 +246,7 @@ test {
     _ = Pty;
     _ = Child;
     _ = Reaper;
+    _ = Orphans;
     _ = Proxy;
     _ = Expect;
     // A module of its own, so its declarations are named here to be

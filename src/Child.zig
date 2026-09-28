@@ -46,6 +46,7 @@ const win32 = if (is_windows) @import("win32.zig") else struct {};
 const tree = if (is_windows) struct {} else @import("tree.zig");
 const cgroups = if (is_windows) struct {} else @import("cgroup.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
+const orphans = @import("Orphans.zig");
 
 /// The operating system's name for the child: the process id on POSIX, the
 /// process `HANDLE` on Windows. An alias for `std.process.Child.Id`.
@@ -817,9 +818,14 @@ fn settled(child: *const Child) ?Term {
 }
 
 /// Records how the child ended and lets everyone else read it.
+///
+/// On Linux the reap is also one of the moments `Orphans` looks at this
+/// process's children, when one runs: what the child left is this process's
+/// now.
 fn publish(child: *Child, term: Term) void {
     child.term = term;
     child.reaped.store(true, .release);
+    if (builtin.os.tag == .linux) orphans.event();
 }
 
 /// Takes the right to be inside the operating system's wait for this child.
@@ -1148,6 +1154,11 @@ pub const KillError = error{
 /// may write to. Where no cgroup could be made — a read-only cgroup mount, as
 /// in a default container, a cgroup owned by another user, a kernel before
 /// 5.14 — a child is reached as on the other POSIX systems, below.
+///
+/// Where `Orphans` runs, a descendant whose parent ended before the signal is
+/// this process's child by then, adopted, and is reached here only through
+/// the child's cgroup: nothing else says which child it came from, and this
+/// does not guess. `Orphans.end` ends every adopted process.
 ///
 /// Otherwise POSIX has no container for a tree, and this reaches three things:
 /// the child, the child's process group when `detach` made one, and every

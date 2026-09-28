@@ -19,6 +19,7 @@ const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
 const cgroup = @import("cgroup.zig");
+const Orphans = @import("Orphans.zig");
 
 const file = handles.file;
 
@@ -87,6 +88,13 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     var contained: ?cgroup.Pending = cgroup.Cgroup.prepare();
     errdefer if (contained) |*pending| pending.abandon();
 
+    // Held from before the child exists until it is on the list of children
+    // that are conduit's own, so that where `Orphans` runs, its look never
+    // takes a child started here for one it adopted; and a look after, since
+    // a spawn is one of the moments it has. Nothing where it does not run.
+    var adoption: Orphans.Spawn = .begin();
+    defer adoption.finish();
+
     // Nothing has to happen between a fork and an exec for this one, so it
     // need not be a fork at all. `posix_spawn` describes the child with file
     // actions instead, and on the systems that have it that is a third less
@@ -101,6 +109,13 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             break :child try posix_spawn.spawn(plan.child, candidates, argv.ptr, envp, options);
         };
         if (started_child) |child| {
+            adoption.started(child.pid) catch |err| {
+                var forks = child.forks;
+                forks.close();
+                discard(child.pid);
+                return err;
+            };
+            adoption.finish();
             plan.closeChildSide(io);
             return started(child.pid, child.forks, .none, &plan, options);
         }
@@ -144,6 +159,17 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             else => |err| return posix.unexpectedErrno(err),
         }
     }
+    adoption.started(pid) catch |err| {
+        discard(pid);
+        file(report[0]).close(io);
+        file(report[1]).close(io);
+        if (go) |ends| {
+            file(ends[0]).close(io);
+            file(ends[1]).close(io);
+        }
+        return err;
+    };
+    adoption.finish();
     file(report[1]).close(io);
     plan.closeChildSide(io);
 
@@ -187,6 +213,14 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
     contained = null;
     return started(pid, forks, kept, &plan, options);
+}
+
+/// Ends and reaps a child that has just been started and will not be handed
+/// back.
+fn discard(pid: posix.pid_t) void {
+    _ = c.kill(pid, .KILL);
+    var status: c_int = undefined;
+    while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
 }
 
 /// The `Child` a started process is, whichever path started it.

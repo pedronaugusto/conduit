@@ -218,6 +218,17 @@ cannot reach a group that has been given the same number since. On Windows the
 job is ended as soon as the child is reaped. The term published is the
 child's own.
 
+`Orphans.init(allocator)` and `start()` make this process, on Linux, the
+parent of every orphan below it (`PR_SET_CHILD_SUBREAPER`): a daemon a
+child left, a grandchild that forked twice and called `setsid`. Nothing
+runs for it — no task, no timer: whenever conduit reaps a child or spawns
+one, it also takes in the new orphans and reaps the ended ones. `count()`
+does the same on demand and says how many are left, and `end(io,
+grace_ms)` ends them all through a pidfd each — `SIGTERM`, the grace, then
+`SIGKILL` — for the end of a program. `deinit()` puts the attribute back.
+Opt-in, and only for a program that starts every child through conduit
+(below). `error.Unsupported` elsewhere.
+
 `Proxy.run(io, .{ .master, .input, .output, .input_buffer, .output_buffer, .resize })`
 moves bytes both ways until the child's end of the terminal closes, and keeps
 the pair the size of a terminal of yours. Both buffers must be non-empty;
@@ -346,6 +357,37 @@ spawn or `deinit` once they have ended. A descendant that moves itself to
 another cgroup it may write to — asks systemd for a scope of its own — has
 left the reach.
 
+**On Linux, orphans can be made this process's own, beneath the cgroup and
+the walk.** A process whose parent ends goes to `init`, or to the nearest
+ancestor that asked for orphans, and is then related to nothing a walk can
+name. `Orphans.start` makes this process that ancestor, so every orphan
+below it becomes its child, and conduit reaps each one that has ended at
+its next event and ends them all with `Orphans.end`. The kernel does not say which children
+were adopted — an orphan and a child this process started are both its
+children, and nothing records the parent one had before — so conduit
+takes the children it started, and the ones this process had at `start`,
+as its own and everything else as adopted. **The contract is that every
+child is started through conduit while it runs:** a child started some
+other way, or a `SIGCHLD` handler that reaps with `waitpid(-1)`, would be
+taken for an orphan and reaped, and its owner's wait would find nothing. A
+`Child`'s own status is never taken: every spawn holds the shared side of a
+lock from before its fork until the child is on conduit's list, and a look
+holds it alone. What a caller may observe: the subreaper attribute is set
+from `start` to `deinit`; a process below this one reports this one as its
+parent once its own has gone, and this process gets a `SIGCHLD` when it
+ends. Nothing wakes an idle program for it: a look — a read of
+`/proc/self/task/<tid>/children` per thread and a `waitid` per child, a
+few microseconds — runs when a child of conduit's is reaped (the moment
+what it left has become this process's), when a spawn returns, and in
+`count` and `end`, so an orphan that ends while none of those happens
+stays a zombie until the next one; each adopted process holds a pidfd
+until it is reaped; each child conduit starts while it runs holds one more
+descriptor until it has been reaped, and every Linux spawn takes that lock,
+running or not. `Child.kill` does not reach an adopted process on the
+child's account unless the child's cgroup holds it: nothing else says which
+child it came from, and it does not guess. `deinit` signals nothing, and an
+adopted process that ends after it is a zombie until this process ends.
+
 Otherwise POSIX has no container for a tree, so `kill` reaches three things:
 the child, the child's process group when `detach` made one, and every
 descendant the system will name — one `/proc` process-table pass on Linux,
@@ -410,7 +452,9 @@ call only — the argument, environment and search-path arrays that must exist
 before the child does — and retain nothing. `Child.output` allocates the bytes
 it collects and `environ` the map it returns; both say whose they are. POSIX
 `Child.kill` uses the page allocator for its exhaustive descendant snapshot
-and reports `error.OutOfMemory` if that snapshot cannot be made. Everything
+and reports `error.OutOfMemory` if that snapshot cannot be made. `Orphans`
+keeps its lists with the allocator it is given until `deinit`, from spawns
+on any thread, so that one must be thread-safe. Everything
 else works in buffers the caller passes, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
@@ -434,7 +478,7 @@ the `Reaper` exists for.
 
 | | Mechanism | Suite |
 |---|---|---|
-| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 per child where one may be made | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
+| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 per child where one may be made; opt-in child subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
 | Linux (musl) | the same | Alpine, in CI and with `ci/linux.sh --musl` |
 | macOS | the same | `macos-latest` |
 | Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |

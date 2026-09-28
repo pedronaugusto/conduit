@@ -1,0 +1,702 @@
+//! This process as the parent of every orphan below it. Linux, and opt-in.
+//!
+//! A process whose parent ends is given another. Ordinarily that is `init`,
+//! or the nearest ancestor that asked to be given them, and from then on the
+//! orphan is related to nothing this process can name: a daemon a child left
+//! running, a grandchild that forked twice and called `setsid`. `start` makes
+//! this process that ancestor (`PR_SET_CHILD_SUBREAPER`), so every such orphan
+//! becomes a child of this one instead, and conduit takes care of it: it
+//! reaps each one that has ended whenever conduit is doing something anyway,
+//! and `end` ends them all, through a pidfd each, so no process given a
+//! recycled pid is ever signalled.
+//!
+//! # Nothing runs while nothing happens
+//!
+//! There is no task and no timer. The kernel sends no notice when a process
+//! is given to this one, and a clock to look for them would wake an idle
+//! program for nothing. So conduit looks at this process's children — takes
+//! in the new orphans, reaps the ones that have ended — at the moments it
+//! already has in hand:
+//!
+//! * a child conduit started is reaped (`wait`, `tryWait`, `killWait`,
+//!   `output`, a `Reaper`), which is also the moment the processes it left
+//!   have become this one's;
+//! * a spawn returns a child;
+//! * `count` is asked;
+//! * `end` runs.
+//!
+//! **The bound, as it is:** an orphan that ends while none of those happens
+//! stays a zombie until the next of them, or until `end`. A program that
+//! wants them gone sooner asks `count` when it likes. An orphan that is still
+//! running costs nothing but its pidfd.
+//!
+//! # The contract: every child is started through conduit
+//!
+//! An orphan given to this process and a child this process started are the
+//! same thing to the kernel, a child. Nothing in `/proc` or in a pidfd says
+//! which parent a process had first. So conduit tells the two apart the only
+//! way it can: it knows the children it started (`Child.spawn`,
+//! `spawnShell`), and the children this process already had when `start` was
+//! called, and takes every other child as adopted. A child started any other
+//! way while this runs — `std.process.spawn`, a library that forks, a
+//! `SIGCHLD` handler that reaps with `waitpid(-1)` — breaks that: conduit
+//! would take the first for an orphan and reap it when it ends, and the wait
+//! its owner makes afterwards would find nothing (the standard library's
+//! treats that as a bug), and the last would take the status of a `Child`
+//! from under it. **A program that starts `Orphans` starts every child
+//! through conduit until `deinit`, and reaps only what conduit hands it.**
+//!
+//! A `Child`'s own status is never taken. A spawn holds a lock shared with
+//! every other spawn from before its `fork` until the child is on the list of
+//! conduit's own, and a look at this process's children holds it alone, so a
+//! look never meets a child conduit started that is not on the list yet.
+//!
+//! # What a caller may observe
+//!
+//! * This process is a child subreaper from `start` to `deinit`, and
+//!   `PR_GET_CHILD_SUBREAPER` says so. Its children are not: the setting is
+//!   not inherited. `deinit` puts back what was there before.
+//! * A process below this one whose parent ends reports this process as its
+//!   parent (`getppid`, `/proc/<pid>/stat`), where it used to report `init` or
+//!   whatever ancestor was a subreaper. This process receives a `SIGCHLD` for
+//!   each adopted process that ends, as for any child of its own; the default
+//!   action ignores it.
+//! * A look reads `/proc/self/task/<tid>/children`, one small file per
+//!   thread, and makes one `waitid` per running child conduit started and per
+//!   adopted process: a few microseconds, added to the reap or the spawn that
+//!   asked for it (measured: about 4 µs with none, 30 µs with a hundred).
+//! * While it runs, each child conduit starts costs one more descriptor, a
+//!   pidfd, until the child has been reaped and a look has passed. A spawn
+//!   that cannot have it ends the child it just started, reaps it, and fails
+//!   with `error.ProcessFdQuotaExceeded` or its kin. Each adopted process
+//!   holds a pidfd until it is reaped.
+//! * Every spawn on Linux takes the shared side of that lock, running or not:
+//!   one atomic operation when nothing is looking.
+//!
+//! # What reaches an adopted process
+//!
+//! `end`, and nothing on behalf of a single child. By the time an orphan is
+//! this process's child it has no link left to the `Child` whose tree it came
+//! from — its parent is gone, its group and session may be its own, and
+//! nothing records the parent it had — so `Child.kill` and
+//! `Reaper.Options.end_tree` cannot say it was that child's and do not guess.
+//! Where the child has a cgroup of its own (`Child.cgroup`) the cgroup still
+//! says, and the child's `kill` ends it as before, adopted or not: the cgroup
+//! is the per-child reach, and this is the floor beneath it and beneath the
+//! walk.
+//!
+//! Lifetime rules: an `Orphans` must not move once `start` has been called,
+//! and `deinit` must be called. One may run at a time in a process. POSIX
+//! elsewhere has no such attribute, and there `start` is
+//! `error.Unsupported`.
+
+const Orphans = @This();
+
+const builtin = @import("builtin");
+const std = @import("std");
+const posix = std.posix;
+const c = std.c;
+const Allocator = std.mem.Allocator;
+
+const tree = if (supported) @import("tree.zig") else struct {};
+const wait_for = if (supported) @import("wait.zig") else struct {};
+const linux = std.os.linux;
+
+/// Whether this system has what `start` needs. Linux: the subreaper attribute
+/// (3.4), `pidfd_open` (5.3), `waitid` on a pidfd (5.4), and the `children`
+/// files in `/proc`; `start` finds out whether the running kernel has them.
+pub const supported = builtin.os.tag == .linux;
+
+/// Every list here. Must be safe to use from more than one thread: spawns and
+/// reaps on any thread add to and look at them.
+allocator: Allocator,
+/// The children conduit started while this runs, and the ones this process
+/// had when `start` was called: not this one's to reap. Added to by spawns,
+/// which hold `gate` shared and `own_lock`; pruned by `look`, which holds
+/// `gate` alone.
+own: std.ArrayList(Held),
+own_lock: SpinLock,
+/// The children this process adopted, until each is reaped. Held under
+/// `lock`.
+adopted: std.ArrayList(Held),
+lock: SpinLock,
+/// Whether this process was a subreaper before `start`, so that `deinit`
+/// puts back what it found.
+was_subreaper: bool,
+running: bool,
+
+/// An `Orphans` that is not running. `start` makes it run.
+pub fn init(allocator: Allocator) Orphans {
+    return .{
+        .allocator = allocator,
+        .own = .empty,
+        .own_lock = .{},
+        .adopted = .empty,
+        .lock = .{},
+        .was_subreaper = false,
+        .running = false,
+    };
+}
+
+pub const LookError = error{
+    OutOfMemory,
+    ProcessFdQuotaExceeded,
+    SystemFdQuotaExceeded,
+    SystemResources,
+} || std.Io.UnexpectedError;
+
+pub const StartError = error{
+    /// Not Linux, or a kernel without `waitid` on a pidfd (5.4) or without
+    /// the `children` files in `/proc`.
+    Unsupported,
+    /// This `Orphans`, or another, is already running in this process.
+    AlreadyStarted,
+} || LookError;
+
+/// Makes this process the parent of every orphan below it.
+///
+/// The children this process has now are taken as its own, whoever started
+/// them, and are never reaped here. From here on, every child is started
+/// through conduit: that is the contract the file's documentation spells out.
+/// Starts nothing: no task, no timer.
+pub fn start(orphans: *Orphans) StartError!void {
+    if (!supported) return error.Unsupported;
+    if (orphans.running) return error.AlreadyStarted;
+    try probe();
+
+    gate.lock();
+    defer gate.unlock();
+    if (current != null) return error.AlreadyStarted;
+
+    orphans.was_subreaper = subreaper();
+    if (!orphans.was_subreaper) try setSubreaper(true);
+    errdefer if (!orphans.was_subreaper) setSubreaper(false) catch {};
+
+    // Whatever this process has now was started before the contract: it is
+    // somebody's, and not an orphan's.
+    errdefer {
+        orphans.releaseAll();
+        orphans.own.deinit(orphans.allocator);
+        orphans.own = .empty;
+    }
+    try forEachChild(orphans, claim);
+
+    orphans.running = true;
+    current = orphans;
+    active.store(true, .release);
+}
+
+pub const EndError = LookError || std.Io.Cancelable;
+
+/// Ends every process this one has adopted, reaps each, and returns once a
+/// look finds none left.
+///
+/// Each adopted process and what it started are asked with `SIGTERM`, deepest
+/// first, given `grace_ms`, and then sent `SIGKILL`; a grace of zero is
+/// `SIGKILL` at once. An adopted process's own children are reached by the
+/// walk `Child.kill` uses, and whatever that misses is adopted when its parent
+/// ends and ended in its turn. Every signal to an adopted process goes
+/// through its pidfd.
+///
+/// Children conduit started are not touched: they have their `Child`, and its
+/// `kill`. What is adopted while this runs is ended too, so a program that is
+/// still leaving orphans keeps this busy; it is the call for the end of a
+/// program. It waits by sleeping between looks, and is a cancelation point.
+pub fn end(orphans: *Orphans, io: std.Io, grace_ms: u32) EndError!void {
+    if (!supported or !orphans.running) return;
+    const deadline: wait_for.Deadline = .in(io, grace_ms);
+    var interval_ms: u32 = 1;
+    // A `children` file read while a child is being reaped elsewhere may pass
+    // over another child, so "nothing left" is believed after two looks.
+    var empty_looks: u8 = 0;
+    while (true) {
+        const left = left: {
+            gate.lock();
+            orphans.lock.lock();
+            defer orphans.lock.unlock();
+            {
+                defer gate.unlock();
+                try orphans.look();
+            }
+            orphans.reapEnded();
+            const insisting = grace_ms == 0 or deadline.remainingMs(io) == 0;
+            for (orphans.adopted.items) |*held| held.ask(if (insisting) .kill else .terminate);
+            break :left orphans.adopted.items.len;
+        };
+        if (left == 0) {
+            empty_looks += 1;
+            if (empty_looks == 2) return;
+            continue;
+        }
+        empty_looks = 0;
+        try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
+        interval_ms = @min(interval_ms * 2, end_slice_ms);
+    }
+}
+
+/// The longest `end` waits between two looks.
+const end_slice_ms: u32 = 5;
+
+/// Looks, reaps every adopted process that has ended, and says how many are
+/// left: still running, or ended in the moment since. Zero when this is not
+/// running. The call for a program that wants the zombies gone now rather
+/// than at conduit's next event.
+pub fn count(orphans: *Orphans) LookError!usize {
+    if (!supported or !orphans.running) return 0;
+    gate.lock();
+    orphans.lock.lock();
+    defer orphans.lock.unlock();
+    {
+        defer gate.unlock();
+        try orphans.look();
+    }
+    orphans.reapEnded();
+    return orphans.adopted.items.len;
+}
+
+/// Reaps what has ended, lets go of every pidfd, and puts this process's
+/// subreaper attribute back as `start` found it.
+///
+/// It signals nothing. An adopted process still running stays this
+/// process's child, and with nothing left to reap it, it is a zombie from the
+/// moment it ends until this process ends: call `end` first. Orphans made
+/// after this go where they went before `start`.
+///
+/// Idempotent.
+pub fn deinit(orphans: *Orphans) void {
+    if (!supported or !orphans.running) return;
+    gate.lock();
+    defer gate.unlock();
+    orphans.lock.lock();
+    defer orphans.lock.unlock();
+    orphans.reapEnded();
+    if (!orphans.was_subreaper) setSubreaper(false) catch {};
+    active.store(false, .release);
+    current = null;
+    orphans.running = false;
+    orphans.releaseAll();
+    orphans.own.deinit(orphans.allocator);
+    orphans.adopted.deinit(orphans.allocator);
+    orphans.own = .empty;
+    orphans.adopted = .empty;
+}
+
+//======================================================================
+// Conduit's events.
+//======================================================================
+
+/// Held shared by a spawn from before its `fork` until the child is on its
+/// `Orphans`' list of conduit's own, and alone by whatever looks at this
+/// process's children or turns adoption on or off. A lock of atomics and
+/// nothing else, because a reap has no `std.Io` to wait with.
+var gate: GateLock = .{};
+/// The `Orphans` running in this process, if one is. Read and written
+/// holding `gate`.
+var current: ?*Orphans = null;
+/// Whether one is running: the one load a reap pays when none is.
+var active: std.atomic.Value(bool) = .init(false);
+
+/// How many looks have run, in a test build: what lets a test say an idle
+/// process looked at nothing.
+pub var looks: std.atomic.Value(usize) = .init(0);
+
+/// Something of conduit's has happened — a child it started has been reaped,
+/// or a spawn has returned one — and, if an `Orphans` runs, a look goes with
+/// it: the processes that child left are this one's by now, and what has
+/// ended among the adopted is reaped. One atomic load when none runs.
+pub fn event() void {
+    if (!supported or !active.load(.acquire)) return;
+    gate.lock();
+    defer gate.unlock();
+    const orphans = current orelse return;
+    orphans.lock.lock();
+    defer orphans.lock.unlock();
+    orphans.look() catch {};
+    orphans.reapEnded();
+}
+
+pub const OwnError = error{
+    OutOfMemory,
+    ProcessFdQuotaExceeded,
+    SystemFdQuotaExceeded,
+    SystemResources,
+} || std.Io.UnexpectedError;
+
+/// A spawn, as far as adoption is concerned: `begin` before the `fork`,
+/// `started` with the child's pid after it, `finish` once that is done or
+/// there is no child. POSIX spawns go through this; outside Linux it is
+/// nothing.
+pub const Spawn = struct {
+    orphans: ?*Orphans,
+    holding: bool,
+    look_after: bool = false,
+
+    pub fn begin() Spawn {
+        if (!supported) return .{ .orphans = null, .holding = false };
+        gate.lockShared();
+        return .{ .orphans = current, .holding = true };
+    }
+
+    /// Puts the child just started on the list of conduit's own. On an error
+    /// the child is not on it, and the caller ends and reaps it: a child
+    /// conduit cannot tell from an orphan is not one to hand back.
+    pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {
+        if (!supported) return;
+        const orphans = spawn.orphans orelse return;
+        const held = Held.open(pid) catch |err| switch (err) {
+            // An unreaped child of this process has a pidfd to open.
+            error.Gone => return error.Unexpected,
+            else => |e| return e,
+        };
+        orphans.own_lock.lock();
+        defer orphans.own_lock.unlock();
+        orphans.own.append(orphans.allocator, held) catch {
+            held.close();
+            return error.OutOfMemory;
+        };
+        spawn.look_after = true;
+    }
+
+    /// Lets a look happen again, and — after a spawn that started a child —
+    /// has one: the spawn is an event of conduit's, and a moment to take in
+    /// what is waiting. Idempotent.
+    pub fn finish(spawn: *Spawn) void {
+        if (!spawn.holding) return;
+        spawn.holding = false;
+        gate.unlockShared();
+        if (spawn.look_after) {
+            spawn.look_after = false;
+            event();
+        }
+    }
+};
+
+//======================================================================
+// Locks of atomics.
+//======================================================================
+
+/// A mutex that spins, yielding. Every section it guards is a handful of
+/// system calls, but for `end`'s, which is the end of a program.
+const SpinLock = struct {
+    held: std.atomic.Value(bool) = .init(false),
+
+    fn lock(spin: *SpinLock) void {
+        while (spin.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+            std.Thread.yield() catch {};
+        }
+    }
+
+    fn unlock(spin: *SpinLock) void {
+        spin.held.store(false, .release);
+    }
+};
+
+/// Many spawns or one look. A look that is waiting keeps new spawns out, so
+/// a stream of spawns cannot hold a look off forever; the spawns in flight
+/// are each a `fork` long.
+const GateLock = struct {
+    state: std.atomic.Value(u32) = .init(0),
+
+    const writing: u32 = 1 << 31;
+    const waiting: u32 = 1 << 30;
+    const readers: u32 = waiting - 1;
+
+    fn lockShared(gate_lock: *GateLock) void {
+        while (true) {
+            const state = gate_lock.state.load(.monotonic);
+            if (state & (writing | waiting) == 0 and
+                gate_lock.state.cmpxchgWeak(state, state + 1, .acquire, .monotonic) == null) return;
+            std.Thread.yield() catch {};
+        }
+    }
+
+    fn unlockShared(gate_lock: *GateLock) void {
+        _ = gate_lock.state.fetchSub(1, .release);
+    }
+
+    fn lock(gate_lock: *GateLock) void {
+        while (true) {
+            const state = gate_lock.state.load(.monotonic);
+            if (state & writing == 0) {
+                if (state & readers == 0) {
+                    // `waiting` is dropped with the taking; another look still
+                    // waiting sets it again.
+                    if (gate_lock.state.cmpxchgWeak(state, writing, .acquire, .monotonic) == null) return;
+                    continue;
+                }
+                if (state & waiting == 0) {
+                    _ = gate_lock.state.cmpxchgWeak(state, state | waiting, .monotonic, .monotonic);
+                }
+            }
+            std.Thread.yield() catch {};
+        }
+    }
+
+    fn unlock(gate_lock: *GateLock) void {
+        _ = gate_lock.state.fetchAnd(~writing, .release);
+    }
+};
+
+//======================================================================
+// Looking and reaping. Linux.
+//======================================================================
+
+/// A process held by its pidfd, and what `end` has asked of it.
+const Held = struct {
+    pid: posix.pid_t,
+    pidfd: posix.fd_t,
+    asked: Asked = .nothing,
+
+    const Asked = enum(u8) { nothing, terminate, kill };
+
+    const OpenError = LookError || error{Gone};
+
+    fn open(pid: posix.pid_t) OpenError!Held {
+        const rc = linux.pidfd_open(pid, 0);
+        return switch (linux.errno(rc)) {
+            .SUCCESS => .{ .pid = pid, .pidfd = @intCast(rc) },
+            // Reaped and gone, or a number that names a thread: nothing to
+            // hold either way.
+            .SRCH, .INVAL => error.Gone,
+            .MFILE => error.ProcessFdQuotaExceeded,
+            .NFILE => error.SystemFdQuotaExceeded,
+            .NOMEM => error.SystemResources,
+            else => |err| posix.unexpectedErrno(err),
+        };
+    }
+
+    fn close(held: Held) void {
+        _ = c.close(held.pidfd);
+    }
+
+    /// Whether the process is a child of this one, reaped by nobody yet. Asked
+    /// of the pidfd, so it is about this process and no other given its pid.
+    fn isChild(held: Held) bool {
+        var info = std.mem.zeroes(linux.siginfo_t);
+        while (true) {
+            const rc = linux.waitid(.PIDFD, held.pidfd, &info, wait_exited | wait_no_hang | wait_no_wait | wait_all, null);
+            switch (linux.errno(rc)) {
+                .SUCCESS => return true,
+                .INTR => continue,
+                // Not a child of this process: its own parent's, or reaped.
+                .CHILD => return false,
+                // Anything else is not an answer, and "a child" is the answer
+                // that takes nothing from anyone.
+                else => return true,
+            }
+        }
+    }
+
+    const Reaped = enum { reaped, running, gone };
+
+    /// Reaps the process if it has ended.
+    fn reap(held: Held) Reaped {
+        var info = std.mem.zeroes(linux.siginfo_t);
+        while (true) {
+            const rc = linux.waitid(.PIDFD, held.pidfd, &info, wait_exited | wait_no_hang | wait_all, null);
+            switch (linux.errno(rc)) {
+                // With `WNOHANG` and nothing to report, the pid stays zero.
+                .SUCCESS => return if (info.fields.common.first.piduid.pid == 0) .running else .reaped,
+                .INTR => continue,
+                // Reaped by somebody else, which the contract forbids; there
+                // is nothing left to hold either way.
+                .CHILD => return .gone,
+                else => return .running,
+            }
+        }
+    }
+
+    /// Sends `what` to the process and what it started, deepest first, once:
+    /// a request already made is not made again, and `.kill` follows
+    /// `.terminate`.
+    fn ask(held: *Held, what: Asked) void {
+        if (@intFromEnum(held.asked) >= @intFromEnum(what)) return;
+        held.asked = what;
+        const sig: posix.SIG = if (what == .kill) .KILL else .TERM;
+        // Its pid is its own: it is this process's child, and nobody but this
+        // process reaps it. A walk that could not be made leaves its
+        // descendants to be adopted when it ends, and asked then.
+        _ = tree.signalDescendants(held.pid, sig, null) catch 0;
+        _ = linux.pidfd_send_signal(held.pidfd, sig, null, 0);
+    }
+};
+
+const wait_exited: u32 = linux.W.EXITED;
+const wait_no_hang: u32 = linux.W.NOHANG;
+const wait_no_wait: u32 = linux.W.NOWAIT;
+/// `__WALL`: a child whatever signal it reports its end with. An adopted
+/// process reports `SIGCHLD`, as the kernel resets it on the way; a child
+/// this process had at `start` may have been made with another.
+const wait_all: u32 = 0x40000000;
+
+/// Finds every child of this process that is neither conduit's own nor
+/// adopted already, and adopts it. The caller holds `gate` alone and `lock`.
+fn look(orphans: *Orphans) LookError!void {
+    if (builtin.is_test) _ = looks.fetchAdd(1, .monotonic);
+    // A child of conduit's own that its owner has reaped is no longer a child
+    // at all, and its pid may be given to a process this one should adopt.
+    var i: usize = 0;
+    while (i < orphans.own.items.len) {
+        const held = orphans.own.items[i];
+        if (held.isChild()) {
+            i += 1;
+            continue;
+        }
+        held.close();
+        _ = orphans.own.swapRemove(i);
+    }
+    try forEachChild(orphans, consider);
+}
+
+fn consider(orphans: *Orphans, pid: posix.pid_t) LookError!void {
+    for (orphans.own.items) |held| if (held.pid == pid) return;
+    for (orphans.adopted.items) |held| if (held.pid == pid) return;
+    const held = Held.open(pid) catch |err| switch (err) {
+        error.Gone => return,
+        else => |e| return e,
+    };
+    // Between the list and the pidfd the pid may have been reaped and given
+    // to a process that is nobody's child here.
+    if (!held.isChild()) return held.close();
+    orphans.adopted.append(orphans.allocator, held) catch {
+        held.close();
+        return error.OutOfMemory;
+    };
+}
+
+/// `start`'s look: every child there is is somebody's.
+fn claim(orphans: *Orphans, pid: posix.pid_t) LookError!void {
+    const held = Held.open(pid) catch |err| switch (err) {
+        error.Gone => return,
+        else => |e| return e,
+    };
+    if (!held.isChild()) return held.close();
+    orphans.own.append(orphans.allocator, held) catch {
+        held.close();
+        return error.OutOfMemory;
+    };
+}
+
+/// Reaps every adopted process that has ended. The caller holds `lock`.
+fn reapEnded(orphans: *Orphans) void {
+    var i: usize = 0;
+    while (i < orphans.adopted.items.len) {
+        const held = orphans.adopted.items[i];
+        switch (held.reap()) {
+            .running => i += 1,
+            .reaped, .gone => {
+                held.close();
+                _ = orphans.adopted.swapRemove(i);
+            },
+        }
+    }
+}
+
+fn releaseAll(orphans: *Orphans) void {
+    for (orphans.own.items) |held| held.close();
+    for (orphans.adopted.items) |held| held.close();
+    orphans.own.clearRetainingCapacity();
+    orphans.adopted.clearRetainingCapacity();
+}
+
+/// Whether the running kernel has what this needs, asked of this process.
+fn probe() StartError!void {
+    const self = Held.open(linux.getpid()) catch return error.Unsupported;
+    defer self.close();
+    var info = std.mem.zeroes(linux.siginfo_t);
+    const rc = linux.waitid(.PIDFD, self.pidfd, &info, wait_exited | wait_no_hang, null);
+    // This process is not its own child: a kernel that can wait on a pidfd
+    // says so, and one that cannot (before 5.4) calls the id type invalid.
+    if (linux.errno(rc) != .CHILD) return error.Unsupported;
+    var path_buffer: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/self/task/{d}/children", .{linux.gettid()}) catch return error.Unsupported;
+    const children = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (children < 0) return error.Unsupported;
+    _ = c.close(children);
+}
+
+fn subreaper() bool {
+    var flag: c_int = 0;
+    const rc = linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0);
+    return linux.errno(rc) == .SUCCESS and flag != 0;
+}
+
+fn setSubreaper(on: bool) std.Io.UnexpectedError!void {
+    const rc = linux.prctl(@intFromEnum(linux.PR.SET_CHILD_SUBREAPER), @intFromBool(on), 0, 0, 0);
+    switch (linux.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// Calls `each` with every child of every thread of this process, from
+/// `/proc/self/task/<tid>/children`. A thread that ends while this reads is
+/// passed over, with its children: they are another thread's by then, or
+/// this process's next time round.
+fn forEachChild(
+    orphans: *Orphans,
+    comptime each: fn (*Orphans, posix.pid_t) LookError!void,
+) LookError!void {
+    const dir = c.open("/proc/self/task", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
+    if (dir < 0) return switch (c.errno(@as(c_int, -1))) {
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        .NOMEM => error.SystemResources,
+        else => |err| posix.unexpectedErrno(err),
+    };
+    defer _ = c.close(dir);
+
+    var entries: [1024]u8 align(@alignOf(linux.dirent64)) = undefined;
+    while (true) {
+        const rc = linux.getdents64(dir, &entries, entries.len);
+        switch (linux.errno(rc)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+        if (rc == 0) return;
+        var offset: usize = 0;
+        while (offset < rc) {
+            const entry: *align(1) const linux.dirent64 = @ptrCast(&entries[offset]);
+            offset += entry.reclen;
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+            _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            var file_buffer: [32]u8 = undefined;
+            const file = std.fmt.bufPrintZ(&file_buffer, "{s}/children", .{name}) catch continue;
+            const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+            if (fd < 0) continue;
+            defer _ = c.close(fd);
+            try eachListed(orphans, fd, each);
+        }
+    }
+}
+
+/// The pids a `children` file lists, space-separated, each handed to `each`.
+fn eachListed(
+    orphans: *Orphans,
+    fd: posix.fd_t,
+    comptime each: fn (*Orphans, posix.pid_t) LookError!void,
+) LookError!void {
+    var buffer: [4096]u8 = undefined;
+    var number: posix.pid_t = 0;
+    var digits: usize = 0;
+    while (true) {
+        const n = c.read(fd, &buffer, buffer.len);
+        if (n < 0) {
+            if (c.errno(@as(c_int, -1)) == .INTR) continue;
+            break;
+        }
+        if (n == 0) break;
+        for (buffer[0..@intCast(n)]) |byte| {
+            if (byte >= '0' and byte <= '9') {
+                number = number *| 10 +| (byte - '0');
+                digits += 1;
+                continue;
+            }
+            if (digits > 0) try each(orphans, number);
+            number = 0;
+            digits = 0;
+        }
+    }
+    if (digits > 0) try each(orphans, number);
+}

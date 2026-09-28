@@ -1501,6 +1501,325 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     try testing.expect(!cgroupExists(path));
 }
 
+//======================================================================
+// Orphans (Linux).
+//======================================================================
+
+const Orphans = conduit.Orphans;
+
+/// Whether this process is a child subreaper now, as the kernel says.
+fn subreaperNow() bool {
+    if (builtin.os.tag != .linux) return false;
+    var flag: c_int = 0;
+    _ = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0);
+    return flag != 0;
+}
+
+/// `orphan_in_own_session`, then `done.` once the subshell that started the
+/// orphan has ended: by then the orphan has been given its second parent.
+const leaves_an_orphan = orphan_in_own_session ++ "; printf 'done.'";
+
+/// Waits for `said` to arrive on the sink.
+fn waitSaid(sink: *Sink, said: []const u8) !void {
+    var waited_ms: u32 = 0;
+    while (waited_ms < budget_ms) : (waited_ms += 2) {
+        const found = found: {
+            sink.mutex.lockUncancelable(io);
+            defer sink.mutex.unlock(io);
+            break :found std.mem.indexOf(u8, sink.bytes.items, said) != null;
+        };
+        if (found) return;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+    return error.TestChildSaidNothing;
+}
+
+/// Waits for `pid` to be this process's child and in a session of its own.
+fn expectAdopted(pid: posix.pid_t) !void {
+    var waited_ms: u32 = 0;
+    while (parentOf(pid) != c.getpid() or getsid(pid) != pid) : (waited_ms += 2) {
+        if (waited_ms >= budget_ms) return error.TestOrphanNotAdopted;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+/// Waits for `Orphans.count` to say `expected`.
+fn expectCount(orphans: *Orphans, expected: usize) !void {
+    var waited_ms: u32 = 0;
+    while (try orphans.count() != expected) : (waited_ms += 2) {
+        if (waited_ms >= budget_ms) return error.TestWrongOrphanCount;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+/// The pid of the orphan a child running `leaves_an_orphan` left, once the
+/// child has said `done.`.
+fn orphanOf(child: *Child) !posix.pid_t {
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdout.?);
+    const orphan = try readPid(&sink);
+    try waitSaid(&sink, "done.");
+    return orphan;
+}
+
+/// The state letter of a Linux process, from `/proc`: `Z` for a zombie, `0`
+/// when there is no such process.
+fn stateOf(pid: posix.pid_t) u8 {
+    var path_buffer: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/stat", .{pid}) catch return 0;
+    const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) return 0;
+    defer _ = c.close(fd);
+    var text: [512]u8 = undefined;
+    const n = c.read(fd, &text, text.len);
+    if (n <= 0) return 0;
+    const close = std.mem.lastIndexOfScalar(u8, text[0..@intCast(n)], ')') orelse return 0;
+    if (close + 2 >= @as(usize, @intCast(n))) return 0;
+    return text[close + 2];
+}
+
+/// Waits for `pid` to have ended and not been reaped.
+fn expectZombie(pid: posix.pid_t) !void {
+    var waited_ms: u32 = 0;
+    while (stateOf(pid) != 'Z') : (waited_ms += 2) {
+        if (waited_ms >= budget_ms) return error.TestOrphanDidNotEnd;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+test "an orphan that forked twice and called setsid is adopted, reaped at conduit's next event, and ended by Orphans.end" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+    var orphans: Orphans = .init(gpa);
+    defer orphans.deinit();
+    if (!Orphans.supported) {
+        try testing.expectError(error.Unsupported, orphans.start());
+        return error.SkipZigTest;
+    }
+    if (setsidProgram() == null) return error.SkipZigTest;
+    orphans.start() catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+        else => return err,
+    };
+    try testing.expect(subreaperNow());
+
+    // One that stays until `end`, left by a child that is still running.
+    var keeper = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x; exit 3" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer keeper.deinit(io);
+    defer _ = keeper.killWait(io, 0) catch {};
+    const kept = try orphanOf(&keeper);
+    defer if (alive(kept)) {
+        _ = c.kill(kept, .KILL);
+    };
+    try expectAdopted(kept);
+    try expectCount(&orphans, 1);
+
+    // One that has ended by the time the child that left it is reaped: the
+    // reap is the event, and takes it with it.
+    {
+        var leaver = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x; exit 0" },
+            .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+        });
+        defer leaver.deinit(io);
+        defer _ = leaver.killWait(io, 0) catch {};
+        const orphan = try orphanOf(&leaver);
+        defer if (alive(orphan)) {
+            _ = c.kill(orphan, .KILL);
+        };
+        try expectAdopted(orphan);
+        _ = c.kill(orphan, .KILL);
+        try expectZombie(orphan);
+        leaver.closeStdin(io);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, (try leaver.waitTimeout(io, budget_ms)) orelse
+            return error.TestChildDidNotExit);
+        try testing.expect(!alive(orphan));
+    }
+
+    // One that ends while nothing of conduit's happens stays a zombie, and a
+    // spawn, the next event, reaps it.
+    {
+        var leaver = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", leaves_an_orphan },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        });
+        defer leaver.deinit(io);
+        defer _ = leaver.killWait(io, 0) catch {};
+        const orphan = try orphanOf(&leaver);
+        defer if (alive(orphan)) {
+            _ = c.kill(orphan, .KILL);
+        };
+        try expectAdopted(orphan);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, (try leaver.waitTimeout(io, budget_ms)) orelse
+            return error.TestChildDidNotExit);
+        _ = c.kill(orphan, .KILL);
+        try expectZombie(orphan);
+        try std.Io.sleep(io, .fromMilliseconds(100), .awake);
+        try testing.expectEqual(@as(u8, 'Z'), stateOf(orphan));
+
+        var next = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
+        defer next.deinit(io);
+        try testing.expect(!alive(orphan));
+        _ = try next.wait(io);
+    }
+    try expectCount(&orphans, 1);
+
+    // The child that left the first still has its own status, and its orphan
+    // runs on after it until `end`.
+    keeper.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 3 }, (try keeper.waitTimeout(io, budget_ms)) orelse
+        return error.TestChildDidNotExit);
+    try testing.expect(alive(kept));
+    try orphans.end(io, 2000);
+    try expectGone(kept);
+    try testing.expectEqual(@as(usize, 0), try orphans.count());
+
+    orphans.deinit();
+    try testing.expect(!subreaperNow());
+}
+
+test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows or !Orphans.supported) return error.SkipZigTest;
+    if (setsidProgram() == null) return error.SkipZigTest;
+    var orphans: Orphans = .init(gpa);
+    defer orphans.deinit();
+    orphans.start() catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+        else => return err,
+    };
+
+    // An adopted orphan running, and nothing of conduit's happening.
+    var leaver = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer leaver.deinit(io);
+    defer _ = leaver.killWait(io, 0) catch {};
+    const orphan = try orphanOf(&leaver);
+    defer if (alive(orphan)) {
+        _ = c.kill(orphan, .KILL);
+    };
+    _ = try leaver.waitTimeout(io, budget_ms);
+    try expectCount(&orphans, 1);
+
+    const before = Orphans.looks.load(.monotonic);
+    try std.Io.sleep(io, .fromMilliseconds(1000), .awake);
+    try testing.expectEqual(before, Orphans.looks.load(.monotonic));
+
+    try orphans.end(io, 0);
+    try expectGone(orphan);
+}
+
+test "a Child's status is never taken by the reaping of orphans, however the two race" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows or !Orphans.supported) return error.SkipZigTest;
+
+    // A child this process had before `start` is somebody's too.
+    var before = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "read x; exit 4" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer before.deinit(io);
+    defer _ = before.killWait(io, 0) catch {};
+
+    var orphans: Orphans = .init(gpa);
+    defer orphans.deinit();
+    orphans.start() catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+        else => return err,
+    };
+
+    // Ended, and looked at, before it is waited for.
+    before.closeStdin(io);
+    try expectZombie(before.id);
+    _ = try orphans.count();
+    try testing.expectEqual(Child.Term{ .exited = 4 }, (try before.waitTimeout(io, budget_ms)) orelse
+        return error.TestChildDidNotExit);
+
+    // Every spawn and every reap below is a look, on four tasks at once, while
+    // orphans are adopted and reaped all along.
+    var failures: std.atomic.Value(u32) = .init(0);
+    var group: std.Io.Group = .init;
+    defer group.cancel(io);
+    for (0..race_tasks) |task| try group.concurrent(io, raceOrphans, .{ @as(u8, @intCast(task)), &failures });
+    try group.await(io);
+    try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
+
+    try orphans.end(io, 0);
+    try testing.expectEqual(@as(usize, 0), try orphans.count());
+}
+
+const race_tasks = 4;
+const race_children = 25;
+
+/// Children that each exit with a status of their own and leave an orphan
+/// that ends at once: every other one waited for at once, and the rest once
+/// they have ended and the other tasks' spawns and reaps have looked at them.
+fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!void {
+    for (0..race_children) |i| {
+        const status: u8 = @intCast(task * race_children + i + 1);
+        var line: [64]u8 = undefined;
+        const said = std.fmt.bufPrint(&line, "(sleep 0 &); exit {d}", .{status}) catch unreachable;
+        var child = Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", said }, .stdio = .ignore }) catch {
+            _ = failures.fetchAdd(1, .monotonic);
+            continue;
+        };
+        defer child.deinit(io);
+        if (i % 2 == 1) try std.Io.sleep(io, .fromMilliseconds(3), .awake);
+        const term = child.waitTimeout(io, budget_ms) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            else => {
+                _ = failures.fetchAdd(1, .monotonic);
+                continue;
+            },
+        } orelse {
+            _ = failures.fetchAdd(1, .monotonic);
+            _ = child.killWait(io, 0) catch {};
+            continue;
+        };
+        if (!std.meta.eql(term, Child.Term{ .exited = status })) _ = failures.fetchAdd(1, .monotonic);
+    }
+}
+
+test "with Orphans not started, an orphan goes where it always went" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows or builtin.os.tag != .linux) return error.SkipZigTest;
+    if (setsidProgram() == null) return error.SkipZigTest;
+    try testing.expect(!subreaperNow());
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; exit 5" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    const orphan = try orphanOf(&child);
+    defer if (alive(orphan)) {
+        _ = c.kill(orphan, .KILL);
+    };
+
+    // Given its second parent before `done.`, and that is not this process.
+    try testing.expect(parentOf(orphan) != c.getpid());
+    const looks_before = Orphans.looks.load(.monotonic);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, (try child.waitTimeout(io, budget_ms)) orelse
+        return error.TestChildDidNotExit);
+    try testing.expectEqual(looks_before, Orphans.looks.load(.monotonic));
+    try testing.expect(!subreaperNow());
+}
+
 /// The parent a Linux process has now, from `/proc`.
 fn parentOf(pid: posix.pid_t) posix.pid_t {
     var path_buffer: [64]u8 = undefined;
