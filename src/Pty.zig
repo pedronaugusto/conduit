@@ -358,7 +358,7 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
     pty.slave = null;
     if (is_windows) {
         if (trace.enabled()) {
-            trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)});
+            trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)}); // safe: printed, never dereferenced
         }
         win32.ClosePseudoConsole(slave);
         trace.print("pty: ClosePseudoConsole returned", .{});
@@ -428,7 +428,8 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
     // is what is read, and the return value is only tested against zero.
     var name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     if (ptsname_r(master_fd, &name_buffer, name_buffer.len) != 0) return openErrno();
-    const name: [*:0]const u8 = @ptrCast(&name_buffer);
+    const name_len = std.mem.indexOfScalar(u8, &name_buffer, 0) orelse return error.Unexpected;
+    const name = name_buffer[0..name_len :0];
 
     // NOCTTY: opening the slave here must not make it this process's
     // controlling terminal. The child asks for that explicitly, after `setsid`.
@@ -570,7 +571,7 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
 
     if (trace.enabled()) {
         trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}, flags=0x{x}", .{
-            @intFromPtr(console),
+            @intFromPtr(console), // safe: printed, never dereferenced
             geometry.rows,
             geometry.cols,
             consoleFlags(granted),

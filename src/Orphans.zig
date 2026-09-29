@@ -617,7 +617,7 @@ fn probe() StartError!void {
 
 fn subreaper() bool {
     var flag: c_int = 0;
-    const rc = linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0);
+    const rc = linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0); // safe: the address of a local the call writes one int to, alive across it
     return linux.errno(rc) == .SUCCESS and flag != 0;
 }
 
@@ -655,11 +655,8 @@ fn forEachChild(
             else => |err| return posix.unexpectedErrno(err),
         }
         if (rc == 0) return;
-        var offset: usize = 0;
-        while (offset < rc) {
-            const entry: *align(1) const linux.dirent64 = @ptrCast(&entries[offset]);
-            offset += entry.reclen;
-            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+        var names: tree.Dirents = .{ .bytes = entries[0..rc] };
+        while (names.next()) |name| {
             _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             var file_buffer: [32]u8 = undefined;
             const file = std.fmt.bufPrintZ(&file_buffer, "{s}/children", .{name}) catch continue;

@@ -1403,7 +1403,7 @@ fn waitTreeWindows(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!boo
             // A job reports more than the one thing: a process started, a
             // process exited, a limit was reached. Only one of them is the
             // answer, and the rest are taken off the port and dropped.
-            if (key == @intFromPtr(job) and message == win32.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) {
+            if (key == @intFromPtr(job) and message == win32.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) { // safe: the completion key against the job handle's value, nothing dereferenced
                 child.tree_ended = true;
                 return true;
             }

@@ -58,7 +58,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     const envp: [*:null]const ?[*:0]const u8 = if (options.environ) |map| envp: {
         const block = try map.createPosixBlock(arena, .{});
         break :envp block.slice.ptr;
-    } else @ptrCast(c.environ);
+    } else c.environ;
 
     const path_value: ?[]const u8 = switch (options.path_search) {
         .child_environ => if (options.environ) |map| map.get("PATH") else environPath(),

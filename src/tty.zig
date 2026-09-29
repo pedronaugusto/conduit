@@ -218,7 +218,7 @@ fn discardInput(handle: Handle) void {
         _ = system.ioctl(handle, request(sys_t.CFLSH), @as(usize, 0));
     } else if (@hasDecl(sys_t, "IOCFLUSH")) {
         var which: c_int = 1; // FREAD
-        _ = system.ioctl(handle, request(sys_t.IOCFLUSH), @intFromPtr(&which));
+        _ = system.ioctl(handle, request(sys_t.IOCFLUSH), @intFromPtr(&which)); // safe: the address of a local the ioctl reads, alive across it
     }
 }
 
@@ -245,7 +245,7 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
         };
     }
     var ws: posix.winsize = undefined;
-    switch (posix.errno(system.ioctl(handle, request(T.GWINSZ), @intFromPtr(&ws)))) {
+    switch (posix.errno(system.ioctl(handle, request(T.GWINSZ), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return .fromWinsize(ws),
         .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
@@ -275,7 +275,7 @@ else
 
 fn setWinSizePosix(handle: Handle, size: Size) SetWinSizeError!void {
     const ws = size.toWinsize();
-    switch (posix.errno(system.ioctl(handle, request(T.SWINSZ), @intFromPtr(&ws)))) {
+    switch (posix.errno(system.ioctl(handle, request(T.SWINSZ), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return,
         .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
@@ -394,7 +394,7 @@ fn foregroundGroupPosix(handle: Handle) ForegroundGroupError!posix.pid_t {
     if (is_linux or is_darwin) {
         // TIOCGPGRP, by its number where the C library would not be asked.
         const tiocgpgrp: u32 = if (is_linux) std.os.linux.T.IOCGPGRP else 0x40047477;
-        switch (posix.errno(system.ioctl(handle, request(tiocgpgrp), @intFromPtr(&group)))) {
+        switch (posix.errno(system.ioctl(handle, request(tiocgpgrp), @intFromPtr(&group)))) { // safe: the address of a local the ioctl writes a pid to, alive across it
             .SUCCESS => {},
             .NOTTY => return error.NoForegroundGroup,
             .BADF, .INVAL => return error.NotATerminal,

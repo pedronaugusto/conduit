@@ -165,7 +165,7 @@ fn describeChild(
             var list = try AttributeList.init(arena, 1);
             try list.setPseudoConsole(console);
             if (trace.enabled()) {
-                trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)});
+                trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)}); // safe: printed, never dereferenced
             }
             attributes.* = list;
             startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
@@ -376,7 +376,7 @@ fn traceSpawn(
             if (slot) |handle| {
                 trace.print("spawn: parent {s}=0x{x}, console: {s}", .{
                     name,
-                    @intFromPtr(handle),
+                    @intFromPtr(handle), // safe: printed, never dereferenced
                     if (isConsole(handle)) "yes" else "no",
                 });
             } else {
@@ -692,7 +692,7 @@ const AttributeList = struct {
 
         // Over-aligned rather than guessed at: the list holds pointers.
         const buffer = try arena.alignedAlloc(u8, .of(usize), size);
-        const raw: *win32.PROC_THREAD_ATTRIBUTE_LIST = @ptrCast(buffer.ptr);
+        const raw: *win32.PROC_THREAD_ATTRIBUTE_LIST = @ptrCast(buffer.ptr); // safe: an opaque list in a buffer of the size Windows asked for, pointer-aligned
         if (win32.InitializeProcThreadAttributeList(raw, count, 0, &size) == .FALSE) {
             return createError();
         }
@@ -726,7 +726,7 @@ const AttributeList = struct {
             list.raw,
             0,
             win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            @ptrCast(handles.ptr),
+            @ptrCast(handles.ptr), // safe: the handle array Windows reads, its size in bytes beside it
             handles.len * @sizeOf(windows.HANDLE),
             null,
             null,

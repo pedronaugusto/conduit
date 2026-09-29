@@ -42,6 +42,9 @@ jobs:
       - name: Formatting
         run: zig fmt --check src examples build.zig
 
+      - name: Casts out of the type system carry their reason
+        run: python3 ci/casts.py
+
       # All four modes: every test here starts a real child process, and what
       # runs between `fork` and `execve` is the kind of code a different
       # inlining decision can change.

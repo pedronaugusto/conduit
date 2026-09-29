@@ -39,6 +39,43 @@ const c = std.c;
 const Deadline = @import("deadline.zig").Deadline;
 const wait_for = @import("wait.zig");
 
+/// The names in what `getdents64` wrote, read from its bytes rather than cast
+/// out of them: a record that would run past them, or that does not hold a
+/// name, ends the walk instead of being read.
+pub const Dirents = struct {
+    bytes: []const u8,
+    offset: usize = 0,
+
+    const reclen_at = @offsetOf(std.os.linux.dirent64, "reclen");
+    const name_at = @offsetOf(std.os.linux.dirent64, "name");
+
+    pub fn next(names: *Dirents) ?[]const u8 {
+        const rest = names.bytes[names.offset..];
+        if (rest.len <= name_at) return null;
+        const reclen = std.mem.readInt(u16, rest[reclen_at..][0..2], builtin.cpu.arch.endian());
+        if (reclen <= name_at or reclen > rest.len) return null;
+        names.offset += reclen;
+        return std.mem.sliceTo(rest[name_at..reclen], 0);
+    }
+};
+
+test "a getdents64 record that would run past what was read, or holds no name, ends the walk" {
+    const endian = builtin.cpu.arch.endian();
+    var bytes: [64]u8 = @splat(0);
+    // One record of 24 bytes named "12", then one that claims 200.
+    std.mem.writeInt(u16, bytes[Dirents.reclen_at..][0..2], 24, endian);
+    @memcpy(bytes[Dirents.name_at..][0..2], "12");
+    std.mem.writeInt(u16, bytes[24 + Dirents.reclen_at ..][0..2], 200, endian);
+    var names: Dirents = .{ .bytes = &bytes };
+    try std.testing.expectEqualStrings("12", names.next().?);
+    try std.testing.expectEqual(null, names.next());
+
+    // A record length of zero would never move the walk on.
+    std.mem.writeInt(u16, bytes[Dirents.reclen_at..][0..2], 0, endian);
+    names = .{ .bytes = &bytes };
+    try std.testing.expectEqual(null, names.next());
+}
+
 /// Sends `sig` to every descendant of `root`, deepest first, and returns how
 /// many of them it reached.
 ///
@@ -225,11 +262,8 @@ fn collectLinux(
         const rc = std.os.linux.getdents64(dir, &entries, entries.len);
         if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
 
-        var offset: usize = 0;
-        while (offset < rc) {
-            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
-            offset += entry.reclen;
-            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+        var names: Dirents = .{ .bytes = entries[0..rc] };
+        while (names.next()) |name| {
             const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             const relation = processRelationLinux(pid) orelse continue;
             try records.append(allocator, .{
@@ -506,11 +540,8 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
     while (true) {
         const rc = std.os.linux.getdents64(dir, &entries, entries.len);
         if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
-        var offset: usize = 0;
-        while (offset < rc) {
-            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
-            offset += entry.reclen;
-            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+        var names: Dirents = .{ .bytes = entries[0..rc] };
+        while (names.next()) |name| {
             const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             if (pid <= 1 or pid == leader or pid == c.getpid()) continue;
             var process = LinuxProcess.capture(pid) orelse continue;
@@ -925,11 +956,8 @@ pub fn hasChildren(pid: posix.pid_t) bool {
         const rc = std.os.linux.getdents64(dir, &entries, entries.len);
         if (std.os.linux.errno(rc) != .SUCCESS) return true;
         if (rc == 0) break;
-        var offset: usize = 0;
-        while (offset < rc) {
-            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
-            offset += entry.reclen;
-            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+        var names: Dirents = .{ .bytes = entries[0..rc] };
+        while (names.next()) |name| {
             const tid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             threads += 1;
             // Read above.
@@ -1155,11 +1183,8 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
         if (std.os.linux.errno(rc) != .SUCCESS) return .unknown;
         if (rc == 0) return .none;
 
-        var offset: usize = 0;
-        while (offset < rc) {
-            const entry: *align(1) const std.os.linux.dirent64 = @ptrCast(&entries[offset]);
-            offset += entry.reclen;
-            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&entry.name)));
+        var names: Dirents = .{ .bytes = entries[0..rc] };
+        while (names.next()) |name| {
             const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             if (pid == leader) continue;
             const relation = processRelationLinux(pid) orelse continue;

@@ -103,7 +103,7 @@ fn current() std.process.Environ {
     if (is_windows) return .{ .block = .global };
     var count: usize = 0;
     while (std.c.environ[count] != null) count += 1;
-    return .{ .block = .{ .slice = @ptrCast(std.c.environ[0..count :null]) } };
+    return .{ .block = .{ .slice = std.c.environ[0..count :null] } };
 }
 
 test "inherit copies the process environment" {
