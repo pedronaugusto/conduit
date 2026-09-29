@@ -1676,6 +1676,10 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     };
     try expectAdopted(kept);
     try expectCount(&orphans, 1);
+    // named, so a program can write it down for a later one to end
+    var names: [4]posix.pid_t = undefined;
+    try testing.expectEqualSlices(posix.pid_t, &.{kept}, try orphans.list(&names));
+    try testing.expectEqual(0, (try orphans.list(names[0..0])).len);
 
     // One that has ended by the time the child that left it is reaped: the
     // reap is the event, and takes it with it.

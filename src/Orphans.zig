@@ -254,6 +254,25 @@ pub fn count(orphans: *Orphans) LookError!usize {
     return orphans.adopted.items.len;
 }
 
+/// Looks, reaps every adopted process that has ended, and names the ones
+/// left in `out`, as many as it holds: what a program writes down so that
+/// a later one can end them, when this one may be gone before `end` runs.
+/// Empty when this is not running.
+pub fn list(orphans: *Orphans, out: []posix.pid_t) LookError![]posix.pid_t {
+    if (!supported or !orphans.running) return out[0..0];
+    gate.lock();
+    orphans.lock.lock();
+    defer orphans.lock.unlock();
+    {
+        defer gate.unlock();
+        try orphans.look();
+    }
+    orphans.reapEnded();
+    const n = @min(out.len, orphans.adopted.items.len);
+    for (orphans.adopted.items[0..n], out[0..n]) |held, *pid| pid.* = held.pid;
+    return out[0..n];
+}
+
 /// Reaps what has ended, lets go of every pidfd, and puts this process's
 /// subreaper attribute back as `start` found it.
 ///
