@@ -124,6 +124,12 @@ lock: SpinLock,
 /// puts back what it found.
 was_subreaper: bool,
 running: bool,
+/// Adoption is announced without calling an owner's code while `lock` is
+/// held. A watcher compares `adoptions` after resetting this event so a
+/// concurrent adoption cannot be lost.
+adoptions: std.atomic.Value(u64),
+adoption_event: std.Io.Event,
+adoption_io: ?std.Io,
 
 /// An `Orphans` that is not running. `start` makes it run.
 pub fn init(allocator: Allocator) Orphans {
@@ -135,7 +141,24 @@ pub fn init(allocator: Allocator) Orphans {
         .lock = .{},
         .was_subreaper = false,
         .running = false,
+        .adoptions = .init(0),
+        .adoption_event = .unset,
+        .adoption_io = null,
     };
+}
+
+/// Register one owner to be woken when a new orphan is held. The event is
+/// only a notification; call `list` to take the actual snapshot. Register
+/// before starting the owner's wait task.
+pub fn adoptionEvent(orphans: *Orphans, io: std.Io) *std.Io.Event {
+    orphans.lock.lock();
+    defer orphans.lock.unlock();
+    orphans.adoption_io = io;
+    return &orphans.adoption_event;
+}
+
+pub fn adoptionCount(orphans: *const Orphans) u64 {
+    return orphans.adoptions.load(.acquire);
 }
 
 pub const LookError = error{
@@ -581,6 +604,8 @@ fn consider(orphans: *Orphans, pid: posix.pid_t) LookError!void {
         held.close();
         return error.OutOfMemory;
     };
+    _ = orphans.adoptions.fetchAdd(1, .release);
+    if (orphans.adoption_io) |io| orphans.adoption_event.set(io);
 }
 
 /// `start`'s look: every child there is is somebody's.
