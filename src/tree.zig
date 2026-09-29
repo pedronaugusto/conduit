@@ -427,7 +427,9 @@ pub const RecordedOptions = struct {
 /// Linux after the proven processes have ended. Darwin cannot enumerate a
 /// group by proven descent after reparenting and reports `error.Unsupported`
 /// for a requested group. A successful return means the processes this call
-/// proved and held have all ended; `true` means there was something to end.
+/// proved and held have ended or have been sent SIGKILL; `true` means there
+/// was something to end. A held identity cannot survive a delivered SIGKILL,
+/// even when the kernel has not yet made its exit observable to a waiter.
 pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
     if (options.cgroup) |contained| {
         const had_members = contained.populated() != .none;
@@ -471,11 +473,16 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
 
     var verified: std.ArrayList(bool) = .empty;
     defer verified.deinit(allocator);
+    var accounted: std.ArrayList(Started) = .empty;
+    defer accounted.deinit(allocator);
     var unproven = false;
     for (found.items) |*process| {
         const holds = try provenBelow(&root, process, allocator);
         try verified.append(allocator, holds);
         if (!holds and process.alive()) unproven = true;
+        if (holds and builtin.os.tag == .linux and options.group != null) {
+            if (try startTime(process.pid)) |since| try accounted.append(allocator, .{ .pid = process.pid, .start = since });
+        }
     }
 
     var i = found.items.len;
@@ -492,23 +499,56 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
     if (root.alive()) _ = try root.wait(io, grace.remainingMs(io));
 
     for (found.items, verified.items) |*process, holds| {
-        if (holds and process.alive()) _ = process.signal(.KILL);
+        if (holds) try killHeld(Process, process);
     }
-    if (root.alive()) _ = root.signal(.KILL);
-    const finish: Deadline = .in(io, 1000);
-    for (found.items, verified.items) |*process, holds| {
-        if (holds and process.alive() and !try process.wait(io, finish.remainingMs(io))) return error.UnableToEnd;
-    }
-    if (root.alive() and !try root.wait(io, finish.remainingMs(io))) return error.UnableToEnd;
+    try killHeld(Process, &root);
 
     if (options.group) |group| {
         if (group != options.pid) return error.Unproven;
         if (comptime builtin.os.tag == .linux) {
-            if ((try signalGroupSince(group, options.pid, options.start, @enumFromInt(0))) > 0) return error.Unproven;
+            // A held member may still appear in /proc immediately after a
+            // delivered KILL. It is already accounted for by that signal;
+            // only members outside the captured set are unproven.
+            if ((try signalGroupSinceImpl(group, options.pid, options.start, @enumFromInt(0), accounted.items)) > 0) return error.Unproven;
         } else return error.Unsupported;
     }
     if (unproven) return error.Unproven;
     return true;
+}
+
+/// The signal goes through the held identity, so delivery is proof that this
+/// process cannot continue. A failed delivery still needs an exit check: it
+/// may have ended on its own, or the kernel may have refused the signal.
+fn killHeld(comptime Held: type, process: *const Held) error{UnableToEnd}!void {
+    if (!process.alive()) return;
+    if (!process.signal(.KILL) and process.alive()) return error.UnableToEnd;
+}
+
+test "a held process is ended when KILL is delivered before exit is observable" {
+    const Fake = struct {
+        live: bool = true,
+        deliver: bool,
+        sent: *bool,
+
+        fn alive(self: *const @This()) bool {
+            return self.live;
+        }
+
+        fn signal(self: *const @This(), sig: posix.SIG) bool {
+            std.debug.assert(sig == .KILL);
+            self.sent.* = true;
+            return self.deliver;
+        }
+    };
+    var sent = false;
+    try killHeld(Fake, &.{ .deliver = true, .sent = &sent });
+    try std.testing.expect(sent);
+    sent = false;
+    try std.testing.expectError(error.UnableToEnd, killHeld(Fake, &.{ .deliver = false, .sent = &sent }));
+    try std.testing.expect(sent);
+    sent = false;
+    try killHeld(Fake, &.{ .live = false, .deliver = false, .sent = &sent });
+    try std.testing.expect(!sent);
 }
 
 /// Signal the live members of a Linux process group whose leader was
@@ -525,10 +565,12 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
 /// reparenting. `CapturedPid.signalGroupSince` handles the narrower case
 /// where the captured leader created the session itself.
 pub fn signalGroupSince(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
-    return signalGroupSinceImpl(group, leader, since, sig);
+    return signalGroupSinceImpl(group, leader, since, sig, &.{});
 }
 
-fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
+const Started = struct { pid: posix.pid_t, start: u64 };
+
+fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG, accounted: []const Started) error{Unsupported}!usize {
     if (comptime builtin.os.tag != .linux) return error.Unsupported;
     if (group <= 1 or since == 0) return 0;
     const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
@@ -549,12 +591,44 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
             const relation = processRelationLinux(pid) orelse continue;
             if (relation.pgrp != group or relation.start == null or relation.start.? < since or
                 relation.state == 'Z' or relation.state == 'X') continue;
+            // /proc can briefly show a process after its pidfd reports exit.
+            // Compare its original start too, so a successor at the same
+            // number remains visible to this check.
+            var already_held = false;
+            for (accounted) |held| {
+                if (held.pid == pid and held.start == relation.start.?) {
+                    already_held = true;
+                    break;
+                }
+            }
+            if (already_held) continue;
             // The proc path could now name a successor. The pidfd cannot:
             // an ended capture refuses the signal instead of reaching it.
             if (process.signal(sig)) reached += 1;
         }
     }
     return reached;
+}
+
+test "a group member held before KILL is accounted for while still visible" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!; wait" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
+    var buffer: [32]u8 = undefined;
+    var output = child.stdout.?.reader(testing.io, &buffer);
+    const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
+    const since = (try startTime(child.id)).?;
+    const descendant_start = (try startTime(descendant)).?;
+    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.id, child.id, since, @enumFromInt(0), &.{}));
+    try testing.expectEqual(@as(usize, 0), try signalGroupSinceImpl(child.id, child.id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start }}));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.id, child.id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start +% 1 }}));
 }
 
 /// `struct proc_bsdinfo` from `<sys/proc_info.h>`, as far as the start time.
@@ -636,7 +710,7 @@ const LinuxProcess = struct {
     /// Reach a recorded Linux group only while this is still its leader.
     pub fn signalGroupSince(process: *const LinuxProcess, group: posix.pid_t, since: u64, sig: posix.SIG) error{Unsupported}!usize {
         if (process.pid != group or !process.alive() or (try startTime(process.pid)) != since) return 0;
-        return signalGroupSinceImpl(group, process.pid, since, sig);
+        return signalGroupSinceImpl(group, process.pid, since, sig, &.{});
     }
 
     pub fn wait(process: *const LinuxProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
