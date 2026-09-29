@@ -3811,6 +3811,52 @@ test "a child given a parent death signal ends with the thread that started it" 
     try testing.expectEqual(Child.Term{ .signal = .KILL }, try waitWithin(&child));
 }
 
+test "a detached child on a pty takes posix_spawn where the platform can give it its terminal, and is the same child" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows or !fast_path) return error.SkipZigTest;
+    const spawn_path = @import("posix_spawn.zig");
+    // A cgroup of the child's own sends any spawn to the fork: this is about
+    // the ones that take `posix_spawn`.
+    cgroup.testing_hook.off = true;
+    defer cgroup.testing_hook.off = false;
+
+    var pty = try Pty.open(.{ .rows = 20, .cols = 70 });
+    defer pty.close(io);
+    const options: Child.SpawnOptions = .{
+        // A terminal that is its controlling one (only such a process opens
+        // /dev/tty), its size, and something it started, named.
+        .argv = &.{ "/bin/sh", "-c", "exec 3</dev/tty && echo tty-ok; stty size; sleep 100 & echo \"pid $!.\"; wait" },
+        .stdio = .{ .pty = &pty },
+        .detach = true,
+    };
+    // Linux has the session and the open; Darwin and the BSDs fork, for the
+    // ioctl only code between a fork and an exec can make.
+    try testing.expectEqual(spawn_path.session_terminal, spawn_path.suits(options));
+
+    var child = try Child.spawn(io, gpa, options);
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    pty.closeSlave(io);
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(pty.readFile());
+    try sink.expect("tty-ok");
+    try sink.expect("20 70");
+    const grandchild = try readPid(&sink);
+
+    // A session and a group of its own, and the terminal's foreground group.
+    try testing.expectEqual(child.id, getpgid(child.id));
+    try testing.expectEqual(child.id, getsid(child.id));
+    try testing.expectEqual(child.id, try conduit.foregroundGroup(pty.read.?));
+
+    // Ended, and what it started with it.
+    _ = try child.killWait(io, 0);
+    try expectGone(grandchild);
+}
+
 test "a spawn with a parent death signal takes the fork, where the signal is set" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const spawn_path = @import("posix_spawn.zig");

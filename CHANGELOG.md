@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A detached child on a pseudo-terminal is started by `posix_spawn` on Linux:
+  `POSIX_SPAWN_SETSID` gives it a session, and the terminal opened by name in
+  that session becomes its controlling terminal, so its process group, its
+  window size and the end of what it started are those of a forked one.
+  macOS and the BSDs keep the fork for it, since a terminal becomes
+  controlling there only through the `TIOCSCTTY` ioctl.
 - `Cgroup.openRecorded` returns a separate, allocation-free `Cgroup.Recorded`
   handle. It holds the cgroup and its parent by descriptor, checks the saved
   inode through that parent, and removes the empty directory with `unlinkat`.

@@ -14,8 +14,14 @@
 //! The general path exists because there are things only code between a fork
 //! and an exec can do, and every one of them sends a spawn back to it:
 //!
-//! * a pseudo-terminal, which needs `setsid` and then `TIOCSCTTY` — there is
-//!   no file action for an ioctl;
+//! * a pseudo-terminal on Darwin and the BSDs, which needs `setsid` and then
+//!   `TIOCSCTTY`: there is no file action for an ioctl, and a BSD kernel
+//!   gives a session its controlling terminal only when that ioctl asks. On
+//!   Linux the child is started in a session of its own
+//!   (`POSIX_SPAWN_SETSID`, glibc 2.26 and musl) and opens its terminal by
+//!   name, without `O_NOCTTY`: glibc and musl both make the session before
+//!   the file actions run, and Linux gives a session leader with no
+//!   controlling terminal the first terminal it opens;
 //! * `credentials` and `resource_limits`, which a process sets on itself;
 //! * `cwd`, because the file action for it is `_np` on both systems, arrived
 //!   late on each, and has a history of not working;
@@ -71,7 +77,10 @@ pub const available = !options_for_build.force_fork_spawn and switch (builtin.os
 /// `spawn`, which has the plan.
 pub fn suits(options: SpawnOptions) bool {
     if (!available) return false;
-    if (options.stdio == .pty) return false;
+    // A terminal of the child's own session only where opening it makes it
+    // the controlling one; an attached child is handed the terminal as it
+    // is handed any stream.
+    if (options.stdio == .pty and options.detach and !session_terminal) return false;
     if (options.cwd != null) return false;
     if (options.credentials.any()) return false;
     if (options.resource_limits.len != 0) return false;
@@ -80,6 +89,12 @@ pub fn suits(options: SpawnOptions) bool {
     if (options.parent_death_signal != null) return false;
     return true;
 }
+
+/// Whether a detached child on a pseudo-terminal can start here: a session
+/// of its own, and its terminal made the controlling one by opening it.
+/// Linux, where the libc has `POSIX_SPAWN_SETSID` and the kernel gives the
+/// first terminal a session leader opens to its session.
+pub const session_terminal = builtin.os.tag == .linux;
 
 /// A child `spawn` started, and the watch on its forks.
 pub const Started = struct {
@@ -112,12 +127,33 @@ pub fn spawn(
     if (posix_spawn_file_actions_init(&actions) != 0) return error.SystemResources;
     defer _ = posix_spawn_file_actions_destroy(&actions);
 
+    // A detached child on a terminal opens it by name, in the session made
+    // for it, so that the terminal is its controlling one; the other
+    // standard streams that are the terminal are copies of that one.
+    const session = options.stdio == .pty and options.detach;
+    var terminal_name: [std.fs.max_path_bytes:0]u8 = undefined;
+    var terminal_slot: ?posix.fd_t = null;
+    if (session) {
+        const slave = options.stdio.pty.slave.?;
+        if (ttyname_r(slave, &terminal_name, terminal_name.len) != 0) return null;
+    }
+
     for (plan, 0..) |target, slot| switch (target) {
         .inherit => {},
         // See the file comment: neither of these two is expressible here in a
         // way that means the same thing on both systems.
         .close => return null,
         .place => |fd| {
+            if (session and fd == options.stdio.pty.slave.?) {
+                if (terminal_slot) |first| {
+                    if (posix_spawn_file_actions_adddup2(&actions, first, @intCast(slot)) != 0) return error.SystemResources;
+                } else {
+                    const name: [*:0]const u8 = &terminal_name;
+                    if (posix_spawn_file_actions_addopen(&actions, @intCast(slot), name, .{ .ACCMODE = .RDWR }, 0) != 0) return error.SystemResources;
+                    terminal_slot = @intCast(slot);
+                }
+                continue;
+            }
             if (fd < 3) return null;
             if (posix_spawn_file_actions_adddup2(&actions, fd, @intCast(slot)) != 0) {
                 return error.SystemResources;
@@ -129,12 +165,13 @@ pub fn spawn(
     if (posix_spawnattr_init(&attr) != 0) return error.SystemResources;
     defer _ = posix_spawnattr_destroy(&attr);
 
-    var flags: Flags = .{
-        .setsigdef = true,
-        .setsigmask = true,
-        .start_suspended = tree.Forks.supported,
-    };
-    if (options.detach) {
+    var flags: Flags = .{ .setsigdef = true, .setsigmask = true };
+    flags.set(.start_suspended, tree.Forks.supported);
+    if (session) {
+        // A session is a group as well, whose leader is the child: asking
+        // for a group besides would fail, a leader cannot change its group.
+        flags.set(.setsid, true);
+    } else if (options.detach) {
         flags.setpgroup = true;
         // Zero is "a new group whose leader is the child", which is what
         // `setpgid(0, 0)` says in the fork child.
@@ -224,10 +261,20 @@ const Flags = packed struct(c_short) {
     setsigdef: bool = false,
     setsigmask: bool = false,
     _unused: u3 = 0,
-    /// `POSIX_SPAWN_START_SUSPENDED`, an Apple extension, and set only on
-    /// Darwin: the same bit is `POSIX_SPAWN_SETSID` in glibc and musl.
-    start_suspended: bool = false,
+    /// `POSIX_SPAWN_START_SUSPENDED` on Darwin and `POSIX_SPAWN_SETSID` in
+    /// glibc and musl, which number the one bit each their own way: read
+    /// through `start_suspended` and `setsid`, each set only on its system.
+    bit7: bool = false,
     _rest: u8 = 0,
+
+    fn set(f: *Flags, comptime field: enum { start_suspended, setsid }, on: bool) void {
+        const here = switch (field) {
+            .start_suspended => builtin.os.tag != .linux,
+            .setsid => builtin.os.tag == .linux,
+        };
+        if (on) std.debug.assert(here);
+        if (here and on) f.bit7 = true;
+    }
 };
 
 extern "c" fn posix_spawnattr_init(attr: *Attr) c_int;
@@ -239,6 +286,14 @@ extern "c" fn posix_spawnattr_setsigmask(attr: *Attr, sigmask: *const posix.sigs
 
 extern "c" fn posix_spawn_file_actions_init(actions: *FileActions) c_int;
 extern "c" fn posix_spawn_file_actions_destroy(actions: *FileActions) c_int;
+extern "c" fn posix_spawn_file_actions_addopen(
+    actions: *FileActions,
+    filedes: posix.fd_t,
+    path: [*:0]const u8,
+    oflag: posix.O,
+    mode: posix.mode_t,
+) c_int;
+extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, len: usize) c_int;
 extern "c" fn posix_spawn_file_actions_adddup2(
     actions: *FileActions,
     filedes: posix.fd_t,

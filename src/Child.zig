@@ -15,9 +15,11 @@
 //!
 //! # The two platforms
 //!
-//! On POSIX this forks and executes, and does between the two the things there
-//! is no other place to do: `setsid`, `TIOCSCTTY`, an empty signal mask and
-//! every signal back at its default action.
+//! On POSIX this is `posix_spawn` when file actions and attributes can describe
+//! the child — on Linux a detached child on a pseudo-terminal included — and
+//! otherwise a fork and an exec, doing between the two the things there is no
+//! other place to do: `setsid`, `TIOCSCTTY`, an empty signal mask and every
+//! signal back at its default action.
 //!
 //! On Windows it is `CreateProcessW`. A child on a pseudo-terminal is attached
 //! to the pseudoconsole through `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` in a

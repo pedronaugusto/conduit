@@ -120,8 +120,10 @@ each of those three being `.inherit`, `.{ .file = f }`, `.ignore`, `.pipe` or
 pair for one stream and something else for the others, on POSIX.
 
 `detach` puts the child out of reach of signals aimed at the parent's process
-group. On POSIX with `.pty` it is `setsid` plus `TIOCSCTTY`, so the pair
-becomes the child's controlling terminal; otherwise `setpgid(0, 0)`. On Windows
+group. On POSIX with `.pty` it is a session of its own with the pair as its
+controlling terminal — `setsid` plus `TIOCSCTTY` in a fork child, or on Linux
+`POSIX_SPAWN_SETSID` plus the terminal opened by name — otherwise
+`setpgid(0, 0)`. On Windows
 it is `CREATE_NEW_PROCESS_GROUP`, which is what a console control event can be
 addressed to and nothing more — reaching the tree there is the job object's
 doing, not `detach`'s.
@@ -453,11 +455,16 @@ that needs nothing done between the fork and the exec is handed to
 `posix_spawn`, which does not copy the parent's page tables: measured here over
 1000 spawns of `/usr/bin/true` on the null device, 946 µs a spawn against 1336.
 Everything that can only be done in a fork child sends the spawn back to the
-fork — a pseudo-terminal, which needs `setsid` and an ioctl; `credentials` and
-`resource_limits`, which a process sets on itself; `cwd`, `Stream.close`, a
-caller's file at descriptor 0, 1 or 2, and `fd_policy = .close_all`. The fast
-path runs on Linux and macOS, which are the systems the suite runs on; the BSDs
-number the attribute flags differently and keep the fork. A child put in a
+fork — `credentials` and `resource_limits`, which a process sets on itself;
+`cwd`, `Stream.close`, a caller's file at descriptor 0, 1 or 2, and `fd_policy =
+.close_all`. A detached child on a pseudo-terminal takes `posix_spawn` on
+Linux: `POSIX_SPAWN_SETSID` makes the session, and the terminal's name opened
+without `O_NOCTTY` in that session makes it the controlling one, as a session
+leader's first terminal open does there. On macOS and the BSDs it keeps the
+fork: a terminal becomes controlling there only through `TIOCSCTTY`, an ioctl
+no file action can make. The fast path runs on Linux and macOS, which are the
+systems the suite runs on; the BSDs number the attribute flags differently and
+keep the fork. A child put in a
 cgroup of its own on Linux is forked too (above). `zig build test
 -Dfork-spawn` runs the whole suite with it turned off.
 
