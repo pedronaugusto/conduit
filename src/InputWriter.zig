@@ -15,6 +15,7 @@
 const InputWriter = @This();
 const std = @import("std");
 const Child = @import("Child.zig");
+const handles = @import("handles.zig");
 
 /// Owned state; only the methods below use it.
 state: ?*opaque {},
@@ -176,7 +177,7 @@ fn run(state: *State, io: std.Io) void {
             failure = err;
             return;
         } orelse return;
-        state.file.writeStreamingAll(io, node.bytes) catch |err| {
+        handles.writeStreamingAll(state.file, io, node.bytes) catch |err| {
             state.mutex.lockUncancelable(io);
             defer state.mutex.unlock(io);
             // Publish the failure before releasing the batch's backlog.

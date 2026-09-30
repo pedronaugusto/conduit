@@ -310,3 +310,37 @@ test "InputWriter a zero bound accepts only empty input" {
     writer.cancel(io);
     try writer.wait(io);
 }
+
+test "InputWriter checks cancellation when a write makes no progress" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const NoProgress = struct {
+        var zero: std.atomic.Value(bool) = .init(false);
+
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            if (operation == .file_write_streaming) {
+                if (zero.swap(true, .acq_rel)) return .{ .file_write_streaming = error.InputOutput };
+                return .{ .file_write_streaming = 0 };
+            }
+            return io.vtable.operate(userdata, operation);
+        }
+
+        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
+            if (zero.load(.acquire)) return error.Canceled;
+            return io.vtable.checkCancel(userdata);
+        }
+    };
+    NoProgress.zero.store(false, .release);
+    var vtable = io.vtable.*;
+    vtable.operate = NoProgress.operate;
+    vtable.checkCancel = NoProgress.checkCancel;
+    const stalled_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    var child = try spawn("echo");
+    defer reap(&child);
+    var writer = try child.inputWriter(stalled_io, gpa, .{ .max_backlog = 10 });
+    defer writer.deinit(stalled_io);
+    try writer.queue(stalled_io, "held");
+    try testing.expectError(error.Canceled, writer.wait(io));
+    try testing.expectError(error.Canceled, writer.queue(io, "later"));
+}

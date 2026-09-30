@@ -214,7 +214,7 @@ fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!v
             error.Canceled => return error.Canceled,
             else => if (handles.finished(err)) return else return error.ReadFailed,
         };
-        to.writeStreamingAll(io, buffer[0..n]) catch |err| switch (err) {
+        handles.writeStreamingAll(to, io, buffer[0..n]) catch |err| switch (err) {
             error.BrokenPipe => return,
             error.Canceled => return error.Canceled,
             else => return error.WriteFailed,

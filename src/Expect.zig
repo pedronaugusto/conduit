@@ -393,7 +393,7 @@ pub const SendError = error{
 /// a line on `"\n"`, and the end-of-file the line discipline makes is
 /// `"\x04"`.
 pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
-    expect.master.write.writeStreamingAll(io, reply) catch |err| switch (err) {
+    handles.writeStreamingAll(expect.master.write, io, reply) catch |err| switch (err) {
         error.Canceled => return error.Canceled,
         error.BrokenPipe => return error.BrokenPipe,
         else => return error.WriteFailed,

@@ -77,6 +77,19 @@ pub fn readStreaming(
     }
 }
 
+/// Writes the whole slice, retaining short writes and checking cancellation
+/// when a backend reports zero progress. File.writeStreamingAll retries that
+/// zero without a cancellation point, so a task could otherwise spin past a
+/// request to stop. The same rule belongs to every writer in this package.
+pub fn writeStreamingAll(f: std.Io.File, io: std.Io, bytes: []const u8) std.Io.File.Writer.Error!void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const n = try f.writeStreaming(io, &.{}, &.{bytes[offset..]}, 1);
+        if (n == 0) try std.Io.checkCancel(io);
+        offset += n;
+    }
+}
+
 /// Whether a descriptor on this system can be opened close-on-exec in one
 /// call, or needs a second one.
 ///
@@ -197,4 +210,31 @@ test "readStreaming retries a permitted zero-byte result" {
     const n = try readStreaming(f, zero_io, &.{&buffer});
     try std.testing.expect(state.returned_zero);
     try std.testing.expectEqualStrings("after zero", buffer[0..n]);
+}
+
+test "writeStreamingAll retains short writes after zero progress" {
+    const ShortWrites = struct {
+        var calls: usize = 0;
+        var used: usize = 0;
+        var bytes: [6]u8 = undefined;
+
+        fn operate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            std.debug.assert(operation == .file_write_streaming);
+            calls += 1;
+            if (calls == 1) return .{ .file_write_streaming = 0 };
+            const data = operation.file_write_streaming.data[0];
+            const n = @min(data.len, 2);
+            @memcpy(bytes[used..][0..n], data[0..n]);
+            used += n;
+            return .{ .file_write_streaming = n };
+        }
+    };
+    ShortWrites.calls = 0;
+    ShortWrites.used = 0;
+    var vtable = std.testing.io.vtable.*;
+    vtable.operate = ShortWrites.operate;
+    const io: std.Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
+    try writeStreamingAll(std.Io.File.stdout(), io, "abcdef");
+    try std.testing.expectEqual(4, ShortWrites.calls);
+    try std.testing.expectEqualStrings("abcdef", &ShortWrites.bytes);
 }

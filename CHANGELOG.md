@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Whole writes check cancellation after zero progress, through one file helper shared by `InputWriter`, `Expect`, and `Proxy`.
+
 - `Child.inputWriter` transfers stdin to a bounded `InputWriter` task, with ordered delivery and end, retained write failures, and cancellation that joins before closure.
 
 - POSIX tree fixtures end and reap their owned descendant on every return, including a failed report.
