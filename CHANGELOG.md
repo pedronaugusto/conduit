@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Recorded-tree fixtures report a stopped descendant after the kernel confirms readiness and observe its exit through the held identity after kill delivery.
+
 - Windows tree fixtures create a native descendant in a separate console with no inherited pipes, and prove the parent's streams ended before closing them.
 
 - Windows program lookup refuses directories and batch scripts as spawn does, sharing the same batch-file policy.

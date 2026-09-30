@@ -99,15 +99,16 @@ pub fn build(b: *std.Build) void {
     });
     test_module.addOptions("conduit_options", conduit_options);
 
-    // A real Windows descendant in its own console, with no inherited pipe.
+    // A native tree with a known descendant identity and stream lifetime.
     // Only tests depend on this executable; it is never part of the library.
-    if (target.result.os.tag == .windows) {
+    {
         const fixture = b.addExecutable(.{
             .name = "conduit-tree-fixture",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/test_process.zig"),
                 .target = target,
                 .optimize = optimize,
+                .link_libc = link_libc,
             }),
         });
         const test_options = b.addOptions();

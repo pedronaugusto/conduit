@@ -1,12 +1,15 @@
-//! A Windows tree fixture with no shell, broker or inherited streams.
-//! The parent creates a sleeping descendant in a new console, reports its
-//! pid, and exits. The test's job owns both processes from before they run.
+//! A tree fixture with no shell or launch broker.
+//! Windows gives the descendant a separate console and no inherited streams,
+//! reports its pid and exits. POSIX reports a descendant only after waitpid
+//! observes it stopped, and keeps the root alive for recorded-tree cleanup.
 const std = @import("std");
+const builtin = @import("builtin");
 const windows = std.os.windows;
 
 extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 
 pub fn main(init: std.process.Init) !void {
+    if (builtin.os.tag != .windows) return posixTree(init);
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len > 1 and std.mem.eql(u8, args[1], "--grandchild")) {
@@ -41,4 +44,25 @@ pub fn main(init: std.process.Init) !void {
     var buffer: [64]u8 = undefined;
     const report = try std.fmt.bufPrint(&buffer, "pid {d}.\n", .{process.dwProcessId});
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
+}
+
+fn posixTree(init: std.process.Init) !void {
+    const c = std.c;
+    const descendant = c.fork();
+    if (descendant < 0) return error.FixtureForkFailed;
+    if (descendant == 0) {
+        // Only async-signal-safe calls in the fork child. It never execs,
+        // so its captured Darwin audit token cannot change under the test.
+        if (c.kill(c.getpid(), .STOP) != 0) c._exit(1);
+        c._exit(0);
+    }
+    var status: c_int = 0;
+    while (c.waitpid(descendant, &status, std.posix.W.UNTRACED) < 0) {
+        if (std.posix.errno(-1) != .INTR) return error.FixtureWaitFailed;
+    }
+    if (!std.posix.W.IFSTOPPED(@bitCast(status))) return error.FixtureDescendantDidNotStop;
+    var buffer: [64]u8 = undefined;
+    const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{descendant});
+    try std.Io.File.stdout().writeStreamingAll(init.io, report);
+    try init.io.sleep(.fromSeconds(30), .awake);
 }

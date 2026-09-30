@@ -1624,7 +1624,7 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     const testing = std.testing;
     const Child = @import("Child.zig");
     var child = try Child.spawn(testing.io, testing.allocator, .{
-        .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!; wait" },
+        .argv = &.{@import("conduit_test_options").tree_fixture},
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(testing.io);
@@ -1633,9 +1633,22 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     var output = child.stdout.?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(State.get(&child).id)).?;
+    var stage: []const u8 = "rejecting a mismatched start time";
+    errdefer |err| std.debug.print("recorded tree: {s} failed with {s}; root {d} start {?d}, descendant {d} start {?d}\n", .{
+        stage,      @errorName(err),                  State.get(&child).id, startTime(State.get(&child).id) catch null,
+        descendant, startTime(descendant) catch null,
+    });
+    var captured = (try captureStarted(descendant, (try startTime(descendant)).?)).?;
+    defer captured.deinit();
+    defer _ = captured.signal(.KILL);
     try testing.expect(!try endRecorded(testing.io, .{ .pid = State.get(&child).id, .start = since +% 1, .grace_ms = 20 }));
     try testing.expect((try startTime(State.get(&child).id)) != null);
+    stage = "ending the recorded tree";
     try testing.expect(try endRecorded(testing.io, .{ .pid = State.get(&child).id, .start = since, .grace_ms = 20 }));
+    stage = "observing the descendant's exit";
+    // Cleanup proves delivery of KILL, which may precede observable exit.
+    // Keep the same 20 ms budget when waiting on the held identity.
+    if (!try captured.wait(testing.io, 20)) return error.TestDescendantStayed;
     try testing.expect((try startTime(descendant)) == null);
     _ = try child.wait(testing.io);
 }
