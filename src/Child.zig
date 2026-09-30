@@ -39,6 +39,7 @@ const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
 const Expect = @import("Expect.zig");
+const InputWriter = @import("InputWriter.zig");
 const Pty = @import("Pty.zig");
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
@@ -61,7 +62,7 @@ pub const ProcessGroupId = if (is_windows) windows.DWORD else posix.pid_t;
 /// uses it. Only spawn creates the state and deinit releases it.
 lifecycle: ?*opaque {},
 /// The writing end of the child's standard input, when `.pipes` asked for one.
-/// Owned by this `Child`.
+/// Owned by this `Child` until transferred to an `InputWriter`.
 stdin: ?std.Io.File,
 /// The reading end of the child's standard output, when `.pipes` asked for
 /// one. Owned by this `Child`.
@@ -682,6 +683,15 @@ pub fn closeStdin(child: *Child, io: std.Io) void {
     const f = child.stdin orelse return;
     child.stdin = null;
     f.close(io);
+}
+
+/// Takes the stdin pipe and starts a bounded writer on its own task. Bytes
+/// queued through it never wait for the child to read. On success stdin is
+/// null: the InputWriter alone writes and closes it, independently of this
+/// Child's lifetime. On error this Child still owns the untouched pipe.
+/// Only a pipe can be transferred; a terminal is error.NoStdinPipe.
+pub fn inputWriter(child: *Child, io: std.Io, allocator: Allocator, options: InputWriter.Options) InputWriter.StartError!InputWriter {
+    return InputWriter.init(io, allocator, child, options);
 }
 
 /// The live identity as a number, or null after retirement or deinit.

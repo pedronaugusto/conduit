@@ -80,6 +80,7 @@ to read while a wait or Reaper runs.
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
 | `child.stdin`, `child.stdout`, `child.stderr` | `std.Io.File`s for the pipes `spawn` created, owned by the `Child`. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
+| `child.inputWriter(io, allocator, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
 | `child.pty` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
 | `child.stdinFile()`, `child.stdoutFile()` | The child's input and output wherever they are: the pipes, or the master. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
@@ -155,6 +156,50 @@ starts* rather than the one process. Windows only; anywhere else it is
 `error.Unsupported`. `cpu_rate` is hundredths of a percent of the whole
 machine's processor time, from 1 through 10,000; an out-of-range value is
 `error.InvalidJobLimit`.
+
+### `InputWriter` — bounded input for a child
+
+```zig
+var input = try child.inputWriter(io, gpa, .{ .max_backlog = 1024 * 1024 });
+defer input.deinit(io);
+try input.queue(io, "first\n");
+try input.queue(io, "second\n");
+try input.end(io);
+// Read output while the input task writes, so neither pipe waits on the other.
+var result = try child.output(io, gpa, .{ .timeout_ms = 5000 });
+defer result.deinit(gpa);
+try input.wait(io);
+```
+
+| | |
+|---|---|
+| `input.queue(io, bytes)` | Copy all bytes in order, or accept none. `BacklogFull` refuses the write without waiting for the child to read. |
+| `input.end(io)` | Refuse further input with `InputClosed`, then close the pipe after everything already queued. Idempotent. |
+| `input.wait(io)` | Wait for pipe closure and return its delivery result. Canceling a waiter leaves delivery running. |
+| `input.cancel(io)` | Abandon pending bytes, interrupt a blocked write and join the task. Later calls return `Canceled`; an earlier failure or completed delivery stays final. |
+| `input.deinit(io)` | Cancel, join and free. Stop the other callers first. Idempotent. |
+
+The writer owns the stdin pipe after successful construction; `child.stdin`
+is then null. Startup failure leaves it with the child. Only a separate pipe
+can be transferred: a child on a terminal is `NoStdinPipe`. The writer does
+not borrow the child. Its allocator and Io must outlive it, and an earlier
+copy of stdin must no longer be used. Move it before sharing and never copy
+it. Queue, end and wait may run on several tasks; cancel has one caller at a
+time. The writing task alone writes and closes the pipe, with no mutex held
+across a write. The first write failure is returned to later callers too.
+
+The bound counts accepted bytes until their whole batch is written to the
+pipe, including the batch the task has taken. It does not count bytes already
+in the operating system's pipe or say when the child consumed them. Allocation
+metadata is additional. A zero bound accepts only empty writes. Calls using
+the writer's allocator are serialized.
+
+[Tokio's `ChildStdin`](https://docs.rs/tokio/latest/tokio/process/struct.ChildStdin.html)
+is an asynchronous pipe writer; [Go's `StdinPipe`](https://pkg.go.dev/os/exec#Cmd.StdinPipe)
+returns an `io.WriteCloser`. Both leave queueing to the caller. `InputWriter`
+adds a byte bound, a task that delivers the queue, and an end ordered after
+the accepted bytes, so a caller can answer a CLI while holding its own lock
+without waiting for that CLI to read.
 
 ### `Expect` — a conversation with a child
 
@@ -492,9 +537,11 @@ master in a second call only where the system refuses it. A descriptor the
 *caller* opened without the flag is the caller's, and `fd_policy` is how to
 say the child should not have it.
 
-**Allocation.** `Child.spawn` and `spawnShell` take an allocator, use it for the
-call only — the argument, environment and search-path arrays that must exist
-before the child does — and retain nothing. `Child.output` allocates the bytes
+**Allocation.** `Child.spawn` and `spawnShell` take an allocator and retain the
+child's lifecycle until `deinit`; that allocator must outlive the child. The
+argument, environment and search-path arrays exist only for the spawn call.
+`InputWriter` keeps its state and queue until `deinit`. `Child.output` allocates
+the bytes
 it collects and `environ` the map it returns; both say whose they are.
 Process snapshots for POSIX signalling and `endRecorded` use bounded stack
 buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
@@ -506,8 +553,9 @@ caller supplied buffers, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
 which is one call; `Reaper`, which exists so a wait can be in flight while
-another task works; and `Child.output`, which reads two streams at once. A
-child is reaped once however many tasks ask: the right to be inside the
+another task works; and `Child.output`, which reads two streams at once. An
+`InputWriter` serializes its queue and writes on one task of its own. A child
+is reaped once however many tasks ask: the right to be inside the
 system's wait is taken with an atomic, and whoever has it publishes the term to
 the rest — so `killWait` is legal while a `Reaper` runs, which is the sequence
 the `Reaper` exists for. A separate identity claim covers the whole descendant

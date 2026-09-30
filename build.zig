@@ -113,6 +113,16 @@ pub fn build(b: *std.Build) void {
         });
         const test_options = b.addOptions();
         test_options.addOptionPath("tree_fixture", fixture.getEmittedBin());
+        const input_fixture = b.addExecutable(.{
+            .name = "conduit-input-fixture",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/test_input_process.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = link_libc,
+            }),
+        });
+        test_options.addOptionPath("input_fixture", input_fixture.getEmittedBin());
         test_module.addOptions("conduit_test_options", test_options);
     }
 

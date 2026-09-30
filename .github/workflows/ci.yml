@@ -135,6 +135,10 @@ jobs:
           "-Dtest-filter=tty.test"
           "-Dtest-filter=environ.test" "-Dtest-filter=shell.test"
 
+      - name: Debug — InputWriter
+        timeout-minutes: 4
+        run: zig build unit -Doptimize=Debug "-Dtest-filter=InputWriter" --test-timeout 45s --summary all
+
       - name: Debug — Expect
         timeout-minutes: 4
         run: zig build unit -Doptimize=Debug "-Dtest-filter=Expect.test" --test-timeout 45s --summary all
