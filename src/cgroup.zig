@@ -60,6 +60,29 @@ pub const supported = builtin.os.tag == .linux;
 /// that is always none.
 pub const Cgroup = if (supported) LinuxCgroup else NoCgroup;
 
+/// The boot that gives a recorded directory inode its meaning.
+/// A complete UUID is required; a partial read never becomes an identity.
+pub fn bootIdentity() ?[36]u8 {
+    if (comptime !supported) return null;
+    const fd = c.open("/proc/sys/kernel/random/boot_id", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) return null;
+    defer _ = c.close(fd);
+    var boot: [36]u8 = undefined;
+    var filled: usize = 0;
+    while (filled < boot.len) {
+        const n = c.read(fd, boot[filled..].ptr, boot.len - filled);
+        if (n < 0 and c.errno(n) == .INTR) continue;
+        if (n <= 0) return null;
+        filled += @intCast(n);
+    }
+    for (boot, 0..) |byte, i| {
+        if (i == 8 or i == 13 or i == 18 or i == 23) {
+            if (byte != '-') return null;
+        } else if (!std.ascii.isHex(byte)) return null;
+    }
+    return boot;
+}
+
 /// Test builds only: what lets a test run a child on the walk where a cgroup
 /// could be had.
 pub const testing_hook = struct {

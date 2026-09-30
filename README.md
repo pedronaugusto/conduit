@@ -89,6 +89,7 @@ to read while a wait or Reaper runs.
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
+| `child.containment(buffer)` | Copies the detached group and optional Linux cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. |
@@ -273,6 +274,12 @@ resolved to is two steps, with room between them for the answer to change.
 with a terminal emulator's defaults — `$SHELL` or `%COMSPEC%`, 24×80, `TERM`
 set, a controlling terminal on POSIX — absorbing the `closeSlave` timing
 difference below.
+
+A survivor ledger saves `child.processId().?` as its key and
+`try child.containment(&path_buffer)` as its containment record before starting
+Reaper. Keep that key, record and path buffer independently of the Child,
+through retirement; remove the ledger entry with the saved key. A numeric key
+never authorizes a signal.
 
 `Reaper.init(&child, options)` and `start(io)` put the wait for a child on a
 task of its own; `exit()` answers a `Child.WaitError!?Term` without blocking,

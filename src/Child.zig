@@ -706,6 +706,41 @@ pub fn processId(child: *const Child) ?Id {
     return state.process_id;
 }
 
+/// Containment facts for a survivor record, with no owned handles.
+/// The cgroup path borrows the buffer passed to containment; everything else
+/// is copied. Keep that buffer with the record, independently of this Child.
+pub const Containment = struct {
+    group: ?ProcessGroupId,
+    cgroup: ?struct {
+        path: [:0]const u8,
+        id: u64,
+        boot: [36]u8,
+    } = null,
+};
+
+pub const ContainmentError = error{ BufferTooSmall, IdentityUnavailable };
+
+/// Copies the detached group and, on Linux, the cgroup path, directory inode
+/// and boot id. Available through retirement, until deinit. No cgroup is null;
+/// a cgroup whose identity cannot be read is IdentityUnavailable, so a ledger
+/// never silently records incomplete containment. An undersized path buffer
+/// is BufferTooSmall; std.fs.max_path_bytes + 64 always holds our path.
+///
+/// Save processId and this record before starting a Reaper. Retain the saved
+/// id as the ledger key through retirement; it is not permission to signal.
+pub fn containment(child: *const Child, buffer: []u8) ContainmentError!Containment {
+    if (child.lifecycle == null) return .{ .group = null };
+    const state = State.get(child);
+    var record: Containment = .{ .group = state.pgid };
+    if (comptime !is_windows) if (state.cgroup.active()) {
+        const path = state.cgroup.path(buffer) orelse return error.BufferTooSmall;
+        const id = state.cgroup.id() orelse return error.IdentityUnavailable;
+        const boot = cgroups.bootIdentity() orelse return error.IdentityUnavailable;
+        record.cgroup = .{ .path = path, .id = id, .boot = boot };
+    };
+    return record;
+}
+
 /// The published answer without asking the OS to reap. Safe alongside a wait
 /// or Reaper: null before publication, or ReapedElsewhere after status loss.
 /// After deinit there is no result to read.

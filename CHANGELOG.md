@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Child.containment` copies the detached group and Linux cgroup path, directory identity and boot identity for records retained through retirement.
+
 - The allocation documentation names the process allocator that owns Windows PTY geometry until the pair closes.
 
 - Windows whole writes report `BrokenPipe` for a pipe whose peer has closed, including the closing state Zig 0.16 reports as `Unexpected`.

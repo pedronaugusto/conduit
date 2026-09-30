@@ -4169,3 +4169,45 @@ test "the Windows PID fixture keeps reading after a successful empty read" {
     try sink.start(source);
     try testing.expectEqual(@as(u32, 12345), try readMarkedNumber(u32, &sink));
 }
+
+test "a containment snapshot survives reaping and deinit without owned handles" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    const key = child.processId().?;
+    var path_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const record = try child.containment(&path_buffer);
+    try testing.expectEqual(key, record.group.?);
+    if (record.cgroup) |contained| {
+        try testing.expect(contained.id != 0);
+        try testing.expectEqual(@as(usize, 36), contained.boot.len);
+        try testing.expect(contained.path.ptr == &path_buffer);
+        try testing.expectError(error.BufferTooSmall, child.containment(&.{}));
+    }
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
+    reaper.deinit(io);
+    try testing.expectEqual(@as(?Child.Id, null), child.processId());
+    var retired_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const retired = try child.containment(&retired_buffer);
+    try testing.expectEqual(record.group, retired.group);
+    if (record.cgroup) |contained| {
+        try testing.expectEqualStrings(contained.path, retired.cgroup.?.path);
+        try testing.expect(contained.path.ptr != retired.cgroup.?.path.ptr);
+        try testing.expectEqual(contained.id, retired.cgroup.?.id);
+        try testing.expectEqualStrings(&contained.boot, &retired.cgroup.?.boot);
+    }
+    child.deinit(io);
+    try testing.expectEqual(key, record.group.?);
+    if (record.cgroup) |contained| try testing.expect(std.mem.startsWith(u8, contained.path, "/"));
+}
