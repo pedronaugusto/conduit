@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- PID fixtures report malformed or missing output and stop when the stream ends; Windows tree fixtures report the failing stage, child result, stdout, stderr and process-open errors.
+
 - Breaking: `Pty.size` borrows a pointer; Windows geometry is opaque and synchronized with the OS resize, so stream borrows never copy a changing cache.
 
 - Breaking: Child owns opaque lifecycle state until `deinit`; `processId` and `result` synchronize identity and result access, replacing public handles and mutable lifecycle fields.

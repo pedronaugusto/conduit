@@ -850,16 +850,28 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
+    var errors: Sink = .{};
+    defer errors.deinit();
+    var stage: []const u8 = "starting readers and reading the grandchild id";
+    errdefer |err| {
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (child.lifecycle != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        sink.report("pid <number>.");
+        errors.report("fixture stderr");
+    }
     try sink.start(child.stdout.?);
+    try errors.start(child.stderr.?);
 
-    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
+    const id = try readMarkedNumber(win32.DWORD, &sink);
+    stage = "opening the reported grandchild";
+    const grandchild = try openById(id);
     defer std.os.windows.CloseHandle(grandchild);
+    stage = "waiting for the child and ending its tree";
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
@@ -1947,7 +1959,7 @@ fn readPid(sink: *Sink) !posix.pid_t {
 /// the type is the caller's to ask for.
 fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
     const deadline: Deadline = .in(io, budget_ms);
-    while (deadline.remainingMs(io) > 0) {
+    while (true) {
         const found = found: {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
@@ -1955,12 +1967,20 @@ fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
             const at = std.mem.indexOf(u8, said, "pid ") orelse break :found null;
             const rest = said[at + "pid ".len ..];
             const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :found null;
-            break :found std.fmt.parseInt(Number, rest[0..end], 10) catch null;
+            const number = std.fmt.parseInt(Number, rest[0..end], 10) catch break :found @as(Number, 0);
+            break :found number;
         };
-        if (found) |number| return number;
+        if (found) |number| {
+            if (number != 0) return number;
+            sink.report("a nonzero decimal process id between pid and .");
+            return error.TestInvalidProcessId;
+        }
+        if (sink.ended() or deadline.remainingMs(io) == 0) {
+            sink.report("pid <number>.");
+            return error.TestChildSaidNothing;
+        }
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
-    return error.TestChildSaidNothing;
 }
 
 /// Whether the operating system still knows that process id. A zombie counts
@@ -1982,7 +2002,10 @@ fn openById(id: win32.DWORD) !win32.HANDLE {
         win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION,
         .FALSE,
         id,
-    ) orelse error.TestProcessNotThere;
+    ) orelse {
+        std.debug.print("\nOpenProcess({d}) failed: Windows error {d}\n", .{ id, @intFromEnum(std.os.windows.GetLastError()) });
+        return error.TestProcessNotThere;
+    };
 }
 
 /// Whether that process is still running. Windows only.
@@ -2007,16 +2030,28 @@ test "waitTree says the tree has ended, and does not say it early" {
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
+    var errors: Sink = .{};
+    defer errors.deinit();
+    var stage: []const u8 = "starting readers and reading the grandchild id";
+    errdefer |err| {
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (child.lifecycle != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        sink.report("pid <number>.");
+        errors.report("fixture stderr");
+    }
     try sink.start(child.stdout.?);
+    try errors.start(child.stderr.?);
 
-    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
+    const id = try readMarkedNumber(win32.DWORD, &sink);
+    stage = "opening the reported grandchild";
+    const grandchild = try openById(id);
     defer std.os.windows.CloseHandle(grandchild);
+    stage = "waiting for the child and ending its tree";
 
     // The child ends on its own, and is left unreaped until the end: `kill`
     // declines to signal a child it has already been told is gone, so a test
@@ -2061,16 +2096,28 @@ test "deinit ends a grandchild the child started and left behind" {
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
+    var errors: Sink = .{};
+    defer errors.deinit();
+    var stage: []const u8 = "starting readers and reading the grandchild id";
+    errdefer |err| {
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (child.lifecycle != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        sink.report("pid <number>.");
+        errors.report("fixture stderr");
+    }
     try sink.start(child.stdout.?);
+    try errors.start(child.stderr.?);
 
-    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
+    const id = try readMarkedNumber(win32.DWORD, &sink);
+    stage = "opening the reported grandchild";
+    const grandchild = try openById(id);
     defer std.os.windows.CloseHandle(grandchild);
+    stage = "waiting for the child and ending its tree";
 
     // The child is gone and reaped, and nothing has been killed: `killWait` on
     // a child that ended on its own signals nothing, so what is running now is
@@ -4034,4 +4081,12 @@ test "Child identity and result access share the Reaper's retirement" {
     try testing.expectEqual(Child.Term{ .exited = 7 }, (try child.result()).?);
     try testing.expectEqual(@as(?Child.Id, null), child.processId());
     try testing.expectEqual(Child.Term{ .exited = 7 }, try reaper.wait(io));
+}
+
+test "a PID fixture reports malformed output instead of a silent timeout" {
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.bytes.appendSlice(gpa, "pid not-a-number.\n");
+    sink.finished.store(true, .release);
+    try testing.expectError(error.TestInvalidProcessId, readMarkedNumber(u32, &sink));
 }
