@@ -262,6 +262,12 @@ fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
     // ended is still the child's, unreaped, while its group is ended below.
     const held = reaper.child.holdReap() orelse return reaper.child.wait(io);
     defer held.release();
+    // A held reap can refer to an already completed child. Read its published
+    // answer before opening any watch or addressing a group by number: those
+    // labels no longer belong to the child once a term has been published.
+    // Holding the reap means tryWait can only read a term or answer null;
+    // it cannot enter the OS wait and cannot return a wait error.
+    if (reaper.child.tryWait() catch unreachable) |term| return term;
     if (wait_for.Watch.open(reaper.child.id)) |watch| {
         defer watch.close();
         while (true) switch (watch.endedOrWoken(wake[0], null)) {

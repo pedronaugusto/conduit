@@ -488,6 +488,41 @@ test "Reaper.exit becomes non-null once the child has ended" {
     try testing.expectEqual(term, try child.wait(io));
 }
 
+test "a Reaper started after reaping never watches a reused identity" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    child.closeStdin(io);
+    const term = try waitWithin(&child);
+
+    var witness = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // The published term is final. Replace the old numeric labels with a
+    // live witness's, as if the OS had reused them: no watch or tree cleanup
+    // may use those labels after retirement.
+    child.id = witness.id;
+    child.pgid = witness.pgid;
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    try testing.expectEqual(@as(?Child.Term, term), try reaper.waitTimeout(io, 20));
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}
+
 test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
