@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Windows whole writes report `BrokenPipe` for a pipe whose peer has closed, including the closing state Zig 0.16 reports as `Unexpected`.
+
 - Whole writes check cancellation after zero progress, through one file helper shared by `InputWriter`, `Expect`, and `Proxy`.
 
 - `Child.inputWriter` transfers stdin to a bounded `InputWriter` task, with ordered delivery and end, retained write failures, and cancellation that joins before closure.
