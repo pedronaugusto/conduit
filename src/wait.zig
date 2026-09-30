@@ -23,6 +23,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
 
@@ -288,7 +289,7 @@ test "a watch on a child ends when the child does" {
     // Every system this package is tested on has one; a system that has not is
     // one where the caller asks again instead, and there is nothing here to
     // assert about it.
-    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    const watch = Watch.open(State.get(&child).id) orelse return error.SkipZigTest;
     defer watch.close();
 
     try testing.expect(watch.ended(5000));
@@ -307,7 +308,7 @@ test "a watch with a wake ends on the wake, then on the child" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
 
-    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    const watch = Watch.open(State.get(&child).id) orelse return error.SkipZigTest;
     defer watch.close();
     const wake = try handles.pipe();
     defer _ = c.close(wake[0]);
@@ -338,7 +339,7 @@ test "a watch on a child that is still running says so" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
 
-    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    const watch = Watch.open(State.get(&child).id) orelse return error.SkipZigTest;
     defer watch.close();
 
     try testing.expect(!watch.ended(20));

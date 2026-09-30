@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: Child owns opaque lifecycle state until `deinit`; `processId` and `result` synchronize identity and result access, replacing public handles and mutable lifecycle fields.
+
 - Breaking: conduit owns `Term`, whose `exited` payload and `exitCode` retain all 32 bits of a Windows exit status.
 
 - Breaking: blocking Child waits and Reaper report `ReapedElsewhere` when another owner took the child's status.

@@ -20,6 +20,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
 
@@ -514,8 +515,8 @@ test "a Reaper started after reaping never watches a reused identity" {
     // The published term is final. Replace the old numeric labels with a
     // live witness's, as if the OS had reused them: no watch or tree cleanup
     // may use those labels after retirement.
-    child.id = witness.id;
-    child.pgid = witness.pgid;
+    State.get(&child).id = State.get(&witness).id;
+    State.get(&child).pgid = State.get(&witness).pgid;
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
     defer reaper.deinit(io);
@@ -820,7 +821,7 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     defer _ = c.kill(left, .KILL);
 
     var deadline: Deadline = .in(io, budget_ms);
-    while (wait_for.endedUnreaped(child.id) != .ended) {
+    while (wait_for.endedUnreaped(State.get(&child).id) != .ended) {
         if (deadline.remainingMs(io) == 0) return error.TestChildDidNotExit;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
@@ -1228,7 +1229,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     // shell that declines job control leaves the grandchild in the child's
     // group, where the group signal reaches it and there is nothing here to
     // prove.
-    if (getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
+    if (getpgid(grandchild) == State.get(&child).pgid.?) return error.SkipZigTest;
 
     _ = try child.killWait(io, 0);
 
@@ -1319,7 +1320,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
         defer if (alive(grandchild)) {
             _ = c.kill(grandchild, .KILL);
         };
-        if (on_pty and getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
+        if (on_pty and getpgid(grandchild) == State.get(&child).pgid.?) return error.SkipZigTest;
 
         const before = tree.walks.load(.monotonic);
         _ = try child.killWait(io, 0);
@@ -1364,7 +1365,7 @@ fn cgroupsHere() !bool {
     var looked = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
     defer looked.deinit(io);
     _ = try looked.wait(io);
-    return looked.cgroup.active();
+    return State.get(&looked).cgroup.active();
 }
 
 /// Waits for `pid` to be gone altogether: not running and not a zombie.
@@ -1386,8 +1387,8 @@ test "a recorded cgroup opens only at its original directory identity and remove
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = child.cgroup.path(&where).?;
-    const identity = child.cgroup.id().?;
+    const path = State.get(&child).cgroup.path(&where).?;
+    const identity = State.get(&child).cgroup.id().?;
     try testing.expect(cgroup.Cgroup.openRecorded(path, identity +% 1) == null);
     var recorded = cgroup.Cgroup.openRecorded(path, identity).?;
     defer recorded.release();
@@ -1406,8 +1407,8 @@ test "a recorded cgroup whose name now holds another is not removed through it" 
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = child.cgroup.path(&where).?;
-    var recorded = cgroup.Cgroup.openRecorded(path, child.cgroup.id().?).?;
+    const path = State.get(&child).cgroup.path(&where).?;
+    var recorded = cgroup.Cgroup.openRecorded(path, State.get(&child).cgroup.id().?).?;
     defer recorded.release();
 
     // The recorded cgroup empties and goes, and a new empty one takes its
@@ -1426,7 +1427,7 @@ test "a recorded cgroup waits on population changes" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    var recorded = cgroup.Cgroup.openRecorded(child.cgroup.path(&where).?, child.cgroup.id().?).?;
+    var recorded = cgroup.Cgroup.openRecorded(State.get(&child).cgroup.path(&where).?, State.get(&child).cgroup.id().?).?;
     defer recorded.release();
     try testing.expect(!try recorded.waitEmpty(io, 20));
     _ = try child.killWait(io, 0);
@@ -1443,13 +1444,13 @@ test "endRecorded ends a verified Linux cgroup and its detached grandchild" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    var recorded = cgroup.Cgroup.openRecorded(child.cgroup.path(&where).?, child.cgroup.id().?).?;
+    var recorded = cgroup.Cgroup.openRecorded(State.get(&child).cgroup.path(&where).?, State.get(&child).cgroup.id().?).?;
     defer recorded.release();
-    const since = (try tree.startTime(child.id)).?;
+    const since = (try tree.startTime(State.get(&child).id)).?;
     try testing.expect(try conduit.endRecorded(io, .{
-        .pid = child.id,
+        .pid = State.get(&child).id,
         .start = since,
-        .group = child.pgid,
+        .group = State.get(&child).pgid,
         .cgroup = &recorded,
         .grace_ms = 20,
     }));
@@ -1476,7 +1477,7 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         });
         defer child.deinit(io);
         defer _ = child.killWait(io, 0) catch {};
-        try testing.expect(child.cgroup.active());
+        try testing.expect(State.get(&child).cgroup.active());
 
         // The reader is done with the child's output before `deinit` below
         // closes it.
@@ -1492,14 +1493,14 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         // Orphaned and in a session of its own before the kill: the case a
         // group signal and a walk down from the child both miss.
         const deadline: Deadline = .in(io, budget_ms);
-        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == child.id or getsid(orphan) != orphan) {
+        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == State.get(&child).id or getsid(orphan) != orphan) {
             if (deadline.remainingMs(io) == 0) return error.TestGrandchildNeverLeft;
             try std.Io.sleep(io, .fromMilliseconds(2), .awake);
         }
-        try testing.expect(getpgid(orphan) != child.id);
+        try testing.expect(getpgid(orphan) != State.get(&child).id);
 
         var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-        const path = try gpa.dupeZ(u8, child.cgroup.path(&where).?);
+        const path = try gpa.dupeZ(u8, State.get(&child).cgroup.path(&where).?);
         defer gpa.free(path);
         try testing.expect(cgroupExists(path));
 
@@ -1530,7 +1531,7 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    try testing.expect(child.cgroup.active());
+    try testing.expect(State.get(&child).cgroup.active());
 
     var sink: Sink = .{};
     defer sink.deinit();
@@ -1561,7 +1562,7 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    try testing.expect(child.cgroup.active());
+    try testing.expect(State.get(&child).cgroup.active());
 
     // The reader is done with the child's output before `deinit` below
     // closes it.
@@ -1575,7 +1576,7 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
         _ = c.kill(orphan, .KILL);
     };
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = try gpa.dupeZ(u8, child.cgroup.path(&where).?);
+    const path = try gpa.dupeZ(u8, State.get(&child).cgroup.path(&where).?);
     defer gpa.free(path);
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
@@ -1838,7 +1839,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
 
     // Ended, and looked at, before it is waited for.
     before.closeStdin(io);
-    try expectZombie(before.id);
+    try expectZombie(State.get(&before).id);
     _ = try orphans.count();
     try testing.expectEqual(Child.Term{ .exited = 4 }, (try before.waitTimeout(io, budget_ms)) orelse
         return error.TestChildDidNotExit);
@@ -2023,10 +2024,10 @@ test "waitTree says the tree has ended, and does not say it early" {
     // then ask it to end. The child's own handle is what says it has exited,
     // and looking at a handle reaps nothing.
     const deadline: Deadline = .in(io, budget_ms);
-    while (deadline.remainingMs(io) > 0 and runningNow(child.id)) {
+    while (deadline.remainingMs(io) > 0 and runningNow(State.get(&child).id)) {
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
-    try testing.expect(!runningNow(child.id));
+    try testing.expect(!runningNow(State.get(&child).id));
 
     // The child is gone and the tree is not, which is the whole of the
     // difference between this wait and `wait`.
@@ -2093,7 +2094,7 @@ test "a detached child has a process group of its own and an attached one does n
     });
     defer detached.deinit(io);
     defer _ = detached.killWait(io, 0) catch {};
-    try testing.expect(detached.pgid != null);
+    try testing.expect(State.get(&detached).pgid != null);
 
     var attached = try Child.spawn(io, gpa, .{
         .argv = &script.sleep_forever,
@@ -2102,7 +2103,7 @@ test "a detached child has a process group of its own and an attached one does n
     });
     defer attached.deinit(io);
     defer _ = attached.killWait(io, 0) catch {};
-    try testing.expectEqual(@as(?Child.ProcessGroupId, null), attached.pgid);
+    try testing.expectEqual(@as(?Child.ProcessGroupId, null), State.get(&attached).pgid);
 }
 
 test "a detached child's process group is the one the operating system reports" {
@@ -2122,11 +2123,11 @@ test "a detached child's process group is the one the operating system reports" 
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
 
-    try testing.expectEqual(child.id, child.pgid.?);
-    try testing.expectEqual(child.id, getpgid(child.id));
+    try testing.expectEqual(State.get(&child).id, State.get(&child).pgid.?);
+    try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
     // Which is the point of it: a signal to this process's group, the one a
     // terminal sends on Ctrl-C, does not reach the child.
-    try testing.expect(getpgid(0) != child.id);
+    try testing.expect(getpgid(0) != State.get(&child).id);
 }
 
 test "an attached child shares the parent's process group" {
@@ -2143,7 +2144,7 @@ test "an attached child shares the parent's process group" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
 
-    try testing.expectEqual(getpgid(0), getpgid(child.id));
+    try testing.expectEqual(getpgid(0), getpgid(State.get(&child).id));
 }
 
 test "killWait with no grace goes straight to the signal nothing survives" {
@@ -2399,7 +2400,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
 
     // `exec`, so the group the shell made is now the one `sleep` is in, and
     // the child's process id is that group's id.
-    try testing.expectEqual(child.id, try conduit.foregroundGroup(pty.read.?));
+    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.read.?));
 
     // The other half of the claim, and the reason this is worth asking at all:
     // a child on a pair without `detach` sees a terminal that has no
@@ -3108,7 +3109,7 @@ test "spawnShell starts the user's shell on a pair" {
 /// The child's operating-system name as a number, for a trace line that has to
 /// compile on both systems: a process id on POSIX, a handle on Windows.
 fn childId(child: Child) usize {
-    return if (is_windows) @intFromPtr(child.id) else @intCast(child.id);
+    return if (is_windows) @intFromPtr(State.get(child).id) else @intCast(State.get(child).id);
 }
 
 /// `getpgid` is not declared in `std.c`, and two of the tests above are about
@@ -3148,8 +3149,8 @@ test "both spawn paths start the same child" {
         errdefer _ = child.killWait(io, 0) catch {};
 
         // Detached either way, and the group is the child's own.
-        try testing.expectEqual(child.id, child.pgid.?);
-        try testing.expectEqual(child.id, getpgid(child.id));
+        try testing.expectEqual(State.get(&child).id, State.get(&child).pgid.?);
+        try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
 
         var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
         defer result.deinit(gpa);
@@ -3465,7 +3466,7 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    const found = probe(child.id, secret);
+    const found = probe(State.get(&child).id, secret);
     // A child that had already gone would hold nothing and prove nothing.
     if (try child.tryWait()) |term| {
         std.debug.print("the child ended before it was asked: {any}\n", .{term});
@@ -3831,7 +3832,7 @@ test "a fork spawn resets an ignored real-time signal in the child" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    try testing.expectEqual(@as(c_int, 0), c.kill(child.id, signal));
+    try testing.expectEqual(@as(c_int, 0), c.kill(State.get(&child).id, signal));
     try testing.expectEqual(Child.Term{ .signal = signal }, try waitWithin(&child));
 }
 
@@ -3949,9 +3950,9 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     const grandchild = try readPid(&sink);
 
     // A session and a group of its own, and the terminal's foreground group.
-    try testing.expectEqual(child.id, getpgid(child.id));
-    try testing.expectEqual(child.id, getsid(child.id));
-    try testing.expectEqual(child.id, try conduit.foregroundGroup(pty.read.?));
+    try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
+    try testing.expectEqual(State.get(&child).id, getsid(State.get(&child).id));
+    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.read.?));
 
     // Ended, and what it started with it.
     _ = try child.killWait(io, 0);
@@ -3974,7 +3975,7 @@ test "blocking waits and Reaper report status reaped elsewhere" {
         var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
         defer child.deinit(io);
         var status: c_int = undefined;
-        while (c.waitpid(child.id, &status, 0) < 0) {
+        while (c.waitpid(State.get(&child).id, &status, 0) < 0) {
             if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
         }
         if (background) {
@@ -4006,4 +4007,31 @@ test "Windows wait and Reaper preserve the control exit status" {
         try testing.expectEqual(@as(u32, 0xc000013a), conduit.exitCode(term).?);
         try testing.expect(!conduit.succeeded(term));
     }
+}
+
+test "Child identity and result access share the Reaper's retirement" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{ .argv = &script.read_then_exit_7, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } } });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expect(child.processId() != null);
+    try testing.expectEqual(@as(?Child.Term, null), try child.result());
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    var buffer: [32]u8 = undefined;
+    var writer = child.stdin.?.writer(io, &buffer);
+    try writer.interface.writeAll("exit\n");
+    try writer.interface.flush();
+    const deadline: Deadline = .in(io, budget_ms);
+    while (try child.result() == null) {
+        _ = child.processId();
+        if (deadline.remainingMs(io) == 0) return error.TestChildDidNotExit;
+        try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+    }
+    try testing.expectEqual(Child.Term{ .exited = 7 }, (try child.result()).?);
+    try testing.expectEqual(@as(?Child.Id, null), child.processId());
+    try testing.expectEqual(Child.Term{ .exited = 7 }, try reaper.wait(io));
 }

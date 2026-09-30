@@ -12,6 +12,7 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
+const State = @import("child_state.zig");
 const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
@@ -41,7 +42,7 @@ const Plan = stdio_plan.Plan(struct {
 });
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
+pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!Child {
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.
@@ -116,7 +117,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             };
             adoption.finish();
             plan.closeChildSide(io);
-            return started(child.pid, child.forks, .none, &plan, options);
+            return started(state, child.pid, child.forks, .none, &plan, options);
         }
     }
 
@@ -211,7 +212,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
     contained = null;
-    return started(pid, forks, kept, &plan, options);
+    return started(state, pid, forks, kept, &plan, options);
 }
 
 /// Ends and reaps a child that has just been started and will not be handed
@@ -224,13 +225,16 @@ fn discard(pid: posix.pid_t) void {
 
 /// The `Child` a started process is, whichever path started it.
 fn started(
+    state: *State,
     pid: posix.pid_t,
     forks: tree.Forks,
     contained: cgroup.Cgroup,
     plan: *const Plan,
     options: SpawnOptions,
 ) Child {
-    return .{
+    state.* = .{
+        .allocator = state.allocator,
+        .process_id = pid,
         .id = pid,
         .thread = {},
         .handles_open = {},
@@ -240,6 +244,10 @@ fn started(
         .pgid = if (options.detach) pid else null,
         .forks = forks,
         .cgroup = contained,
+        .term = null,
+    };
+    return .{
+        .lifecycle = @ptrCast(state), // safe: only spawn creates the opaque lifecycle, retaining this allocation until deinit.
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -247,7 +255,6 @@ fn started(
             .pty => |pty| pty.master(),
             else => null,
         },
-        .term = null,
     };
 }
 

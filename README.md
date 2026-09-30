@@ -70,10 +70,14 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 
 ### `Child` — a child process
 
+Lifecycle state is opaque. Move a child before sharing it, and do not copy it
+or call `deinit` while another task uses it. `processId` and `result` are safe
+to read while a wait or Reaper runs.
+
 | | |
 |---|---|
-| `Child.spawn(io, allocator, options)` | Start it. The allocator is used for the call only; nothing is retained. |
-| `child.id`, `child.pgid` | The process id (POSIX) or handle (Windows), and the process group when `detach` asked for one. |
+| `Child.spawn(io, allocator, options)` | Start it. The allocator owns the lifecycle until `deinit` and must outlive the child. |
+| `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
 | `child.stdin`, `child.stdout`, `child.stderr` | `std.Io.File`s for the pipes `spawn` created, owned by the `Child`. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
 | `child.pty` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
@@ -82,7 +86,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
-| `child.term` | How it ended, once something reaped it. Written by whichever call did and published through an atomic, so `tryWait` is how to read it while a `Reaper` runs. |
+| `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
@@ -515,7 +519,7 @@ once reaped, its process or group id is never used for signalling again.
 
 - **No terminal emulation.** `Proxy` moves bytes; nothing here parses an escape sequence or keeps a screen.
 - **No command splitting.** `argv` is a list, and turning one string into several is a shell's grammar.
-- **No job control.** `foregroundGroup` answers the question; `tcsetpgrp` is the caller's call to make with `child.pgid`.
+- **No job control.** `foregroundGroup` answers the question; `tcsetpgrp` is the caller's call to make with the group id saved from `child.processId()` for a detached child.
 - **No pattern language.** `Expect` matches byte strings.
 - **No pre-exec callback.** Only async-signal-safe calls are legal there, so the uses people reach for one for are named options instead.
 - **No `.bat` or `.cmd`.** `spawn` returns `error.UnsupportedBatchFile`, because the command interpreter re-parses their command line with rules no serialisation survives.

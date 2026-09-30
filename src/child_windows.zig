@@ -10,6 +10,7 @@ const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
+const State = @import("child_state.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("trace.zig");
@@ -21,7 +22,7 @@ const SpawnOptions = Child.SpawnOptions;
 const file = @import("handles.zig").file;
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
+pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!Child {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -119,7 +120,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     plan.closeChildSide(io);
 
-    return .{
+    state.* = .{
+        .allocator = state.allocator,
+        .process_id = information.dwProcessId,
         .id = information.hProcess,
         .thread = information.hThread,
         .job = job.handle,
@@ -131,6 +134,10 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         .pgid = if (options.detach) information.dwProcessId else null,
         .forks = {},
         .cgroup = {},
+        .term = null,
+    };
+    return .{
+        .lifecycle = @ptrCast(state), // safe: only spawn creates the opaque lifecycle, retaining this allocation until deinit.
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -138,7 +145,6 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             .pty => |pty| pty.master(),
             else => null,
         },
-        .term = null,
     };
 }
 
