@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A rejected Reaper start closes its wake pipe before returning, so retrying cannot overwrite and leak its descriptors.
+
 - PID fixtures report malformed or missing output and stop when the stream ends; Windows tree fixtures report the failing stage, child result, stdout, stderr and process-open errors.
 
 - Breaking: `Pty.size` borrows a pointer; Windows geometry is opaque and synchronized with the OS resize, so stream borrows never copy a changing cache.

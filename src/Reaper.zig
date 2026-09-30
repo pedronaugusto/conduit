@@ -142,6 +142,7 @@ pub fn start(reaper: *Reaper, io: std.Io) StartError!void {
     // a cancelation point of its own: the wake is how a better wait is ended,
     // not a condition of waiting at all.
     if (!is_windows) reaper.wake = handles.pipe() catch null;
+    errdefer reaper.closeWake();
     return reaper.group.concurrent(io, run, .{ reaper, io });
 }
 
@@ -237,10 +238,15 @@ pub fn deinit(reaper: *Reaper, io: std.Io) void {
         _ = c.write(ends[1], "x", 1);
     };
     reaper.group.cancel(io);
+    reaper.closeWake();
+}
+
+/// A rejected start and a joined task release the same owned wake handles.
+fn closeWake(reaper: *Reaper) void {
     if (!is_windows) if (reaper.wake) |ends| {
+        reaper.wake = null;
         _ = c.close(ends[0]);
         _ = c.close(ends[1]);
-        reaper.wake = null;
     };
 }
 
@@ -493,4 +499,40 @@ test "every wait error survives the round trip through the atomic" {
         try std.testing.expectError(err, decode(encodeError(err)));
         try std.testing.expect(encodeError(err) != running);
     }
+}
+
+test "a rejected Reaper start releases its wake pipe before returning" {
+    if (is_windows) return error.SkipZigTest;
+    const io = std.testing.io;
+    var child = try Child.spawn(io, std.testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var reaper: Reaper = .init(&child, .{});
+    defer reaper.deinit(io);
+    const Reject = struct {
+        reaper: *Reaper,
+        ends: ?[2]posix.fd_t = null,
+
+        fn concurrent(userdata: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
+            const reject: *@This() = @ptrCast(@alignCast(userdata.?));
+            reject.ends = reject.reaper.wake;
+            return error.ConcurrencyUnavailable;
+        }
+    };
+    var reject: Reject = .{ .reaper = &reaper };
+    var vtable = io.vtable.*;
+    vtable.groupConcurrent = Reject.concurrent;
+    const rejected_io: std.Io = .{ .userdata = &reject, .vtable = &vtable };
+    try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(rejected_io));
+    for (reject.ends.?) |fd| {
+        try std.testing.expectEqual(@as(c_int, -1), c.fcntl(fd, c.F.GETFD));
+        try std.testing.expectEqual(std.c.E.BADF, c.errno(@as(c_int, -1)));
+    }
+    try std.testing.expectEqual(@as(?[2]posix.fd_t, null), reaper.wake);
+    try reaper.start(io);
+    reaper.stop(io, 0);
+    _ = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
 }
