@@ -4165,3 +4165,32 @@ test "HeldReap and Reaper expose no writable lifecycle fields" {
     try testing.expect(@typeInfo(Child.HeldReap) == .@"enum");
     try testing.expect(@typeInfo(conduit.Reaper) == .@"enum");
 }
+
+test "output reads a published result before watching a retired process number" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf retained; exit 7" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
+    var witness = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // A retired number may already name a live stranger. The published
+    // answer must decide the wait before that number can open a watch.
+    State.get(&child).id = witness.processId().?;
+    var output = try child.output(io, gpa, .{ .timeout_ms = 20 });
+    defer output.deinit(gpa);
+    try testing.expectEqual(false, output.timed_out);
+    try testing.expectEqualStrings("retained", output.stdout);
+    try testing.expectEqual(Child.Term{ .exited = 7 }, output.term);
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}

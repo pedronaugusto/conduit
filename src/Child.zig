@@ -1083,7 +1083,7 @@ fn reapEnded(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Te
 /// The ways this package can ask a child to stop, on either system.
 ///
 /// POSIX has more signals than these and a program that wants one can send it
-/// itself with `std.posix.kill` and `State.get(child).id`. What is here is the subset
+/// itself while holding its own process identity. What is here is the subset
 /// that means the same thing on Windows, which is the only thing a portable
 /// API can promise.
 pub const Signal = enum {
@@ -1650,8 +1650,12 @@ pub fn output(
     // the two pipes and that handle are watched together from this task, so
     // no task is started and no thread is woken to read a pipe. Windows, and
     // a system with nothing to watch, keep the readers on tasks.
+    const published = try child.result();
     if (!is_windows) {
-        if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, watch);
+        // A published term needs only stream draining. Never register an OS
+        // watch on the retired number, which may already name a stranger.
+        if (published != null) return child.outputPolled(io, allocator, options, null, published);
+        if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, watch, null);
     }
     return child.outputOnTasks(io, allocator, options);
 }
@@ -1844,9 +1848,10 @@ fn outputPolled(
     io: std.Io,
     allocator: Allocator,
     options: OutputOptions,
-    watch: wait_for.Watch,
+    watch: ?wait_for.Watch,
+    published: ?Term,
 ) OutputError!Output {
-    defer watch.close();
+    defer if (watch) |opened| opened.close();
     var out: Collector = .init;
     var err: Collector = .init;
     errdefer out.list.deinit(allocator);
@@ -1861,8 +1866,8 @@ fn outputPolled(
 
     var timed_out = false;
     const deadline: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
-    var term: ?Term = null;
-    var drain: ?Deadline = null;
+    var term = published;
+    var drain: ?Deadline = if (published != null) .in(io, options.drain_ms) else null;
     var ended = false;
     while (true) {
         try std.Io.checkCancel(io);
@@ -1900,7 +1905,7 @@ fn outputPolled(
             count += 1;
         }
         if (term == null and !ended) {
-            fds[count] = .{ .fd = watch.handle, .events = posix.POLL.IN, .revents = 0 };
+            fds[count] = .{ .fd = watch.?.handle, .events = posix.POLL.IN, .revents = 0 };
             which[count] = 2;
             count += 1;
         }
