@@ -1245,14 +1245,33 @@ fn killPasses(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void
 const kill_passes: u8 = 2;
 
 fn signalTarget(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void {
-    if (c.kill(target, sig) == 0) return;
-    switch (c.errno(@as(c_int, -1))) {
+    return signalOwnedTarget(PosixSignals, State.get(child).id, target, sig);
+}
+
+const PosixSignals = struct {
+    fn send(target: posix.pid_t, sig: posix.SIG) ?posix.E {
+        if (c.kill(target, sig) == 0) return null;
+        return c.errno(@as(c_int, -1));
+    }
+
+    fn ended(pid: posix.pid_t) wait_for.Ended {
+        return wait_for.endedUnreaped(pid);
+    }
+};
+
+fn signalOwnedTarget(comptime System: type, pid: posix.pid_t, target: posix.pid_t, sig: posix.SIG) KillError!void {
+    switch (System.send(target, sig) orelse return) {
         .PERM => {
             // Darwin refuses a signal addressed to a process group whose only
             // remaining member has exited and not yet been reaped. That is not
             // a permission problem in any sense the caller can act on, so it is
             // reported as what it is: the child is already gone.
-            if (wait_for.endedUnreaped(State.get(child).id) == .ended) return;
+            if (System.ended(pid) == .ended) return;
+            // A Darwin group walk can exclude an exiting root before waitid
+            // can observe it. Address the held root directly: this also
+            // distinguishes a denied live child's actual permissions from
+            // the group's empty delivery set. Identity is still held.
+            if (target < 0) return signalOwnedTarget(System, pid, pid, sig);
             return error.PermissionDenied;
         },
         // No such process: the child ended between the check above and here.
@@ -1261,6 +1280,40 @@ fn signalTarget(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!vo
         .INVAL => unreachable,
         else => |err| return posix.unexpectedErrno(err),
     }
+}
+
+test "a group leaving before its exit is waitable still receives a child signal" {
+    if (is_windows) return error.SkipZigTest;
+    const Leaving = struct {
+        var root_signalled: bool = false;
+
+        fn send(target: posix.pid_t, _: posix.SIG) ?posix.E {
+            if (target < 0) return .PERM;
+            root_signalled = true;
+            return null;
+        }
+
+        fn ended(_: posix.pid_t) wait_for.Ended {
+            return .running;
+        }
+    };
+    Leaving.root_signalled = false;
+    try signalOwnedTarget(Leaving, 123, -123, .TERM);
+    try std.testing.expect(Leaving.root_signalled);
+}
+
+test "a refused group still reports the held child's actual permission denial" {
+    if (is_windows) return error.SkipZigTest;
+    const Denied = struct {
+        fn send(_: posix.pid_t, _: posix.SIG) ?posix.E {
+            return .PERM;
+        }
+
+        fn ended(_: posix.pid_t) wait_for.Ended {
+            return .running;
+        }
+    };
+    try std.testing.expectError(error.PermissionDenied, signalOwnedTarget(Denied, 123, -123, .TERM));
 }
 
 pub const KillWaitError = KillError || WaitError || TryWaitError || std.Io.Cancelable;
@@ -1981,6 +2034,8 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
     defer watchdog.deinit(io);
 
     for (0..64) |iteration| {
+        var stage: []const u8 = "spawning";
+        errdefer |err| std.debug.print("identity fixture: iteration {d}, {s}: {s}\n", .{ iteration, stage, @errorName(err) });
         var child = try spawn(io, testing.allocator, .{
             .argv = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -1989,17 +2044,23 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         defer child.deinit(io);
         defer _ = child.killWait(io, 0) catch {};
         var reaper: @import("Reaper.zig") = .init(&child, .{});
+        stage = "starting Reaper";
         try reaper.start(io);
         defer reaper.deinit(io);
 
         var probe: SignalProbe = .{ .reaper = &reaper };
         signal_probe = &probe;
         defer signal_probe = null;
+        stage = "delivering the signal";
         try child.kill(if (iteration % 3 == 0) .kill else .terminate);
         signal_probe = null;
+        stage = "checking retirement during delivery";
         try testing.expect(!probe.retired);
+        stage = "waiting for publication";
         const term = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+        stage = "comparing the published answer";
         try testing.expectEqual(term, try child.wait(io));
+        stage = "ignoring a retired kill";
         try child.kill(.kill);
     }
 }
