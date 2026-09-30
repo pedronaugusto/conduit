@@ -65,12 +65,9 @@ read: ?Handle,
 write: ?Handle,
 /// The terminal end. `null` once `close` or `closeSlave` has been called.
 slave: ?Slave,
-/// Windows only: the geometry last given to `open` or `resize`.
-///
-/// A pseudoconsole cannot be asked its size, so `size` answers from here. On
-/// POSIX there is an ioctl for it and this field does not exist, because a
-/// remembered number there would be a copy that a child could make wrong.
-remembered_size: if (is_windows) Size else void,
+/// Windows only: the geometry owner. Kept behind a pointer so borrowing a
+/// stream by value never copies state another task is resizing.
+geometry: if (is_windows) ?*opaque {} else void,
 /// Windows only: which of `OpenOptions.console` this system granted.
 ///
 /// A flag a version of ConPTY does not know makes it refuse the whole call,
@@ -199,11 +196,14 @@ pub const ResizeError = error{
 /// That is what makes window-size forwarding possible at all — see `Proxy`.
 pub fn resize(pty: *Pty, new_size: Size) ResizeError!void {
     if (is_windows) {
+        const geometry = pty.geometryState() orelse return error.Unexpected;
+        geometry.lock();
+        defer geometry.mutex.unlock();
         const slave = pty.slave orelse return error.Unexpected;
         if (win32.ResizePseudoConsole(slave, new_size.toCoord()) != win32.ok) {
             return error.Unexpected;
         }
-        pty.remembered_size = new_size;
+        geometry.size = new_size;
         return;
     }
     const read = pty.read orelse return error.Unexpected;
@@ -216,9 +216,15 @@ pub const SizeError = ResizeError;
 ///
 /// On POSIX this asks the kernel, so it reflects a resize done by anyone. On
 /// Windows a pseudoconsole cannot be asked, so this answers with what `open`
-/// or `resize` last set.
-pub fn size(pty: Pty) SizeError!Size {
-    if (is_windows) return pty.remembered_size;
+/// or `resize` last set. Safe to read while resize is in flight; the OS
+/// change and cached geometry are serialized together on Windows.
+pub fn size(pty: *const Pty) SizeError!Size {
+    if (is_windows) {
+        const geometry = pty.geometryState() orelse return error.Unexpected;
+        geometry.lock();
+        defer geometry.mutex.unlock();
+        return geometry.size;
+    }
     const read = pty.read orelse return error.Unexpected;
     return tty.winSize(read);
 }
@@ -354,6 +360,7 @@ fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
 /// and is the call to prefer; the child is the caller's, and `Child.killWait`
 /// is how it is done.
 pub fn closeSlave(pty: *Pty, io: std.Io) void {
+    defer if (is_windows) pty.releaseGeometry();
     const slave = pty.slave orelse return;
     pty.slave = null;
     if (is_windows) {
@@ -392,6 +399,7 @@ pub fn closeSlave(pty: *Pty, io: std.Io) void {
 /// and close afterwards. On Windows `close` reads the master itself while the
 /// console host goes, so no reader of the caller's has to stay for it.
 pub fn closeMaster(pty: *Pty, io: std.Io) void {
+    defer if (is_windows) pty.releaseGeometry();
     trace.print("pty: closing the master ends", .{});
     defer trace.print("pty: master ends closed", .{});
     // The same handle twice on POSIX, so it is closed once.
@@ -404,6 +412,28 @@ pub fn closeMaster(pty: *Pty, io: std.Io) void {
         if (!same) file(handle).close(io);
         pty.write = null;
     }
+}
+
+/// One owner for the Windows resize operation and the size it accepted.
+const Geometry = struct {
+    mutex: std.atomic.Mutex = .unlocked,
+    size: Size,
+
+    fn lock(geometry: *Geometry) void {
+        while (!geometry.mutex.tryLock()) std.Thread.yield() catch {};
+    }
+};
+
+fn geometryState(pty: *const Pty) ?*Geometry {
+    const state = pty.geometry orelse return null;
+    return @ptrCast(@alignCast(state)); // safe: openWindows stored this allocated Geometry, alive until both ends close.
+}
+
+fn releaseGeometry(pty: *Pty) void {
+    if (pty.slave != null or pty.read != null or pty.write != null) return;
+    const geometry = pty.geometryState() orelse return;
+    pty.geometry = null;
+    std.heap.smp_allocator.destroy(geometry);
 }
 
 //======================================================================
@@ -446,7 +476,7 @@ fn openPosix(options: OpenOptions) OpenError!Pty {
         .read = master_fd,
         .write = master_fd,
         .slave = slave_fd,
-        .remembered_size = {},
+        .geometry = {},
         .console = {},
     };
 }
@@ -512,6 +542,9 @@ extern "c" fn ptsname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 const pipe_bytes: win32.DWORD = 256 * 1024;
 
 fn openWindows(options: OpenOptions) OpenError!Pty {
+    const remembered = std.heap.smp_allocator.create(Geometry) catch return error.SystemResources;
+    errdefer std.heap.smp_allocator.destroy(remembered);
+    remembered.* = .{ .size = options.size() };
     // Two pipes. Each has an end for the console and an end for this program,
     // and neither end is inheritable -- `null` security attributes is what
     // says so -- which is the Windows counterpart of the close-on-exec the
@@ -588,7 +621,7 @@ fn openWindows(options: OpenOptions) OpenError!Pty {
         .read = output_read,
         .write = input_write,
         .slave = console,
-        .remembered_size = geometry,
+        .geometry = @ptrCast(remembered), // safe: open owns this Geometry until both ends close, and geometryState restores its type.
         .console = granted,
     };
 }
@@ -829,4 +862,43 @@ test "restoring a terminal nobody reads does not wait for its output" {
     }
     try testing.expect(written > 0);
     try tty.restore(pty.slave.?, saved);
+}
+
+test "size borrows the pair instead of copying its mutable Windows geometry" {
+    const receiver = @typeInfo(@TypeOf(Pty.size)).@"fn".params[0].type.?;
+    try testing.expect(receiver == *const Pty);
+}
+
+test "Windows size and stream borrows stay coherent while another task resizes" {
+    if (!is_windows) return error.SkipZigTest;
+    const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const a: Size = .{ .rows = 24, .cols = 80, .x_pixel = 640, .y_pixel = 480 };
+    const b: Size = .{ .rows = 30, .cols = 100, .x_pixel = 1000, .y_pixel = 600 };
+    var pty = try Pty.open(.{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
+    defer pty.close(io);
+    var drain: Drain = .{};
+    try drain.start(io, pty.readFile());
+    defer drain.deinit(io);
+    const Resize = struct {
+        fn run(pair: *Pty, first: Size, second: Size) !void {
+            for (0..64) |_| {
+                try pair.resize(second);
+                try pair.resize(first);
+            }
+        }
+    };
+    var resizing = try std.Io.concurrent(io, Resize.run, .{ &pty, a, b });
+    defer resizing.cancel(io) catch {};
+    for (0..1024) |_| {
+        const borrowed = pty.master();
+        try testing.expectEqual(pty.read.?, borrowed.read.handle);
+        const got = try pty.size();
+        try testing.expect(std.meta.eql(got, a) or std.meta.eql(got, b));
+        try std.Io.sleep(io, .fromNanoseconds(1), .awake);
+    }
+    try resizing.await(io);
+    try testing.expectEqual(a, try pty.size());
 }
