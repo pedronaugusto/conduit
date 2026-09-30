@@ -548,8 +548,10 @@ buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
 lists with the allocator it is given until `deinit`, from spawns on any
 thread, so that one must be thread-safe. Every heap allocation made by the
-package uses an allocator the caller passed; other operations use fixed or
-caller supplied buffers, `Expect` included.
+package uses an allocator the caller passed except for Windows PTY geometry.
+Windows PTY geometry uses `std.heap.smp_allocator`, kept until every end of
+the pair closes; `Pty.open` has no allocator parameter. Other operations use
+fixed or caller supplied buffers, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,
 which is one call; `Reaper`, which exists so a wait can be in flight while
