@@ -3810,6 +3810,31 @@ const BorrowedDescriptor = struct {
     }
 };
 
+test "a fork spawn resets an ignored real-time signal in the child" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const signal: posix.SIG = @enumFromInt(std.os.linux.NSIG - 1);
+    var saved: posix.Sigaction = undefined;
+    const ignored: posix.Sigaction = .{
+        .handler = .{ .handler = posix.SIG.IGN },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(signal, &ignored, &saved);
+    defer posix.sigaction(signal, &saved, null);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sleep", "30" },
+        .cwd = ".", // takes the fork path
+        .stdio = .ignore,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(@as(c_int, 0), c.kill(child.id, signal));
+    try testing.expectEqual(Child.Term{ .signal = signal }, try waitWithin(&child));
+}
+
 test "a fork spawn reports exec failure even when all standard descriptors were closed" {
     if (is_windows) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());

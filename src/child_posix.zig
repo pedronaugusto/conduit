@@ -439,22 +439,30 @@ fn clearSignals() void {
     // one thing a pseudo-terminal exists to deliver. Every ignored signal goes
     // back to its default action here, which is what a shell does when it puts
     // a job in the foreground.
-    // Up to 32, which is where the named signals end. Above it are the
-    // real-time signals, and on Linux the threading implementation owns the
-    // first two of those and sets them up before `main` runs: resetting them
-    // in a fork child would be taking them from it. Nothing a program is meant
-    // to ignore lives up there.
-    var number: u6 = 1;
-    while (number < 32) : (number += 1) {
-        const signal: posix.SIG = @enumFromInt(number);
+    clearDispositions(SpawnSignals);
+}
+
+const SpawnSignals = struct {
+    const SIG = posix.SIG;
+    const Sigaction = posix.Sigaction;
+    const sigaction = c.sigaction;
+    const limit = if (@hasDecl(c.SIG, "RTMAX")) @max(c.NSIG, c.SIG.RTMAX + 1) else c.NSIG;
+};
+
+fn clearDispositions(comptime system: type) void {
+    var number: u32 = 1;
+    while (number < system.limit) : (number += 1) {
+        const signal: system.SIG = @enumFromInt(number);
         // The two that cannot be caught cannot be reset either.
         if (signal == .KILL or signal == .STOP) continue;
-        var current: posix.Sigaction = undefined;
-        posix.sigaction(signal, null, &current);
-        if (current.handler.handler != posix.SIG.IGN) continue;
-        current.handler = .{ .handler = posix.SIG.DFL };
+        var current: system.Sigaction = undefined;
+        // Reserved numbers cannot carry a caller's disposition. In
+        // particular, libc refuses its threading signals on Linux.
+        if (system.sigaction(signal, null, &current) != 0) continue;
+        if (current.handler.handler != system.SIG.IGN) continue;
+        current.handler = .{ .handler = system.SIG.DFL };
         current.flags = 0;
-        posix.sigaction(signal, &current, null);
+        _ = system.sigaction(signal, &current, null);
     }
 }
 
@@ -693,6 +701,47 @@ fn readAll(fd: posix.fd_t, buffer: []u8) usize {
         return filled;
     }
     return filled;
+}
+
+test "fork signal defaults include ignored real-time signals and leave reserved numbers alone" {
+    const System = struct {
+        const Handler = enum { default, ignored, caught };
+        const SIG = enum(u32) {
+            KILL = 9,
+            STOP = 19,
+            _,
+            const IGN: Handler = .ignored;
+            const DFL: Handler = .default;
+        };
+        const Sigaction = struct {
+            handler: union(enum) { handler: Handler },
+            flags: u32 = 0,
+        };
+        const limit = 65;
+        var actions: [limit]Sigaction = undefined;
+        var reserved_writes: usize = 0;
+
+        fn sigaction(signal: SIG, action: ?*const Sigaction, previous: ?*Sigaction) c_int {
+            const number = @intFromEnum(signal);
+            if (number == 32 or number == 33) {
+                if (action != null) reserved_writes += 1;
+                return -1;
+            }
+            if (previous) |old| old.* = actions[number];
+            if (action) |new| actions[number] = new.*;
+            return 0;
+        }
+    };
+    System.actions = @splat(.{ .handler = .{ .handler = .default } });
+    System.reserved_writes = 0;
+    System.actions[2].handler = .{ .handler = .ignored };
+    System.actions[64].handler = .{ .handler = .ignored };
+    System.actions[32].handler = .{ .handler = .caught };
+    clearDispositions(System);
+    try std.testing.expectEqual(System.Handler.default, System.actions[2].handler.handler);
+    try std.testing.expectEqual(System.Handler.default, System.actions[64].handler.handler);
+    try std.testing.expectEqual(System.Handler.caught, System.actions[32].handler.handler);
+    try std.testing.expectEqual(@as(usize, 0), System.reserved_writes);
 }
 
 test "searchPath returns the program itself when it is a path" {
