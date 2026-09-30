@@ -4090,3 +4090,28 @@ test "a PID fixture reports malformed output instead of a silent timeout" {
     sink.finished.store(true, .release);
     try testing.expectError(error.TestInvalidProcessId, readMarkedNumber(u32, &sink));
 }
+
+test "a Reaper started after status loss never watches a reused identity" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
+    defer child.deinit(io);
+    var status: c_int = undefined;
+    while (c.waitpid(State.get(&child).id, &status, 0) < 0) {
+        if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
+    }
+    try testing.expectError(error.ReapedElsewhere, child.tryWait());
+    var witness = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "read x" }, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } }, .detach = true });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // Reuse a live witness's number deliberately instead of waiting for PID wrap.
+    State.get(&child).id = State.get(&witness).id;
+    State.get(&child).pgid = State.get(&witness).pgid;
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, 100));
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}
