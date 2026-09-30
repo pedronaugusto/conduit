@@ -31,4 +31,16 @@ pub fn build(b: *std.Build) void {
     });
     orphans.root_module.addOptions("bench_options", options);
     b.installArtifact(orphans);
+    const claims = b.addExecutable(.{
+        .name = "lifecycle-claims",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lifecycle_claims.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "conduit", .module = conduit_dep.module("conduit") }},
+        }),
+    });
+    claims.root_module.addOptions("bench_options", options);
+    b.installArtifact(claims);
 }

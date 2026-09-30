@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The bench harness measures wait and spawn ratios, stop submission and completion, and joins with live streams on an exclusively quiet machine.
+
 - `Orphans.list` names the adopted processes still running after a look, so
   a program can write them down for a later one to end.
 - A detached child on a pseudo-terminal is started by `posix_spawn` on Linux:
