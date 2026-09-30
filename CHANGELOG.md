@@ -6,6 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A deadline keeps its final fraction of a millisecond until it has actually elapsed, so tree cleanup cannot cut a grace short by rounding it down.
 - Forked children reset ignored real-time signals as well as named signals, while leaving numbers reserved by libc alone.
 - Fork handshakes keep their control pipes above standard descriptors, so placing streams cannot overwrite an exec failure report when the parent's streams were closed.
 - Descendant signalling proves ancestry through held process identities before delivery, so a recycled pid in a snapshot cannot authorize a signal to a stranger.
