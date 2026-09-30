@@ -3810,6 +3810,43 @@ const BorrowedDescriptor = struct {
     }
 };
 
+test "a fork spawn reports exec failure even when all standard descriptors were closed" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var file = try tmp.dir.createFile(io, "stand-in", .{ .read = true });
+    defer file.close(io);
+    var stdin: BorrowedDescriptor = try .take(0, file);
+    defer stdin.restore();
+    var stdout: BorrowedDescriptor = try .take(1, file);
+    defer stdout.restore();
+    var stderr: BorrowedDescriptor = try .take(2, file);
+    defer stderr.restore();
+    _ = c.close(0);
+    _ = c.close(1);
+    _ = c.close(2);
+    const spawn_error: ?Child.SpawnError = if (Child.spawn(io, gpa, .{
+        .argv = &.{"/conduit-test/no-such-executable"},
+        .cwd = ".", // takes the fork path
+        .stdio = .ignore,
+    })) |started| ended: {
+        var child = started;
+        // An unexpected child can own a watch on a low descriptor too.
+        // Close it before restoring the test runner's standard descriptors.
+        _ = child.killWait(io, 0) catch {};
+        child.deinit(io);
+        break :ended null;
+    } else |err| err;
+    stdin.restore();
+    stdout.restore();
+    stderr.restore();
+    // Restore before printing an assertion.
+    try testing.expectEqual(@as(?Child.SpawnError, error.FileNotFound), spawn_error);
+}
+
 test "a parent death signal is refused where the system has none" {
     if (builtin.os.tag == .linux) return error.SkipZigTest;
     try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{

@@ -123,13 +123,13 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // How the fork child reports a failure that happens after the fork. The
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
-    const report = try makePipe();
+    const report = try controlPipe();
     // Where there is a watch on the child's forks (`tree.Forks`), the fork
     // child waits on this before its `execve` until the parent has registered
     // it, so the program the child becomes cannot fork before the watch is
     // in. Without a pipe there is no watch, and `kill` walks as it always
     // did.
-    const go: ?[2]posix.fd_t = if (tree.Forks.supported) makePipe() catch null else null;
+    const go: ?[2]posix.fd_t = if (tree.Forks.supported) controlPipe() catch null else null;
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -653,6 +653,29 @@ fn openNullDevice() SpawnError!posix.fd_t {
 /// has nothing to do with this one. Darwin has no `pipe2` and takes the gap.
 fn makePipe() SpawnError![2]posix.fd_t {
     return handles.pipe();
+}
+
+/// The fork handshake is owned by spawn, outside the slots the stdio plan
+/// replaces. A parent with closed standard descriptors can otherwise get
+/// the exec report on descriptor 2 and overwrite it while placing stderr.
+fn controlPipe() SpawnError![2]posix.fd_t {
+    var ends = try makePipe();
+    errdefer {
+        for (ends) |fd| _ = c.close(fd);
+    }
+    for (&ends) |*fd| {
+        if (fd.* > 2) continue;
+        const moved = c.fcntl(fd.*, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+        if (moved < 0) return switch (c.errno(@as(c_int, -1))) {
+            .MFILE => error.ProcessFdQuotaExceeded,
+            .NFILE => error.SystemFdQuotaExceeded,
+            .NOMEM => error.SystemResources,
+            else => |err| posix.unexpectedErrno(err),
+        };
+        _ = c.close(fd.*);
+        fd.* = @intCast(moved);
+    }
+    return ends;
 }
 
 /// Reads until the buffer is full or the writer is gone. Used on the report
