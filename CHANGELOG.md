@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Proxy resize forwarding checks cancellation even when tickets keep changing, yields for zero intervals, and measures each refresh interval by one deadline.
+
 - Unit tests count spawn calls, native wait sleeps and stop tasks instead of asserting speed; deadline tests use controlled clocks, and timing claims live on the bench branch.
 
 - Breaking: `HeldReap` and Reaper state are opaque; `Reaper.StartError` includes `AlreadyStarted`, and a successful start or deinit prevents another start in that lifetime.
