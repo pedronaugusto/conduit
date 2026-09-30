@@ -1,0 +1,10 @@
+.{
+    .name = .conduit_benchmark,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0x21c673c426860ea0,
+    .dependencies = .{
+        .conduit = .{ .path = ".." },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "orphans-cost-2026-09-28.zig" },
+}

@@ -1,0 +1,63 @@
+//! Spawn+wait of /usr/bin/true with Orphans off and on, interleaved; and the
+//! cost of one look (Orphans.count) with N live children.
+const std = @import("std");
+const conduit = @import("conduit");
+var true_program: []const u8 = "true";
+var sleep_program: []const u8 = "sleep";
+
+fn spawnWait(io: std.Io, gpa: std.mem.Allocator, n: usize) !f64 {
+    const start = std.Io.Clock.awake.now(io);
+    for (0..n) |_| {
+        var child = try conduit.Child.spawn(io, gpa, .{ .argv = &.{true_program}, .stdio = .ignore });
+        defer child.deinit(io);
+        _ = try child.wait(io);
+    }
+    const ns = start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds;
+    return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(n)) / 1000.0;
+}
+
+pub fn main(init: std.process.Init) !void {
+    if (!conduit.Orphans.supported) {
+        std.debug.print("Orphans tracking unavailable: requires Linux\n", .{});
+        return;
+    }
+    true_program = init.environ_map.get("BENCH_TRUE") orelse "true";
+    sleep_program = init.environ_map.get("BENCH_SLEEP") orelse "sleep";
+    const io = init.io;
+    const gpa = std.heap.c_allocator;
+    const smoke = @import("bench_options").smoke;
+    const n = if (smoke) 1 else 2000;
+    if (!smoke) _ = try spawnWait(io, gpa, 200);
+    var best_off: f64 = 1e9;
+    var best_on: f64 = 1e9;
+    for (0..(if (smoke) @as(usize, 1) else 7)) |_| {
+        best_off = @min(best_off, try spawnWait(io, gpa, n));
+        var orphans: conduit.Orphans = .init(gpa);
+        try orphans.start();
+        best_on = @min(best_on, try spawnWait(io, gpa, n));
+        orphans.deinit();
+    }
+    std.debug.print("spawn+wait off {d:.1} us, on {d:.1} us\n", .{ best_off, best_on });
+
+    // One look with 0, 10, 100 live children of conduit's own.
+    const live_counts: []const usize = if (smoke) &.{ 0, 1 } else &.{ 0, 10, 100 };
+    for (live_counts) |live| {
+        var children: [100]conduit.Child = undefined;
+        var orphans: conduit.Orphans = .init(gpa);
+        try orphans.start();
+        for (children[0..live]) |*ch| ch.* = try conduit.Child.spawn(io, gpa, .{ .argv = &.{ sleep_program, "100" }, .stdio = .ignore });
+        var best: f64 = 1e9;
+        for (0..(if (smoke) @as(usize, 1) else 7)) |_| {
+            const start = std.Io.Clock.awake.now(io);
+            for (0..(if (smoke) @as(usize, 1) else 200)) |_| _ = try orphans.count();
+            const ns = start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds;
+            best = @min(best, @as(f64, @floatFromInt(ns)) / (if (smoke) @as(f64, 1) else 200) / 1000.0);
+        }
+        for (children[0..live]) |*ch| {
+            _ = ch.killWait(io, 0) catch {};
+            ch.deinit(io);
+        }
+        orphans.deinit();
+        std.debug.print("look with {d} own children: {d:.1} us\n", .{ live, best });
+    }
+}
