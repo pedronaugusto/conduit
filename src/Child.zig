@@ -114,8 +114,8 @@ pub fn exitCode(term: Term) ?u32 {
 /// nobody named is illegal behaviour rather than an answer. The number is in
 /// the `Term` either way.
 ///
-/// Always `null` on Windows, where `Term.signal` is never produced: a
-/// terminated process there reports the exit code it was terminated with, and
+/// Terms returned by Windows waits have no signal name: a terminated process
+/// there reports the exit code it was terminated with, and
 /// `killWait` uses 1. A portable program that wants to say why a child stopped
 /// has to accept that the Windows answer is a number.
 pub fn signalName(term: Term) ?[]const u8 {

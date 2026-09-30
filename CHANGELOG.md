@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Signal-name documentation distinguishes Windows wait results from a supplied signal term.
+
 - Reaper documentation states the resource and result ownership behind its one-start lifetime.
 
 - A refused group signal addresses the still-held child directly before reporting permission denial, covering Darwin's exit-to-wait observation gap.
