@@ -386,7 +386,7 @@ Whether this process may is found out at the first spawn, from
 assumed; a refusal (a read-only cgroup mount, as in a default container; a
 cgroup owned by root, as in an SSH session; a cgroup v1 system; a kernel
 before 5.14) is remembered, and every child is started as before and reached
-as below. What a caller may observe: `Child.cgroup` says which a child has; a
+as below. The cgroup is owned by the child's opaque lifecycle; a
 contained spawn always takes the fork, never `posix_spawn`, since joining a
 cgroup is a write and there is no file action for one; this process holds
 one more descriptor per child, and makes and removes one directory per child

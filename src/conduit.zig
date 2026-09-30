@@ -1,6 +1,6 @@
 //! Child processes and pseudo-terminals, on POSIX and on Windows.
 //!
-//! Four things the standard library has no answer for, and one it does:
+//! Processes and terminal operations behind one portable API:
 //!
 //! * `Pty` opens a pseudo-terminal pair and sets and reads its window size.
 //! * `Child` spawns a program on that pair — which is what makes the child
@@ -11,9 +11,8 @@
 //!   program needs on its own standard streams.
 //! * `spawnShell` is the user's shell on a pair, with the defaults every
 //!   terminal program would otherwise write out itself.
-//! * `wait` is the standard library's: `Child.wait` hands the process on to
-//!   `std.process.Child.wait`, so it is a cancelation point and uses whatever
-//!   the `std.Io` implementation has for waiting on a process.
+//! * `Child.wait` observes exit before reaping, so signalling keeps the
+//!   identity until delivery finishes. It remains a cancelation point.
 //!
 //! `Reaper` puts a wait on a background task so a program can poll for a
 //! child's death, `Proxy` is the two-direction byte pump between a master and

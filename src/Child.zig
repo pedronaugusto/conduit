@@ -1095,7 +1095,7 @@ pub const KillError = error{
 /// child was detached.
 ///
 /// On Linux, where this process may make a cgroup below its own, every child
-/// is put in one of its own before it runs (`Child.cgroup`, and `cgroup.zig`
+/// is put in one of its own before it runs (held in its lifecycle; `cgroup.zig`
 /// says how that is found out), and the cgroup is the reach: `.kill` writes
 /// `cgroup.kill`, which ends everything in it at once and is safe against a
 /// fork while it is delivered, and the other two signal each member. A

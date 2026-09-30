@@ -242,7 +242,7 @@ const Sink = struct {
             "the end of the stream"
         else
             "nothing -- it is still waiting in a read";
-        std.debug.print("\nwaited {d} ms for \"{s}\"; the read stopped with {s}; {d} bytes arrived:\n  ", .{
+        std.debug.print("\nbudget {d} ms for \"{s}\"; the read stopped with {s}; {d} bytes arrived:\n  ", .{
             budget_ms,
             needle,
             why,
@@ -293,7 +293,7 @@ fn waitWithin(child: *Child) !Child.Term {
 /// package's own either. `.terminate` there is a console control event, so a
 /// child that obeys it ends on its own terms and reports whatever status it
 /// chose — the system's control-exit status for one that does not handle the
-/// event, which reaches `Term.exited` as the low byte of an `NTSTATUS`. The
+/// event, whose full `NTSTATUS` reaches `Term.exited`. The
 /// number this package does choose is the one `.kill` terminates with, and
 /// `killWait` with no grace is what asks for it: "succeeded, exitCode and
 /// signalName" below is where that 1 is asserted. Here the claim is the one

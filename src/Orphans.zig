@@ -80,7 +80,7 @@
 //! from — its parent is gone, its group and session may be its own, and
 //! nothing records the parent it had — so `Child.kill` and
 //! `Reaper.Options.end_tree` cannot say it was that child's and do not guess.
-//! Where the child has a cgroup of its own (`Child.cgroup`) the cgroup still
+//! Where the child has a cgroup of its own (owned by its Child) the cgroup still
 //! says, and the child's `kill` ends it as before, adopted or not: the cgroup
 //! is the per-child reach, and this is the floor beneath it and beneath the
 //! walk.

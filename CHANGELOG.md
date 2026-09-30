@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Documentation describes opaque lifecycle ownership, exit observation before reaping, and complete Windows exit statuses.
+
 - Windows tree fixtures retry successful empty reads, launch direct children and prove a live grandchild belongs to the specific job before testing cleanup.
 
 - A Reaper started after observed status loss reports `ReapedElsewhere` before watching or addressing the retired process identity.
