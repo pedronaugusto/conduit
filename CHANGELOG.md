@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: conduit owns `Term`, whose `exited` payload and `exitCode` retain all 32 bits of a Windows exit status.
+
 - Breaking: blocking Child waits and Reaper report `ReapedElsewhere` when another owner took the child's status.
 
 - A deadline keeps its final fraction of a millisecond until it has actually elapsed, so tree cleanup cannot cut a grace short by rounding it down.

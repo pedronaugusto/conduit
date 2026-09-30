@@ -143,24 +143,15 @@ identity: std.atomic.Mutex = .unlocked,
 /// Guarded by `identity`; once set, no signal uses the child's name again.
 identity_retired: bool = false,
 
-/// How a child process ended.
-///
-/// This is `std.process.Child.Term` rather than a parallel type of this
-/// package's own, so a program can hand the result to code that already speaks
-/// the standard library's vocabulary. `.stopped` is never produced here:
-/// neither `wait` nor `tryWait` asks for stop notifications, and Windows has
-/// no such state. `.signal` is POSIX-only for the same reason — a Windows
-/// process that is terminated reports the exit code it was terminated with.
-///
-/// **A Windows exit code is a `DWORD` and `Term.exited` is a byte**, so what
-/// arrives there is the low byte of it. That matters because the codes Windows
-/// produces itself are not small: a console process ended by a control event
-/// it does not handle exits with the system's control-exit status, an
-/// `NTSTATUS` in the `0xC000_0000` range, and the byte that reaches `Term` is
-/// the last two digits of it. The truncation is `std.process.Child.wait`'s,
-/// and `tryWait` does the same thing for the same reason: the two calls must
-/// not report a child differently.
-pub const Term = std.process.Child.Term;
+/// How a child process ended. Exit codes retain all 32 bits on Windows;
+/// POSIX exit codes occupy the low byte. Signals are POSIX-only, and stopped
+/// is never produced because these waits do not request stop notifications.
+pub const Term = union(enum) {
+    exited: u32,
+    signal: posix.SIG,
+    stopped: posix.SIG,
+    unknown: u32,
+};
 
 /// Whether the child ended the way a program that did its job ends: exited,
 /// with a status of zero.
@@ -170,9 +161,6 @@ pub const Term = std.process.Child.Term;
 /// the program not getting to say anything. `exitCode` and `signalName` are
 /// for telling them apart.
 ///
-/// This is the one question almost every caller has, and `Term` is a tagged
-/// union of the standard library's rather than a type of this package's own,
-/// so it cannot be a method on it. A function it is.
 pub fn succeeded(term: Term) bool {
     return switch (term) {
         .exited => |code| code == 0,
@@ -182,7 +170,7 @@ pub fn succeeded(term: Term) bool {
 
 /// The status the child exited with, or `null` if it did not exit -- which on
 /// POSIX means a signal ended it.
-pub fn exitCode(term: Term) ?u8 {
+pub fn exitCode(term: Term) ?u32 {
     return switch (term) {
         .exited => |code| code,
         else => null,
@@ -1097,8 +1085,7 @@ pub const Signal = enum {
     /// A child that ends because of the console control event chooses its own
     /// exit code, and a child that does not handle the event gets the system's
     /// control-exit status. So `.terminate` on Windows is the one request here
-    /// whose outcome this package does not decide; `Term` says what a byte of
-    /// such a status looks like.
+    /// whose outcome this package does not decide; `Term` preserves that status.
     terminate,
     /// End the child now. POSIX: `SIGKILL`. Windows: `TerminateProcess`.
     /// Neither can be caught.
@@ -1328,7 +1315,7 @@ pub const KillWaitError = KillError || WaitError || TryWaitError || std.Io.Cance
 /// reports `.exited = 1`. A child that obeys the `.terminate` before it ends
 /// on its own terms and reports whatever status *it* chose — for one that does
 /// not handle the control event, the system's control-exit status, which
-/// reaches `Term` as its low byte. A caller that wants a number of its own on
+/// reaches `Term` in full. A caller that wants a number of its own on
 /// that system should pass a `grace_ms` of zero; a caller that wants to know
 /// whether the child ended well should ask `succeeded`.
 ///
@@ -1925,7 +1912,7 @@ fn tryWaitWindows(child: *Child) TryWaitError!?Term {
     }
     var code: win32.DWORD = undefined;
     const term: Term = if (win32.GetExitCodeProcess(child.id, &code) != .FALSE)
-        .{ .exited = @truncate(code) }
+        .{ .exited = code }
     else
         .{ .unknown = 0 };
     child.closeHandles();
@@ -2141,4 +2128,9 @@ test {
         _ = @import("tree.zig");
         _ = @import("wait.zig");
     }
+}
+
+test "Term can carry every Windows exit code on every platform" {
+    const term: Term = .{ .exited = 255 };
+    try std.testing.expectEqual(@as(u16, 32), @bitSizeOf(@TypeOf(term.exited)));
 }

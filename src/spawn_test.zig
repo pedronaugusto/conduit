@@ -1098,7 +1098,7 @@ test "succeeded, exitCode and signalName say how a child ended" {
 
     const term = try waitWithin(&ok_child);
     try testing.expect(!conduit.succeeded(term));
-    try testing.expectEqual(@as(?u8, 7), conduit.exitCode(term));
+    try testing.expectEqual(@as(?u32, 7), conduit.exitCode(term));
     try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(term));
 
     try testing.expect(conduit.succeeded(.{ .exited = 0 }));
@@ -1114,11 +1114,11 @@ test "succeeded, exitCode and signalName say how a child ended" {
     defer killed.deinit(io);
     const killed_term = try killed.killWait(io, 0);
     if (is_windows) {
-        try testing.expectEqual(@as(?u8, 1), conduit.exitCode(killed_term));
+        try testing.expectEqual(@as(?u32, 1), conduit.exitCode(killed_term));
         try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(killed_term));
     } else {
         try testing.expect(!conduit.succeeded(killed_term));
-        try testing.expectEqual(@as(?u8, null), conduit.exitCode(killed_term));
+        try testing.expectEqual(@as(?u32, null), conduit.exitCode(killed_term));
         try testing.expectEqualStrings("KILL", conduit.signalName(killed_term).?);
     }
 }
@@ -3985,5 +3985,25 @@ test "blocking waits and Reaper report status reaped elsewhere" {
         } else {
             try testing.expectError(error.ReapedElsewhere, child.wait(io));
         }
+    }
+}
+
+test "Windows wait and Reaper preserve the control exit status" {
+    if (!is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    for ([_]bool{ false, true }) |background| {
+        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "cmd.exe", "/c", "exit -1073741510" }, .stdio = .ignore });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const term = if (background) blk: {
+            var reaper: conduit.Reaper = .init(&child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io);
+            break :blk (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        } else try waitWithin(&child);
+        try testing.expectEqual(@as(u32, 0xc000013a), conduit.exitCode(term).?);
+        try testing.expect(!conduit.succeeded(term));
     }
 }

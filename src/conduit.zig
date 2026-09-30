@@ -121,7 +121,7 @@ pub const Proxy = @import("Proxy.zig");
 /// or for a byte count, each with a deadline, then send a reply.
 pub const Expect = @import("Expect.zig");
 
-/// How a child process ended. An alias for `std.process.Child.Term`.
+/// How a child process ended, including the full Windows exit code.
 pub const Term = Child.Term;
 /// Whether a `Term` is the one a program that did its job ends with: exited,
 /// with a status of zero.

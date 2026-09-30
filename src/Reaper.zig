@@ -469,6 +469,8 @@ test "every term survives the round trip through the atomic" {
     const cases = [_]Term{
         .{ .exited = 0 },
         .{ .exited = 255 },
+        .{ .exited = 0xc000013a },
+        .{ .exited = 0xffffffff },
         .{ .signal = .TERM },
         .{ .stopped = .INT },
         .{ .unknown = 0xdeadbeef },

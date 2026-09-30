@@ -103,11 +103,11 @@ The caller must also compare the boot id saved with the inode. On systems
 without cgroups, `openRecorded` returns `null`.
 
 `conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
-`Term` holds without matching on it. `Term` is `std.process.Child.Term`, not a
-parallel type of this package's own. `signalName` is `null` on Windows, where a
-process reports an exit code however it ended: 1 when `killWait` had to
-terminate it, and otherwise whatever the child itself exited with — the low
-byte of it, since `Term.exited` is a byte and a Windows exit code is a `DWORD`.
+`Term` holds without matching on it. `Term` belongs to conduit: `exited` is
+`u32`, preserving the full Windows exit code and the POSIX exit byte.
+`signalName` is `null` on Windows, where a process reports an exit code however
+it ended: 1 when `killWait` had to terminate it, and otherwise whatever the
+child itself exited with, including the system's control-exit status.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
