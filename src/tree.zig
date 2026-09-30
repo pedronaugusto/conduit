@@ -28,7 +28,8 @@
 //! reports `error.OutOfMemory` if it cannot hold the whole snapshot rather
 //! than silently leaving a suffix of it alive. A process is captured as a
 //! stable kernel identity before the walk retains it: a pidfd on Linux and
-//! an audit token on Darwin. A PID alone is
+//! an audit token on Darwin. Every candidate's ancestry is then proved
+//! through held identities before signalling. A PID alone is
 //! never used as a later signal target because it may have been recycled by
 //! then.
 
@@ -38,6 +39,39 @@ const posix = std.posix;
 const c = std.c;
 const Deadline = @import("deadline.zig").Deadline;
 const wait_for = @import("wait.zig");
+
+// A recycled entry in a process-table snapshot, before it is signalled.
+var snapshot_witness: if (builtin.is_test) ?posix.pid_t else void = if (builtin.is_test) null else {};
+
+test "a descendant snapshot cannot authorize a signal to an unrelated captured identity" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const Child = @import("Child.zig");
+    const options: Child.SpawnOptions = .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    };
+    var root = try Child.spawn(io, testing.allocator, options);
+    defer root.deinit(io);
+    defer _ = root.killWait(io, 0) catch {};
+    var witness = try Child.spawn(io, testing.allocator, options);
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+
+    // A listed descendant could have been reaped and its pid reused before
+    // capture. Retain a live witness in that snapshot: its stable identity
+    // alone proves nothing about its relation to the root.
+    snapshot_witness = witness.id;
+    defer snapshot_witness = null;
+    try testing.expectEqual(@as(usize, 0), try signalDescendants(root.id, .CONT, null));
+    var captured = Process.capture(root.id).?;
+    defer captured.deinit();
+    try testing.expectEqual(@as(usize, 0), try captured.signalDescendants(.CONT, null));
+}
 
 /// The names in what `getdents64` wrote, read from its bytes rather than cast
 /// out of them: a record that would run past them, or that does not hold a
@@ -100,12 +134,15 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
     return signalDescendantsGuarded(root, null, sig, in_group);
 }
 
-/// Walk below a held process and signal only while its original identity
-/// still occupies the root. The identity is checked after the walk, before
-/// any descendant is signalled. On Darwin `alive` checks the audit token's
-/// pid version, so a reused root pid cannot turn this into a stranger's walk.
+/// Walk below a held process and prove each candidate's ancestry before
+/// signalling, while the root still holds its original identity. A pid
+/// recycled before capture cannot authorize a signal just by being in the
+/// snapshot. On Darwin `alive` checks the audit token's pid version.
 fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
-    if (guard) |held| if (!held.alive()) return 0;
+    var captured_root: ?Process = if (guard == null) Process.capture(root) else null;
+    defer if (captured_root) |*held| held.deinit();
+    const anchor = guard orelse if (captured_root) |*held| held else return 0;
+    if (!anchor.alive()) return 0;
     if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
     // Exhausting this bounded workspace reports OutOfMemory before sending
     // a partial pass.
@@ -119,15 +156,32 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
         found.deinit(allocator);
     }
     try collect(root, in_group, &found, allocator);
+    if (builtin.is_test) if (snapshot_witness) |pid| {
+        var process = Process.capture(pid) orelse unreachable;
+        found.append(allocator, process) catch |err| {
+            process.deinit();
+            return err;
+        };
+    };
 
     // A read of the process table may have outlived the root. In that case
     // none of the relationships just read proves whose descendants they are.
-    if (guard) |held| if (!held.alive()) return 0;
+    if (!anchor.alive()) return 0;
+
+    // A stable identity only binds a signal to the captured process; it does
+    // not prove that a pid from an earlier snapshot was still a descendant
+    // when it was captured. Prove every link through held identities before
+    // delivering anything, so allocation failure cannot send a partial pass.
+    var proven: std.ArrayList(bool) = .empty;
+    defer proven.deinit(allocator);
+    for (found.items) |*process| try proven.append(allocator, try provenBelow(anchor, process, allocator));
+    if (!anchor.alive()) return 0;
 
     var reached: usize = 0;
     var i = found.items.len;
     while (i > 0) {
         i -= 1;
+        if (!proven.items[i]) continue;
         const process = &found.items[i];
         const pid = process.pid;
         // Nothing this package started can be `init` or this process itself,

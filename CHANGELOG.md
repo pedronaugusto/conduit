@@ -6,6 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Descendant signalling proves ancestry through held process identities before delivery, so a recycled pid in a snapshot cannot authorize a signal to a stranger.
 - Reaper tree cleanup and task-based output draining measure their remaining budgets against clock deadlines, including interrupted polls and delayed wakes.
 - A Reaper started after the child was reaped returns its published term before opening a watch or addressing the old process group.
 - Signalling and final reaping share the child's identity, so a concurrent wait cannot release its pid or close its Windows handles during delivery.

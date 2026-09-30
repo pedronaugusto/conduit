@@ -437,7 +437,8 @@ both left the group and been orphaned before anything looked is reached by no
 system, and a grandchild of a child that was already reaped keeps running. The
 walk signals stable process identities — pidfds on Linux and audit tokens on
 Darwin — so a descendant that exits cannot turn a recycled PID into a signal
-for an unrelated process. The walk grows to hold the whole tree; if it cannot,
+for an unrelated process. Each candidate's ancestry is proved through held
+identities before delivery. The walk grows to hold the whole tree; if it cannot,
 `kill` reports `error.OutOfMemory` before sending a partial descendant pass. On
 Darwin, where the walk is a pass over the whole process table each time it
 is asked, a child that has never forked is not walked at all: `spawn` watches
