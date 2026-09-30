@@ -4211,3 +4211,35 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
     try testing.expectEqual(key, record.group.?);
     if (record.cgroup) |contained| try testing.expect(std.mem.startsWith(u8, contained.path, "/"));
 }
+
+test "Reaper start cannot replace an active task or restart a joined lifetime" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var reaper: conduit.Reaper = .init(&child, .{});
+    defer reaper.deinit(io);
+    try reaper.start(io);
+    // Equality of errors keeps this regression compilable before the error
+    // has been added to StartError. A duplicate task can be canceled safely.
+    var rejected = false;
+    reaper.start(io) catch |err| {
+        try testing.expectEqual(error.AlreadyStarted, err);
+        rejected = true;
+    };
+    try testing.expect(rejected);
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
+    reaper.deinit(io);
+    try testing.expectError(error.AlreadyStarted, reaper.start(io));
+}
+
+test "HeldReap and Reaper expose no writable lifecycle fields" {
+    try testing.expect(@typeInfo(Child.HeldReap) == .@"enum");
+    try testing.expect(@typeInfo(conduit.Reaper) == .@"enum");
+}

@@ -295,7 +295,11 @@ caller holding a lock can stop a child. `deinit(io)` ends the task; on POSIX
 the wait is on the child's `pidfd` or kqueue registration beside a pipe
 `deinit` writes to, so it goes at once whether or not the `std.Io` can cancel
 a system call. The `Child` must outlive it, it must not move once started, and
-a wait error is final and returned by every later `exit()`.
+a wait error is final and returned by every later `exit()`. The state and wake handles are opaque.
+Only one successful start is allowed per lifetime; another start, including
+after `deinit`, returns `AlreadyStarted`. A concurrency failure releases
+its resources and may be retried before `deinit`. Release every HeldReap
+exactly once, and join Reaper before destroying its Child.
 
 `Options.end_tree` ends what the child leaves running when it ends by itself,
 before it is reaped. On Linux, for a child in a cgroup of its own (below),

@@ -840,22 +840,27 @@ fn releaseReap(child: *Child) void {
 pub fn holdReap(child: *Child) ?HeldReap {
     if (child.lifecycle == null) return null;
     if (!child.claimReap()) return null;
-    return .{ .child = child };
+    return @enumFromInt(@intFromPtr(child)); // safe: the claimed guard borrows this Child until release.
 }
 
 /// The right to reap a child, held until `release`, including after `wait`.
-pub const HeldReap = struct {
-    child: *Child,
+/// Release exactly once and do not copy it. Its Child must outlive the guard.
+pub const HeldReap = enum(usize) {
+    _,
+
+    fn owner(held: HeldReap) *Child {
+        return @ptrFromInt(@intFromEnum(held)); // safe: holdReap retains the borrowed Child until release.
+    }
 
     /// Blocks until the child ends, reaps it and publishes the term — or
     /// answers from the one already published.
     pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {
-        return held.child.waitClaimed(io);
+        return held.owner().waitClaimed(io);
     }
 
     /// Gives the right back, whether or not the child was reaped.
     pub fn release(held: HeldReap) void {
-        held.child.releaseReap();
+        held.owner().releaseReap();
     }
 };
 
@@ -2055,7 +2060,7 @@ fn statusToTerm(status: u32) Term {
 var signal_probe: if (builtin.is_test) ?*SignalProbe else void = if (builtin.is_test) null else {};
 
 const SignalProbe = if (builtin.is_test) struct {
-    reaper: *@import("Reaper.zig"),
+    reaper: *@import("Reaper.zig").Reaper,
     retired: bool = false,
 
     fn beforeSignal(probe: *@This(), child: *Child) void {
@@ -2088,7 +2093,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         });
         defer child.deinit(io);
         defer _ = child.killWait(io, 0) catch {};
-        var reaper: @import("Reaper.zig") = .init(&child, .{});
+        var reaper: @import("Reaper.zig").Reaper = .init(&child, .{});
         stage = "starting Reaper";
         try reaper.start(io);
         defer reaper.deinit(io);
