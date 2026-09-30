@@ -3964,3 +3964,26 @@ test "a spawn with a parent death signal takes the fork, where the signal is set
     try testing.expect(!spawn_path.suits(.{ .argv = &script.greeting, .parent_death_signal = .kill }));
     try testing.expectEqual(spawn_path.available, spawn_path.suits(.{ .argv = &script.greeting }));
 }
+
+test "blocking waits and Reaper report status reaped elsewhere" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    for ([_]bool{ false, true }) |background| {
+        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
+        defer child.deinit(io);
+        var status: c_int = undefined;
+        while (c.waitpid(child.id, &status, 0) < 0) {
+            if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
+        }
+        if (background) {
+            var reaper: conduit.Reaper = .init(&child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io);
+            try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, budget_ms));
+        } else {
+            try testing.expectError(error.ReapedElsewhere, child.wait(io));
+        }
+    }
+}

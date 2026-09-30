@@ -484,6 +484,7 @@ test "every wait error survives the round trip through the atomic" {
         error.AccessDenied,
         error.Canceled,
         error.Unexpected,
+        error.ReapedElsewhere,
     };
     for (cases) |err| {
         try std.testing.expectError(err, decode(encodeError(err)));

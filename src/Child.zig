@@ -756,7 +756,7 @@ pub fn closeStdin(child: *Child, io: std.Io) void {
     f.close(io);
 }
 
-pub const WaitError = std.process.Child.WaitError;
+pub const WaitError = std.process.Child.WaitError || error{ReapedElsewhere};
 
 /// Blocks until the child ends, and returns how.
 ///
@@ -797,12 +797,7 @@ fn waitClaimed(child: *Child, io: std.Io) WaitError!Term {
     // run longer than one u32 millisecond span. Exit observation keeps the
     // zombie (or Windows handles) intact until tryWaitClaimed takes identity.
     while (true) {
-        const term = child.reapWithin(io, .in(io, std.math.maxInt(u32))) catch |err| switch (err) {
-            // WaitError has no ReapedElsewhere, as the standard library's
-            // blocking wait did not. Preserve that public error set.
-            error.ReapedElsewhere => return error.Unexpected,
-            else => |other| return other,
-        };
+        const term = try child.reapWithin(io, .in(io, std.math.maxInt(u32)));
         if (term) |ended| return ended;
     }
 }

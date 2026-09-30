@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: blocking Child waits and Reaper report `ReapedElsewhere` when another owner took the child's status.
+
 - A deadline keeps its final fraction of a millisecond until it has actually elapsed, so tree cleanup cannot cut a grace short by rounding it down.
 - Forked children reset ignored real-time signals as well as named signals, while leaving numbers reserved by libc alone.
 - Fork handshakes keep their control pipes above standard descriptors, so placing streams cannot overwrite an exec failure report when the parent's streams were closed.
