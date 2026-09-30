@@ -60,8 +60,6 @@
 //! much less.
 
 const builtin = @import("builtin");
-const std = @import("std");
-
 const tty = @import("conduit.tty");
 const environ_impl = @import("environ.zig");
 const shell = @import("shell.zig");

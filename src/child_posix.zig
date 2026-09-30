@@ -12,7 +12,6 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
-const Pty = @import("Pty.zig");
 const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");

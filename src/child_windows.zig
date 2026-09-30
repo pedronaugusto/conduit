@@ -11,7 +11,6 @@ const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig");
 const command_line = @import("command_line.zig");
-const Pty = @import("Pty.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("trace.zig");
 const win32 = @import("win32.zig");
@@ -147,10 +146,10 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 /// `CreateProcessW` takes them in.
 ///
 /// A pseudoconsole is attached through an attribute list rather than through
-/// the standard handles, and the two are mutually exclusive:
-/// `STARTF_USESTDHANDLES` alongside `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` is
-/// documented as unsupported. Nothing needs to be inheritable in that case
-/// either, which is why `inheritHandles` differs.
+/// the standard handles. Naming a standard handle alongside a pseudoconsole
+/// is unsupported; `STARTF_USESTDHANDLES` with three null handles keeps the
+/// parent's streams out. Nothing needs to be inheritable in that case either,
+/// which is why `inheritHandles` differs.
 fn describeChild(
     arena: Allocator,
     options: SpawnOptions,

@@ -549,9 +549,10 @@ A test that is about POSIX alone — a controlling terminal, `getpgid`, Ctrl-C
 becoming `SIGINT`, `stty size` — says so and skips elsewhere, and so does a
 Windows-only one: a job object holding a tree, a handle's inheritance flag, a
 console option the system may decline. On Windows the
-program is resolved by `CreateProcessW`, which searches the application
-directory, the current directory, the system directories and `PATH` and appends
-`.exe`; `PATHEXT` is not searched.
+program search checks the application directory, the current directory, the
+system directories and `PATH`, appending `.exe`; `PATHEXT` is not searched.
+With a supplied environment, conduit resolves the name against its `PATH`
+before `CreateProcessW`; otherwise Windows resolves it.
 
 ## Testing
 

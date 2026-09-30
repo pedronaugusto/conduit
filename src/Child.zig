@@ -41,8 +41,6 @@ const Expect = @import("Expect.zig");
 const Pty = @import("Pty.zig");
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
-const tty = @import("conduit.tty");
-
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 const tree = if (is_windows) struct {} else @import("tree.zig");
