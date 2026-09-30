@@ -71,20 +71,18 @@ const script = if (is_windows) struct {
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
     /// Starts a process of its own that outlives it, and says which one.
     ///
-    /// `Start-Process` is `CreateProcess` with a console of its own, so the
-    /// grandchild holds none of this child's handles and goes on running after
-    /// the child has exited and been reaped. What relates the two afterwards is
-    /// the job object, which is the whole of what `waitTree` and `deinit` are
-    /// claims about. The id is printed the way `readMarkedNumber` reads it.
-    ///
-    /// Windows only, and used only by tests that skip elsewhere: POSIX has no
-    /// container to ask after a tree with.
+    /// Uses CreateProcess rather than the shell's launch machinery, so the
+    /// grandchild is born into the child's job. It inherits the pipes; the
+    /// sinks keep draining them until the test ends the tree.
     const detached_grandchild = [_][]const u8{
         "powershell.exe",
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' -PassThru; " ++
+        "$start = New-Object System.Diagnostics.ProcessStartInfo; " ++
+            "$start.FileName = 'ping.exe'; $start.Arguments = '-n 60 127.0.0.1'; " ++
+            "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; " ++
+            "$p = [System.Diagnostics.Process]::Start($start); " ++
             "Write-Output ('pid ' + $p.Id + '.')",
     };
     /// Writes a cursor-shape sequence to its terminal and stays there.
@@ -134,6 +132,7 @@ const script = if (is_windows) struct {
 /// Closing a file under a task that is reading it is a race on the
 /// descriptor, and ThreadSanitizer on Linux says so.
 const Sink = struct {
+    source_io: std.Io = io,
     mutex: std.Io.Mutex = .init,
     bytes: std.ArrayList(u8) = .empty,
     group: std.Io.Group = .init,
@@ -175,11 +174,10 @@ const Sink = struct {
         var buffer: [512]u8 = undefined;
         while (true) {
             if (sink.stopping.load(.acquire)) return sink.stop(null);
-            const n = file.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+            const n = handles.readStreaming(file, sink.source_io, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return sink.stop(if (handles.finished(err)) null else err),
             };
-            if (n == 0) return sink.stop(null);
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
             sink.bytes.appendSlice(gpa, buffer[0..n]) catch return;
@@ -870,7 +868,8 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
     const id = try readMarkedNumber(win32.DWORD, &sink);
     stage = "opening the reported grandchild";
     const grandchild = try openById(id);
-    defer std.os.windows.CloseHandle(grandchild);
+    defer closeFixtureProcess(grandchild);
+    try expectFixtureInJob(grandchild, &child);
     stage = "waiting for the child and ending its tree";
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
@@ -1999,13 +1998,32 @@ fn alive(pid: posix.pid_t) bool {
 /// even after that process has ended.
 fn openById(id: win32.DWORD) !win32.HANDLE {
     return win32.OpenProcess(
-        win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION,
+        win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION | win32.PROCESS_TERMINATE,
         .FALSE,
         id,
     ) orelse {
         std.debug.print("\nOpenProcess({d}) failed: Windows error {d}\n", .{ id, @intFromEnum(std.os.windows.GetLastError()) });
         return error.TestProcessNotThere;
     };
+}
+
+/// A failed job assertion must still end the held witness, including one
+/// that the fixture accidentally started outside the child's job.
+fn closeFixtureProcess(process: win32.HANDLE) void {
+    if (runningNow(process)) _ = win32.TerminateProcess(process, 1);
+    std.os.windows.CloseHandle(process);
+}
+
+fn expectFixtureInJob(process: win32.HANDLE, child: *Child) !void {
+    var member: win32.BOOL = .FALSE;
+    if (win32.IsProcessInJob(process, State.get(child).job.?, &member) == .FALSE) {
+        std.debug.print("\nIsProcessInJob failed: Windows error {d}\n", .{@intFromEnum(std.os.windows.GetLastError())});
+        return error.TestJobQueryFailed;
+    }
+    if (member == .FALSE or !runningNow(process)) {
+        std.debug.print("\nfixture grandchild: in child's job={}, running={}\n", .{ member != .FALSE, runningNow(process) });
+        return error.TestGrandchildNotRunningInJob;
+    }
 }
 
 /// Whether that process is still running. Windows only.
@@ -2050,7 +2068,8 @@ test "waitTree says the tree has ended, and does not say it early" {
     const id = try readMarkedNumber(win32.DWORD, &sink);
     stage = "opening the reported grandchild";
     const grandchild = try openById(id);
-    defer std.os.windows.CloseHandle(grandchild);
+    defer closeFixtureProcess(grandchild);
+    try expectFixtureInJob(grandchild, &child);
     stage = "waiting for the child and ending its tree";
 
     // The child ends on its own, and is left unreaped until the end: `kill`
@@ -2116,7 +2135,8 @@ test "deinit ends a grandchild the child started and left behind" {
     const id = try readMarkedNumber(win32.DWORD, &sink);
     stage = "opening the reported grandchild";
     const grandchild = try openById(id);
-    defer std.os.windows.CloseHandle(grandchild);
+    defer closeFixtureProcess(grandchild);
+    try expectFixtureInJob(grandchild, &child);
     stage = "waiting for the child and ending its tree";
 
     // The child is gone and reaped, and nothing has been killed: `killWait` on
@@ -4114,4 +4134,43 @@ test "a Reaper started after status loss never watches a reused identity" {
     defer reaper.deinit(io);
     try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, 100));
     try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}
+
+test "the Windows PID fixture keeps reading after a successful empty read" {
+    // Windows permits this when a pipe writer issues a zero-length write.
+    // Inject that documented result on every platform, before the actual PID.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const written = try tmp.dir.createFile(io, "pid", .{});
+    try written.writeStreamingAll(io, "pid 12345.\n");
+    written.close(io);
+    const source = try tmp.dir.openFile(io, "pid", .{});
+    defer source.close(io);
+    const EmptyOnce = struct {
+        base: std.Io,
+        empty: bool = true,
+
+        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
+            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            return state.base.vtable.checkCancel(state.base.userdata);
+        }
+
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            if (operation == .file_read_streaming and state.empty) {
+                state.empty = false;
+                return .{ .file_read_streaming = 0 };
+            }
+            return state.base.vtable.operate(state.base.userdata, operation);
+        }
+    };
+
+    var empty: EmptyOnce = .{ .base = io };
+    var vtable = io.vtable.*;
+    vtable.operate = EmptyOnce.operate;
+    vtable.checkCancel = EmptyOnce.checkCancel;
+    var sink: Sink = .{ .source_io = .{ .vtable = &vtable, .userdata = &empty } };
+    defer sink.deinit();
+    try sink.start(source);
+    try testing.expectEqual(@as(u32, 12345), try readMarkedNumber(u32, &sink));
 }

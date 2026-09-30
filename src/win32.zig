@@ -112,6 +112,14 @@ pub extern "kernel32" fn AssignProcessToJobObject(
     hProcess: HANDLE,
 ) callconv(.winapi) BOOL;
 
+/// Whether a held process belongs to this specific job. The test fixtures
+/// prove this before asking job termination to reach the grandchild.
+pub extern "kernel32" fn IsProcessInJob(
+    ProcessHandle: HANDLE,
+    JobHandle: HANDLE,
+    Result: *BOOL,
+) callconv(.winapi) BOOL;
+
 /// Ends every process in the job, each with `uExitCode`.
 pub extern "kernel32" fn TerminateJobObject(
     hJob: HANDLE,
@@ -364,6 +372,7 @@ pub extern "kernel32" fn TerminateProcess(
 /// how it ended. Used by the tests, which is where a process named only by its
 /// id has to be looked at.
 pub const SYNCHRONIZE: DWORD = 0x00100000;
+pub const PROCESS_TERMINATE: DWORD = 0x00000001;
 pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x00001000;
 
 pub extern "kernel32" fn OpenProcess(
