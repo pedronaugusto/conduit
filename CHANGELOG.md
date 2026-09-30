@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Unit tests count spawn calls, native wait sleeps and stop tasks instead of asserting speed; deadline tests use controlled clocks, and timing claims live on the bench branch.
+
 - Breaking: `HeldReap` and Reaper state are opaque; `Reaper.StartError` includes `AlreadyStarted`, and a successful start or deinit prevents another start in that lifetime.
 
 - Breaking: `CapturedPid` is opaque; `processId()` replaces its numeric field, and Darwin captures retain process identity across exec while checking refreshed audit versions for signal delivery.

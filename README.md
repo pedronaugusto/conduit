@@ -476,7 +476,7 @@ from `start` to `deinit`; a process below this one reports this one as its
 parent once its own has gone, and this process gets a `SIGCHLD` when it
 ends. Nothing wakes an idle program for it: a look — a read of
 `/proc/self/task/<tid>/children` per thread and a `waitid` per child, a
-few microseconds — runs when a child of conduit's is reaped (the moment
+bounded process scan — runs when a child of conduit's is reaped (the moment
 what it left has become this process's), when a spawn returns, and in
 `count` and `end`, so an orphan that ends while none of those happens
 stays a zombie until the next one; each adopted process holds a pidfd
@@ -518,8 +518,7 @@ sent puts the stop back on the walk.
 
 **Two ways to start a child on POSIX, and the same child either way.** A spawn
 that needs nothing done between the fork and the exec is handed to
-`posix_spawn`, which does not copy the parent's page tables: measured here over
-1000 spawns of `/usr/bin/true` on the null device, 946 µs a spawn against 1336.
+`posix_spawn`, which does not copy the parent's page tables.
 Everything that can only be done in a fork child sends the spawn back to the
 fork — `credentials` and `resource_limits`, which a process sets on itself;
 `cwd`, `Stream.close`, a caller's file at descriptor 0, 1 or 2, and `fd_policy =

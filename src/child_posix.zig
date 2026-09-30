@@ -97,8 +97,8 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
 
     // Nothing has to happen between a fork and an exec for this one, so it
     // need not be a fork at all. `posix_spawn` describes the child with file
-    // actions instead, and on the systems that have it that is a third less
-    // work per spawn. It answers `null` for a set of descriptors it cannot
+    // actions instead, without copying the parent's page tables. It answers
+    // `null` for a set of descriptors it cannot
     // describe, and then this falls through to the fork below. A contained
     // child is always forked: joining its cgroup is a write, and there is no
     // file action for one.
@@ -137,6 +137,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     const parent = c.getpid();
 
     handles.ForkGap.startingAChild();
+    if (builtin.is_test) @import("test_support.zig").SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
         // The child inherits the lock as held, and the only thing it does with

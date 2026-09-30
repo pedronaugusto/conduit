@@ -600,9 +600,7 @@ test "Reaper.wait blocks until the child has ended, and answers everyone who ask
     defer reaper.deinit(io);
 
     // Still running: a bounded wait says so, and says it no sooner than asked.
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
     try testing.expectEqual(@as(?Child.Term, null), try reaper.waitTimeout(io, 30));
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() >= 30);
 
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
@@ -640,18 +638,26 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     defer reaper.deinit(io);
 
     const grace_ms = 300;
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
-    reaper.stop(io, grace_ms);
-    // Asked, not waited for: the grace is the reaper's to spend.
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < grace_ms);
+    const Count = struct {
+        var tasks: usize = 0;
+        fn concurrent(userdata: ?*anyopaque, group: *std.Io.Group, context: []const u8, alignment: std.mem.Alignment, run: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
+            tasks += 1;
+            return io.vtable.groupConcurrent(userdata, group, context, alignment, run);
+        }
+    };
+    Count.tasks = 0;
+    var vtable = io.vtable.*;
+    vtable.groupConcurrent = Count.concurrent;
+    const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    reaper.stop(counted_io, grace_ms);
+    try testing.expectEqual(@as(usize, 1), Count.tasks);
+    // Asked, not waited for: exactly one task owns the grace.
     // A second request with a grace changes nothing.
-    reaper.stop(io, grace_ms);
+    reaper.stop(counted_io, grace_ms);
+    try testing.expectEqual(@as(usize, 1), Count.tasks);
 
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
-    const took_ms = t0.untilNow(io).raw.toMilliseconds();
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
-    try testing.expect(took_ms >= grace_ms);
-    try testing.expect(took_ms < grace_ms + 2000);
 
     const deadline: Deadline = .in(io, budget_ms);
     while (alive(grandchild)) {
@@ -681,12 +687,10 @@ test "Reaper.stop is over the moment a child that honours the request ends" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
     reaper.stop(io, 60_000);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     // The request, not the force: the grace was never waited out.
     try testing.expectEqual(Child.Term{ .signal = .TERM }, term);
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
 }
 
 test "Reaper.stop with no grace is the force, now" {
@@ -768,13 +772,11 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
     child.closeStdin(io);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .exited = 3 }, term);
     // The one that would not go when asked was made to, once the grace had
     // passed, and the child was published only after it.
-    if (t0.untilNow(io).raw.toMilliseconds() < grace_ms) return error.TestGraceNotGiven;
     // Ended, both: what is left is their new parent's reaping of them, which
     // this test cannot hurry and only waits out.
     const deadline: Deadline = .in(io, budget_ms);
@@ -910,9 +912,13 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
     try std.Io.sleep(io, .fromMilliseconds(20), .awake);
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
-    reaper.deinit(io);
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
+    {
+        var join_watchdog: Watchdog = .init(@src());
+        join_watchdog.limit_ms = budget_ms;
+        try join_watchdog.start(io);
+        defer join_watchdog.deinit(io);
+        reaper.deinit(io);
+    }
     try testing.expectError(error.Canceled, reaper.exit());
 
     child.closeStdin(io);
@@ -997,72 +1003,35 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
     try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
 }
 
-test "waitTimeout costs no more than the blocking wait it is a deadline on" {
+test "waitTimeout uses the native exit wait without interval sleeps" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-
-    // A relative budget over complete rounds. `waitTimeout` used to ask again
-    // on a growing interval -- one millisecond, then two, then four -- which
-    // put a millisecond and a half between a child ending and this call
-    // noticing, whatever the machine. It waits on a handle the system makes
-    // ready now, so it stays within half again the blocking wait. The two are
-    // interleaved inside each round, and the fastest whole round from each
-    // side is the one compared: scheduler stalls can only make a round slower,
-    // and a shared runner gets several chances to leave each side alone.
-    const rounds = 6;
-    const per_round = 8;
-    var fastest_blocking: i64 = std.math.maxInt(i64);
-    var fastest_deadlined: i64 = std.math.maxInt(i64);
-
-    // Neither side pays for the cold first spawn.
-    _ = try timeOne(.blocking);
-    _ = try timeOne(.deadlined);
-
-    for (0..rounds) |round| {
-        var blocking: i64 = 0;
-        var deadlined: i64 = 0;
-        for (0..per_round) |_| {
-            if (round % 2 == 0) {
-                blocking += try timeOne(.blocking);
-                deadlined += try timeOne(.deadlined);
-            } else {
-                deadlined += try timeOne(.deadlined);
-                blocking += try timeOne(.blocking);
-            }
-        }
-        fastest_blocking = @min(fastest_blocking, blocking);
-        fastest_deadlined = @min(fastest_deadlined, deadlined);
-    }
-
-    if (fastest_deadlined * 2 <= fastest_blocking * 3) return;
-    std.debug.print(
-        "\nfastest {d}-child round: wait() {d} us, waitTimeout() {d} us; deadline wait exceeded the 3:2 budget\n",
-        .{ per_round, fastest_blocking, fastest_deadlined },
-    );
-    return error.TestWaitTimeoutCostsTooMuch;
-}
-
-/// Microseconds to start a child that exits at once and reap it, one way or
-/// the other.
-fn timeOne(how: enum { blocking, deadlined }) !i64 {
-    const argv: []const []const u8 = if (is_windows)
-        &.{ "cmd.exe", "/c", "exit 0" }
-    else
-        &.{ "/bin/sh", "-c", "exit 0" };
-
-    const start: std.Io.Timestamp = .now(io, .awake);
-    var child = try Child.spawn(io, gpa, .{ .argv = argv, .stdio = .ignore });
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    switch (how) {
-        .blocking => _ = try child.wait(io),
-        .deadlined => if (try child.waitTimeout(io, budget_ms) == null) {
-            return error.TestChildDidNotExit;
-        },
+    defer _ = child.killWait(io, 0) catch {};
+    if (!is_windows) {
+        const watch = wait_for.Watch.open(child.processId().?) orelse return error.SkipZigTest;
+        watch.close();
     }
-    const end: std.Io.Timestamp = .now(io, .awake);
-    return start.durationTo(end).toMicroseconds();
+    const Count = struct {
+        var sleeps: usize = 0;
+        fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            sleeps += 1;
+            return error.Canceled;
+        }
+    };
+    Count.sleeps = 0;
+    var vtable = io.vtable.*;
+    vtable.sleep = Count.sleep;
+    const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(counted_io, 20));
+    try testing.expectEqual(@as(usize, 0), Count.sleeps);
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
 }
 
 test "waitTimeout gives up without ending the child" {
@@ -3256,77 +3225,30 @@ test "a child on the posix_spawn path starts with the same clean slate" {
     try testing.expectEqual(Child.Term{ .signal = .INT }, result.term);
 }
 
-test "the posix_spawn path is the faster one" {
+test "a spawn expressible by file actions makes no fork call" {
+    if (is_windows or !fast_path) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    if (is_windows or !fast_path) return error.SkipZigTest;
-    // A child in a cgroup of its own is always forked, so this is about the
-    // spawns that take `posix_spawn`: those where no cgroup is made.
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
-
-    // A budget, not a measurement, and a relative one so that a loaded machine
-    // moves both numbers together. `fork` copies a process's page tables and
-    // `posix_spawn` does not; measured on an M3 Max over 1000 spawns of
-    // `/usr/bin/true` on the null device, that is 1304 us a spawn against
-    // 902 us, a third less. A tenth less is the bar here.
-    const program: []const u8 = program: {
-        for ([_][]const u8{ "/usr/bin/true", "/bin/true" }) |path| {
-            std.Io.Dir.accessAbsolute(io, path, .{}) catch continue;
-            break :program path;
-        }
-        return error.SkipZigTest;
-    };
-
-    // Under ThreadSanitizer a fork costs its runtime far more than it costs
-    // the kernel -- about 140 ms against 1.4 on the M3 Max, where
-    // `posix_spawn` goes from about 1 ms to 1.6 -- so 200 rounds took some
-    // 27 s of the watchdog's 30. Twenty still measure the same claim, with the
-    // gap a hundredfold there.
-    const rounds: usize = if (builtin.sanitize_thread) 20 else 200;
-    // A few of each first, so that neither path pays for a cold cache.
-    _ = try timeOneSpawn(program, null);
-    _ = try timeOneSpawn(program, "/");
-
-    // Up to five goes at it: one descheduled run on a loaded machine is not
-    // the claim, and a difference of a third is there every time.
-    var attempt: usize = 0;
-    while (attempt < 5) : (attempt += 1) {
-        // The two are interleaved rather than measured in blocks, so that a
-        // machine that gets busier while this runs makes both numbers worse
-        // together instead of the second one alone.
-        var fast_us: i64 = 0;
-        var forked_us: i64 = 0;
-        var round: usize = 0;
-        while (round < rounds) : (round += 1) {
-            fast_us += try timeOneSpawn(program, null);
-            forked_us += try timeOneSpawn(program, "/");
-        }
-        if (fast_us * 10 <= forked_us * 9) return;
-
-        std.debug.print(
-            "\nposix_spawn {d} us against fork and exec {d} us, {d} spawns each: not the tenth faster this asks for\n",
-            .{ fast_us, forked_us, rounds },
-        );
-    }
-    return error.TestFastPathIsNotFaster;
-}
-
-/// Microseconds to start one child and reap it. A non-null `cwd` is what sends
-/// the spawn down the fork path.
-fn timeOneSpawn(program: []const u8, cwd: ?[]const u8) !i64 {
-    const start: std.Io.Timestamp = .now(io, .awake);
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{program},
-        .cwd = cwd,
-        .stdio = .ignore,
-    });
+    const calls = @import("test_support.zig").SpawnCalls;
+    calls.forks = 0;
+    calls.file_actions = 0;
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    _ = try child.wait(io);
-    const end: std.Io.Timestamp = .now(io, .awake);
-    return start.durationTo(end).toMicroseconds();
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    try testing.expectEqual(@as(usize, 0), calls.forks);
+    try testing.expectEqual(@as(usize, 1), calls.file_actions);
+
+    // cwd cannot be expressed by this implementation's file actions.
+    var forked = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
+    defer forked.deinit(io);
+    defer _ = forked.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&forked));
+    try testing.expectEqual(@as(usize, 1), calls.forks);
+    try testing.expectEqual(@as(usize, 1), calls.file_actions);
 }
 
 //======================================================================

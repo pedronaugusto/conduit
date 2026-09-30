@@ -556,3 +556,58 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     reaper.stop(io, 0);
     _ = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
 }
+
+test "Reaper deadlines keep spurious wakes on one answer event and spend the stop grace there" {
+    if (is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var reaper: Reaper = .init(&child, .{});
+    defer reaper.deinit(io);
+    const Clock = struct {
+        ms: u32 = 0,
+        waits: usize = 0,
+        sleeps: usize = 0,
+        event: ?*const u32 = null,
+        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
+        }
+        fn futexWait(userdata: ?*anyopaque, ptr: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            if (clock.event) |event| std.debug.assert(event == ptr) else clock.event = ptr;
+            clock.waits += 1;
+            clock.ms += 10;
+        }
+        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            clock.sleeps += 1;
+            return error.Canceled;
+        }
+    };
+    var clock: Clock = .{};
+    var vtable = io.vtable.*;
+    vtable.now = Clock.now;
+    vtable.futexWait = Clock.futexWait;
+    vtable.sleep = Clock.sleep;
+    const clock_io: std.Io = .{ .userdata = &clock, .vtable = &vtable };
+    try testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(clock_io, 30));
+    try testing.expectEqual(@as(usize, 3), clock.waits);
+    try testing.expectEqual(@as(usize, 0), clock.sleeps);
+    try testing.expectEqual(@as(u32, 30), clock.ms);
+    try testing.expectEqual(@as(?Term, null), try child.tryWait());
+    clock = .{};
+    reaper.insist(clock_io, 40);
+    try testing.expectEqual(@as(usize, 4), clock.waits);
+    try testing.expectEqual(@as(usize, 0), clock.sleeps);
+    try testing.expectEqual(@as(u32, 40), clock.ms);
+    try testing.expectEqual(Term{ .signal = .KILL }, try child.wait(io));
+}

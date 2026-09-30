@@ -1264,8 +1264,7 @@ const DarwinForks = struct {
         if (forks.reading.swap(true, .acquire)) return true;
         defer forks.reading.store(false, .release);
         // `KEVENT_FLAG_IMMEDIATE` rather than a timeout of zero, which only
-        // `kevent64` takes: measured here, a zero timeout still costs 14 µs
-        // a call, the flag 0.3 µs.
+        // `kevent64` takes, without entering a timed wait.
         var events: [2]c.kevent64_s = undefined;
         var nothing: [0]c.kevent64_s = undefined;
         const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{ .IMMEDIATE = true }, null);

@@ -63,8 +63,7 @@
 //!   action ignores it.
 //! * A look reads `/proc/self/task/<tid>/children`, one small file per
 //!   thread, and makes one `waitid` per running child conduit started and per
-//!   adopted process: a few microseconds, added to the reap or the spawn that
-//!   asked for it (measured: about 4 µs with none, 30 µs with a hundred).
+//!   adopted process, added to the reap or spawn that asked for it.
 //! * While it runs, each child conduit starts costs one more descriptor, a
 //!   pidfd, until the child has been reaped and a look has passed. A spawn
 //!   that cannot have it ends the child it just started, reaps it, and fails

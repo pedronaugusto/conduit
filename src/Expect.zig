@@ -696,9 +696,13 @@ test "deinit stops the reader while the terminal is still open" {
     defer expect.deinit(io);
     _ = try expect.until(io, "ready", budget_ms);
 
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
-    expect.deinit(io);
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
+    {
+        var join_watchdog: Watchdog = .init(@src());
+        join_watchdog.limit_ms = budget_ms;
+        try join_watchdog.start(io);
+        defer join_watchdog.deinit(io);
+        expect.deinit(io);
+    }
     try testing.expect(expect.finished.load(.acquire));
     // Still running: the read ended because it was asked to, not because the
     // stream did.

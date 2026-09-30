@@ -71,3 +71,9 @@ pub const Watchdog = struct {
         });
     }
 };
+
+/// Counts only the parent's fork and posix_spawn calls, never wall time.
+pub const SpawnCalls = struct {
+    pub var forks: usize = 0;
+    pub var file_actions: usize = 0;
+};

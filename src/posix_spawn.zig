@@ -5,9 +5,7 @@
 //! much memory the parent has mapped. `posix_spawn` does not: the systems here
 //! implement it with `vfork` or with a kernel call of their own, and the child
 //! is described by a list of file actions and a set of attributes rather than
-//! by code running in it. Measured on an M3 Max, 1000 spawns of `/usr/bin/true`
-//! on the null device: 1336 µs a spawn through `fork` and `execve`, 946 µs
-//! through `posix_spawn`.
+//! by code running in it.
 //!
 //! # What it cannot do
 //!
@@ -197,6 +195,7 @@ pub fn spawn(
     var best: posix.E = .NOENT;
     for (candidates) |candidate| {
         var pid: posix.pid_t = undefined;
+        if (builtin.is_test) @import("test_support.zig").SpawnCalls.file_actions += 1;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) return try started(pid);
         switch (@as(posix.E, @enumFromInt(rc))) {
