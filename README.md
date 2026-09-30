@@ -81,7 +81,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
-| `child.wait(io)` | Blocks; delegates to `std.process.Child.wait`. |
+| `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.term` | How it ended, once something reaped it. Written by whichever call did and published through an atomic, so `tryWait` is how to read it while a `Reaper` runs. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
@@ -505,7 +505,10 @@ another task works; and `Child.output`, which reads two streams at once. A
 child is reaped once however many tasks ask: the right to be inside the
 system's wait is taken with an atomic, and whoever has it publishes the term to
 the rest — so `killWait` is legal while a `Reaper` runs, which is the sequence
-the `Reaper` exists for.
+the `Reaper` exists for. A separate identity claim covers the whole descendant
+walk and signal delivery, and the final reap and Windows handle closure. A
+wait observes the exit without holding that claim, so it can still be stopped;
+once reaped, its process or group id is never used for signalling again.
 
 ## Scope
 

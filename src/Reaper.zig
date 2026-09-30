@@ -137,7 +137,7 @@ pub const StartError = std.Io.ConcurrentError;
 /// deadlocking later. Calling this twice on one `Reaper` starts a second wait,
 /// which is a bug: the second one finds no child.
 pub fn start(reaper: *Reaper, io: std.Io) StartError!void {
-    // Without a pipe the wait falls back to the standard library's, which is
+    // Without a pipe the wait falls back to Child.wait, which is
     // a cancelation point of its own: the wake is how a better wait is ended,
     // not a condition of waiting at all.
     if (!is_windows) reaper.wake = handles.pipe() catch null;
@@ -276,7 +276,7 @@ fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
         // none at all. Either way the end is asked for without reaping, so
         // that what the child left in its group can still be ended by the id
         // the child holds. Where even that cannot be asked, the wait is the
-        // standard library's, and the group is left as it is.
+        // Child.wait, and the group is left as it is.
         while (true) switch (wait_for.endedUnreaped(reaper.child.id)) {
             .ended => break,
             .running => if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled,

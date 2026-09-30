@@ -124,8 +124,8 @@ term: ?Term,
 ///
 /// Stored with release ordering after `term`, and loaded with acquire
 /// ordering before every read of it, so that a task which sees a term sees
-/// the whole of it. That pairing is what makes `Reaper` legal alongside
-/// `kill`, `killWait` and `tryWait` on the same `Child`.
+/// the whole of it. The separate `identity` claim keeps signalling safe
+/// until this publication says the identity has been retired.
 reaped: std.atomic.Value(bool) = .init(false),
 /// Whether some task is inside the operating system's wait for this child.
 ///
@@ -134,6 +134,14 @@ reaped: std.atomic.Value(bool) = .init(false),
 /// this reads the answer the one who did publishes — `tryWait` by saying the
 /// child is still running, `wait` by waiting for the answer to appear.
 reaping: std.atomic.Value(bool) = .init(false),
+/// The right to use or retire the OS identity. Signalling holds it for the
+/// whole tree walk and delivery; reaping holds it only for the final,
+/// nonblocking wait, handle closure and publication. Waiting for an exit
+/// never holds it, so a child being waited for can still be killed.
+identity: std.atomic.Mutex = .unlocked,
+/// An identity retired without a term, because something else reaped it.
+/// Guarded by `identity`; once set, no signal uses the child's name again.
+identity_retired: bool = false,
 
 /// How a child process ended.
 ///
@@ -753,8 +761,8 @@ pub const WaitError = std.process.Child.WaitError;
 /// Blocks until the child ends, and returns how.
 ///
 /// Returns the same value on every later call: the child is reaped once. This
-/// is the standard library's wait, so it is a cancelation point and uses
-/// whatever the `std.Io` implementation has for the job.
+/// waits on the same exit handles as `waitTimeout`, without reaping until
+/// signalling has let go of the identity. It is a cancelation point.
 ///
 /// **Read the child's output while you wait for it.** A child that fills a
 /// pipe nobody is draining stops there, and a child on a pseudo-terminal can
@@ -784,24 +792,19 @@ pub fn wait(child: *Child, io: std.Io) WaitError!Term {
 
 /// `wait` for a caller that already holds the reap.
 fn waitClaimed(child: *Child, io: std.Io) WaitError!Term {
-    if (child.settled()) |term| return term;
-
-    var proc: std.process.Child = .{
-        .id = child.id,
-        .thread_handle = child.thread,
-        .stdin = null,
-        .stdout = null,
-        .stderr = null,
-        .request_resource_usage_statistics = false,
-    };
-    const term = try proc.wait(io);
-    // The standard library's Windows wait closes the process and thread
-    // handles as part of reaping. Recording that here is what keeps `deinit`
-    // from closing them a second time, and it is written before the publish
-    // below so that whoever reads the term reads this too.
-    if (is_windows) child.handles_open = false;
-    child.publish(term);
-    return term;
+    // One implementation owns final reaping for bounded and unbounded waits.
+    // Renew the largest bounded wait until an answer arrives: a child may
+    // run longer than one u32 millisecond span. Exit observation keeps the
+    // zombie (or Windows handles) intact until tryWaitClaimed takes identity.
+    while (true) {
+        const term = child.reapWithin(io, .in(io, std.math.maxInt(u32))) catch |err| switch (err) {
+            // WaitError has no ReapedElsewhere, as the standard library's
+            // blocking wait did not. Preserve that public error set.
+            error.ReapedElsewhere => return error.Unexpected,
+            else => |other| return other,
+        };
+        if (term) |ended| return ended;
+    }
 }
 
 //======================================================================
@@ -818,14 +821,9 @@ fn settled(child: *const Child) ?Term {
 }
 
 /// Records how the child ended and lets everyone else read it.
-///
-/// On Linux the reap is also one of the moments `Orphans` looks at this
-/// process's children, when one runs: what the child left is this process's
-/// now.
 fn publish(child: *Child, term: Term) void {
     child.term = term;
     child.reaped.store(true, .release);
-    if (builtin.os.tag == .linux) orphans.event();
 }
 
 /// Takes the right to be inside the operating system's wait for this child.
@@ -850,7 +848,7 @@ pub fn holdReap(child: *Child) ?HeldReap {
     return .{ .child = child };
 }
 
-/// The right to reap a child, held. `wait` or `release` gives it back.
+/// The right to reap a child, held until `release`, including after `wait`.
 pub const HeldReap = struct {
     child: *Child,
 
@@ -1020,8 +1018,22 @@ pub fn tryWait(child: *Child) TryWaitError!?Term {
 
 /// `tryWait` for a caller that already holds the reap.
 fn tryWaitClaimed(child: *Child) TryWaitError!?Term {
+    // tryWait must stay nonblocking even while a signaller walks a tree.
+    if (!child.identity.tryLock()) return null;
+    var published = false;
+    defer {
+        child.identity.unlock();
+        // Adoption belongs to Orphans, after retirement has let go of the
+        // identity. Its process-table look must not hold off signalling.
+        if (builtin.os.tag == .linux and published) orphans.event();
+    }
     if (child.settled()) |term| return term;
-    if (is_windows) return child.tryWaitWindows();
+    if (child.identity_retired) return error.ReapedElsewhere;
+    if (is_windows) {
+        const term = try child.tryWaitWindows();
+        published = term != null;
+        return term;
+    }
 
     var status: c_int = undefined;
     while (true) {
@@ -1030,11 +1042,15 @@ fn tryWaitClaimed(child: *Child) TryWaitError!?Term {
         if (rc > 0) {
             const term = statusToTerm(@bitCast(status));
             child.publish(term);
+            published = true;
             return term;
         }
         switch (c.errno(rc)) {
             .INTR => continue,
-            .CHILD => return error.ReapedElsewhere,
+            .CHILD => {
+                child.identity_retired = true;
+                return error.ReapedElsewhere;
+            },
             else => |err| return posix.unexpectedErrno(err),
         }
     }
@@ -1176,16 +1192,23 @@ pub const KillError = error{
 /// the signal, so that a first child made while it was being sent still gets
 /// the passes above. A child that has a child is walked as described.
 ///
-/// A child that has already ended is not signalled, because its name no longer
-/// belongs to it; that case is not an error, and it may reap the child as a
-/// side effect. On Windows that also means nothing else in its job is ended:
+/// A child that has already been reaped is not signalled, because its name no
+/// longer belongs to it; that case is not an error. On Windows that also
+/// means nothing else in its job is ended:
 /// `killWait` on a child that exited on its own leaves what the child started
 /// to `deinit`.
 ///
-/// This does not wait. The child is still a process, and still needs reaping,
-/// when this returns.
+/// This does not wait for the child to exit. It shares an identity claim with
+/// final reaping: no wait can release the pid or close the Windows handles
+/// during the descendant walk or signal delivery. The child still needs
+/// reaping when this returns, unless another task has already done it.
 pub fn kill(child: *Child, signal: Signal) KillError!void {
-    if (child.settled() != null) return;
+    // Never wait for an exit here. Whoever holds identity is only delivering
+    // a signal or doing the final nonblocking reap, not waiting on the child.
+    while (!child.identity.tryLock()) std.Thread.yield() catch {};
+    defer child.identity.unlock();
+    if (child.settled() != null or child.identity_retired) return;
+    if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
     if (is_windows) return child.killWindows(signal);
 
     const sig = signal.toPosix();
@@ -1277,7 +1300,7 @@ fn signalTarget(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!vo
             // remaining member has exited and not yet been reaped. That is not
             // a permission problem in any sense the caller can act on, so it is
             // reported as what it is: the child is already gone.
-            if ((child.tryWait() catch null) != null) return;
+            if (wait_for.endedUnreaped(child.id) == .ended) return;
             return error.PermissionDenied;
         },
         // No such process: the child ended between the check above and here.
@@ -1949,9 +1972,9 @@ fn terminateWindows(child: *Child) KillError!void {
     if (win32.TerminateProcess(child.id, 1) != .FALSE) return;
     return switch (windows.GetLastError()) {
         .ACCESS_DENIED => {
-            // Usually this means the process has already exited; the reap
-            // below is what tells the two apart.
-            if ((child.tryWait() catch null) != null) return;
+            // Usually this means the process has already exited. Observe it
+            // without reaping while signal delivery owns the identity.
+            if (win32.WaitForSingleObject(child.id, 0) == win32.WAIT_OBJECT_0) return;
             return error.PermissionDenied;
         },
         .INVALID_HANDLE => {},
@@ -1974,6 +1997,90 @@ fn statusToTerm(status: u32) Term {
         .{ .stopped = c.W.STOPSIG(status) }
     else
         .{ .unknown = status };
+}
+
+// A test can stop delivery at the boundary between taking the child's name
+// and using it. No hook or storage reaches a consumer build.
+var signal_probe: if (builtin.is_test) ?*SignalProbe else void = if (builtin.is_test) null else {};
+
+const SignalProbe = if (builtin.is_test) struct {
+    reaper: *@import("Reaper.zig"),
+    retired: bool = false,
+
+    fn beforeSignal(probe: *@This(), child: *Child) void {
+        child.closeStdin(std.testing.io);
+        // Give the Reaper the chance to finish the reap while delivery is
+        // paused. With a held identity it must leave the status and handles
+        // alone until delivery resumes.
+        _ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};
+        probe.retired = child.reaped.load(.acquire) or if (is_windows) retired: {
+            var code: win32.DWORD = undefined;
+            break :retired win32.GetExitCodeProcess(child.id, &code) == .FALSE;
+        } else c.kill(child.id, @enumFromInt(0)) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
+    }
+} else struct {};
+
+test "a Reaper cannot retire the identity while kill is delivering a signal" {
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    for (0..64) |iteration| {
+        var child = try spawn(io, testing.allocator, .{
+            .argv = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" },
+            .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+            .detach = iteration % 2 == 0,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        var reaper: @import("Reaper.zig") = .init(&child, .{});
+        try reaper.start(io);
+        defer reaper.deinit(io);
+
+        var probe: SignalProbe = .{ .reaper = &reaper };
+        signal_probe = &probe;
+        defer signal_probe = null;
+        try child.kill(if (iteration % 3 == 0) .kill else .terminate);
+        signal_probe = null;
+        try testing.expect(!probe.retired);
+        const term = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+        try testing.expectEqual(term, try child.wait(io));
+        try child.kill(.kill);
+    }
+}
+
+test "a reap reported elsewhere retires the identity before kill can use its number" {
+    if (is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "exit 7" },
+        .stdio = .ignore,
+    });
+    defer child.deinit(io);
+    var status: c_int = undefined;
+    while (c.waitpid(child.id, &status, 0) < 0) {
+        if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
+    }
+    try testing.expectError(error.ReapedElsewhere, child.tryWait());
+
+    var witness = try spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // Substitute an unrelated live process's number for the retired label:
+    // exercise PID reuse without relying on the kernel to recycle a pid.
+    child.id = witness.id;
+    try child.kill(.kill);
+    try testing.expectEqual(@as(?Term, null), try witness.waitTimeout(io, 20));
 }
 
 test {
