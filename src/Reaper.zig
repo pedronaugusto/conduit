@@ -294,9 +294,9 @@ fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
     // of its own has what it left in there, wherever its group went.
     if (reaper.options.end_tree) {
         if (reaper.child.cgroup.active()) {
-            if (!reaper.endContained(wake[0])) return error.Canceled;
+            if (!reaper.endContained(io, wake[0])) return error.Canceled;
         } else if (reaper.child.pgid) |pgid| {
-            if (!reaper.endGroup(pgid, wake[0])) return error.Canceled;
+            if (!reaper.endGroup(io, pgid, wake[0])) return error.Canceled;
         }
     }
     return held.wait(io);
@@ -305,19 +305,16 @@ fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
 /// What the child left in its cgroup: asked, given the grace, then made.
 /// The child itself, ended and unreaped, is not counted as running there.
 /// False when the wake came first.
-fn endContained(reaper: *Reaper, wake: posix.fd_t) bool {
+fn endContained(reaper: *Reaper, io: std.Io, wake: posix.fd_t) bool {
     const contained = &reaper.child.cgroup;
     switch (contained.populated()) {
         .none => return true,
         .others => {
             _ = contained.signalMembers(.TERM, reaper.child.id, null) catch {};
-            var waited_ms: u32 = 0;
-            var slice_ms: u32 = 1;
-            while (waited_ms < reaper.options.tree_grace_ms) {
-                if (!pause(wake, slice_ms)) return false;
-                waited_ms += slice_ms;
-                slice_ms = @min(slice_ms * 2, tree_slice_ms);
-                if (contained.populated() == .none) return true;
+            switch (reaper.treeGrace(io, wake, .{ .contained = contained })) {
+                .empty => return true,
+                .woken => return false,
+                .elapsed => {},
             }
         },
         .unknown => {},
@@ -325,13 +322,13 @@ fn endContained(reaper: *Reaper, wake: posix.fd_t) bool {
     // One write, and safe against a fork while it is delivered. A cgroup the
     // kernel will not end leaves the group to be ended as before.
     if (contained.kill()) return true;
-    if (reaper.child.pgid) |pgid| return reaper.endGroup(pgid, wake);
+    if (reaper.child.pgid) |pgid| return reaper.endGroup(io, pgid, wake);
     return true;
 }
 
 /// What the child left in its group: asked, given the grace, then made.
 /// False when the wake came first.
-fn endGroup(reaper: *Reaper, pgid: posix.pid_t, wake: posix.fd_t) bool {
+fn endGroup(reaper: *Reaper, io: std.Io, pgid: posix.pid_t, wake: posix.fd_t) bool {
     const leader = reaper.child.id;
     // A group holding nothing but the child is the usual case, and is the
     // one that sends nothing.
@@ -339,13 +336,10 @@ fn endGroup(reaper: *Reaper, pgid: posix.pid_t, wake: posix.fd_t) bool {
         .none => return true,
         .others => {
             _ = c.kill(-pgid, .TERM);
-            var waited_ms: u32 = 0;
-            var slice_ms: u32 = 1;
-            while (waited_ms < reaper.options.tree_grace_ms) {
-                if (!pause(wake, slice_ms)) return false;
-                waited_ms += slice_ms;
-                slice_ms = @min(slice_ms * 2, tree_slice_ms);
-                if (tree.members(pgid, leader) == .none) return true;
+            switch (reaper.treeGrace(io, wake, .{ .group = pgid })) {
+                .empty => return true,
+                .woken => return false,
+                .elapsed => {},
             }
         },
         .unknown => {},
@@ -360,6 +354,33 @@ fn endGroup(reaper: *Reaper, pgid: posix.pid_t, wake: posix.fd_t) bool {
     return true;
 }
 
+const TreeReach = union(enum) {
+    group: posix.pid_t,
+    contained: *const @import("cgroup.zig").Cgroup,
+
+    fn empty(reach: TreeReach, leader: posix.pid_t) bool {
+        return switch (reach) {
+            .group => |pgid| tree.members(pgid, leader) == .none,
+            .contained => |contained| contained.populated() == .none,
+        };
+    }
+};
+
+/// One grace for either tree reach, measured by the caller's clock. An
+/// interrupted poll spends only the time it actually took, and a delayed
+/// wake spends all of it. Neither changes the deadline.
+fn treeGrace(reaper: *Reaper, io: std.Io, wake: posix.fd_t, reach: TreeReach) enum { empty, elapsed, woken } {
+    const deadline: @import("deadline.zig").Deadline = .in(io, reaper.options.tree_grace_ms);
+    var slice_ms: u32 = 1;
+    while (true) {
+        const left = deadline.remainingMs(io);
+        if (left == 0) return .elapsed;
+        if (!pause(wake, @min(left, slice_ms))) return .woken;
+        if (reach.empty(reaper.child.id)) return .empty;
+        slice_ms = @min(slice_ms * 2, tree_slice_ms);
+    }
+}
+
 /// The longest the group is left between two looks while its grace runs.
 /// Only a group with something left in it is looked at at all.
 const tree_slice_ms: u32 = 20;
@@ -368,6 +389,12 @@ const kill_passes: u8 = 3;
 
 /// Sleeps `ms` unless the wake comes first. False when it did.
 fn pause(wake: posix.fd_t, ms: u32) bool {
+    if (builtin.is_test) if (pause_elapsed) |elapsed| {
+        // A poll interrupted after two milliseconds, before its requested
+        // slice elapsed. The test's clock advances by the time actually spent.
+        elapsed.* += 2;
+        return true;
+    };
     var fds = [_]c.pollfd{.{ .fd = wake, .events = c.POLL.IN, .revents = 0 }};
     return c.poll(&fds, 1, @intCast(ms)) <= 0 or fds[0].revents == 0;
 }
@@ -399,6 +426,43 @@ fn decode(state: u64) ExitError!Term {
         4 => @as(ExitError, @errorCast(@errorFromInt(@as(u16, @truncate(payload))))),
         else => unreachable,
     };
+}
+
+var pause_elapsed: if (builtin.is_test) ?*u32 else void = if (builtin.is_test) null else {};
+
+test "a Reaper tree grace counts elapsed time when polls are interrupted" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 30 & echo ready; read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var buffer: [32]u8 = undefined;
+    var reader = child.stdout.?.reader(io, &buffer);
+    try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
+
+    const Clock = struct {
+        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const elapsed: *u32 = @ptrCast(@alignCast(userdata.?));
+            return .{ .nanoseconds = @as(i96, elapsed.*) * std.time.ns_per_ms };
+        }
+    };
+    var elapsed: u32 = 0;
+    var vtable = io.vtable.*;
+    vtable.now = Clock.now;
+    const clock_io: std.Io = .{ .vtable = &vtable, .userdata = &elapsed };
+    var reaper: Reaper = .init(&child, .{ .tree_grace_ms = 100 });
+    pause_elapsed = &elapsed;
+    defer pause_elapsed = null;
+    try testing.expect(reaper.endGroup(clock_io, child.pgid.?, -1));
+    try testing.expect(elapsed >= 100);
 }
 
 test "every term survives the round trip through the atomic" {

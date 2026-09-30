@@ -1661,11 +1661,12 @@ fn outputOnTasks(
     // The child is gone, so its ends of the pipes are closed and the readers
     // are finishing. Anything still holding a stream open is not the child,
     // and is not what this call promised to wait for.
-    var drained_ms: u32 = 0;
-    while (drained_ms < options.drain_ms) {
+    const drain: Deadline = .in(io, options.drain_ms);
+    while (true) {
         if (out.done.load(.acquire) and err.done.load(.acquire)) break;
-        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
-        drained_ms += 2;
+        const left = drain.remainingMs(io);
+        if (left == 0) break;
+        try std.Io.sleep(io, .fromMilliseconds(@min(left, 2)), .awake);
     }
     // Joins the tasks, so the lists below are this task's alone again.
     group.cancel(io);
@@ -2049,6 +2050,58 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         try testing.expectEqual(term, try child.wait(io));
         try child.kill(.kill);
     }
+}
+
+test "output on tasks bounds draining by elapsed time after a delayed sleep" {
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
+    var child = try spawn(io, testing.allocator, .{
+        .argv = argv,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    child.closeStdin(io);
+    _ = (try child.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+
+    // A live writer keeps the output open after the child has ended, as an
+    // inherited pipe in a grandchild would, without leaving an orphan behind.
+    var writer = try spawn(io, testing.allocator, .{
+        .argv = argv,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer writer.deinit(io);
+    defer _ = writer.killWait(io, 0) catch {};
+    child.stdout = writer.stdout;
+    writer.stdout = null;
+
+    const Clock = struct {
+        var elapsed: std.atomic.Value(u32) = .init(0);
+
+        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            return .{ .nanoseconds = @as(i96, elapsed.load(.acquire)) * std.time.ns_per_ms };
+        }
+
+        fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            // A two millisecond sleep that resumed after ten. Only the
+            // caller's clock says how much of the drain budget was spent.
+            _ = elapsed.fetchAdd(10, .release);
+            try std.Io.checkCancel(std.testing.io);
+        }
+    };
+    Clock.elapsed.store(0, .release);
+    var vtable = io.vtable.*;
+    vtable.now = Clock.now;
+    vtable.sleep = Clock.sleep;
+    const delayed_io: std.Io = .{ .vtable = &vtable, .userdata = io.userdata };
+    var result = try child.outputOnTasks(delayed_io, testing.allocator, .{ .drain_ms = 20 });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result.stdout_truncated);
+    try testing.expectEqual(@as(u32, 20), Clock.elapsed.load(.acquire));
 }
 
 test "a reap reported elsewhere retires the identity before kill can use its number" {
