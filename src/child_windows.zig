@@ -324,7 +324,7 @@ fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
     // choices remain unsupported rather than being silently treated as it.
     if (options.path_search != .child_environ) return error.Unsupported;
 
-    if (isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
+    if (windows_search.isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
 
     // A pseudoconsole is attached through the attribute list, and Windows
     // documents `STARTF_USESTDHANDLES` as unsupported alongside it -- so there
@@ -744,26 +744,6 @@ const AttributeList = struct {
 };
 
 //======================================================================
-// The program.
-//======================================================================
-
-/// Whether the program is a batch script, which this package refuses to run.
-///
-/// `cmd.exe` re-parses the command line of a `.bat` or `.cmd` with rules no
-/// argument serialisation survives, so an argument containing the right
-/// characters becomes a second command. Refusing is the only honest answer for
-/// an API whose argument list is data; a caller who wants a script can invoke
-/// `cmd.exe /c` themselves and take responsibility for what they pass it.
-fn isBatchFile(program: []const u8) bool {
-    return endsWithIgnoringCase(program, ".bat") or endsWithIgnoringCase(program, ".cmd");
-}
-
-fn endsWithIgnoringCase(haystack: []const u8, suffix: []const u8) bool {
-    if (haystack.len < suffix.len) return false;
-    return std.ascii.eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
-}
-
-//======================================================================
 // Errors.
 //======================================================================
 
@@ -783,17 +763,4 @@ fn createError() SpawnError {
         .MAX_THRDS_REACHED => error.ResourceLimitReached,
         else => |err| win32.unexpected(err),
     };
-}
-
-//======================================================================
-// Tests.
-//======================================================================
-
-const testing = std.testing;
-
-test "batch files are recognised whatever their case" {
-    try testing.expect(isBatchFile("go.bat"));
-    try testing.expect(isBatchFile("C:\\x\\GO.CMD"));
-    try testing.expect(!isBatchFile("go.exe"));
-    try testing.expect(!isBatchFile("bat"));
 }

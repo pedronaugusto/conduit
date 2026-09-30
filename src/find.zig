@@ -11,6 +11,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const is_windows = builtin.os.tag == .windows;
+const windows_search = @import("windows_search.zig");
 const child_windows = if (is_windows) @import("child_windows.zig") else struct {};
 
 /// Where `name` resolves for a child given `environ`, by the rules
@@ -26,7 +27,8 @@ const child_windows = if (is_windows) @import("child_windows.zig") else struct {
 ///
 /// **Windows**: the directory of this executable, the current directory, the
 /// system directories, then `PATH`, with `.exe` supplied to a name with no
-/// extension; a name with a separator or a drive is itself if it exists.
+/// extension; a name with a separator or a drive is itself if it is a file.
+/// Batch scripts are refused here as they are by spawn.
 ///
 /// The path is allocated with `allocator` and is the caller's.
 pub fn findProgram(
@@ -40,9 +42,9 @@ pub fn findProgram(
         var arena_state: std.heap.ArenaAllocator = .init(allocator);
         defer arena_state.deinit();
         if (!child_windows.isBareProgram(name)) {
-            std.Io.Dir.cwd().access(io, name, .{}) catch return null;
-            return try allocator.dupe(u8, name);
+            return directWindowsProgram(io, allocator, name);
         }
+        if (windows_search.isBatchFile(name)) return null;
         const found = try child_windows.findBare(io, arena_state.allocator(), name, environ) orelse return null;
         return try allocator.dupe(u8, found);
     }
@@ -61,6 +63,15 @@ pub fn findProgram(
         if (runnable(io, candidate)) return try allocator.dupe(u8, candidate);
     }
     return null;
+}
+
+/// A program that already names a Windows path still has to be a file.
+/// This check uses the Io filesystem, so it is exercised on every host.
+fn directWindowsProgram(io: std.Io, allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {
+    if (windows_search.isBatchFile(name)) return null;
+    const stat = std.Io.Dir.cwd().statFile(io, name, .{}) catch return null;
+    if (stat.kind == .directory) return null;
+    return try allocator.dupe(u8, name);
 }
 
 /// A file with an execute bit that this process may execute: what
@@ -148,4 +159,24 @@ test "on Windows a bare name is found on PATH with .exe supplied, and a director
     defer testing.allocator.free(direct);
     try testing.expectEqualStrings(expected, direct);
     try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "C:\\conduit\\no\\such.exe") == null);
+}
+
+test "a Windows program path refuses directories and batch files" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "directory.exe");
+    const batch = try tmp.dir.createFile(io, "program.CMD", .{});
+    batch.close(io);
+    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = buffer[0..try tmp.dir.realPath(io, &buffer)];
+    for ([_][]const u8{ "directory.exe", "program.CMD" }) |name| {
+        const path = try std.fs.path.join(testing.allocator, &.{ directory, name });
+        defer testing.allocator.free(path);
+        const found = try directWindowsProgram(io, testing.allocator, path);
+        defer if (found) |owned| testing.allocator.free(owned);
+        try testing.expect(found == null);
+        if (is_windows) try testing.expect(try findProgram(io, testing.allocator, &.init(testing.allocator), path) == null);
+    }
 }

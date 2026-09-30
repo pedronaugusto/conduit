@@ -18,6 +18,22 @@ pub fn isBareProgram(program: []const u8) bool {
     return std.mem.indexOfAny(u8, program, "\\/:") == null;
 }
 
+/// Whether the program is a batch script, which this package refuses to run.
+///
+/// `cmd.exe` re-parses the command line of a `.bat` or `.cmd` with rules no
+/// argument serialisation survives, so an argument containing the right
+/// characters becomes a second command. Refusing is the only honest answer for
+/// an API whose argument list is data; a caller who wants a script can invoke
+/// `cmd.exe /c` themselves and take responsibility for what they pass it.
+pub fn isBatchFile(program: []const u8) bool {
+    return endsWithIgnoringCase(program, ".bat") or endsWithIgnoringCase(program, ".cmd");
+}
+
+fn endsWithIgnoringCase(haystack: []const u8, suffix: []const u8) bool {
+    if (haystack.len < suffix.len) return false;
+    return std.ascii.eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
+}
+
 /// The places a search starts from, as this process finds them.
 pub const Places = struct {
     /// The directory of this executable, when it could be found.
@@ -182,4 +198,11 @@ fn pathEntriesKeepTheirShape(_: void, smith: *std.testing.Smith) !void {
         }
     }
     try testing.expect(entries.next() == null);
+}
+
+test "batch files are recognised whatever their case" {
+    try testing.expect(isBatchFile("go.bat"));
+    try testing.expect(isBatchFile("C:\\x\\GO.CMD"));
+    try testing.expect(!isBatchFile("go.exe"));
+    try testing.expect(!isBatchFile("bat"));
 }
