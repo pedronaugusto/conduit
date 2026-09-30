@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reaper documentation states the resource and result ownership behind its one-start lifetime.
+
 - A refused group signal addresses the still-held child directly before reporting permission denial, covering Darwin's exit-to-wait observation gap.
 
 - Recorded-tree fixtures report a stopped descendant after the kernel confirms readiness and observe its exit through the held identity after kill delivery.

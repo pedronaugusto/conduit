@@ -135,8 +135,8 @@ pub const StartError = std.Io.ConcurrentError;
 ///
 /// The task must be able to run alongside the caller, so an `std.Io`
 /// implementation with no concurrency to offer fails here rather than
-/// deadlocking later. Calling this twice on one `Reaper` starts a second wait,
-/// which is a bug: the second one finds no child.
+/// deadlocking later. Call it once per Reaper: starting twice replaces wake
+/// handles the first task borrowed and gives two tasks the same result owner.
 pub fn start(reaper: *Reaper, io: std.Io) StartError!void {
     // Without a pipe the wait falls back to Child.wait, which is
     // a cancelation point of its own: the wake is how a better wait is ended,
