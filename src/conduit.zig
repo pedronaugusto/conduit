@@ -212,9 +212,11 @@ pub const startTime = if (is_windows)
 else
     @import("tree.zig").startTime;
 /// A process held by a kernel identity rather than by its number — a pidfd
-/// on Linux, an audit token on Darwin — so that `signal` reaches it or
-/// nothing, and never a process given the same pid since. `alive` says
-/// whether it has ended; `deinit` lets go of it. POSIX only.
+/// on Linux, a stable unique process id on Darwin. Darwin checks that id
+/// before refreshing the audit version for delivery, so exec preserves the
+/// capture and a reused pid cannot authorize a signal. `processId()` reads
+/// the number for reports; `alive` says whether it has ended. Release exactly
+/// once with `deinit` and do not copy an owning capture. POSIX only.
 pub const CapturedPid = if (is_windows)
     @compileError("CapturedPid is POSIX-only")
 else

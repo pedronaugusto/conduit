@@ -859,7 +859,7 @@ const DarwinProcess = struct {
     }
 
     /// The process at `pid` if it started at `since`, from one lookup that
-    /// answers the start time and the version of the pid together.
+    /// answers the start time and stable unique process id together.
     fn captureStarted(pid: posix.pid_t, since: u64) ?DarwinProcess {
         var info: BsdInfoWithUniqueId = undefined;
         const written = proc_pidinfo(pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
@@ -934,8 +934,8 @@ const DarwinProcess = struct {
             try held.append(allocator, member);
         }
         // The group and session may be re-used only after the original one
-        // has gone. This audit-token check is after enumeration and before
-        // the first signal; every member is also signalled through its token.
+        // has gone. Check the stable unique id after enumeration and before
+        // the first signal; every member checks its own id before delivery.
         if (!process.alive()) return 0;
         var reached: usize = 0;
         for (held.items) |*member| {

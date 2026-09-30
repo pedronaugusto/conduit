@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The root API documentation describes the stable Darwin process identity and the audit version checked at delivery.
+
 - `Child.output` reads a published result before opening an exit watch, draining an already reaped child without watching its retired process number.
 
 - Proxy resize forwarding checks cancellation even when tickets keep changing, yields for zero intervals, and measures each refresh interval by one deadline.
