@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Windows tree fixtures create a native descendant in a separate console with no inherited pipes, and prove the parent's streams ended before closing them.
+
 - Windows program lookup refuses directories and batch scripts as spawn does, sharing the same batch-file policy.
 
 - Documentation describes opaque lifecycle ownership, exit observation before reaping, and complete Windows exit statuses.

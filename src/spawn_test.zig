@@ -71,20 +71,10 @@ const script = if (is_windows) struct {
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
     /// Starts a process of its own that outlives it, and says which one.
     ///
-    /// Uses CreateProcess rather than the shell's launch machinery, so the
-    /// grandchild is born into the child's job. It inherits the pipes; the
-    /// sinks keep draining them until the test ends the tree.
-    const detached_grandchild = [_][]const u8{
-        "powershell.exe",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "$start = New-Object System.Diagnostics.ProcessStartInfo; " ++
-            "$start.FileName = 'ping.exe'; $start.Arguments = '-n 60 127.0.0.1'; " ++
-            "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; " ++
-            "$p = [System.Diagnostics.Process]::Start($start); " ++
-            "Write-Output ('pid ' + $p.Id + '.')",
-    };
+    /// A native child creates a descendant in a separate console and prints
+    /// its id. No shell launch, no inherited pipe, and both belong to the
+    /// child's job. Built only for the test module.
+    const detached_grandchild = [_][]const u8{@import("conduit_test_options").tree_fixture};
     /// Writes a cursor-shape sequence to its terminal and stays there.
     ///
     /// `DECSCUSR` is the one a console host that models what passes through it
@@ -2145,6 +2135,11 @@ test "deinit ends a grandchild the child started and left behind" {
     _ = try waitWithin(&child);
     try testing.expect(runningNow(grandchild));
 
+    const closed: Deadline = .in(io, budget_ms);
+    while (!sink.ended() or !errors.ended()) {
+        if (closed.remainingMs(io) == 0) return error.TestGrandchildInheritedFixturePipe;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
     child.deinit(io);
 
     try testing.expect(endedWithin(grandchild));
