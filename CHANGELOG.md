@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- POSIX tree fixtures end and reap their owned descendant on every return, including a failed report.
+
 - Signal-name documentation distinguishes Windows wait results from a supplied signal term.
 
 - Reaper documentation states the resource and result ownership behind its one-start lifetime.

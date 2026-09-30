@@ -9,9 +9,9 @@ const windows = std.os.windows;
 extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 
 pub fn main(init: std.process.Init) !void {
-    if (builtin.os.tag != .windows) return posixTree(init);
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
+    if (builtin.os.tag != .windows) return posixTree(init, args.len > 1 and std.mem.eql(u8, args[1], "--fail-report"));
     if (args.len > 1 and std.mem.eql(u8, args[1], "--grandchild")) {
         Sleep(std.math.maxInt(windows.DWORD));
         return;
@@ -46,7 +46,7 @@ pub fn main(init: std.process.Init) !void {
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
 }
 
-fn posixTree(init: std.process.Init) !void {
+fn posixTree(init: std.process.Init, fail_report: bool) !void {
     const c = std.c;
     const descendant = c.fork();
     if (descendant < 0) return error.FixtureForkFailed;
@@ -56,6 +56,15 @@ fn posixTree(init: std.process.Init) !void {
         if (c.kill(c.getpid(), .STOP) != 0) c._exit(1);
         c._exit(0);
     }
+    defer {
+        // This direct child is still ours and unreaped. Any return, including
+        // a failed report, ends and reaps it before the helper itself exits.
+        _ = c.kill(descendant, .KILL);
+        var departed: c_int = 0;
+        while (c.waitpid(descendant, &departed, 0) < 0) {
+            if (std.posix.errno(-1) != .INTR) break;
+        }
+    }
     var status: c_int = 0;
     while (c.waitpid(descendant, &status, std.posix.W.UNTRACED) < 0) {
         if (std.posix.errno(-1) != .INTR) return error.FixtureWaitFailed;
@@ -63,6 +72,15 @@ fn posixTree(init: std.process.Init) !void {
     if (!std.posix.W.IFSTOPPED(@bitCast(status))) return error.FixtureDescendantDidNotStop;
     var buffer: [64]u8 = undefined;
     const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{descendant});
+    if (fail_report) {
+        try std.Io.File.stderr().writeStreamingAll(init.io, report);
+        // Keep the child unreaped until the test has captured its identity.
+        // A bare pid reported just before cleanup could already be reused.
+        var acknowledged: [1]u8 = undefined;
+        if (try std.Io.File.stdin().readStreaming(init.io, &.{&acknowledged}) != 1)
+            return error.FixtureHandshakeFailed;
+        return error.FixtureReportFailed;
+    }
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
     try init.io.sleep(.fromSeconds(30), .awake);
 }

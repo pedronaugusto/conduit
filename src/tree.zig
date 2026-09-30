@@ -1653,6 +1653,31 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     _ = try child.wait(testing.io);
 }
 
+test "a failed tree fixture releases the descendant it still owns" {
+    switch (builtin.os.tag) {
+        .linux, .macos => {},
+        else => return error.SkipZigTest,
+    }
+    const testing = std.testing;
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(testing.io, testing.allocator, .{
+        .argv = &.{ @import("conduit_test_options").tree_fixture, "--fail-report" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .pipe } },
+    });
+    defer child.deinit(testing.io);
+    defer _ = child.killWait(testing.io, 0) catch {};
+    var buffer: [64]u8 = undefined;
+    var output = child.stderr.?.reader(testing.io, &buffer);
+    const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
+    const since = (try startTime(descendant)) orelse return error.TestFixtureDescendantMissing;
+    var held = (try captureStarted(descendant, since)) orelse return error.TestFixtureDescendantMissing;
+    defer held.deinit();
+    defer _ = held.signal(.KILL);
+    try child.stdin.?.writeStreamingAll(testing.io, "x");
+    try testing.expectEqual(Child.Term{ .exited = 1 }, try child.wait(testing.io));
+    if (!try held.wait(testing.io, 20)) return error.TestFixtureLeftDescendant;
+}
+
 test "a leaderless Linux group keeps the child its leader started" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
