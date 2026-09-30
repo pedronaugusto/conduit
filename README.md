@@ -241,9 +241,13 @@ writes down each child's pid and `conduit.startTime(pid)`, and the next time
 it runs uses `conduit.endRecorded` to end what it can still prove belongs to
 that process. A recorded cgroup reaches the complete Linux tree.
 `conduit.captureStarted(pid, start)` holds such a process by a pidfd on Linux
-and an audit token on Darwin, taken before the start time is checked (Linux)
+and a stable unique process id on Darwin, taken before the start time is checked (Linux)
 or with it in one lookup (Darwin), so the signal it sends reaches that
 process or nothing; it is `null` for a start time that does not match.
+`CapturedPid` exposes no token or handle. `captured.processId()` reads its
+number for reports. Release it exactly once with `deinit`; do not copy an
+owning capture. Darwin checks the stable unique id on every lookup, so exec
+keeps the identity while a reused PID cannot provide a new audit token.
 `captured.signalDescendants(sig, in_group)` walks its descendants only while
 the captured root is still the same process, including after the walk.
 `captured.signalGroupSince(group, start, sig)` reaches a recorded Linux

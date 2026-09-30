@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `CapturedPid` is opaque; `processId()` replaces its numeric field, and Darwin captures retain process identity across exec while checking refreshed audit versions for signal delivery.
+
 - `Child.containment` copies the detached group and Linux cgroup path, directory identity and boot identity for records retained through retirement.
 
 - The allocation documentation names the process allocator that owns Windows PTY geometry until the pair closes.

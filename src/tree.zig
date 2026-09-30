@@ -28,7 +28,7 @@
 //! reports `error.OutOfMemory` if it cannot hold the whole snapshot rather
 //! than silently leaving a suffix of it alive. A process is captured as a
 //! stable kernel identity before the walk retains it: a pidfd on Linux and
-//! an audit token on Darwin. Every candidate's ancestry is then proved
+//! a unique process id on Darwin. Every candidate's ancestry is then proved
 //! through held identities before signalling. A PID alone is
 //! never used as a later signal target because it may have been recycled by
 //! then.
@@ -43,6 +43,8 @@ const wait_for = @import("wait.zig");
 
 // A recycled entry in a process-table snapshot, before it is signalled.
 var snapshot_witness: if (builtin.is_test) ?posix.pid_t else void = if (builtin.is_test) null else {};
+// A controlled exec between identity lookup and token delivery.
+var before_token_delivery: if (builtin.is_test) ?*const fn () void else void = if (builtin.is_test) null else {};
 
 test "a descendant snapshot cannot authorize a signal to an unrelated captured identity" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
@@ -138,7 +140,7 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
 /// Walk below a held process and prove each candidate's ancestry before
 /// signalling, while the root still holds its original identity. A pid
 /// recycled before capture cannot authorize a signal just by being in the
-/// snapshot. On Darwin `alive` checks the audit token's pid version.
+/// snapshot. On Darwin `alive` checks the stable process unique id.
 fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
     var captured_root: ?Process = if (guard == null) Process.capture(root) else null;
     defer if (captured_root) |*held| held.deinit();
@@ -195,7 +197,7 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
 }
 
 /// Wait for a held process to end without reaping it. Linux polls the held
-/// pidfd; Darwin registers NOTE_EXIT with kqueue while the audit token still
+/// pidfd; Darwin registers NOTE_EXIT with kqueue while the unique process id still
 /// matches. If registration is unavailable, a bounded 1–4 ms clock-based
 /// check is used. True means gone; false means the deadline passed.
 fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
@@ -206,8 +208,8 @@ fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Can
     else
         wait_for.Watch.open(process.pid);
     defer if (builtin.os.tag != .linux) if (watch) |opened| opened.close();
-    // Registration by number on Darwin is checked against the held audit
-    // token immediately afterward; it cannot turn a reused pid into a wait
+    // Registration by number on Darwin is checked against the held unique
+    // id immediately afterward; it cannot turn a reused pid into a wait
     // for the wrong process.
     if (!process.alive()) return true;
     var interval_ms: u32 = 1;
@@ -420,15 +422,69 @@ pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
 }
 
 /// A process held by a kernel identity rather than by its number: a pidfd on
-/// Linux, an audit token on Darwin. `signal` reaches that process or
+/// Linux, a unique process id on Darwin. `signal` reaches that process or
 /// nothing — once it has ended, never a process given the same pid since.
 /// `alive` says whether it has ended (a zombie has); ask it rather than
-/// sending signal 0, which Darwin refuses through a token. `pid` is the
+/// sending signal 0, which Darwin refuses through a token. `processId()` is the
 /// number it had, for reports. `wait(io, timeout_ms)` waits without reaping:
 /// poll on the held pidfd on Linux, kqueue NOTE_EXIT on Darwin, and bounded
 /// 1–4 ms clock-based checks only if no event registration is available.
 /// `deinit` lets go of it.
-pub const CapturedPid = Process;
+pub const CapturedPid = enum(u128) {
+    _,
+
+    fn wrap(process: Process) CapturedPid {
+        const identity: u64 = switch (builtin.os.tag) {
+            .linux => @intCast(process.pidfd),
+            .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => process.unique_id,
+            else => 0,
+        };
+        return @enumFromInt(@as(u128, @as(u32, @bitCast(process.pid))) | (@as(u128, identity) << 32));
+    }
+
+    fn unwrap(captured: CapturedPid) Process {
+        const bits = @intFromEnum(captured);
+        const pid: posix.pid_t = @bitCast(@as(u32, @truncate(bits)));
+        const identity: u64 = @truncate(bits >> 32);
+        return switch (builtin.os.tag) {
+            .linux => .{ .pid = pid, .pidfd = @intCast(identity) },
+            .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .{ .pid = pid, .unique_id = identity },
+            else => .{ .pid = pid },
+        };
+    }
+
+    /// The captured number for reports, never authority to signal by number.
+    pub fn processId(captured: *const CapturedPid) posix.pid_t {
+        return captured.unwrap().pid;
+    }
+
+    pub fn alive(captured: *const CapturedPid) bool {
+        return captured.unwrap().alive();
+    }
+
+    pub fn signal(captured: *const CapturedPid, sig: posix.SIG) bool {
+        return captured.unwrap().signal(sig);
+    }
+
+    pub fn signalDescendants(captured: *const CapturedPid, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+        return captured.unwrap().signalDescendants(sig, in_group);
+    }
+
+    pub fn signalGroupSince(captured: *const CapturedPid, group: posix.pid_t, since: u64, sig: posix.SIG) @typeInfo(@TypeOf(Process.signalGroupSince)).@"fn".return_type.? {
+        return captured.unwrap().signalGroupSince(group, since, sig);
+    }
+
+    pub fn wait(captured: *const CapturedPid, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+        return captured.unwrap().wait(io, timeout_ms);
+    }
+
+    /// Release exactly once; do not copy an owning captured identity.
+    pub fn deinit(captured: *CapturedPid) void {
+        var process = captured.unwrap();
+        process.deinit();
+        captured.* = undefined;
+    }
+};
 
 /// Holds the process `pid` names if it is the one that started at `since`
 /// (a `startTime` answer written down earlier), so that a program sweeping
@@ -440,10 +496,14 @@ pub const CapturedPid = Process;
 /// the pidfd is then asked whether its process is still there, so a start
 /// time read from a successor, after the captured process had ended, is
 /// never taken for the captured one's. **Darwin**: one `proc_pidinfo` call
-/// answers the start time and the pid's version together, and the audit
-/// token is made from that version; a signal through it is refused by the
-/// kernel for any other process at that pid. `error.Unsupported` elsewhere.
+/// answers the start time and stable unique process id together. Delivery
+/// refreshes the audit version only while that unique id matches, so exec
+/// preserves the capture and PID reuse cannot authorize a signal. `error.Unsupported` elsewhere.
 pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?CapturedPid {
+    return CapturedPid.wrap((try captureStartedProcess(pid, since)) orelse return null);
+}
+
+fn captureStartedProcess(pid: posix.pid_t, since: u64) error{Unsupported}!?Process {
     if (pid <= 1 or since == 0) return switch (builtin.os.tag) {
         .linux, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => null,
         else => error.Unsupported,
@@ -505,7 +565,7 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
         return (try endRecorded(io, fallback)) or had_members;
     }
 
-    var root = (try captureStarted(options.pid, options.start)) orelse {
+    var root = (try captureStartedProcess(options.pid, options.start)) orelse {
         if (options.group) |group| {
             if (group != options.pid) return error.Unproven;
             if (comptime builtin.os.tag == .linux) {
@@ -789,16 +849,13 @@ const AuditToken = extern struct { val: [8]c_uint };
 
 const DarwinProcess = struct {
     pid: posix.pid_t,
-    token: AuditToken,
+    unique_id: u64,
 
     fn capture(pid: posix.pid_t) ?DarwinProcess {
         var info: ProcUniqueInfo = undefined;
         const written = proc_pidinfo(pid, proc_pid_unique_info, 0, &info, @sizeOf(ProcUniqueInfo));
         if (written != @sizeOf(ProcUniqueInfo)) return null;
-        var token: AuditToken = .{ .val = @splat(0) };
-        token.val[5] = @bitCast(pid);
-        token.val[7] = @bitCast(info.id_version);
-        return .{ .pid = pid, .token = token };
+        return .{ .pid = pid, .unique_id = info.unique_id };
     }
 
     /// The process at `pid` if it started at `since`, from one lookup that
@@ -809,17 +866,28 @@ const DarwinProcess = struct {
         if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
         if (info.bsd.status == proc_status_zombie) return null;
         if (info.bsd.start_tvsec *% std.time.us_per_s +% info.bsd.start_tvusec != since) return null;
-        var token: AuditToken = .{ .val = @splat(0) };
-        token.val[5] = @bitCast(pid);
-        token.val[7] = @bitCast(info.unique.id_version);
-        return .{ .pid = pid, .token = token };
+        return .{ .pid = pid, .unique_id = info.unique.unique_id };
     }
 
     /// The kernel refuses signal 0 through a token (`EINVAL`), so `alive`
     /// and not this is how to ask whether the process is still there.
     pub fn signal(process: *const DarwinProcess, sig: posix.SIG) bool {
-        var token = process.token;
-        return proc_signal_with_audittoken(&token, @intCast(@intFromEnum(sig))) == 0;
+        // Exec changes the audit version, not the process unique id. Every
+        // refresh proves the same process; the kernel checks the version at
+        // delivery, closing the reuse window after that proof. Retry only a
+        // changed version, with a bound for a process that keeps execing.
+        var previous: ?i32 = null;
+        for (0..3) |_| {
+            const info = process.current() orelse return false;
+            if (previous == info.unique.id_version) return false;
+            var token: AuditToken = .{ .val = @splat(0) };
+            token.val[5] = @bitCast(process.pid);
+            token.val[7] = @bitCast(info.unique.id_version);
+            if (builtin.is_test) if (before_token_delivery) |exec| exec();
+            if (proc_signal_with_audittoken(&token, @intCast(@intFromEnum(sig))) == 0) return true;
+            previous = info.unique.id_version;
+        }
+        return false;
     }
 
     pub fn signalDescendants(process: *const DarwinProcess, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
@@ -880,14 +948,18 @@ const DarwinProcess = struct {
         return waitCaptured(process, io, timeout_ms);
     }
 
-    /// Whether the process has not ended: the pid still has the version the
-    /// token holds, and what holds it is not a zombie.
-    pub fn alive(process: *const DarwinProcess) bool {
+    /// Look up the current executable only while the stable process identity
+    /// still matches. A reused pid can never supply a new delivery token.
+    fn current(process: *const DarwinProcess) ?BsdInfoWithUniqueId {
         var info: BsdInfoWithUniqueId = undefined;
         const written = proc_pidinfo(process.pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
-        if (written != @sizeOf(BsdInfoWithUniqueId)) return false;
-        return info.unique.id_version == @as(i32, @bitCast(process.token.val[7])) and
-            info.bsd.status != proc_status_zombie;
+        if (written != @sizeOf(BsdInfoWithUniqueId) or
+            info.unique.unique_id != process.unique_id or info.bsd.status == proc_status_zombie) return null;
+        return info;
+    }
+
+    pub fn alive(process: *const DarwinProcess) bool {
+        return process.current() != null;
     }
 
     pub fn deinit(process: *DarwinProcess) void {
@@ -1578,7 +1650,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     try testing.expect((try captureStarted(State.get(&child).id, started -% 1)) == null);
     var captured = (try captureStarted(State.get(&child).id, started)).?;
     defer captured.deinit();
-    try testing.expectEqual(State.get(&child).id, captured.pid);
+    try testing.expectEqual(State.get(&child).id, captured.processId());
     try testing.expect(captured.alive());
     if (builtin.os.tag == .macos) {
         try testing.expectError(error.Unsupported, captured.signalGroupSince(State.get(&child).id, started, .CONT));
@@ -1752,4 +1824,89 @@ test "a captured Darwin session leader proves its group's member" {
     defer captured.deinit();
     try std.testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(leader, since, .CONT));
     try std.testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(leader, since, .KILL));
+}
+
+test "a captured process keeps its identity across exec" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var buffer: [64]u8 = undefined;
+    var reader = child.stdout.?.reader(io, &buffer);
+    try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
+    const pid = child.processId().?;
+    const since = (try startTime(pid)).?;
+    var captured = (try captureStarted(pid, since)).?;
+    defer captured.deinit();
+    try child.stdin.?.writeStreamingAll(io, "exec\n");
+    try testing.expectEqualStrings("after", (try reader.interface.takeDelimiter('\n')).?);
+    try testing.expect(captured.alive());
+    try testing.expect(!try captured.wait(io, 0));
+    try testing.expect(captured.signal(.STOP));
+    try testing.expect(captured.signal(.CONT));
+    try testing.expect(captured.signal(.KILL));
+    try testing.expect(try captured.wait(io, 5000));
+    try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.wait(io));
+}
+
+test "CapturedPid does not expose signal identities as writable fields" {
+    try std.testing.expect(@typeInfo(CapturedPid) == .@"enum");
+}
+
+test "Darwin token delivery refreshes after a concurrent exec and refuses a different unique id" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const Child = @import("Child.zig");
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var buffer: [64]u8 = undefined;
+    var reader = child.stdout.?.reader(io, &buffer);
+    try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
+    var process = DarwinProcess.capture(child.processId().?).?;
+    const version = process.current().?.unique.id_version;
+    const Exec = struct {
+        var child_ptr: *Child = undefined;
+        var reader_ptr: *std.Io.Reader = undefined;
+        var calls: usize = 0;
+        fn exec() void {
+            before_token_delivery = null;
+            calls += 1;
+            child_ptr.stdin.?.writeStreamingAll(std.testing.io, "exec\n") catch @panic("fixture input failed");
+            const line = reader_ptr.takeDelimiter('\n') catch @panic("fixture output failed");
+            std.testing.expectEqualStrings("after", line.?) catch @panic("fixture did not exec");
+        }
+    };
+    Exec.child_ptr = &child;
+    Exec.reader_ptr = &reader.interface;
+    Exec.calls = 0;
+    before_token_delivery = Exec.exec;
+    defer before_token_delivery = null;
+    try testing.expect(process.signal(.CONT));
+    try testing.expectEqual(@as(usize, 1), Exec.calls);
+    try testing.expect(process.current().?.unique.id_version != version);
+    try testing.expect(process.alive());
+    var stranger = process;
+    stranger.unique_id +%= 1;
+    try testing.expect(!stranger.alive());
+    try testing.expect(!stranger.signal(.KILL));
+    try testing.expect(process.alive());
+    try testing.expect(process.signal(.KILL));
+    try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.wait(io));
 }
