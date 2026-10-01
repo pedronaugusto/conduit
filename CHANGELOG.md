@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Cgroup handoffs consume their join descriptor and directory ownership once, so repeated cleanup cannot close a recycled descriptor or release the transferred cgroup.
+
 - Deferred cgroup cleanup retains owned directory handles and verifies their identity before removal, leaving replacement directories alone.
 
 - Orphan identity capture verifies pidfd reap ownership after reading start time, refusing a process number recycled during the lookup.

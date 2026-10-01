@@ -794,19 +794,31 @@ pub const Pending = struct {
 
     /// The child is running, having joined or not. The cgroup to keep, or
     /// none if it did not join, and then no more cgroups for this process.
+    /// Consumes the handoff; later calls own neither descriptor nor cgroup.
     pub fn started(pending: *Pending, joined: bool) Cgroup {
-        _ = c.close(pending.procs);
+        const had_join = pending.closeProcs();
+        var kept = pending.cgroup;
+        pending.cgroup = .none;
         if (!joined) {
-            pending.cgroup.release();
-            if (supported) Place.refuse();
+            kept.release();
+            if (supported and had_join) Place.refuse();
         }
-        return pending.cgroup;
+        return kept;
     }
 
-    /// No child after all.
+    /// No child after all. Consumes the handoff; idempotent.
     pub fn abandon(pending: *Pending) void {
-        _ = c.close(pending.procs);
+        _ = pending.closeProcs();
         pending.cgroup.release();
+    }
+
+    fn closeProcs(pending: *Pending) bool {
+        if (builtin.os.tag == .windows) return false; // No Windows prepare can create a join descriptor.
+        const fd = pending.procs;
+        pending.procs = -1;
+        if (fd < 0) return false;
+        _ = c.close(fd);
+        return true;
     }
 };
 
@@ -981,4 +993,22 @@ test "deferred cgroup cleanup keeps directory ownership instead of removing a re
     var retained = Replacement.retained orelse return error.TestDirectoryOwnerLost;
     try std.testing.expect(retained.active());
     try std.testing.expectEqual(@as(posix.fd_t, 7), retained.inner().dir);
+}
+
+test "a consumed cgroup handoff cannot close a recycled join descriptor" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const ends = try @import("handles.zig").pipe();
+    defer _ = c.close(ends[0]);
+    var pending: Pending = .{ .cgroup = .none, .procs = ends[1] };
+    errdefer pending.abandon();
+    var kept = pending.started(true);
+    defer kept.release();
+
+    // Force the just-closed descriptor to name a different, live pipe end.
+    // No allocator or clock decides whether reuse happens in this test.
+    try std.testing.expectEqual(ends[1], c.dup2(ends[0], ends[1]));
+    defer _ = c.close(ends[1]);
+    pending.abandon();
+    _ = pending.started(true);
+    try std.testing.expect(c.fcntl(ends[1], c.F.GETFD, @as(c_int, 0)) >= 0);
 }
