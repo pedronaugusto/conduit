@@ -545,6 +545,22 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             return held;
         }
 
+        fn openAdopted(pid: posix.pid_t) OpenError!Held {
+            return openAdoptedWith(pid, PidfdWait);
+        }
+
+        fn openAdoptedWith(pid: posix.pid_t, comptime System: type) OpenError!Held {
+            var held = try System.open(pid);
+            errdefer System.close(held.pidfd);
+            if (!try held.isChildWith(System)) return error.Gone;
+            held.start = System.start(pid);
+            // A by-number lookup may have met a replacement if another
+            // reaper broke the contract. The pidfd must still prove that
+            // this owner holds the original identity after that lookup.
+            if (!try held.isChildWith(System)) return error.Gone;
+            return held;
+        }
+
         fn close(held: Held) void {
             _ = c.close(held.pidfd);
         }
@@ -556,6 +572,18 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
 
         const PidfdWait = struct {
+            fn open(pid: posix.pid_t) OpenError!Held {
+                return Held.open(pid);
+            }
+
+            fn start(pid: posix.pid_t) ?u64 {
+                return tree.startTime(pid) catch unreachable; // Linux supports startTime; the pidfd and reap ownership hold the process.
+            }
+
+            fn close(pidfd: posix.fd_t) void {
+                _ = c.close(pidfd);
+            }
+
             fn child(pidfd: posix.fd_t, info: *linux.siginfo_t) linux.E {
                 return linux.errno(linux.waitid(.PIDFD, pidfd, info, wait_exited | wait_no_hang | wait_no_wait | wait_all, null));
             }
@@ -642,12 +670,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     fn consider(orphans: *Orphans, pid: posix.pid_t) LookError!void {
         for (orphans.inner().own.items) |held| if (held.pid == pid) return;
         for (orphans.inner().adopted.items) |held| if (held.pid == pid) return;
-        var held = Held.openChild(pid) catch |err| switch (err) {
+        const held = Held.openAdopted(pid) catch |err| switch (err) {
             error.Gone => return,
             else => |e| return e,
         };
-        // openChild proved reap ownership before the start-time lookup.
-        held.start = tree.startTime(pid) catch unreachable; // Linux supports startTime; isChild and both locks hold reap ownership.
         orphans.inner().adopted.append(orphans.inner().allocator, held) catch {
             held.close();
             return error.OutOfMemory;
@@ -809,4 +835,40 @@ test "an unknown pidfd wait does not prove reap ownership" {
     };
     const held: Orphans.Held = .{ .pid = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 1, .pidfd = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1 };
     try std.testing.expectError(error.Unexpected, held.isChildWith(Refused));
+}
+
+test "orphan identity capture refuses a pid recycled during its start-time lookup" {
+    const Reuse = struct {
+        var retired: bool = false;
+        var closes: usize = 0;
+        var checks: usize = 0;
+
+        fn open(pid: posix.pid_t) Orphans.Held.OpenError!Orphans.Held {
+            return .{ .pid = pid, .pidfd = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 7 };
+        }
+
+        fn child(_: posix.fd_t, _: *linux.siginfo_t) linux.E {
+            checks += 1;
+            // The pidfd remains bound to the original process after the
+            // number has been reused. Only that process can be ours to reap.
+            return if (retired) .CHILD else .SUCCESS;
+        }
+
+        fn start(_: posix.pid_t) ?u64 {
+            // Force another reaper to retire the held process and let a
+            // replacement occupy its pid before the by-number lookup returns.
+            retired = true;
+            return 900;
+        }
+
+        fn close(_: posix.fd_t) void {
+            closes += 1;
+        }
+    };
+    Reuse.retired = false;
+    Reuse.closes = 0;
+    Reuse.checks = 0;
+    try std.testing.expectError(error.Gone, Orphans.Held.openAdoptedWith(if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 123, Reuse));
+    try std.testing.expectEqual(@as(usize, 2), Reuse.checks);
+    try std.testing.expectEqual(@as(usize, 1), Reuse.closes);
 }

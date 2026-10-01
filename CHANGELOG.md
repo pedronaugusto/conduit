@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Orphan identity capture verifies pidfd reap ownership after reading start time, refusing a process number recycled during the lookup.
+
 - Orphans refuses new reap ownership when pidfd waitid cannot verify it, while retaining existing holds until retirement is known.
 
 - Expect waits for a buffer-space event when full, with discard and consumption waking the reader instead of an interval timer.
