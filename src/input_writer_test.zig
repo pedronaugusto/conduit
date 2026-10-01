@@ -383,3 +383,7 @@ test "InputWriter isOpen observes cancellation and retained failures" {
     try testing.expect(!writer.isOpen(io));
     try testing.expectError(error.Canceled, writer.queue(io, ""));
 }
+
+test "InputWriter exposes no writable ownership slots" {
+    try testing.expect(@typeInfo(InputWriter) == .@"enum");
+}

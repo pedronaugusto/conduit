@@ -101,7 +101,7 @@ pub const Pty = @import("Pty.zig");
 /// A child process on a pseudo-terminal, on pipes, or on inherited streams.
 pub const Child = @import("Child.zig");
 /// Bounded input, queued without waiting for a child to read, on its own task.
-pub const InputWriter = @import("InputWriter.zig");
+pub const InputWriter = @import("InputWriter.zig").InputWriter;
 /// A background wait, so a caller can poll for a child's death.
 pub const Reaper = @import("Reaper.zig").Reaper;
 /// Linux, opt-in: this process as the parent of every orphan below it, the

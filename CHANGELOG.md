@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `InputWriter` keeps its allocated queue and pipe ownership behind an opaque value; callers construct it through its methods.
+
 - Forked PTY children preserve standard streams that replaced a master descriptor in a standard slot.
 
 - Program lookup documentation distinguishes missing and empty PATH values and describes relative paths without search.
