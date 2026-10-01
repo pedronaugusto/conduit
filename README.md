@@ -207,6 +207,9 @@ without waiting for that CLI to read.
 
 ### `Expect` — a conversation with a child
 
+Conversation state is opaque; create it with `init` and observe bytes through
+`pending`, `until`, `untilAny` and `bytes`.
+
 | | |
 |---|---|
 | `Expect.init(master, buffer)` | Over `Child.pty` or `Pty.master()`, with a buffer the caller owns. |

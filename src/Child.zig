@@ -38,7 +38,7 @@ const c = std.c;
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
-const Expect = @import("Expect.zig");
+const Expect = @import("Expect.zig").Expect;
 const InputWriter = @import("InputWriter.zig");
 const Pty = @import("Pty.zig");
 const trace = @import("trace.zig");

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Expect` keeps conversation state opaque in fixed storage; construction and observations use its methods.
+
 - `InputWriter.isOpen(io)` gives adapters an uncancelable acceptance snapshot, independent of backlog space.
 
 - Breaking: `Pty.open` takes a caller allocator retained for Windows geometry until every end closes; `spawnShell` forwards its allocator.

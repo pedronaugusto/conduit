@@ -120,7 +120,7 @@ pub const console = tty.console;
 pub const Proxy = @import("Proxy.zig");
 /// A conversation with a child: wait for a byte pattern, for any of several,
 /// or for a byte count, each with a deadline, then send a reply.
-pub const Expect = @import("Expect.zig");
+pub const Expect = @import("Expect.zig").Expect;
 
 /// How a child process ended, including the full Windows exit code.
 pub const Term = Child.Term;
