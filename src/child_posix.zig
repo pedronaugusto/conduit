@@ -142,7 +142,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     if (pid == 0) {
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
-        const join: posix.fd_t = if (contained) |pending| pending.procs else -1;
+        const join: posix.fd_t = if (contained) |pending| pending.joinDescriptor() else -1;
         childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent, go, join);
     }
     handles.ForkGap.release();

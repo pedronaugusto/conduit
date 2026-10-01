@@ -427,7 +427,7 @@ const LinuxCgroup = enum(@Int(.unsigned, @sizeOf(CgroupState) * 8)) {
             Place.refuse();
             return null;
         }
-        return .{ .cgroup = init(dir, name), .procs = procs };
+        return Pending.init(init(dir, name), procs);
     }
 
     /// Where the cgroup is, for a report or a test.
@@ -788,17 +788,37 @@ const MemberOps = struct {
 
 /// A cgroup made for a child not yet started, and the descriptor the fork
 /// child writes itself into it through.
-pub const Pending = struct {
+const PendingState = struct {
     cgroup: Cgroup,
     procs: posix.fd_t,
+};
+
+pub const Pending = enum(@Int(.unsigned, @sizeOf(PendingState) * 8)) {
+    _,
+
+    fn inner(pending: *Pending) *PendingState {
+        return @ptrCast(@alignCast(pending)); // safe: prepare initializes inline storage of this size and alignment.
+    }
+
+    fn init(cgroup: Cgroup, procs: posix.fd_t) Pending {
+        var pending: Pending = undefined;
+        pending.inner().* = .{ .cgroup = cgroup, .procs = procs };
+        return pending;
+    }
+
+    /// Borrows the join descriptor until started or abandon consumes it; -1 afterwards.
+    pub fn joinDescriptor(pending: Pending) posix.fd_t {
+        const state: *const PendingState = @ptrCast(@alignCast(&pending)); // safe: reads the initialized inline storage without taking ownership.
+        return state.procs;
+    }
 
     /// The child is running, having joined or not. The cgroup to keep, or
     /// none if it did not join, and then no more cgroups for this process.
     /// Consumes the handoff; later calls own neither descriptor nor cgroup.
     pub fn started(pending: *Pending, joined: bool) Cgroup {
         const had_join = pending.closeProcs();
-        var kept = pending.cgroup;
-        pending.cgroup = .none;
+        var kept = pending.inner().cgroup;
+        pending.inner().cgroup = .none;
         if (!joined) {
             kept.release();
             if (supported and had_join) Place.refuse();
@@ -809,13 +829,13 @@ pub const Pending = struct {
     /// No child after all. Consumes the handoff; idempotent.
     pub fn abandon(pending: *Pending) void {
         _ = pending.closeProcs();
-        pending.cgroup.release();
+        pending.inner().cgroup.release();
     }
 
     fn closeProcs(pending: *Pending) bool {
         if (builtin.os.tag == .windows) return false; // No Windows prepare can create a join descriptor.
-        const fd = pending.procs;
-        pending.procs = -1;
+        const fd = pending.inner().procs;
+        pending.inner().procs = -1;
         if (fd < 0) return false;
         _ = c.close(fd);
         return true;
@@ -999,7 +1019,7 @@ test "a consumed cgroup handoff cannot close a recycled join descriptor" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
     const ends = try @import("handles.zig").pipe();
     defer _ = c.close(ends[0]);
-    var pending: Pending = .{ .cgroup = .none, .procs = ends[1] };
+    var pending = Pending.init(.none, ends[1]);
     errdefer pending.abandon();
     var kept = pending.started(true);
     defer kept.release();
@@ -1011,4 +1031,8 @@ test "a consumed cgroup handoff cannot close a recycled join descriptor" {
     pending.abandon();
     _ = pending.started(true);
     try std.testing.expect(c.fcntl(ends[1], c.F.GETFD, @as(c_int, 0)) >= 0);
+}
+
+test "Pending exposes no writable cgroup handoff ownership" {
+    try std.testing.expect(@typeInfo(Pending) == .@"enum");
 }

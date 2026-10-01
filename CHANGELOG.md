@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Cgroup.prepare` returns an opaque handoff; `joinDescriptor` borrows its descriptor and `started` or `abandon` consumes ownership.
+
 - Breaking: `Pty` keeps descriptors and Windows geometry opaque; `readHandle`, `writeHandle`, `slaveHandle` and `consoleOptions` borrow or copy observations.
 
 - Breaking: `Child` hides lifecycle and owned pipes; `stdinFile`, `stdoutFile`, `stderrFile` and `terminalMaster` borrow streams, and `takeStdin`, `takeStdout` and `takeStderr` transfer pipes.
