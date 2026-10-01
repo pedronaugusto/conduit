@@ -318,6 +318,9 @@ cannot reach a group that has been given the same number since. On Windows the
 job is ended as soon as the child is reaped. The term published is the
 child's own.
 
+`Orphans` keeps its state opaque; `init`, `count`, `list`, `adoptionEvent` and
+`adoptionCount` provide construction and observations.
+
 `Orphans.init(allocator)` and `start()` make this process, on Linux, the
 parent of every orphan below it (`PR_SET_CHILD_SUBREAPER`): a daemon a
 child left, a grandchild that forked twice and called `setsid`. Nothing

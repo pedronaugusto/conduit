@@ -48,7 +48,7 @@ const win32 = if (is_windows) @import("win32.zig") else struct {};
 const tree = if (is_windows) struct {} else @import("tree.zig");
 const cgroups = if (is_windows) struct {} else @import("cgroup.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
-const orphans = @import("Orphans.zig");
+const orphans = @import("Orphans.zig").Orphans;
 
 /// A numeric process id on either platform, never a Windows handle.
 pub const Id = if (is_windows) windows.DWORD else posix.pid_t;

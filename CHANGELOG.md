@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Orphans` keeps adoption and lifecycle state opaque in fixed storage; its methods own every list and notification.
+
 - Breaking: `Expect` keeps conversation state opaque in fixed storage; construction and observations use its methods.
 
 - `InputWriter.isOpen(io)` gives adapters an uncancelable acceptance snapshot, independent of backlog space.

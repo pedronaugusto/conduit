@@ -108,7 +108,7 @@ pub const Reaper = @import("Reaper.zig").Reaper;
 /// ended ones reaped whenever this package reaps or spawns a child, and all
 /// of them ended by `end`, for a program that starts every child through
 /// this package. No task, no timer.
-pub const Orphans = @import("Orphans.zig");
+pub const Orphans = @import("Orphans.zig").Orphans;
 /// A Linux child's cgroup. `Cgroup.openRecorded` returns the separate
 /// `Cgroup.Recorded` handle for a cgroup saved by an earlier run. On other
 /// systems the handles are empty.
