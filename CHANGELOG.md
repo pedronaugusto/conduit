@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Child` hides lifecycle and owned pipes; `stdinFile`, `stdoutFile`, `stderrFile` and `terminalMaster` borrow streams, and `takeStdin`, `takeStdout` and `takeStderr` transfer pipes.
+
 - Breaking: `InputWriter` keeps its allocated queue and pipe ownership behind an opaque value; callers construct it through its methods.
 
 - Forked PTY children preserve standard streams that replaced a master descriptor in a standard slot.

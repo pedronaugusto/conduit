@@ -336,7 +336,7 @@ test "a child on pipes can be written to" {
     defer child.deinit(io);
     errdefer _ = child.killWait(io, 0) catch {};
 
-    try child.stdin.?.writeStreamingAll(io, "a line\n");
+    try child.stdinFile().?.writeStreamingAll(io, "a line\n");
     child.closeStdin(io);
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
@@ -402,9 +402,9 @@ test "output ends a silent child when its stream cannot be read" {
     defer child.deinit(io);
     errdefer _ = child.killWait(io, 0) catch {};
 
-    child.stdout.?.close(io);
-    child.stdout.?.handle = -1;
-    defer child.stdout = null;
+    child.stdoutFile().?.close(io);
+    State.get(&child).stdout.?.handle = -1;
+    defer _ = child.takeStdout();
     try testing.expectError(error.ReadFailed, child.output(io, gpa, .{}));
     try testing.expect((try child.tryWait()) != null);
 }
@@ -630,7 +630,7 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     // after the child, so it stops reading before the child closes its file
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const grandchild = try readPid(&sink);
 
     var reaper: conduit.Reaper = .init(&child, .{});
@@ -710,7 +710,7 @@ test "Reaper.stop with no grace is the force, now" {
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     _ = try readPid(&sink);
 
     var reaper: conduit.Reaper = .init(&child, .{});
@@ -746,7 +746,7 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const polite = try readPid(&sink);
     const stubborn = stubborn: {
         const deadline: Deadline = .in(io, budget_ms);
@@ -806,7 +806,7 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const left = try readPid(&sink);
     defer _ = c.kill(left, .KILL);
 
@@ -850,12 +850,12 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
     defer errors.deinit();
     var stage: []const u8 = "starting readers and reading the grandchild id";
     errdefer |err| {
-        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (child.lifecycle != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (State.optional(&child) != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
         sink.report("pid <number>.");
         errors.report("fixture stderr");
     }
-    try sink.start(child.stdout.?);
-    try errors.start(child.stderr.?);
+    try sink.start(child.stdoutFile().?);
+    try errors.start(child.stderrFile().?);
 
     const id = try readMarkedNumber(win32.DWORD, &sink);
     stage = "opening the reported grandchild";
@@ -972,7 +972,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     child.closeStdin(io);
 
     // The same file the reader would come from, so the two agree.
-    try testing.expectEqual(child.stdout.?.handle, child.stdoutFile().?.handle);
+    try testing.expectEqual(State.get(&child).stdout.?.handle, child.stdoutFile().?.handle);
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
@@ -992,11 +992,11 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
 
     // Written, but not finished: the child is still reading, because this
     // process is still a writer.
-    try child.stdin.?.writeStreamingAll(io, "a line\n");
+    try child.stdinFile().?.writeStreamingAll(io, "a line\n");
     try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, 50));
 
     child.closeStdin(io);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stdin);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stdinFile());
     // Idempotent, which is what makes it safe to pair with `deinit`.
     child.closeStdin(io);
 
@@ -1144,7 +1144,7 @@ test "killWait reaches what the child started, not only the child" {
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
 
     // Both still running, so the pipe still has writers.
     try std.Io.sleep(io, .fromMilliseconds(200), .awake);
@@ -1284,7 +1284,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
 
         var sink: Sink = .{};
         defer sink.deinit();
-        try sink.start(if (on_pty) pty.readFile() else child.stdout.?);
+        try sink.start(if (on_pty) pty.readFile() else child.stdoutFile().?);
         const grandchild = try readPid(&sink);
         // Whatever this test finds, it leaves nothing behind.
         defer if (alive(grandchild)) {
@@ -1454,7 +1454,7 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         const orphan = orphan: {
             var sink: Sink = .{};
             defer sink.deinit();
-            try sink.start(child.stdout.?);
+            try sink.start(child.stdoutFile().?);
             break :orphan try readPid(&sink);
         };
         defer if (alive(orphan)) {
@@ -1505,7 +1505,7 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
 
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const orphan = try readPid(&sink);
     defer if (alive(orphan)) {
         _ = c.kill(orphan, .KILL);
@@ -1539,7 +1539,7 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     const orphan = orphan: {
         var sink: Sink = .{};
         defer sink.deinit();
-        try sink.start(child.stdout.?);
+        try sink.start(child.stdoutFile().?);
         break :orphan try readPid(&sink);
     };
     defer if (alive(orphan)) {
@@ -1620,7 +1620,7 @@ fn expectCount(orphans: *Orphans, expected: usize) !void {
 fn orphanOf(child: *Child) !posix.pid_t {
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const orphan = try readPid(&sink);
     try waitSaid(&sink, "done.");
     return orphan;
@@ -2020,12 +2020,12 @@ test "waitTree says the tree has ended, and does not say it early" {
     defer errors.deinit();
     var stage: []const u8 = "starting readers and reading the grandchild id";
     errdefer |err| {
-        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (child.lifecycle != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (State.optional(&child) != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
         sink.report("pid <number>.");
         errors.report("fixture stderr");
     }
-    try sink.start(child.stdout.?);
-    try errors.start(child.stderr.?);
+    try sink.start(child.stdoutFile().?);
+    try errors.start(child.stderrFile().?);
 
     const id = try readMarkedNumber(win32.DWORD, &sink);
     stage = "opening the reported grandchild";
@@ -2087,12 +2087,12 @@ test "deinit ends a grandchild the child started and left behind" {
     defer errors.deinit();
     var stage: []const u8 = "starting readers and reading the grandchild id";
     errdefer |err| {
-        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (child.lifecycle != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (State.optional(&child) != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
         sink.report("pid <number>.");
         errors.report("fixture stderr");
     }
-    try sink.start(child.stdout.?);
-    try errors.start(child.stderr.?);
+    try sink.start(child.stdoutFile().?);
+    try errors.start(child.stderrFile().?);
 
     const id = try readMarkedNumber(win32.DWORD, &sink);
     stage = "opening the reported grandchild";
@@ -2510,7 +2510,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     defer _ = child.killWait(io, 0) catch {};
 
     // The stderr pipe was not created, because the file replaced it.
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderr);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
 
     var sink: Sink = .{};
     defer sink.deinit();
@@ -2544,9 +2544,9 @@ test "each stream is chosen on its own" {
     errdefer _ = child.killWait(io, 0) catch {};
 
     // Only the stream that asked for a pipe has one.
-    try testing.expectEqual(@as(?std.Io.File, null), child.stdin);
-    try testing.expect(child.stdout != null);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderr);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stdinFile());
+    try testing.expect(child.stdoutFile() != null);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
@@ -2594,7 +2594,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     try on_terminal.start(pty.readFile());
     var on_pipe: Sink = .{};
     defer on_pipe.deinit();
-    try on_pipe.start(child.stderr.?);
+    try on_pipe.start(child.stderrFile().?);
 
     try on_terminal.expect("stdout is a terminal");
     try on_pipe.expect("stderr is not");
@@ -4009,7 +4009,7 @@ test "Child identity and result access share the Reaper's retirement" {
     try reaper.start(io);
     defer reaper.deinit(io);
     var buffer: [32]u8 = undefined;
-    var writer = child.stdin.?.writer(io, &buffer);
+    var writer = child.stdinFile().?.writer(io, &buffer);
     try writer.interface.writeAll("exit\n");
     try writer.interface.flush();
     const deadline: Deadline = .in(io, budget_ms);

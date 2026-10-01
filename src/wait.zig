@@ -276,7 +276,7 @@ fn endedOrWokenKqueue(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcom
 
 test "a watch on a child ends when the child does" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.io, testing.allocator, .{
@@ -297,7 +297,7 @@ test "a watch on a child ends when the child does" {
 
 test "a watch with a wake ends on the wake, then on the child" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     const handles = @import("handles.zig");
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
@@ -329,7 +329,7 @@ test "a watch with a wake ends on the wake, then on the child" {
 
 test "a watch on a child that is still running says so" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.io, testing.allocator, .{

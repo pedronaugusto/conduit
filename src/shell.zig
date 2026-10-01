@@ -10,7 +10,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const Pty = @import("Pty.zig");
 const environ = @import("environ.zig");
 const tty = @import("conduit.tty");

@@ -99,7 +99,7 @@ comptime {
 /// A pseudo-terminal pair.
 pub const Pty = @import("Pty.zig");
 /// A child process on a pseudo-terminal, on pipes, or on inherited streams.
-pub const Child = @import("Child.zig");
+pub const Child = @import("Child.zig").Child;
 /// Bounded input, queued without waiting for a child to read, on its own task.
 pub const InputWriter = @import("InputWriter.zig").InputWriter;
 /// A background wait, so a caller can poll for a child's death.

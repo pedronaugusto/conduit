@@ -13,7 +13,7 @@
 //! calls are serialized; a shared allocator must support its other users.
 
 const std = @import("std");
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const handles = @import("handles.zig");
 
 pub const InputWriter = enum(usize) {
@@ -30,17 +30,18 @@ pub const InputWriter = enum(usize) {
     pub const WriteError = std.Io.File.Writer.Error;
     pub const QueueError = WriteError || std.mem.Allocator.Error || error{ BacklogFull, InputClosed };
 
-    /// Starts a writer and transfers `child.stdin` to it. `Child.inputWriter` is
+    /// Starts a writer and transfers the stdin pipe to it. `Child.inputWriter` is
     /// the same operation. On error the pipe remains the child's, untouched.
     /// A terminal has no separate input to close and is `error.NoStdinPipe`.
     /// Do not use an earlier copy of the pipe after this succeeds.
     pub fn init(io: std.Io, allocator: std.mem.Allocator, child: *Child, options: Options) StartError!InputWriter {
-        const file = child.stdin orelse return error.NoStdinPipe;
+        const child_state = @import("child_state.zig").optional(child) orelse return error.NoStdinPipe;
+        const file = child_state.stdin orelse return error.NoStdinPipe;
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
         state.* = .{ .allocator = allocator, .file = file, .max_backlog = options.max_backlog };
         try state.group.concurrent(io, run, .{ state, io });
-        child.stdin = null;
+        @import("child_state.zig").get(child).stdin = null;
         return @enumFromInt(@intFromPtr(state)); // safe: the owner retains this allocated State until deinit.
     }
 
@@ -227,5 +228,4 @@ pub const InputWriter = enum(usize) {
         try std.testing.expect(writer.isOpen(observed_io));
         try std.testing.expectEqual(@as(usize, 1), backend.waits);
     }
-
 };

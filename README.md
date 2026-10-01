@@ -78,10 +78,11 @@ to read while a wait or Reaper runs.
 |---|---|
 | `Child.spawn(io, allocator, options)` | Start it. The allocator owns the lifecycle until `deinit` and must outlive the child. |
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
-| `child.stdin`, `child.stdout`, `child.stderr` | `std.Io.File`s for the pipes `spawn` created, owned by the `Child`. |
+| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Borrowed `std.Io.File`s; the created pipes remain owned by the `Child`. |
+| `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller, who closes it. A pair has no pipe to transfer. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
 | `child.inputWriter(io, allocator, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
-| `child.pty` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
+| `child.terminalMaster()` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
 | `child.stdinFile()`, `child.stdoutFile()` | The child's input and output wherever they are: the pipes, or the master. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |

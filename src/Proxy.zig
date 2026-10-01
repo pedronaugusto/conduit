@@ -271,7 +271,7 @@ fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!v
 //======================================================================
 
 const testing = std.testing;
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const Watchdog = @import("test_support.zig").Watchdog;
 
 test "empty transfer buffers are rejected before either direction starts" {

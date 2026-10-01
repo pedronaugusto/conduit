@@ -539,7 +539,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     //======================================================================
 
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     const Watchdog = @import("test_support.zig").Watchdog;
 
     /// Generous: it is a failure budget, not a timing assertion.

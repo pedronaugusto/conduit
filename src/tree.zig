@@ -53,7 +53,7 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     var watchdog: @import("test_support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     const options: Child.SpawnOptions = .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -728,7 +728,7 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
 test "a group member held before KILL is accounted for while still visible" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!; wait" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
@@ -737,7 +737,7 @@ test "a group member held before KILL is accounted for while still visible" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
     var buffer: [32]u8 = undefined;
-    var output = child.stdout.?.reader(testing.io, &buffer);
+    var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(State.get(&child).id)).?;
     const descendant_start = (try startTime(descendant)).?;
@@ -1493,7 +1493,7 @@ test "a descendant that escaped the process group is still killed" {
 
 test "the descendants of this process include a child it just started" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     // The systems that cannot answer answer nothing, which is correct and not
     // something to assert a pid against.
     const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
@@ -1526,7 +1526,7 @@ test "the descendants of this process include a child it just started" {
 
 test "a group is empty but for its leader once what the leader started has ended" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => true,
         else => false,
@@ -1560,7 +1560,7 @@ test "a group is empty but for its leader once what the leader started has ended
 test "a Linux process with a child of its own is said to have one, and one without is not" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
 
     var leaf = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sleep", "30" },
@@ -1614,7 +1614,7 @@ test "a process's start time is its own: the same while it runs, gone once it is
     const own = (try startTime(c.getpid())).?;
     try std.testing.expectEqual(own, (try startTime(c.getpid())).?);
 
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -1625,8 +1625,8 @@ test "a process's start time is its own: the same while it runs, gone once it is
     try std.testing.expectEqual(started, (try startTime(pid)).?);
     // a process started after this one did not start before it
     try std.testing.expect(started >= own);
-    child.stdin.?.close(testing.io);
-    child.stdin = null;
+    child.stdinFile().?.close(testing.io);
+    _ = child.takeStdin();
     _ = try child.wait(testing.io);
     try std.testing.expectEqual(@as(?u64, null), try startTime(pid));
 }
@@ -1637,7 +1637,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -1656,8 +1656,8 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     }
     // A signal the shell's default action ignores, sent through the capture.
     try testing.expect(captured.signal(.CONT));
-    child.stdin.?.close(testing.io);
-    child.stdin = null;
+    child.stdinFile().?.close(testing.io);
+    _ = child.takeStdin();
     _ = try child.wait(testing.io);
     // Ended and reaped: the capture reaches nothing, whoever has the number.
     try testing.expect(!captured.alive());
@@ -1671,7 +1671,7 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sleep", "30" },
         .stdio = .ignore,
@@ -1693,7 +1693,7 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{@import("conduit_test_options").tree_fixture},
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
@@ -1701,7 +1701,7 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
     var buffer: [32]u8 = undefined;
-    var output = child.stdout.?.reader(testing.io, &buffer);
+    var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(State.get(&child).id)).?;
     var stage: []const u8 = "rejecting a mismatched start time";
@@ -1730,7 +1730,7 @@ test "a failed tree fixture releases the descendant it still owns" {
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ @import("conduit_test_options").tree_fixture, "--fail-report" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .pipe } },
@@ -1738,13 +1738,13 @@ test "a failed tree fixture releases the descendant it still owns" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
     var buffer: [64]u8 = undefined;
-    var output = child.stderr.?.reader(testing.io, &buffer);
+    var output = child.stderrFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(descendant)) orelse return error.TestFixtureDescendantMissing;
     var held = (try captureStarted(descendant, since)) orelse return error.TestFixtureDescendantMissing;
     defer held.deinit();
     defer _ = held.signal(.KILL);
-    try child.stdin.?.writeStreamingAll(testing.io, "x");
+    try child.stdinFile().?.writeStreamingAll(testing.io, "x");
     try testing.expectEqual(Child.Term{ .exited = 1 }, try child.wait(testing.io));
     if (!try held.wait(testing.io, 20)) return error.TestFixtureLeftDescendant;
 }
@@ -1752,7 +1752,7 @@ test "a failed tree fixture releases the descendant it still owns" {
 test "a leaderless Linux group keeps the child its leader started" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     // The leader waits on its input, so it is still running when its start
     // time is read, and ends when that input closes.
     var leader = try Child.spawn(testing.io, testing.allocator, .{
@@ -1767,7 +1767,7 @@ test "a leaderless Linux group keeps the child its leader started" {
     var captured = (try captureStarted(State.get(&leader).id, since)).?;
     defer captured.deinit();
     var buffer: [32]u8 = undefined;
-    var output = leader.stdout.?.reader(testing.io, &buffer);
+    var output = leader.stdoutFile().?.reader(testing.io, &buffer);
     const member = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     try testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(group, since, .CONT));
     errdefer {
@@ -1832,7 +1832,7 @@ test "a captured process keeps its identity across exec" {
     var watchdog: @import("test_support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -1840,13 +1840,13 @@ test "a captured process keeps its identity across exec" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [64]u8 = undefined;
-    var reader = child.stdout.?.reader(io, &buffer);
+    var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
     const pid = child.processId().?;
     const since = (try startTime(pid)).?;
     var captured = (try captureStarted(pid, since)).?;
     defer captured.deinit();
-    try child.stdin.?.writeStreamingAll(io, "exec\n");
+    try child.stdinFile().?.writeStreamingAll(io, "exec\n");
     try testing.expectEqualStrings("after", (try reader.interface.takeDelimiter('\n')).?);
     try testing.expect(captured.alive());
     try testing.expect(!try captured.wait(io, 0));
@@ -1868,7 +1868,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     var watchdog: @import("test_support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -1876,7 +1876,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [64]u8 = undefined;
-    var reader = child.stdout.?.reader(io, &buffer);
+    var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
     var process = DarwinProcess.capture(child.processId().?).?;
     const version = process.current().?.unique.id_version;
@@ -1887,7 +1887,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
         fn exec() void {
             before_token_delivery = null;
             calls += 1;
-            child_ptr.stdin.?.writeStreamingAll(std.testing.io, "exec\n") catch @panic("fixture input failed");
+            child_ptr.stdinFile().?.writeStreamingAll(std.testing.io, "exec\n") catch @panic("fixture input failed");
             const line = reader_ptr.takeDelimiter('\n') catch @panic("fixture output failed");
             std.testing.expectEqualStrings("after", line.?) catch @panic("fixture did not exec");
         }

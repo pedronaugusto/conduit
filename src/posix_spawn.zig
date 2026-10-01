@@ -46,7 +46,7 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const tree = @import("tree.zig");
 const options_for_build = @import("conduit_options");
 

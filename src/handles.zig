@@ -277,7 +277,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     var watchdog: @import("test_support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try @import("Child.zig").spawn(io, testing.allocator, .{
+    var child = try @import("Child.zig").Child.spawn(io, testing.allocator, .{
         .argv = &.{ @import("conduit_test_options").input_fixture, "exit" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -286,7 +286,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
         child.deinit(io);
     }
     try testing.expect((try child.waitTimeout(io, 5000)) != null);
-    try testing.expectError(error.BrokenPipe, writeStreamingAll(child.stdin.?, io, "closed"));
+    try testing.expectError(error.BrokenPipe, writeStreamingAll(child.stdinFile().?, io, "closed"));
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

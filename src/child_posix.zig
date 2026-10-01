@@ -11,7 +11,7 @@ const posix = std.posix;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const State = @import("child_state.zig");
 const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
@@ -246,9 +246,6 @@ fn started(
         .forks = forks,
         .cgroup = contained,
         .term = null,
-    };
-    return .{
-        .lifecycle = @ptrCast(state), // safe: only spawn creates the opaque lifecycle, retaining this allocation until deinit.
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -257,6 +254,7 @@ fn started(
             else => null,
         },
     };
+    return State.owner(state);
 }
 
 /// Where between the fork and the exec something went wrong, and with what

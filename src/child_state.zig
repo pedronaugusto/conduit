@@ -2,7 +2,7 @@
 const State = @This();
 const builtin = @import("builtin");
 const std = @import("std");
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const posix = std.posix;
 const windows = std.os.windows;
 const is_windows = builtin.os.tag == .windows;
@@ -12,6 +12,10 @@ const Id = std.process.Child.Id;
 const ProcessGroupId = Child.ProcessGroupId;
 const Term = Child.Term;
 
+stdin: ?std.Io.File = null,
+stdout: ?std.Io.File = null,
+stderr: ?std.Io.File = null,
+pty: ?@import("Pty.zig").Master = null,
 allocator: std.mem.Allocator,
 process_id: Child.Id,
 /// The operating system's name for the child.
@@ -89,6 +93,16 @@ identity: std.atomic.Mutex = .unlocked,
 identity_retired: bool = false,
 
 /// Only spawn creates this pointer, and deinit destroys it after all tasks join.
+pub fn optional(child: anytype) ?*State {
+    const value = if (@TypeOf(child) == Child) child else if (@TypeOf(child.*) == Child) child.* else child.*.*;
+    const address = @intFromEnum(value);
+    return if (address == 0) null else @ptrFromInt(address); // safe: spawn encodes its allocated State; zero is a closed owner.
+}
+
 pub fn get(child: anytype) *State {
-    return @ptrCast(@alignCast(child.lifecycle.?)); // safe: spawn stores an allocated State with its original alignment.
+    return optional(child).?;
+}
+
+pub fn owner(state: *State) Child {
+    return @enumFromInt(@intFromPtr(state)); // safe: the Child takes this allocated State and releases it in deinit.
 }

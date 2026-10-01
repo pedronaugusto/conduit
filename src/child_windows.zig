@@ -9,7 +9,7 @@ const std = @import("std");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const State = @import("child_state.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
@@ -135,9 +135,6 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
         .forks = {},
         .cgroup = {},
         .term = null,
-    };
-    return .{
-        .lifecycle = @ptrCast(state), // safe: only spawn creates the opaque lifecycle, retaining this allocation until deinit.
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -146,6 +143,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
             else => null,
         },
     };
+    return State.owner(state);
 }
 
 /// Says what the child is attached to or handed, in the two records

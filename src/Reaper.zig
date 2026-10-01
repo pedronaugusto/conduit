@@ -49,7 +49,7 @@ const std = @import("std");
 const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
@@ -472,7 +472,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [32]u8 = undefined;
-    var reader = child.stdout.?.reader(io, &buffer);
+    var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
 
     const Clock = struct {
