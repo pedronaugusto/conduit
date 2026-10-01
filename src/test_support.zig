@@ -77,3 +77,16 @@ pub const SpawnCalls = struct {
     pub var forks: usize = 0;
     pub var file_actions: usize = 0;
 };
+
+var teardown_probe_group: std.Io.Group = .init;
+test "runner teardown probe" {
+    if (!try std.testing.environ.contains(std.testing.allocator, "CONDUIT_TEARDOWN_PROBE")) return error.SkipZigTest;
+    const Task = struct {
+        fn run() void {
+            while (true) std.Io.sleep(std.testing.io, .fromSeconds(1), .awake) catch {};
+        }
+    };
+    // Intentionally leave a backend task alive after the test body returns.
+    // Only ci/runner.py enables this probe, in its own disposable process.
+    try teardown_probe_group.concurrent(std.testing.io, Task.run, .{});
+}

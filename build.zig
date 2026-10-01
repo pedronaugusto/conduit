@@ -126,8 +126,16 @@ pub fn build(b: *std.Build) void {
         test_module.addOptions("conduit_test_options", test_options);
     }
 
+    const runner_options = b.addOptions();
+    runner_options.addOption(u32, "watchdog_ms", b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown") orelse 30_000);
+    test_module.addOptions("conduit_runner_options", runner_options);
+    test_module.addAnonymousImport("standard_test_runner", .{
+        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ b.graph.zig_lib_directory.path.?, "compiler", "test_runner.zig" }) },
+    });
+
     const tests = b.addTest(.{
         .name = "conduit-tests",
+        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .server },
         .filters = test_filters,
         .root_module = test_module,
     });

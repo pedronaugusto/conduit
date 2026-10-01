@@ -239,6 +239,7 @@ else
     @import("tree.zig").endRecorded;
 
 test {
+    _ = @import("test_support.zig");
     _ = @import("input_writer_test.zig");
     _ = Pty;
     _ = Child;

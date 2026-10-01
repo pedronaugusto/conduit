@@ -12,6 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Breaking: `Orphans.Spawn` keeps its adoption gate claim opaque; callers use `begin`, `started` and `finish`.
 
+- Every test has an independent native watchdog through Io teardown, reporting its name, source module and phase before the runner can lose contact.
+
 - Breaking: `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.
 
 - Breaking: `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.
