@@ -41,9 +41,18 @@ test "a deadline retains its last fraction of a millisecond until it expires" {
 }
 
 test "a deadline reads the clock and expires" {
-    const io = std.testing.io;
+    const Clock = struct {
+        var milliseconds: u32 = 100;
+        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            return .{ .nanoseconds = @as(i96, milliseconds) * std.time.ns_per_ms };
+        }
+    };
+    var vtable = std.testing.io.vtable.*;
+    vtable.now = Clock.now;
+    const io: std.Io = .{ .vtable = &vtable, .userdata = std.testing.io.userdata };
+    Clock.milliseconds = 100;
     const deadline: Deadline = .in(io, 10);
-    try std.testing.expect(deadline.remainingMs(io) <= 10);
-    try io.sleep(.fromMilliseconds(11), .awake);
+    try std.testing.expectEqual(@as(u32, 10), deadline.remainingMs(io));
+    Clock.milliseconds = 111;
     try std.testing.expectEqual(@as(u32, 0), deadline.remainingMs(io));
 }
