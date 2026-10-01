@@ -477,8 +477,8 @@ pub const PathSearch = enum {
     /// environment usually means -- an empty `PATH` for the child should not
     /// also mean this spawn cannot find its program.
     parent_environ,
-    /// No search. `argv[0]` is a path, and a bare name is `error.FileNotFound`
-    /// rather than whatever happens to be on a search path.
+    /// No search. `argv[0]` is used as the path supplied, resolved against
+    /// the child's working directory when relative, including a bare name.
     none,
 };
 

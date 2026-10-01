@@ -232,11 +232,13 @@ A wait ends in `error.Timeout`, `error.EndOfStream`, `error.BufferFull` or
 is this process's environment with those changes, as a map the caller owns; a
 `null` value removes the variable rather than emptying it.
 `environ.only(allocator, …)` takes the same list and inherits nothing, for a
-child that should not see an agent socket or a token. A child with no `PATH` is
-also one a bare `argv[0]` cannot be found for, so `path_search` says which
-`PATH` resolves the program: `.child_environ` (the default, what a shell does),
-`.parent_environ` (what `std.process.spawn` does, and what a scrubbed
-environment wants) or `.none`. On Windows conduit resolves a bare program
+child that should not see an agent socket or a token. `path_search` says
+which `PATH` resolves the program: `.child_environ` (the default, what a shell
+does), `.parent_environ` (what `std.process.spawn` does) or `.none` (the path
+as supplied, relative to the child's working directory when relative).
+On POSIX a missing `PATH` uses the default directories; an empty `PATH`
+searches the child's current directory. Windows still checks its fixed
+program directories without a `PATH`. On Windows conduit resolves a bare program
 against the child environment before `CreateProcessW`, whose own search would
 otherwise use the parent's `PATH`; the other two modes are `error.Unsupported`
 there.
@@ -468,9 +470,8 @@ under its own cgroup, named `conduit-<pid>-<n>`; `deinit` removes it, and
 one whose processes outlive the child is left to them and removed by a later
 spawn or `deinit` once they have ended. Up to sixteen such cgroups retain
 their directory handles so later cleanup verifies the identity before removal.
-A descendant that moves itself to
-another cgroup it may write to — asks systemd for a scope of its own — has
-left the reach.
+A descendant that moves itself to another cgroup it may write to — asks
+systemd for a scope of its own — has left the reach.
 
 **On Linux, orphans can be made this process's own, beneath the cgroup and
 the walk.** A process whose parent ends goes to `init`, or to the nearest

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Program lookup documentation distinguishes missing and empty PATH values and describes relative paths without search.
+
 - Cgroup handoffs consume their join descriptor and directory ownership once, so repeated cleanup cannot close a recycled descriptor or release the transferred cgroup.
 
 - Deferred cgroup cleanup retains owned directory handles and verifies their identity before removal, leaving replacement directories alone.
@@ -43,8 +45,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Breaking: `CapturedPid` is opaque; `processId()` replaces its numeric field, and Darwin captures retain process identity across exec while checking refreshed audit versions for signal delivery.
 
 - `Child.containment` copies the detached group and Linux cgroup path, directory identity and boot identity for records retained through retirement.
-
-- The allocation documentation names the process allocator that owns Windows PTY geometry until the pair closes.
 
 - Windows whole writes report `BrokenPipe` for a pipe whose peer has closed, including the closing state Zig 0.16 reports as `Unexpected`.
 
