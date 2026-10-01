@@ -158,6 +158,7 @@ test "InputWriter keeps a write failure for later writers and waiters" {
     try testing.expect((try child.waitTimeout(io, budget_ms)) != null);
     try writer.queue(io, "gone");
     try testing.expectError(error.BrokenPipe, writer.wait(io));
+    try testing.expect(!writer.isOpen(io));
     try testing.expectError(error.BrokenPipe, writer.queue(io, "later"));
     try testing.expectError(error.BrokenPipe, writer.end(io));
     writer.cancel(io);
@@ -343,4 +344,42 @@ test "InputWriter checks cancellation when a write makes no progress" {
     try writer.queue(stalled_io, "held");
     try testing.expectError(error.Canceled, writer.wait(io));
     try testing.expectError(error.Canceled, writer.queue(io, "later"));
+}
+
+test "InputWriter isOpen observes acceptance even with a full backlog" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try spawn("end");
+    defer reap(&child);
+    var gate: WriteGate = .{ .file = child.stdin.? };
+    var vtable: std.Io.VTable = undefined;
+    const gated_io = gate.backend(&vtable);
+    var writer = try child.inputWriter(gated_io, gpa, .{ .max_backlog = 4 });
+    defer writer.deinit(gated_io);
+    try testing.expect(writer.isOpen(gated_io));
+    try writer.queue(gated_io, "held");
+    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    try testing.expect(writer.isOpen(gated_io));
+    try testing.expectError(error.BacklogFull, writer.queue(gated_io, "x"));
+    try writer.end(gated_io);
+    try testing.expect(!writer.isOpen(gated_io));
+    gate.release.set(io);
+    try writer.wait(gated_io);
+    try testing.expect(!writer.isOpen(gated_io));
+    try output(&child, "heldEOF");
+}
+
+test "InputWriter isOpen observes cancellation and retained failures" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try spawn("end");
+    defer reap(&child);
+    var writer = try child.inputWriter(io, gpa, .{ .max_backlog = 0 });
+    defer writer.deinit(io);
+    try testing.expect(writer.isOpen(io));
+    writer.cancel(io);
+    try testing.expect(!writer.isOpen(io));
+    try testing.expectError(error.Canceled, writer.queue(io, ""));
 }

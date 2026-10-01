@@ -160,6 +160,9 @@ machine's processor time, from 1 through 10,000; an out-of-range value is
 
 ### `InputWriter` — bounded input for a child
 
+`writer.isOpen(io)` takes an uncancelable snapshot of whether input is still
+accepted, even when the backlog is full. A later `queue` checks again.
+
 ```zig
 var input = try child.inputWriter(io, gpa, .{ .max_backlog = 1024 * 1024 });
 defer input.deinit(io);

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `InputWriter.isOpen(io)` gives adapters an uncancelable acceptance snapshot, independent of backlog space.
+
 - Breaking: `Pty.open` takes a caller allocator retained for Windows geometry until every end closes; `spawnShell` forwards its allocator.
 
 - The root API documentation describes the stable Darwin process identity and the audit version checked at delivery.

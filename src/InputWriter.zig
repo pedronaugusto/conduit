@@ -45,6 +45,16 @@ pub fn init(io: std.Io, allocator: std.mem.Allocator, child: *Child, options: Op
     return .{ .state = @ptrCast(state) }; // safe: the opaque handle owns this allocated State.
 }
 
+/// Whether input is still accepted, regardless of available backlog space.
+/// An uncancelable snapshot; end, cancellation or failure makes it false.
+/// A later queue call still checks its own acceptance and may fail.
+pub fn isOpen(writer: *const InputWriter, io: std.Io) bool {
+    const state = writer.get();
+    state.mutex.lockUncancelable(io);
+    defer state.mutex.unlock(io);
+    return !state.ending and state.failed == null;
+}
+
 /// Copies all of `bytes` into the queue, or accepts none of it. Concurrent
 /// calls are ordered by acquisition of the queue mutex; bytes within a call
 /// stay together. That mutex is held for allocation and copying, never for a
@@ -190,4 +200,31 @@ fn run(state: *State, io: std.Io) void {
         state.free(node);
         state.mutex.unlock(io);
     }
+}
+
+test "InputWriter isOpen takes a contended mutex without cancellation" {
+    const Backend = struct {
+        mutex: *std.Io.Mutex,
+        waits: usize = 0,
+        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32) void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.waits += 1;
+            backend.mutex.state.store(.unlocked, .release);
+        }
+        fn canceled(_: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            return error.Canceled;
+        }
+        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
+    };
+    var state: State = .{ .allocator = std.testing.allocator, .file = undefined, .max_backlog = 0 };
+    var writer: InputWriter = .{ .state = @ptrCast(&state) }; // safe: this synthetic writer borrows the State for this test only.
+    var backend: Backend = .{ .mutex = &state.mutex };
+    var vtable = std.testing.io.vtable.*;
+    vtable.futexWait = Backend.canceled;
+    vtable.futexWaitUncancelable = Backend.wait;
+    vtable.futexWake = Backend.wake;
+    const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    state.mutex.state.store(.locked_once, .release);
+    try std.testing.expect(writer.isOpen(observed_io));
+    try std.testing.expectEqual(@as(usize, 1), backend.waits);
 }
