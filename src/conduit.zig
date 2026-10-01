@@ -257,4 +257,5 @@ test {
     _ = @import("find.zig");
     _ = @import("windows_search.zig");
     _ = @import("spawn_test.zig");
+    _ = @import("descendants_test.zig");
 }

@@ -6,11 +6,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 const windows = std.os.windows;
 
+extern "c" fn pause() c_int;
+
 extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--daemon")) return daemonTree(init, args);
     if (builtin.os.tag != .windows) return posixTree(init, args.len > 1 and std.mem.eql(u8, args[1], "--fail-report"));
     if (args.len > 1 and std.mem.eql(u8, args[1], "--grandchild")) {
         Sleep(std.math.maxInt(windows.DWORD));
@@ -83,4 +86,58 @@ fn posixTree(init: std.process.Init, fail_report: bool) !void {
     }
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
     try init.io.sleep(.fromSeconds(30), .awake);
+}
+
+// The root stays alive until the test has captured the daemon's identity.
+// No daemon inherits the root's pipes; no shell or personal config is read.
+fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
+    const escape = args.len > 2 and std.mem.eql(u8, args[2], "--escape");
+    const id = if (builtin.os.tag == .windows) win: {
+        const allocator = init.arena.allocator();
+        const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, args[0]);
+        const command = try std.fmt.allocPrint(allocator, "\"{s}\" --grandchild", .{args[0]});
+        const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
+        var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+        startup.cb = @sizeOf(windows.STARTUPINFOW);
+        startup.dwFlags = windows.STARTF_USESHOWWINDOW;
+        var process: windows.PROCESS.INFORMATION = undefined;
+        if (windows.kernel32.CreateProcessW(program.ptr, line.ptr, null, null, .FALSE, .{ .create_new_console = true }, null, null, &startup, &process) == .FALSE)
+            return error.FixtureSpawnFailed;
+        windows.CloseHandle(process.hThread);
+        windows.CloseHandle(process.hProcess);
+        break :win process.dwProcessId;
+    } else posix: {
+        const c = std.c;
+        var ready: [2]c_int = undefined;
+        if (c.pipe(&ready) != 0) return error.FixturePipeFailed;
+        const pid = c.fork();
+        if (pid < 0) return error.FixtureForkFailed;
+        if (pid == 0) {
+            _ = c.close(ready[0]);
+            if (escape and c.setsid() < 0) c._exit(1);
+            _ = c.close(0);
+            _ = c.close(1);
+            _ = c.close(2);
+            if (c.write(ready[1], "r", 1) != 1) c._exit(1);
+            _ = c.close(ready[1]);
+            while (true) _ = pause();
+        }
+        _ = c.close(ready[1]);
+        defer _ = c.close(ready[0]);
+        var byte: [1]u8 = undefined;
+        if (c.read(ready[0], &byte, 1) != 1) return error.FixtureHandshakeFailed;
+        break :posix @as(u32, @intCast(pid));
+    };
+    var buffer: [64]u8 = undefined;
+    const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{id});
+    try std.Io.File.stdout().writeStreamingAll(init.io, report);
+    var byte: [1]u8 = undefined;
+    if ((std.Io.File.stdin().readStreaming(init.io, &.{&byte}) catch |err| switch (err) {
+        error.EndOfStream => 0,
+        else => return err,
+    }) == 1) {
+        try std.Io.File.stdout().writeStreamingAll(init.io, "output\n");
+        try init.io.sleep(.fromSeconds(30), .awake);
+    }
+    if (args.len > 2 and std.mem.eql(u8, args[2], "--exit-7")) std.process.exit(7);
 }

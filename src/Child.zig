@@ -263,6 +263,8 @@ pub const Child = enum(usize) {
         /// a pty on Windows the useful setting is therefore `false`, which is what
         /// `spawnShell` picks there.
         detach: bool = false,
+        /// What becomes of descendants after a normal, reaped exit.
+        descendants: Descendants = .survive,
         /// Send the child's standard error to this file, whatever `stdio` says
         /// about the other two streams. The file is borrowed: `deinit` does not
         /// close it, and it must stay open until `spawn` returns.
@@ -316,6 +318,8 @@ pub const Child = enum(usize) {
         /// next time it runs.
         parent_death_signal: ?Signal = null,
     };
+
+    pub const Descendants = enum { survive, contain };
 
     /// What the job object holding the child and its tree may use. Windows only.
     ///

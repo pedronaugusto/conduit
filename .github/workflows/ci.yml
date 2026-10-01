@@ -173,6 +173,7 @@ jobs:
           "-Dtest-filter=end_tree on Windows"
           "-Dtest-filter=waitTree says"
           "-Dtest-filter=deinit ends a grandchild"
+          "-Dtest-filter=descendants_test"
 
       # Traced: both tests here that put a child on a pseudoconsole have hung
       # on a runner at one time or another, so this step says which stage it
