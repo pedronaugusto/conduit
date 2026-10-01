@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Cgroup` and `Cgroup.Recorded` keep directory ownership opaque in fixed storage; their observation and cleanup methods retain their signatures.
+
 - Breaking: `Orphans` keeps adoption and lifecycle state opaque in fixed storage; its methods own every list and notification.
 
 - Breaking: `Expect` keeps conversation state opaque in fixed storage; construction and observations use its methods.

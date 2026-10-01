@@ -97,7 +97,8 @@ to read while a wait or Reaper runs.
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
 
-`conduit.Cgroup` is the cgroup a Linux child holds. `cgroup.id()` gives its
+`conduit.Cgroup` is the cgroup a Linux child holds. Both cgroup handle types
+keep ownership opaque in fixed storage. `cgroup.id()` gives its
 directory identity. `Cgroup.openRecorded(path, id)` returns a separate
 `Cgroup.Recorded` handle only when the saved inode matches. It holds both the
 cgroup and its parent by descriptor, and copies only the final name into a

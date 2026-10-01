@@ -322,23 +322,44 @@ const Leftovers = struct {
 
 var sequence: std.atomic.Value(u32) = .init(0);
 
-const LinuxCgroup = struct {
+const CgroupState = struct {
     /// The child's cgroup directory, opened `O_PATH`, or -1 for none.
     dir: posix.fd_t,
     name: Name,
+};
+
+const LinuxCgroup = enum(@Int(.unsigned, @sizeOf(CgroupState) * 8)) {
+    _,
+
+    fn inner(value: *LinuxCgroup) *CgroupState {
+        return @ptrCast(@alignCast(value)); // safe: construction writes inline state; the enum holds its size and alignment.
+    }
+
+    fn innerConst(value: *const LinuxCgroup) *const CgroupState {
+        return @ptrCast(@alignCast(value)); // safe: observes the same initialized inline state without copying it.
+    }
+
+    fn init(dir: posix.fd_t, name: Name) LinuxCgroup {
+        var value: LinuxCgroup = undefined;
+        value.inner().* = .{ .dir = dir, .name = name };
+        return value;
+    }
+
     pub const Recorded = LinuxRecorded;
 
-    pub const none: LinuxCgroup = .{ .dir = -1, .name = .{ .owner = 0, .sequence = 0 } };
+    // All bytes are 0xff: the directory is -1 on every layout, and the
+    // unused name has no ownership. This also permits a comptime constant.
+    pub const none: LinuxCgroup = @enumFromInt(std.math.maxInt(@Int(.unsigned, @sizeOf(CgroupState) * 8)));
 
     pub fn active(cgroup: *const LinuxCgroup) bool {
-        return cgroup.dir >= 0;
+        return cgroup.innerConst().dir >= 0;
     }
 
     /// The directory inode that identifies this cgroup for this boot.
     pub fn id(cgroup: *const LinuxCgroup) ?u64 {
         if (!cgroup.active()) return null;
         var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(cgroup.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
+        const rc = std.os.linux.statx(cgroup.innerConst().dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
         if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
         return st.ino;
     }
@@ -395,13 +416,13 @@ const LinuxCgroup = struct {
             Place.refuse();
             return null;
         }
-        return .{ .cgroup = .{ .dir = dir, .name = name }, .procs = procs };
+        return .{ .cgroup = init(dir, name), .procs = procs };
     }
 
     /// Where the cgroup is, for a report or a test.
     pub fn path(cgroup: *const LinuxCgroup, buffer: []u8) ?[:0]const u8 {
         if (!cgroup.active()) return null;
-        return cgroup.name.path(buffer);
+        return cgroup.innerConst().name.path(buffer);
     }
 
     /// Remove an empty cgroup, refusing a path that now names another one.
@@ -413,28 +434,28 @@ const LinuxCgroup = struct {
         const current = c.open(at, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
         if (current < 0) return false;
         defer _ = c.close(current);
-        var check: LinuxCgroup = .{ .dir = current, .name = cgroup.name };
+        var check = init(current, cgroup.inner().name);
         if (check.id() != cgroup.id()) return false;
         if (c.rmdir(at) != 0) return false;
-        _ = c.close(cgroup.dir);
+        _ = c.close(cgroup.inner().dir);
         cgroup.* = none;
         return true;
     }
 
     pub fn kill(cgroup: *const LinuxCgroup) bool {
-        return (MemberOps{ .dir = cgroup.dir }).kill();
+        return (MemberOps{ .dir = cgroup.innerConst().dir }).kill();
     }
 
     pub fn signalMembers(cgroup: *const LinuxCgroup, sig: posix.SIG, leader: posix.pid_t, in_group: ?posix.pid_t) std.mem.Allocator.Error!?usize {
-        return (MemberOps{ .dir = cgroup.dir }).signalMembers(sig, leader, in_group);
+        return (MemberOps{ .dir = cgroup.innerConst().dir }).signalMembers(sig, leader, in_group);
     }
 
     pub fn populated(cgroup: *const LinuxCgroup) Populated {
-        return (MemberOps{ .dir = cgroup.dir }).populated();
+        return (MemberOps{ .dir = cgroup.innerConst().dir }).populated();
     }
 
     pub fn waitEmpty(cgroup: *const LinuxCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return (MemberOps{ .dir = cgroup.dir }).waitEmpty(io, timeout_ms);
+        return (MemberOps{ .dir = cgroup.innerConst().dir }).waitEmpty(io, timeout_ms);
     }
 
     /// Lets go of the cgroup and removes it, or leaves it to be removed once
@@ -442,8 +463,8 @@ const LinuxCgroup = struct {
     pub fn release(cgroup: *LinuxCgroup) void {
         if (!cgroup.active()) return;
         if (cgroup.remove()) return;
-        _ = c.close(cgroup.dir);
-        const name = cgroup.name;
+        _ = c.close(cgroup.inner().dir);
+        const name = cgroup.inner().name;
         cgroup.* = none;
         if (!name.remove()) Leftovers.add(name);
         Leftovers.sweep();
@@ -452,12 +473,24 @@ const LinuxCgroup = struct {
 
 /// A cgroup found from a saved path and inode, with its parent held open.
 /// The caller must check the saved boot id before using an inode from a record.
-const LinuxRecorded = struct {
+const RecordedState = struct {
     parent: posix.fd_t,
     dir: posix.fd_t,
     name: [std.fs.max_name_bytes + 1]u8,
     name_len: usize,
     recorded_id: u64,
+};
+
+const LinuxRecorded = enum(@Int(.unsigned, @sizeOf(RecordedState) * 8)) {
+    _,
+
+    fn inner(value: *LinuxRecorded) *RecordedState {
+        return @ptrCast(@alignCast(value)); // safe: construction writes inline state; the enum holds its size and alignment.
+    }
+
+    fn innerConst(value: *const LinuxRecorded) *const RecordedState {
+        return @ptrCast(@alignCast(value)); // safe: observes the same initialized inline state without copying it.
+    }
 
     fn open(path_name: []const u8, recorded_id: u64) ?LinuxRecorded {
         if (recorded_id == 0 or path_name.len < 2 or path_name.len >= std.fs.max_path_bytes or path_name[0] != '/' or
@@ -478,16 +511,17 @@ const LinuxRecorded = struct {
             if (!keep) _ = c.close(parent);
         }
 
-        var result: LinuxRecorded = .{ .parent = parent, .dir = -1, .name = undefined, .name_len = base.len, .recorded_id = recorded_id };
-        @memcpy(result.name[0..base.len], base);
-        result.name[base.len] = 0;
-        result.dir = c.openat(parent, result.name[0..base.len :0], .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .NOFOLLOW = true, .CLOEXEC = true });
-        if (result.dir < 0) return null;
+        var result: LinuxRecorded = undefined;
+        result.inner().* = .{ .parent = parent, .dir = -1, .name = undefined, .name_len = base.len, .recorded_id = recorded_id };
+        @memcpy(result.inner().name[0..base.len], base);
+        result.inner().name[base.len] = 0;
+        result.inner().dir = c.openat(parent, result.inner().name[0..base.len :0], .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .NOFOLLOW = true, .CLOEXEC = true });
+        if (result.inner().dir < 0) return null;
         defer {
-            if (!keep) _ = c.close(result.dir);
+            if (!keep) _ = c.close(result.inner().dir);
         }
         if (result.id() != recorded_id or !result.namedIdentityMatches()) return null;
-        const events = c.openat(result.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+        const events = c.openat(result.inner().dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (events < 0) return null;
         _ = c.close(events);
         keep = true;
@@ -495,13 +529,13 @@ const LinuxRecorded = struct {
     }
 
     pub fn active(recorded: *const LinuxRecorded) bool {
-        return recorded.dir >= 0;
+        return recorded.innerConst().dir >= 0;
     }
 
     pub fn id(recorded: *const LinuxRecorded) ?u64 {
         if (!recorded.active()) return null;
         var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(recorded.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
+        const rc = std.os.linux.statx(recorded.innerConst().dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
         if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
         return st.ino;
     }
@@ -510,8 +544,8 @@ const LinuxRecorded = struct {
     /// directory: `statx` on the name, not following a link.
     fn namedIdentityMatches(recorded: *const LinuxRecorded) bool {
         var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(recorded.parent, recorded.name[0..recorded.name_len :0], std.os.linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &st);
-        return std.os.linux.errno(rc) == .SUCCESS and st.ino == recorded.recorded_id;
+        const rc = std.os.linux.statx(recorded.innerConst().parent, recorded.innerConst().name[0..recorded.innerConst().name_len :0], std.os.linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &st);
+        return std.os.linux.errno(rc) == .SUCCESS and st.ino == recorded.innerConst().recorded_id;
     }
 
     /// Remove the empty directory through the held parent only if its name
@@ -521,37 +555,37 @@ const LinuxRecorded = struct {
     pub fn remove(recorded: *LinuxRecorded) bool {
         if (!recorded.active()) return true;
         if (!recorded.namedIdentityMatches()) return false;
-        if (c.unlinkat(recorded.parent, recorded.name[0..recorded.name_len :0], c.AT.REMOVEDIR) != 0) return false;
-        _ = c.close(recorded.dir);
-        _ = c.close(recorded.parent);
-        recorded.dir = -1;
-        recorded.parent = -1;
+        if (c.unlinkat(recorded.inner().parent, recorded.inner().name[0..recorded.inner().name_len :0], c.AT.REMOVEDIR) != 0) return false;
+        _ = c.close(recorded.inner().dir);
+        _ = c.close(recorded.inner().parent);
+        recorded.inner().dir = -1;
+        recorded.inner().parent = -1;
         return true;
     }
 
     pub fn release(recorded: *LinuxRecorded) void {
         if (!recorded.active()) return;
         if (recorded.remove()) return;
-        _ = c.close(recorded.dir);
-        _ = c.close(recorded.parent);
-        recorded.dir = -1;
-        recorded.parent = -1;
+        _ = c.close(recorded.inner().dir);
+        _ = c.close(recorded.inner().parent);
+        recorded.inner().dir = -1;
+        recorded.inner().parent = -1;
     }
 
     pub fn kill(recorded: *const LinuxRecorded) bool {
-        return (MemberOps{ .dir = recorded.dir }).kill();
+        return (MemberOps{ .dir = recorded.innerConst().dir }).kill();
     }
 
     pub fn signalMembers(recorded: *const LinuxRecorded, sig: posix.SIG, leader: posix.pid_t, in_group: ?posix.pid_t) std.mem.Allocator.Error!?usize {
-        return (MemberOps{ .dir = recorded.dir }).signalMembers(sig, leader, in_group);
+        return (MemberOps{ .dir = recorded.innerConst().dir }).signalMembers(sig, leader, in_group);
     }
 
     pub fn populated(recorded: *const LinuxRecorded) Populated {
-        return (MemberOps{ .dir = recorded.dir }).populated();
+        return (MemberOps{ .dir = recorded.innerConst().dir }).populated();
     }
 
     pub fn waitEmpty(recorded: *const LinuxRecorded, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return (MemberOps{ .dir = recorded.dir }).waitEmpty(io, timeout_ms);
+        return (MemberOps{ .dir = recorded.innerConst().dir }).waitEmpty(io, timeout_ms);
     }
 };
 
@@ -744,9 +778,10 @@ pub fn join(procs: posix.fd_t) bool {
     return c.write(procs, "0", 1) == 1;
 }
 
-const NoCgroup = struct {
+const NoCgroup = enum(u8) {
+    _,
     pub const Recorded = NoRecorded;
-    pub const none: NoCgroup = .{};
+    pub const none: NoCgroup = @enumFromInt(0);
 
     pub fn active(cgroup: *const NoCgroup) bool {
         _ = cgroup;
@@ -814,7 +849,8 @@ const NoCgroup = struct {
     }
 };
 
-const NoRecorded = struct {
+const NoRecorded = enum(u8) {
+    _,
     pub fn active(_: *const NoRecorded) bool {
         return false;
     }
@@ -865,4 +901,9 @@ test "a cgroup2 line of mountinfo names its mount point and root, and nothing el
         &point,
         &root,
     ) == null);
+}
+
+test "cgroup handles expose no writable directory ownership" {
+    try std.testing.expect(@typeInfo(Cgroup) == .@"enum");
+    try std.testing.expect(@typeInfo(Cgroup.Recorded) == .@"enum");
 }
