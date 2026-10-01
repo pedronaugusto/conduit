@@ -327,9 +327,12 @@ parent of every orphan below it (`PR_SET_CHILD_SUBREAPER`): a daemon a
 child left, a grandchild that forked twice and called `setsid`. Nothing
 runs for it — no task, no timer: whenever conduit reaps a child or spawns
 one, it also takes in the new orphans and reaps the ended ones. `count()`
-does the same on demand and says how many are left, `list(out)` names
-them (for a program that writes them down, so a later one can end what
-this one did not), and `end(io, grace_ms)` ends them all through a pidfd each — `SIGTERM`, the grace, then
+does the same on demand and says how many are left. `list(out)` copies
+`Orphans.Record` values with `pid` and `start`, captured under pidfd and reap
+ownership during adoption. It reports `IdentityUnavailable` if a start time
+could not be read. Retain both fields and the boot identity for a later
+`captureStarted` or `endRecorded`; records own no handles. `end(io, grace_ms)` ends them all through a pidfd
+each — `SIGTERM`, the grace, then
 `SIGKILL` — for the end of a program. `deinit()` puts the attribute back.
 Opt-in, and only for a program that starts every child through conduit
 (below). `error.Unsupported` elsewhere.

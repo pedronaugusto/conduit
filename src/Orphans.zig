@@ -290,11 +290,25 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         return orphans.inner().adopted.items.len;
     }
 
-    /// Looks, reaps every adopted process that has ended, and names the ones
-    /// left in `out`, as many as it holds: what a program writes down so that
-    /// a later one can end them, when this one may be gone before `end` runs.
-    /// Empty when this is not running.
-    pub fn list(orphans: *Orphans, out: []posix.pid_t) LookError![]posix.pid_t {
+    /// A copied process identity. Retain both fields; the pid alone is not
+    /// authority to signal. Save this boot's identity alongside persistent
+    /// records, then use captureStarted or endRecorded within that boot.
+    pub const Record = struct {
+        pid: posix.pid_t,
+        /// Linux clock ticks after boot, as returned by conduit.startTime.
+        start: u64,
+    };
+
+    pub const ListError = LookError || error{IdentityUnavailable};
+
+    /// Looks, reaps ended adoptees, and copies as many retained identities as
+    /// fit in out. Start times are captured during adoption, while the pidfd
+    /// and this owner's exclusive reap ownership still hold the process.
+    /// A running process whose start time could not be read is
+    /// IdentityUnavailable; its numeric pid is never returned alone.
+    /// Empty when this is not running. Records own no handle and remain valid
+    /// as saved facts after end or deinit; they do not promise liveness.
+    pub fn list(orphans: *Orphans, out: []Record) ListError![]Record {
         if (!supported or !orphans.inner().running) return out[0..0];
         gate.lock();
         orphans.inner().lock.lock();
@@ -305,7 +319,9 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
         orphans.reapEnded();
         const n = @min(out.len, orphans.inner().adopted.items.len);
-        for (orphans.inner().adopted.items[0..n], out[0..n]) |held, *pid| pid.* = held.pid;
+        for (orphans.inner().adopted.items[0..n], out[0..n]) |held, *record| {
+            record.* = .{ .pid = held.pid, .start = held.start orelse return error.IdentityUnavailable };
+        }
         return out[0..n];
     }
 
@@ -501,6 +517,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         pid: posix.pid_t,
         pidfd: posix.fd_t,
         asked: Asked = .nothing,
+        start: ?u64 = null,
 
         const Asked = enum(u8) { nothing, terminate, kill };
 
@@ -606,13 +623,14 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     fn consider(orphans: *Orphans, pid: posix.pid_t) LookError!void {
         for (orphans.inner().own.items) |held| if (held.pid == pid) return;
         for (orphans.inner().adopted.items) |held| if (held.pid == pid) return;
-        const held = Held.open(pid) catch |err| switch (err) {
+        var held = Held.open(pid) catch |err| switch (err) {
             error.Gone => return,
             else => |e| return e,
         };
         // Between the list and the pidfd the pid may have been reaped and given
         // to a process that is nobody's child here.
         if (!held.isChild()) return held.close();
+        held.start = tree.startTime(pid) catch unreachable; // Linux supports startTime; isChild and both locks hold reap ownership.
         orphans.inner().adopted.append(orphans.inner().allocator, held) catch {
             held.close();
             return error.OutOfMemory;
@@ -759,3 +777,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         try std.testing.expect(@typeInfo(Orphans) == .@"enum");
     }
 };
+
+test "orphan records retain a pid and its captured start time" {
+    var storage: [1]Orphans.Record = undefined;
+    var orphans: Orphans = .init(std.testing.allocator);
+    defer orphans.deinit();
+    try std.testing.expectEqual(@as(usize, 0), (try orphans.list(&storage)).len);
+}

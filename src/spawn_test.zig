@@ -1683,8 +1683,11 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try expectAdopted(kept);
     try expectCount(&orphans, 1);
     // named, so a program can write it down for a later one to end
-    var names: [4]posix.pid_t = undefined;
-    try testing.expectEqualSlices(posix.pid_t, &.{kept}, try orphans.list(&names));
+    var names: [4]Orphans.Record = undefined;
+    const identities = try orphans.list(&names);
+    try testing.expectEqual(@as(usize, 1), identities.len);
+    try testing.expectEqual(kept, identities[0].pid);
+    try testing.expectEqual((try conduit.startTime(kept)).?, identities[0].start);
     try testing.expectEqual(0, (try orphans.list(names[0..0])).len);
 
     // One that has ended by the time the child that left it is reaped: the
@@ -4193,4 +4196,33 @@ test "output reads a published result before watching a retired process number" 
     try testing.expectEqualStrings("retained", output.stdout);
     try testing.expectEqual(Child.Term{ .exited = 7 }, output.term);
     try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}
+
+test "Orphans list copies the held identity for a record kept after reaping" {
+    if (!Orphans.supported) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var orphans: Orphans = .init(gpa);
+    try orphans.start();
+    defer orphans.deinit();
+    defer orphans.end(io, 0) catch {};
+    var keeper = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer keeper.deinit(io);
+    defer _ = keeper.killWait(io, 0) catch {};
+    const kept = try orphanOf(&keeper);
+    try expectAdopted(kept);
+    try expectCount(&orphans, 1);
+    var records: [4]Orphans.Record = undefined;
+    const listed = try orphans.list(&records);
+    try testing.expectEqual(@as(usize, 1), listed.len);
+    const saved = listed[0];
+    try testing.expectEqual(kept, saved.pid);
+    try testing.expectEqual((try conduit.startTime(kept)).?, saved.start);
+    try orphans.end(io, 0);
+    try testing.expectEqual(@as(usize, 0), (try orphans.list(&records)).len);
+    try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);
 }
