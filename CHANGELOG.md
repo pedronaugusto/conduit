@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.
+
 - Breaking: `Orphans.Record` also copies group and session from the same verified adoption snapshot as its start time.
 
 - Breaking: `Cgroup.prepare` returns an opaque handoff; `joinDescriptor` borrows its descriptor and `started` or `abandon` consumes ownership.

@@ -43,7 +43,7 @@ pub fn main() !void {
     // Everything it writes to its terminal, and how it ends, with a bound on
     // the whole thing. A terminal is one stream, so a child on a pair has no
     // separate standard error to collect.
-    var result = try shell.child.output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
+    var result = try shell.child().output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
     defer result.deinit(gpa);
 
     // --- README:usage ---

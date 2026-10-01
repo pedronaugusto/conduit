@@ -29,23 +29,30 @@ const win32 = if (is_windows) @import("win32.zig") else struct {};
 const max_program_units = 1024;
 
 /// A shell running on a pseudo-terminal, and the pair it runs on.
-pub const Shell = struct {
-    /// The pair. Read it with `pty.readFile()` and write it with
-    /// `pty.writeFile()`; on POSIX the terminal end is already closed, which
-    /// is what lets a read of the master finish when the shell exits.
-    pty: Pty,
-    /// The shell process.
-    child: Child,
+const ShellState = struct { pty: Pty, child: Child };
 
-    /// Closes the pair and the streams the `Child` owns.
-    ///
-    /// Reap the child first — `child.killWait(io, grace)` or `child.wait(io)`
-    /// — or this leaves a process behind. On Windows closing the pair is
-    /// `ClosePseudoConsole`, which ends a shell that is still running, but
-    /// there is still nobody left to collect how it ended.
+pub const Shell = enum(@Int(.unsigned, @sizeOf(ShellState) * 8)) {
+    _,
+    fn inner(shell: *Shell) *ShellState {
+        return @ptrCast(@alignCast(shell)); // safe: spawnShell initializes inline storage with this size and alignment.
+    }
+    fn init(pair: Pty, process: Child) Shell {
+        var shell: Shell = undefined;
+        shell.inner().* = .{ .pty = pair, .child = process };
+        return shell;
+    }
+    /// Borrows the shell process; it lives until Shell.deinit.
+    pub fn child(shell: *Shell) *Child {
+        return &shell.inner().child;
+    }
+    /// Borrows the pair; it lives until Shell.deinit.
+    pub fn pty(shell: *Shell) *Pty {
+        return &shell.inner().pty;
+    }
+    /// Reap the child first, then close the pair and resources. Idempotent.
     pub fn deinit(shell: *Shell, io: std.Io) void {
-        shell.child.deinit(io);
-        shell.pty.close(io);
+        shell.inner().child.deinit(io);
+        shell.inner().pty.close(io);
     }
 };
 
@@ -60,7 +67,7 @@ pub const Options = struct {
     /// The geometry of the pair.
     size: tty.Size = .{ .rows = 24, .cols = 80 },
     /// What the console on the far side of the pair is asked to do. Windows
-    /// only; `Shell.pty.consoleOptions()` says which of them the system granted.
+    /// only; `Shell.pty().consoleOptions()` says which of them the system granted.
     console: Pty.ConsoleOptions = .{},
     /// The shell's working directory. `null` inherits this process's.
     cwd: ?[]const u8 = null,
@@ -142,7 +149,7 @@ pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShell
 
     if (!is_windows) pty.closeSlave(io);
 
-    return .{ .pty = pty, .child = child };
+    return Shell.init(pty, child);
 }
 
 /// The user's shell, or the one every system is guaranteed to have.
@@ -217,4 +224,8 @@ test "default shell calls retain independent values" {
         first[0] +%= 1;
         try std.testing.expectEqual(second_first, second[0]);
     }
+}
+
+test "Shell exposes no writable child or pair ownership" {
+    try std.testing.expect(@typeInfo(Shell) == .@"enum");
 }

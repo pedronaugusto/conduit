@@ -3123,20 +3123,20 @@ test "spawnShell starts the user's shell on a pair" {
         .size = .{ .rows = 40, .cols = 132 },
     });
     defer shell.deinit(io);
-    defer _ = shell.child.killWait(io, 0) catch {};
-    if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child)});
+    defer _ = shell.child().killWait(io, 0) catch {};
+    if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child().*)});
 
-    try testing.expectEqual(@as(u16, 40), (try shell.pty.size()).rows);
+    try testing.expectEqual(@as(u16, 40), (try shell.pty().size()).rows);
 
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(shell.pty.readFile());
+    try sink.start(shell.pty().readFile());
     trace.print("shell: reading the master", .{});
 
     try sink.expect("hi");
     trace.print("shell: the shell said what it was asked to", .{});
 
-    _ = try shell.child.killWait(io, budget_ms);
+    _ = try shell.child().killWait(io, budget_ms);
     trace.print("shell: reaped", .{});
 }
 
