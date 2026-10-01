@@ -157,19 +157,21 @@ pub const OpenError = error{
     /// also what an operating system too old for `CreatePseudoConsole` to
     /// succeed reports, since the call itself is resolved at load time.
     SystemResources,
-} || tty.UnexpectedError;
+} || tty.UnexpectedError || std.mem.Allocator.Error;
 
 /// Opens a new pseudo-terminal pair with the given geometry.
 ///
 /// On success the caller owns every end and must eventually call `close`, or
 /// `closeSlave` and `closeMaster` separately. On failure nothing is leaked.
+/// Windows geometry uses `allocator` until every end closes; it must outlive
+/// the pair. POSIX uses no allocation.
 ///
 /// On POSIX both ends are close-on-exec, so a pair held open while some
 /// unrelated child is spawned is not handed to it. `Child.spawn` puts the
 /// slave on the child's standard streams with `dup2`, which clears the flag on
 /// the copies, so the child it *is* for still gets its terminal.
-pub fn open(options: OpenOptions) OpenError!Pty {
-    if (is_windows) return openWindows(options);
+pub fn open(allocator: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
+    if (is_windows) return openWindows(allocator, options);
     return openPosix(options);
 }
 
@@ -418,6 +420,7 @@ pub fn closeMaster(pty: *Pty, io: std.Io) void {
 const Geometry = struct {
     mutex: std.atomic.Mutex = .unlocked,
     size: Size,
+    allocator: std.mem.Allocator,
 
     fn lock(geometry: *Geometry) void {
         while (!geometry.mutex.tryLock()) std.Thread.yield() catch {};
@@ -433,7 +436,7 @@ fn releaseGeometry(pty: *Pty) void {
     if (pty.slave != null or pty.read != null or pty.write != null) return;
     const geometry = pty.geometryState() orelse return;
     pty.geometry = null;
-    std.heap.smp_allocator.destroy(geometry);
+    geometry.allocator.destroy(geometry);
 }
 
 //======================================================================
@@ -541,10 +544,10 @@ extern "c" fn ptsname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 /// enough for a repaint of a window far larger than anyone runs.
 const pipe_bytes: win32.DWORD = 256 * 1024;
 
-fn openWindows(options: OpenOptions) OpenError!Pty {
-    const remembered = std.heap.smp_allocator.create(Geometry) catch return error.SystemResources;
-    errdefer std.heap.smp_allocator.destroy(remembered);
-    remembered.* = .{ .size = options.size() };
+fn openWindows(allocator: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
+    const remembered = try allocator.create(Geometry);
+    errdefer allocator.destroy(remembered);
+    remembered.* = .{ .size = options.size(), .allocator = allocator };
     // Two pipes. Each has an end for the console and an end for this program,
     // and neither end is inheritable -- `null` security attributes is what
     // says so -- which is the Windows counterpart of the close-on-exec the
@@ -685,7 +688,7 @@ test "open gives a pair at the requested size, and resize changes it" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
     defer pty.close(io);
     // Registered after the close, so it runs before it: the reader is stopped
     // before the file it reads is closed (see `closeMaster`), and `close`
@@ -710,7 +713,7 @@ test "close is idempotent and correct after closing one end" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var pty = try Pty.open(.{});
+    var pty = try Pty.open(std.testing.allocator, .{});
     // The master ends go first here, which is what makes the terminal end safe
     // to close on Windows with nothing reading: see `close`.
     pty.closeMaster(io);
@@ -725,7 +728,7 @@ test "close is idempotent and correct after closing one end" {
 test "both ends of a POSIX pair are the same terminal" {
     if (is_windows) return error.SkipZigTest;
     const io = testing.io;
-    var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
     defer pty.close(io);
 
     try testing.expect(tty.isTty(pty.read.?));
@@ -748,7 +751,7 @@ test "a pair opened with a pixel size reports it at both ends" {
     // What a terminal embedding a program passes through: the cells it gave
     // the program, and those cells in pixels, so a program that sizes
     // pictures by the cell does not have to guess.
-    var pty = try Pty.open(.{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 });
     defer pty.close(io);
     const want: Size = .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 };
     try testing.expectEqual(want, try pty.size());
@@ -758,7 +761,7 @@ test "a pair opened with a pixel size reports it at both ends" {
 test "the terminal end of a POSIX pair has a name under /dev" {
     if (is_windows) return error.SkipZigTest;
     const io = testing.io;
-    var pty = try Pty.open(.{});
+    var pty = try Pty.open(std.testing.allocator, .{});
     defer pty.close(io);
 
     var buffer: [std.fs.max_path_bytes]u8 = undefined;
@@ -769,7 +772,7 @@ test "the terminal end of a POSIX pair has a name under /dev" {
 test "raw mode round-trips on the terminal end of a POSIX pair" {
     if (is_windows) return error.SkipZigTest;
     const io = testing.io;
-    var pty = try Pty.open(.{});
+    var pty = try Pty.open(std.testing.allocator, .{});
     defer pty.close(io);
 
     const before = try posix.tcgetattr(pty.slave.?);
@@ -801,7 +804,7 @@ test "both ends of a POSIX pair are close-on-exec" {
     // gone.
     if (is_windows) return error.SkipZigTest;
     const io = testing.io;
-    var pty = try Pty.open(.{});
+    var pty = try Pty.open(std.testing.allocator, .{});
     defer pty.close(io);
 
     const FD_CLOEXEC: c_int = c.FD_CLOEXEC;
@@ -818,7 +821,7 @@ test "a pseudoconsole is opened with the console options this system will take" 
     // All three asked for. `passthrough` needs Windows 11 22H2 and the others
     // are older, so what comes back depends on the machine — but it is always
     // a subset of the ask, and the open never fails for want of a flag.
-    var pty = try Pty.open(.{
+    var pty = try Pty.open(std.testing.allocator, .{
         .rows = 24,
         .cols = 80,
         .console = .{ .win32_input = true, .passthrough = true, .resize_quirk = true },
@@ -834,7 +837,7 @@ test "a pseudoconsole is opened with the console options this system will take" 
 test "a pair asked for no console options gets none" {
     if (!is_windows) return error.SkipZigTest;
     const io = testing.io;
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     try testing.expectEqual(ConsoleOptions{}, pty.console);
 }
@@ -845,7 +848,7 @@ test "restoring a terminal nobody reads does not wait for its output" {
     // TCSAFLUSH does, would never return.
     if (is_windows) return error.SkipZigTest;
     const io = testing.io;
-    var pty = try Pty.open(.{});
+    var pty = try Pty.open(std.testing.allocator, .{});
     defer pty.close(io);
     const saved = try tty.rawMode(pty.slave.?);
     // Not blocking, so filling the pair cannot hang the test either.
@@ -877,7 +880,7 @@ test "Windows size and stream borrows stay coherent while another task resizes" 
     defer watchdog.deinit(io);
     const a: Size = .{ .rows = 24, .cols = 80, .x_pixel = 640, .y_pixel = 480 };
     const b: Size = .{ .rows = 30, .cols = 100, .x_pixel = 1000, .y_pixel = 600 };
-    var pty = try Pty.open(.{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
     defer pty.close(io);
     var drain: Drain = .{};
     try drain.start(io, pty.readFile());
@@ -901,4 +904,23 @@ test "Windows size and stream borrows stay coherent while another task resizes" 
     }
     try resizing.await(io);
     try testing.expectEqual(a, try pty.size());
+}
+
+test "open uses the caller allocator until every end closes" {
+    var allocator: testing.FailingAllocator = .init(testing.allocator, .{});
+    var pty = try Pty.open(allocator.allocator(), .{});
+    defer pty.close(testing.io);
+    try testing.expectEqual(@as(usize, if (is_windows) 1 else 0), allocator.allocations);
+    pty.closeSlave(testing.io);
+    try testing.expectEqual(@as(usize, 0), allocator.deallocations);
+    pty.closeMaster(testing.io);
+    try testing.expectEqual(allocator.allocations, allocator.deallocations);
+    pty.close(testing.io);
+    try testing.expectEqual(allocator.allocations, allocator.deallocations);
+}
+
+test "open reports caller allocation refusal before opening a Windows pair" {
+    if (!is_windows) return error.SkipZigTest;
+    var allocator: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    try testing.expectError(error.OutOfMemory, Pty.open(allocator.allocator(), .{}));
 }

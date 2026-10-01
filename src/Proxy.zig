@@ -302,7 +302,7 @@ test "an input error interrupts a silent output pump" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var terminal = try Pty.open(.{});
+    var terminal = try Pty.open(std.testing.allocator, .{});
     defer terminal.close(io);
     var input_buffer: [32]u8 = undefined;
     var output_buffer: [32]u8 = undefined;
@@ -357,13 +357,13 @@ test "bytes written to one terminal reach the program on the other, and back" {
 
     // The terminal the "user" is at. Raw, so nothing it is sent is echoed
     // back and confused with the child's output.
-    var user = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
     _ = try tty.rawMode(user.slave.?);
 
     // The terminal the child runs on, also raw: `cat` is doing the echoing
     // here, and the terminal doing it too would double every line.
-    var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
     _ = try tty.rawMode(terminal.slave.?);
 
@@ -408,11 +408,11 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
 
     // The user's terminal, raw: that is what turns Ctrl-C into a byte instead
     // of a signal for this process, which is the whole claim being tested.
-    var user = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
     _ = try tty.rawMode(user.slave.?);
 
-    var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -458,10 +458,10 @@ test "the window size is forwarded onto the pair" {
 
     // Two pairs again: one stands in for the program's own terminal, whose
     // size the forwarder reads, and one is the child's.
-    var user = try Pty.open(.{ .rows = 11, .cols = 37 });
+    var user = try Pty.open(std.testing.allocator, .{ .rows = 11, .cols = 37 });
     defer user.close(io);
 
-    var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
     var input_buffer: [64]u8 = undefined;

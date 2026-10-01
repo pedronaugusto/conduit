@@ -97,7 +97,7 @@ pub const SpawnShellError = Pty.OpenError || Child.SpawnError || environ.Inherit
 /// thing this function exists to absorb.
 ///
 /// On success the caller owns the `Shell` and must reap the child and call
-/// `Shell.deinit`.
+/// `Shell.deinit`. On Windows the allocator must outlive the Shell.
 pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {
     var owned_program: ?[]u8 = null;
     defer if (owned_program) |program| allocator.free(program);
@@ -122,7 +122,7 @@ pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShell
         break :map &inherited.?;
     };
 
-    var pty: Pty = try .open(.{
+    var pty: Pty = try .open(allocator, .{
         .rows = options.size.rows,
         .cols = options.size.cols,
         .x_pixel = options.size.x_pixel,

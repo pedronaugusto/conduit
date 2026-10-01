@@ -59,7 +59,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 
 | | |
 |---|---|
-| `Pty.open(options)` | A new pair. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
+| `Pty.open(allocator, options)` | A new pair. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
 | `pty.read`, `pty.write` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
 | `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, as `std.Io.File`s sharing the handle rather than duplicating it. |
 | `pty.slave` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
@@ -562,9 +562,10 @@ buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
 lists with the allocator it is given until `deinit`, from spawns on any
 thread, so that one must be thread-safe. Every heap allocation made by the
-package uses an allocator the caller passed except for Windows PTY geometry.
-Windows PTY geometry uses `std.heap.smp_allocator`, kept until every end of
-the pair closes; `Pty.open` has no allocator parameter. Other operations use
+package uses an allocator the caller passed. `Pty.open` retains its allocator
+for Windows geometry until every end of the pair closes; POSIX uses no
+allocation. `spawnShell` forwards its allocator, which must outlive the
+Shell on Windows. Other operations use
 fixed or caller supplied buffers, `Expect` included.
 
 **Thread safety.** One task at a time per `Child` or `Pty`, except `Pty.resize`,

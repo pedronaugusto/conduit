@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Pty.open` takes a caller allocator retained for Windows geometry until every end closes; `spawnShell` forwards its allocator.
+
 - The root API documentation describes the stable Darwin process identity and the audit version checked at delivery.
 
 - `Child.output` reads a published result before opening an exit watch, draining an already reaped child without watching its retired process number.

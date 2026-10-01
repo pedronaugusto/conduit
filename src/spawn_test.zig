@@ -1178,7 +1178,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     //
     // On a pair rather than on pipes, because a shell with no controlling
     // terminal declines to turn job control on at all.
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -1225,7 +1225,7 @@ test "a child that has never forked is stopped by its signal alone, without the 
     // it goes through `posix_spawn` (unless the build says always fork), on
     // a pair through the fork, and both ways with and without a group.
     for ([_]bool{ false, true }) |on_pty| for ([_]bool{ false, true }) |detach| {
-        var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         var child = try Child.spawn(io, gpa, .{
             .argv = &.{ "/bin/sleep", "100" },
@@ -1264,7 +1264,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
     for ([_]bool{ false, true }) |on_pty| {
-        var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
         defer tree.testing_hook.hold_ms = 0;
@@ -2217,7 +2217,7 @@ test "what a child writes to its terminal reaches the master" {
     // the master itself while it does.
 
     trace.print("master: opening a pair", .{});
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2253,7 +2253,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // anything in the first place.
     if (!is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{
+    var pty = try Pty.open(std.testing.allocator, .{
         .rows = 24,
         .cols = 80,
         .console = .{ .passthrough = true },
@@ -2301,7 +2301,7 @@ test "a child on a pty sees a terminal" {
     // construction.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2325,7 +2325,7 @@ test "a child on a pty reports the window size it was given, and the one it is r
     // print; that a pseudoconsole takes the new size is `Pty`'s own test.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2361,7 +2361,7 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
     // has a Windows counterpart.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     // `exec` so the shell is replaced and the signal has one process to reach.
@@ -2389,7 +2389,7 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2417,7 +2417,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     // generated signals to, which is not a thing a console has.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2437,7 +2437,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     // a child on a pair without `detach` sees a terminal that has no
     // foreground group, so nothing typed at the master will ever become a
     // signal for it.
-    var quiet = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var quiet = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer quiet.close(io);
 
     var attached = try Child.spawn(io, gpa, .{
@@ -2464,7 +2464,7 @@ test "closing the master hangs the terminal up, and a detached child gets SIGHUP
     // signalling it, and that is `Pty.closeSlave`, not this.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2495,7 +2495,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     // a pseudoconsole is not a file.
     if (is_windows) return error.SkipZigTest;
 
-    var sink_pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var sink_pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer sink_pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2563,7 +2563,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // `Pty.slaveFile` is a compile error there and says so.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     // Standard output is the terminal; standard error is a pipe. The child
@@ -3908,7 +3908,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
 
-    var pty = try Pty.open(.{ .rows = 20, .cols = 70 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 20, .cols = 70 });
     defer pty.close(io);
     const options: Child.SpawnOptions = .{
         // A terminal that is its controlling one (only such a process opens
