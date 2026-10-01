@@ -77,7 +77,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // The descriptors the child will have as 0, 1 and 2, and the ones the
     // parent keeps. `plan` opens nothing the caller owns.
     var plan: Plan = try .init(io, options, switch (options.stdio) {
-        .pty => |pty| pty.slave.?,
+        .pty => |pty| pty.slaveHandle().?,
         else => null,
     });
     errdefer plan.closeAll(io);
@@ -353,7 +353,7 @@ fn childMain(
         switch (options.stdio) {
             .pty => |pty| {
                 if (c.setsid() < 0) bail(report, .detach);
-                if (c.ioctl(pty.slave.?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
+                if (c.ioctl(pty.slaveHandle().?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
                     bail(report, .controlling_terminal);
                 }
             },
@@ -382,7 +382,7 @@ fn childMain(
         // originally opened there has already been replaced, and its old
         // number can no longer authorize closing the new descriptor.
         .pty => |pty| {
-            for ([_]posix.fd_t{ pty.read.?, pty.slave.? }) |fd| {
+            for ([_]posix.fd_t{ pty.readHandle().?, pty.slaveHandle().? }) |fd| {
                 if (fd > 2) _ = c.close(fd);
             }
         },

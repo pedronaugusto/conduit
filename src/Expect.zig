@@ -50,7 +50,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Pty = @import("Pty.zig");
+const Pty = @import("Pty.zig").Pty;
 const handles = @import("handles.zig");
 
 const is_windows = builtin.os.tag == .windows;
@@ -654,7 +654,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         pty.closeSlave(io);
 
         var buffer: [1024]u8 = undefined;
-        var expect: Expect = .init(child.pty.?, &buffer);
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
         try expect.start(io);
         defer expect.deinit(io);
 
@@ -701,7 +701,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         if (!is_windows) pty.closeSlave(io);
 
         var buffer: [1024]u8 = undefined;
-        var expect: Expect = .init(child.pty.?, &buffer);
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
         try expect.start(io);
         defer expect.deinit(io);
         _ = try expect.until(io, "ready", budget_ms);
@@ -842,7 +842,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         pty.closeSlave(io);
 
         var buffer: [64]u8 = undefined;
-        var expect: Expect = .init(child.pty.?, &buffer);
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
         try expect.start(io);
         defer expect.deinit(io);
 
@@ -877,7 +877,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         pty.closeSlave(io);
 
         var buffer: [256]u8 = undefined;
-        var expect: Expect = .init(child.pty.?, &buffer);
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
         try expect.start(io);
         defer expect.deinit(io);
 

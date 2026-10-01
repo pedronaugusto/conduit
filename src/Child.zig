@@ -39,7 +39,7 @@ const Allocator = std.mem.Allocator;
 
 const Expect = @import("Expect.zig").Expect;
 const InputWriter = @import("InputWriter.zig").InputWriter;
-const Pty = @import("Pty.zig");
+const Pty = @import("Pty.zig").Pty;
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
 const is_windows = builtin.os.tag == .windows;

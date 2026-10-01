@@ -132,7 +132,7 @@ pub fn spawn(
     var terminal_name: [std.fs.max_path_bytes:0]u8 = undefined;
     var terminal_slot: ?posix.fd_t = null;
     if (session) {
-        const slave = options.stdio.pty.slave.?;
+        const slave = options.stdio.pty.slaveHandle().?;
         if (ttyname_r(slave, &terminal_name, terminal_name.len) != 0) return null;
     }
 
@@ -142,7 +142,7 @@ pub fn spawn(
         // way that means the same thing on both systems.
         .close => return null,
         .place => |fd| {
-            if (session and fd == options.stdio.pty.slave.?) {
+            if (session and fd == options.stdio.pty.slaveHandle().?) {
                 if (terminal_slot) |first| {
                     if (posix_spawn_file_actions_adddup2(&actions, first, @intCast(slot)) != 0) return error.SystemResources;
                 } else {

@@ -15,7 +15,7 @@ const Term = Child.Term;
 stdin: ?std.Io.File = null,
 stdout: ?std.Io.File = null,
 stderr: ?std.Io.File = null,
-pty: ?@import("Pty.zig").Master = null,
+pty: ?@import("Pty.zig").Pty.Master = null,
 allocator: std.mem.Allocator,
 process_id: Child.Id,
 /// The operating system's name for the child.

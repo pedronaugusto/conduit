@@ -164,7 +164,7 @@ fn describeChild(
 ) SpawnError!void {
     switch (options.stdio) {
         .pty => |pty| {
-            const console = pty.slave.?;
+            const console = pty.slaveHandle().?;
             var list = try AttributeList.init(arena, 1);
             try list.setPseudoConsole(console);
             if (trace.enabled()) {

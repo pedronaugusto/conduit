@@ -48,7 +48,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Pty = @import("Pty.zig");
+const Pty = @import("Pty.zig").Pty;
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
@@ -61,7 +61,7 @@ const is_windows = builtin.os.tag == .windows;
 /// smaller than a terminal's line is merely slower, not wrong.
 pub const Options = struct {
     /// The master end of the pair the child is running on. `Pty.master` or
-    /// `Child.pty` is where this comes from.
+    /// `Child.terminalMaster()` is where this comes from.
     master: Pty.Master,
     /// Where the child's input comes from, usually the program's own standard
     /// input in raw mode.
@@ -359,13 +359,13 @@ test "bytes written to one terminal reach the program on the other, and back" {
     // back and confused with the child's output.
     var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
-    _ = try tty.rawMode(user.slave.?);
+    _ = try tty.rawMode(user.slaveHandle().?);
 
     // The terminal the child runs on, also raw: `cat` is doing the echoing
     // here, and the terminal doing it too would double every line.
     var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
-    _ = try tty.rawMode(terminal.slave.?);
+    _ = try tty.rawMode(terminal.slaveHandle().?);
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "cat" },
@@ -410,7 +410,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     // of a signal for this process, which is the whole claim being tested.
     var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
-    _ = try tty.rawMode(user.slave.?);
+    _ = try tty.rawMode(user.slaveHandle().?);
 
     var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
@@ -476,7 +476,7 @@ test "the window size is forwarded onto the pair" {
         .output_buffer = &output_buffer,
         .resize = .{
             .pty = &terminal,
-            .source = user.slave.?,
+            .source = user.slaveHandle().?,
             .ticket = &ticket,
             .interval_ms = 1000,
             .tick_ms = 1,

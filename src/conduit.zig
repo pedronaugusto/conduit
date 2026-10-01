@@ -41,8 +41,9 @@
 //! systems themselves disagree:
 //!
 //! * **The master is two handles.** POSIX gives one bidirectional descriptor;
-//!   ConPTY gives two pipes. So `Pty` has `read` and `write` on both — the
-//!   same descriptor twice on POSIX — and no caller has to know which it holds.
+//!   ConPTY gives two pipes. `Pty.master()` borrows `read` and `write` on both
+//!   — the same descriptor twice on POSIX — and no caller has to know which
+//!   it holds.
 //! * **`Pty.closeSlave` is wanted at different moments.** On POSIX, right
 //!   after `Child.spawn`, or a read of the master never finishes. On Windows
 //!   it is `ClosePseudoConsole`, which ends the child, so it is called when the
@@ -97,7 +98,7 @@ comptime {
 }
 
 /// A pseudo-terminal pair.
-pub const Pty = @import("Pty.zig");
+pub const Pty = @import("Pty.zig").Pty;
 /// A child process on a pseudo-terminal, on pipes, or on inherited streams.
 pub const Child = @import("Child.zig").Child;
 /// Bounded input, queued without waiting for a child to read, on its own task.

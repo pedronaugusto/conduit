@@ -2270,7 +2270,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // host does not model -- the cursor shape is the one people notice -- is
     // simply not there. That is the documented behaviour and not a failure, so
     // the test says which machine it is on and stops.
-    if (!pty.console.passthrough) {
+    if (!pty.consoleOptions().passthrough) {
         std.debug.print(
             "\nthis Windows did not grant PSEUDOCONSOLE_PASSTHROUGH_MODE; skipping\n",
             .{},
@@ -2434,7 +2434,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
 
     // `exec`, so the group the shell made is now the one `sleep` is in, and
     // the child's process id is that group's id.
-    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.read.?));
+    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.readHandle().?));
 
     // The other half of the claim, and the reason this is worth asking at all:
     // a child on a pair without `detach` sees a terminal that has no
@@ -2454,7 +2454,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
 
     try testing.expectError(
         error.NoForegroundGroup,
-        conduit.foregroundGroup(quiet.read.?),
+        conduit.foregroundGroup(quiet.readHandle().?),
     );
 }
 
@@ -3939,7 +3939,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     // A session and a group of its own, and the terminal's foreground group.
     try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
     try testing.expectEqual(State.get(&child).id, getsid(State.get(&child).id));
-    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.read.?));
+    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.readHandle().?));
 
     // Ended, and what it started with it.
     _ = try child.killWait(io, 0);
@@ -4236,9 +4236,7 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     defer pair.close(io);
     var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
     defer stdin.restore();
-    _ = c.close(pair.read.?);
-    pair.read = 0;
-    pair.write = 0;
+    @import("Pty.zig").placeMasterForTest(&pair, 0);
     // Close the temporary master before restoring the runner's stdin,
     // including on a failed spawn or assertion.
     defer pair.closeMaster(io);

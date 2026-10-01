@@ -11,7 +11,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Child = @import("Child.zig").Child;
-const Pty = @import("Pty.zig");
+const Pty = @import("Pty.zig").Pty;
 const environ = @import("environ.zig");
 const tty = @import("conduit.tty");
 
@@ -60,7 +60,7 @@ pub const Options = struct {
     /// The geometry of the pair.
     size: tty.Size = .{ .rows = 24, .cols = 80 },
     /// What the console on the far side of the pair is asked to do. Windows
-    /// only; `Shell.pty.console` says which of them the system granted.
+    /// only; `Shell.pty.consoleOptions()` says which of them the system granted.
     console: Pty.ConsoleOptions = .{},
     /// The shell's working directory. `null` inherits this process's.
     cwd: ?[]const u8 = null,
