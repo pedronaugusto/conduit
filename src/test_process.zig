@@ -132,12 +132,9 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
     const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{id});
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
     var byte: [1]u8 = undefined;
-    if ((std.Io.File.stdin().readStreaming(init.io, &.{&byte}) catch |err| switch (err) {
+    _ = std.Io.File.stdin().readStreaming(init.io, &.{&byte}) catch |err| switch (err) {
         error.EndOfStream => 0,
         else => return err,
-    }) == 1) {
-        try std.Io.File.stdout().writeStreamingAll(init.io, "output\n");
-        try init.io.sleep(.fromSeconds(30), .awake);
-    }
+    };
     if (args.len > 2 and std.mem.eql(u8, args[2], "--exit-7")) std.process.exit(7);
 }

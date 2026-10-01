@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `SpawnOptions.descendants` chooses one lifecycle policy on every platform: the default `.survive` leaves descendants alone after normal, reaped completion, including Windows daemons; `.contain` ends survivors through job kill-on-close or a private POSIX group or Linux cgroup. Timeout, output error and explicit termination retain tree cleanup.
+- Native daemon tests prove default survival, containment through every reap path, and termination on timeout, kill, killWait and output error; Windows runs them on the hosted runner.
+
 - Force delivery retains group cleanup through the final held reap, catching a late fork before identity retirement; Reaper stop spends one grace on its owned tree.
 
 - Deadline expiry tests use controlled clock readings instead of elapsed wall time.

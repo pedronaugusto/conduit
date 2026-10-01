@@ -17,6 +17,11 @@ stdout: ?std.Io.File = null,
 stderr: ?std.Io.File = null,
 pty: ?@import("Pty.zig").Pty.Master = null,
 allocator: std.mem.Allocator,
+/// The spawn's one descendant lifecycle policy.
+descendants: Child.Descendants = .survive,
+/// A termination request owns tree cleanup even if the child catches it and
+/// exits normally. Protected by identity alongside signal delivery and reap.
+end_descendants: bool = false,
 process_id: Child.Id,
 /// The operating system's name for the child.
 ///
@@ -38,7 +43,7 @@ handles_open: if (is_windows) bool else void,
 ///
 /// This is what makes `kill` and `killWait` reach the whole tree there, the
 /// way a signal to a process group does on POSIX. `null` once `deinit` has
-/// closed it, and closing it ends whatever is still in it — see `deinit`.
+/// closed it; the lifecycle policy determines whether closing it ends members.
 job: if (is_windows) ?windows.HANDLE else void,
 /// Windows only: the completion port the job posts to, which is how
 /// `waitTree` learns that the job has emptied. Closed alongside `job`.

@@ -54,6 +54,7 @@ const Fixture = struct {
         var options: Child.SpawnOptions = .{
             .argv = &.{ program, "--daemon", argument },
             .cwd = cwd,
+            .job_limits = if (windows) .{ .active_processes = 4 } else .{},
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         };
         if (policy == .contain) options.descendants = .contain;
@@ -94,16 +95,41 @@ test "normal reap and deinit leave a detached daemon alive by default" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var fixture = try Fixture.start(.survive, "--escape");
-    defer fixture.deinit();
-    fixture.child.closeStdin(io);
-    const term = (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
-    try std.testing.expect(Child.succeeded(term));
-    fixture.child.deinit(io);
-    try std.testing.expect(fixture.daemon.alive());
-    // Observe beyond the asynchronous termination boundary as well.
-    try io.sleep(.fromMilliseconds(50), .awake);
-    try std.testing.expect(fixture.daemon.alive());
+    inline for (.{ "wait", "tryWait", "output", "Reaper", "exit-7" }) |method| {
+        var fixture = try Fixture.start(.survive, if (comptime std.mem.eql(u8, method, "exit-7")) "--exit-7" else "--escape");
+        defer fixture.deinit();
+        fixture.child.closeStdin(io);
+        const term = if (comptime std.mem.eql(u8, method, "tryWait")) term: {
+            const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+            while (deadline.remainingMs(io) > 0) {
+                if (try fixture.child.tryWait()) |term| break :term term;
+                try io.sleep(.fromMilliseconds(2), .awake);
+            }
+            return error.TestChildDidNotExit;
+        } else if (comptime std.mem.eql(u8, method, "output")) term: {
+            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            defer output.deinit(gpa);
+            break :term output.term();
+        } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
+            var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io);
+            break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        try std.testing.expectEqual(Child.Term{ .exited = if (comptime std.mem.eql(u8, method, "exit-7")) 7 else 0 }, term);
+        if (windows) {
+            var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = undefined;
+            try std.testing.expect(win32.QueryInformationJobObject(State.get(&fixture.child).job.?, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits)), null) != .FALSE);
+            try std.testing.expectEqual(@as(u32, 4), limits.BasicLimitInformation.ActiveProcessLimit);
+            try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0);
+            try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE == 0);
+        }
+        fixture.child.deinit(io);
+        try std.testing.expect(fixture.daemon.alive());
+        // Observe beyond the asynchronous termination boundary as well.
+        try io.sleep(.fromMilliseconds(50), .awake);
+        try std.testing.expect(fixture.daemon.alive());
+    }
 }
 
 test "containment ends a daemon after normal completion through every reap" {

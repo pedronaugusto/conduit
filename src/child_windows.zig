@@ -122,6 +122,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
 
     state.* = .{
         .allocator = state.allocator,
+        .descendants = options.descendants,
         .process_id = information.dwProcessId,
         .id = information.hProcess,
         .thread = information.hThread,

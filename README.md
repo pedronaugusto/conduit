@@ -124,7 +124,32 @@ child itself exited with, including the system's control-exit status.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`, `fd_policy`, `job_limits`, `parent_death_signal`.
+`resource_limits`, `fd_policy`, `job_limits`, `parent_death_signal`, `descendants`.
+
+`descendants = .survive` is the default on every platform. Once the child
+exits normally and is reaped, `deinit` leaves what it started alone. This
+includes a nonzero exit status: it is still a normal exit. A git helper can
+start a credential-cache daemon, return, and release its `Child` while the
+daemon keeps serving later invocations. Windows clears only the job's
+kill-on-close flag at the reap, retaining its resource limits; if that call
+fails, the wait reports the error and can be retried. Reap before deinit.
+
+Set `descendants = .contain` when the descendants belong to the child's
+lifetime. Windows keeps job kill-on-close, ending survivors at deinit. POSIX
+makes a private process group even with `detach = false`, and ends that group
+or the Linux cgroup before the final reap releases the child's identity.
+Every wait path, including `output` and `Reaper`, follows the same policy.
+A private group isolates the child from the parent's terminal signals, as
+`detach` does. A descendant that leaves its group and becomes orphaned is
+outside group containment; a Linux cgroup still holds it where one is
+available. Use this policy for cooperative subprocess trees, within the
+platform's reach described below.
+
+Timeouts in `output`, output errors, `kill` and `killWait` still end the tree
+in either mode, within that same reach. `waitTimeout` remains an observation:
+a null answer does not end the child. Explicit `Reaper.end_tree` still ends
+survivors. A signal request followed by a normal exit does not release the
+survivors as though the child had completed on its own.
 
 `stdio` is `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` —
@@ -436,10 +461,9 @@ starts after the close reads that file instead.
 
 **`kill` and `killWait` reach what the child started.** On Windows every child
 goes in a job object of its own before it runs — started suspended, assigned,
-resumed, so nothing is ever outside it — and `.kill` ends the job. The job ends
-what is left in it when its last handle closes, so `deinit` there also ends
-what the child started and left behind. A child that cannot be put in its job
-is `error.JobAssignmentFailed`, not a child whose tree `kill` would miss.
+resumed, so nothing is ever outside it — and `.kill` ends the job. A child
+that cannot be put in its job is `error.JobAssignmentFailed`, not a child
+whose tree `kill` would miss.
 
 A container the system keeps can also be asked about, which is `waitTree`: the
 job reports to a completion port from before the child is assigned to it, and

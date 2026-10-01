@@ -263,7 +263,9 @@ pub const Child = enum(usize) {
         /// a pty on Windows the useful setting is therefore `false`, which is what
         /// `spawnShell` picks there.
         detach: bool = false,
-        /// What becomes of descendants after a normal, reaped exit.
+        /// Whether descendants may outlive a normal, reaped exit. Independent
+        /// of `detach`: `.contain` also makes a private group on POSIX.
+        /// Timeout, output error and explicit termination still end the tree.
         descendants: Descendants = .survive,
         /// Send the child's standard error to this file, whatever `stdio` says
         /// about the other two streams. The file is borrowed: `deinit` does not
@@ -319,7 +321,17 @@ pub const Child = enum(usize) {
         parent_death_signal: ?Signal = null,
     };
 
-    pub const Descendants = enum { survive, contain };
+    /// One policy for the descendants a child starts, on every platform.
+    pub const Descendants = enum {
+        /// Normal exit and deinit leave descendants running. The default, for
+        /// helpers that deliberately start a daemon. Reap before deinit.
+        survive,
+        /// End descendants on normal completion too. Windows retains job
+        /// kill-on-close until deinit; POSIX ends the cgroup or private process
+        /// group before the final reap releases its identity. A process that
+        /// leaves that group is outside containment unless a cgroup holds it.
+        contain,
+    };
 
     /// What the job object holding the child and its tree may use. Windows only.
     ///
@@ -594,14 +606,18 @@ pub const Child = enum(usize) {
     pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
         if (options.argv.len == 0) return error.InvalidArgv;
         if (options.parent_death_signal != null and builtin.os.tag != .linux) return error.Unsupported;
+        var configured = options;
+        // A private POSIX group belongs to the held child until the reap. It
+        // must never be the caller's group, even when detach was not requested.
+        if (!is_windows and options.descendants == .contain) configured.detach = true;
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
         state.allocator = allocator;
-        if (is_windows) return @import("child_windows.zig").spawn(io, allocator, options, state);
+        if (is_windows) return @import("child_windows.zig").spawn(io, allocator, configured, state);
         // A job object is what these bound, and POSIX has no such container.
         // `resource_limits` is the option that exists here.
         if (options.job_limits.any()) return error.Unsupported;
-        return @import("child_posix.zig").spawn(io, allocator, options, state);
+        return @import("child_posix.zig").spawn(io, allocator, configured, state);
     }
 
     /// Closes the streams this `Child` owns: the pipes `spawn` created, if any,
@@ -610,21 +626,15 @@ pub const Child = enum(usize) {
     ///
     /// Streams the caller supplied are left alone.
     ///
-    /// **On Windows this ends whatever is left of the child's tree.** The job is
-    /// created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so letting go of the
-    /// `Child` lets go of everything the child started — including anything that
-    /// outlived the child itself. That is a difference from POSIX, where `deinit`
-    /// signals nothing and a grandchild of a reaped child keeps running: Windows
-    /// has a container for a tree and POSIX has only an address to send signals
-    /// to. A program that wants a grandchild to outlive it on Windows has to
-    /// arrange that itself; this package will not leave one behind by accident.
-    /// `waitTree` is how to watch that happen, and it has to be asked before this:
-    /// the job is what reports, and this is what closes it.
+    /// A normal, reaped exit leaves descendants alone by default. With
+    /// `descendants = .contain`, Windows closes a job with kill-on-close and
+    /// POSIX has ended the private group or cgroup before reaping. Timeout,
+    /// output error and explicit termination end the tree in either policy.
+    /// A Windows child dropped before reaping retains kill-on-close.
+    /// `waitTree` must be asked before deinit closes the job and its port.
     ///
-    /// On Linux it removes the cgroup the child was put in, if it was put in one.
-    /// It signals nothing there either: a cgroup whose processes outlive the
-    /// child cannot be removed while they run, and is left to them and removed
-    /// once they have ended, by a later spawn or `deinit` in this process.
+    /// Linux cgroups with surviving members are left until they empty, then
+    /// removed by a later spawn or deinit. No survivor is signalled for that.
     ///
     /// Releases the lifecycle allocation. Only deinit, processId, result and kill
     /// may be called afterwards. Safe to call more than once and before it has been
@@ -638,6 +648,8 @@ pub const Child = enum(usize) {
             allocator.destroy(state);
             child.* = @enumFromInt(0);
         }
+        if (!is_windows and state.descendants == .contain and !state.reaped.load(.acquire))
+            child.kill(.kill) catch {};
         if (State.get(child).stdin) |f| f.close(io);
         if (State.get(child).stdout) |f| f.close(io);
         if (State.get(child).stderr) |f| f.close(io);
@@ -1028,10 +1040,10 @@ pub const Child = enum(usize) {
             return term;
         }
 
-        if (State.get(child).force_tree) {
-            // KILL can meet a fork still inside the kernel. Once waitid observes
-            // the root ended, that fork has finished and its group is still
-            // ours. Send the final force before waitpid releases the identity.
+        if (State.get(child).force_tree or State.get(child).end_descendants or State.get(child).descendants == .contain) {
+            // Normal containment and every termination request share this
+            // final force. Once waitid observes the root ended, its last fork
+            // has finished and its group id is still ours until waitpid.
             switch (wait_for.endedUnreaped(State.get(child).id)) {
                 .running => return null,
                 .ended => {
@@ -1200,10 +1212,8 @@ pub const Child = enum(usize) {
     /// the passes above. A child that has a child is walked as described.
     ///
     /// A child that has already been reaped is not signalled, because its name no
-    /// longer belongs to it; that case is not an error. On Windows that also
-    /// means nothing else in its job is ended:
-    /// `killWait` on a child that exited on its own leaves what the child started
-    /// to `deinit`.
+    /// longer belongs to it; that case is not an error. A child already reaped
+    /// on its own leaves descendants to the chosen lifecycle policy.
     ///
     /// This does not wait for the child to exit. It shares an identity claim with
     /// final reaping: no wait can release the pid or close the Windows handles
@@ -1216,6 +1226,7 @@ pub const Child = enum(usize) {
         while (!State.get(child).identity.tryLock()) std.Thread.yield() catch {};
         defer State.get(child).identity.unlock();
         if (child.settled() != null or State.get(child).identity_retired) return;
+        State.get(child).end_descendants = true;
         if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
         if (is_windows) return child.killWindows(signal);
 
@@ -1427,8 +1438,8 @@ pub const Child = enum(usize) {
     /// `false` means the time ran out with something still in the job.
     ///
     /// Ask it before `deinit`. The job and the port it reports on are closed
-    /// there, and closing the job is itself what ends what is left inside it — so
-    /// after `deinit` there is nothing to hear the answer on and this reports what
+    /// there, under the chosen descendant policy. After `deinit` there is
+    /// nothing to hear the answer on and this reports what
     /// it heard while there was.
     ///
     /// A zero `timeout_ms` asks and does not wait, which is how to poll. The
@@ -1752,6 +1763,14 @@ pub const Child = enum(usize) {
     fn abandon(child: *Child, io: std.Io) void {
         const protection = io.swapCancelProtection(.blocked);
         defer _ = io.swapCancelProtection(protection);
+        // The run may have failed while draining after normal publication.
+        // The job or cgroup still belongs to us even then; a retired process
+        // or group number never becomes signalling authority again.
+        if (State.optional(child)) |state| {
+            if (is_windows) {
+                if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
+            } else if (state.cgroup.active()) _ = state.cgroup.kill();
+        }
         _ = child.killWait(io, 0) catch {};
     }
 
@@ -2052,12 +2071,11 @@ pub const Child = enum(usize) {
         State.get(child).handles_open = false;
     }
 
-    /// Closes the job, which ends anything still in it. Idempotent.
+    /// Closes the job under the selected lifecycle policy. Idempotent.
     fn closeJob(child: *Child) void {
-        // The port goes after the job, because closing the job is what ends what
-        // is left in it and the job posts that to the port. Nothing reads the
-        // message by then; the order is so that the job is never reporting to a
-        // handle that has gone.
+        // The port goes after the job. A contained job ends its members here
+        // and posts that to the port; the job must not report to a handle that
+        // has gone, even though nothing reads the final message.
         defer if (State.get(child).job_port) |port| {
             State.get(child).job_port = null;
             windows.CloseHandle(port);
@@ -2080,9 +2098,23 @@ pub const Child = enum(usize) {
             .{ .exited = code }
         else
             .{ .unknown = 0 };
+        if (State.get(child).descendants == .survive and !State.get(child).end_descendants and term == .exited)
+            try child.releaseJobSurvivors();
         child.closeHandles();
         child.publish(term);
         return term;
+    }
+
+    /// Release only kill-on-close, retaining every resource limit the caller
+    /// chose. Failure leaves the process handles and status available to retry.
+    fn releaseJobSurvivors(child: *Child) TryWaitError!void {
+        const job = State.get(child).job orelse return;
+        var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = undefined;
+        if (win32.QueryInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits)), null) == .FALSE)
+            return win32.unexpected(windows.GetLastError());
+        limits.BasicLimitInformation.LimitFlags &= ~win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == .FALSE)
+            return win32.unexpected(windows.GetLastError());
     }
 
     fn killWindows(child: *Child, signal: Signal) KillError!void {

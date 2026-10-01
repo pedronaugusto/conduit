@@ -2101,13 +2101,12 @@ test "deinit ends a grandchild the child started and left behind" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    // Windows only: this is the job object's doing. On POSIX `deinit` signals
-    // nothing and a grandchild of a reaped child keeps running, which
-    // `Child.deinit` says out loud.
+    // Windows only: explicit containment retains job kill-on-close.
     if (!is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
+        .descendants = .contain,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);

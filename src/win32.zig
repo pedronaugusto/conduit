@@ -126,6 +126,14 @@ pub extern "kernel32" fn TerminateJobObject(
     uExitCode: UINT,
 ) callconv(.winapi) BOOL;
 
+pub extern "kernel32" fn QueryInformationJobObject(
+    hJob: HANDLE,
+    JobObjectInformationClass: c_int,
+    lpJobObjectInformation: *anyopaque,
+    cbJobObjectInformationLength: DWORD,
+    lpReturnLength: ?*DWORD,
+) callconv(.winapi) BOOL;
+
 pub extern "kernel32" fn SetInformationJobObject(
     hJob: HANDLE,
     JobObjectInformationClass: c_int,

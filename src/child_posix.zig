@@ -235,6 +235,7 @@ fn started(
 ) Child {
     state.* = .{
         .allocator = state.allocator,
+        .descendants = options.descendants,
         .process_id = pid,
         .id = pid,
         .thread = {},
