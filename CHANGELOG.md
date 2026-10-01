@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Adoption spawn handoffs reject registration after success or finish, so a released gate cannot authorize later ownership.
+
 - Breaking: `Orphans.Spawn` keeps its adoption gate claim opaque; callers use `begin`, `started` and `finish`.
 
 - Breaking: `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.

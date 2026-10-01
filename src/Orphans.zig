@@ -404,6 +404,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         orphans: ?*Orphans,
         holding: bool,
         look_after: bool = false,
+        lifetime: enum { ready, registered, closed } = .ready,
     };
 
     pub const Spawn = enum(@Int(.unsigned, @sizeOf(SpawnState) * 8)) {
@@ -426,9 +427,15 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// Puts the child just started on the list of conduit's own. On an error
         /// the child is not on it, and the caller ends and reaps it: a child
         /// conduit cannot tell from an orphan is not one to hand back.
+        /// Unexpected after successful registration or finish; failed registration may retry.
         pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {
-            if (!supported) return;
-            const orphans = spawn.inner().orphans orelse return;
+            const state = spawn.inner();
+            if (state.lifetime != .ready) return error.Unexpected;
+            if (!supported or state.orphans == null) {
+                state.lifetime = .registered;
+                return;
+            }
+            const orphans = state.orphans.?;
             const held = Held.open(pid) catch |err| switch (err) {
                 // An unreaped child of this process has a pidfd to open.
                 error.Gone => return error.Unexpected,
@@ -440,16 +447,22 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 held.close();
                 return error.OutOfMemory;
             };
-            spawn.inner().look_after = true;
+            state.lifetime = .registered;
+            state.look_after = true;
         }
 
         /// Lets a look happen again, and — after a spawn that started a child —
         /// has one: the spawn is an event of conduit's, and a moment to take in
         /// what is waiting. Idempotent.
         pub fn finish(spawn: *Spawn) void {
-            if (!spawn.inner().holding) return;
-            spawn.inner().holding = false;
-            gate.unlockShared();
+            const state = spawn.inner();
+            if (state.lifetime == .closed) return;
+            state.lifetime = .closed;
+            state.orphans = null;
+            if (state.holding) {
+                state.holding = false;
+                gate.unlockShared();
+            }
             if (spawn.inner().look_after) {
                 spawn.inner().look_after = false;
                 event();
@@ -896,4 +909,10 @@ test "orphan records copy group and session from the held adoption" {
 
 test "Orphans Spawn exposes no writable adoption gate ownership" {
     try std.testing.expect(@typeInfo(Orphans.Spawn) == .@"enum");
+}
+
+test "an adoption spawn refuses registration after releasing its gate" {
+    var spawn = Orphans.Spawn.begin();
+    spawn.finish();
+    try std.testing.expectError(error.Unexpected, spawn.started(if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else c.getpid()));
 }
