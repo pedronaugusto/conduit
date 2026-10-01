@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Force delivery retains group cleanup through the final held reap, catching a late fork before identity retirement; Reaper stop spends one grace on its owned tree.
+
 - Deadline expiry tests use controlled clock readings instead of elapsed wall time.
 
 - Adoption spawn handoffs reject registration after success or finish, so a released gate cannot authorize later ownership.

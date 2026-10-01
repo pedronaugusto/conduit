@@ -137,6 +137,16 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
     return signalDescendantsGuarded(root, null, sig, in_group);
 }
 
+/// A final force while the exited, unreaped leader still owns this group id.
+/// Forks of that leader have completed by now; repeated passes cover forks
+/// of surviving members. The caller must retain reap ownership throughout.
+pub fn forceHeldGroup(pgid: posix.pid_t, leader: posix.pid_t) void {
+    for (0..3) |_| {
+        _ = c.kill(-pgid, .KILL);
+        if (members(pgid, leader) == .none) break;
+    }
+}
+
 /// Walk below a held process and prove each candidate's ancestry before
 /// signalling, while the root still holds its original identity. A pid
 /// recycled before capture cannot authorize a signal just by being in the

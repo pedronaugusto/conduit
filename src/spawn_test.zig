@@ -721,6 +721,37 @@ test "Reaper.stop with no grace is the force, now" {
     reaper.stop(io, 0);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
+    const deadline: Deadline = .in(io, budget_ms);
+    while (!sink.ended()) {
+        if (deadline.remainingMs(io) == 0) return error.TestStoppedTreeRetainedPipe;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+test "killWait retires a forced group only after closing its late fork's pipe" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    for (0..16) |_| {
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        var sink: Sink = .{};
+        defer sink.deinit();
+        try sink.start(child.stdoutFile().?);
+        _ = try readPid(&sink);
+        try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.killWait(io, 0));
+        const deadline: Deadline = .in(io, budget_ms);
+        while (!sink.ended()) {
+            if (deadline.remainingMs(io) == 0) return error.TestForcedGroupRetainedPipe;
+            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        }
+    }
 }
 
 test "end_tree: what a child leaves in its group ends with it, before the child is reaped" {

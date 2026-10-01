@@ -1024,6 +1024,21 @@ pub const Child = enum(usize) {
             return term;
         }
 
+        if (State.get(child).force_tree) {
+            // KILL can meet a fork still inside the kernel. Once waitid observes
+            // the root ended, that fork has finished and its group is still
+            // ours. Send the final force before waitpid releases the identity.
+            switch (wait_for.endedUnreaped(State.get(child).id)) {
+                .running => return null,
+                .ended => {
+                    const contained = &State.get(child).cgroup;
+                    if (!contained.active() or !contained.kill())
+                        if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
+                    State.get(child).force_tree = false;
+                },
+                .unknown => {},
+            }
+        }
         var status: c_int = undefined;
         while (true) {
             const rc = c.waitpid(State.get(child).id, &status, c.W.NOHANG);
@@ -1201,6 +1216,7 @@ pub const Child = enum(usize) {
         if (is_windows) return child.killWindows(signal);
 
         const sig = signal.toPosix();
+        if (sig == .KILL) State.get(child).force_tree = true;
         const target: posix.pid_t = if (State.get(child).pgid) |pgid| -pgid else State.get(child).id;
 
         // A child in a cgroup of its own: the cgroup is the tree, whatever the

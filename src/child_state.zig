@@ -88,6 +88,10 @@ reaping: std.atomic.Value(bool) = .init(false),
 /// nonblocking wait, handle closure and publication. Waiting for an exit
 /// never holds it, so a child being waited for can still be killed.
 identity: std.atomic.Mutex = .unlocked,
+/// A force request still owns group cleanup at the final, nonblocking reap.
+/// Protected by identity, so fork completion cannot be followed by retirement
+/// before the group is addressed again.
+force_tree: bool = false,
 /// An identity retired without a term, because something else reaped it.
 /// Guarded by `identity`; once set, no signal uses the child's name again.
 identity_retired: bool = false,

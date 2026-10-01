@@ -307,7 +307,9 @@ and `wait(io)` and `waitTimeout(io, ms)` wait for the answer on an event the
 task sets, so nothing asks the system again and again. `stop(io, grace_ms)`
 asks the child and what it started to end and makes them once the grace has
 passed, and returns at once: the grace is spent on the `Reaper`'s task, so a
-caller holding a lock can stop a child. `deinit(io)` ends the task; on POSIX
+caller holding a lock can stop a child. On POSIX its held reap ends the
+remaining owned group or cgroup before releasing the root identity, spending
+the remainder of that same grace. `deinit(io)` ends the task; on POSIX
 the wait is on the child's `pidfd` or kqueue registration beside a pipe
 `deinit` writes to, so it goes at once whether or not the `std.Io` can cancel
 a system call. The `Child` must outlive it, it must not move once started, and
