@@ -99,9 +99,6 @@ const tree = if (Orphans.supported) @import("tree.zig") else struct {};
 const wait_for = if (Orphans.supported) @import("wait.zig") else struct {};
 const linux = std.os.linux;
 
-/// Whether this system has what `start` needs. Linux: the subreaper attribute
-/// (3.4), `pidfd_open` (5.3), `waitid` on a pidfd (5.4), and the `children`
-/// files in `/proc`; `start` finds out whether the running kernel has them.
 const Implementation = struct {
     /// Every list here. Must be safe to use from more than one thread: spawns and
     /// reaps on any thread add to and look at them.
@@ -131,7 +128,9 @@ const Implementation = struct {
 pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     _,
 
-    /// Linux subreaper support; start checks the running kernel.
+    /// Whether this system has what `start` needs. Linux: the subreaper attribute
+    /// (3.4), `pidfd_open` (5.3), `waitid` on a pidfd (5.4), and the `children`
+    /// files in `/proc`; `start` finds out whether the running kernel has them.
     pub const supported = builtin.os.tag == .linux;
 
     fn inner(orphans: *Orphans) *Implementation {
@@ -537,24 +536,41 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             };
         }
 
+        /// A new reap owner needs a positive kernel answer. The pidfd is
+        /// released on both an unrelated identity and an unknown answer.
+        fn openChild(pid: posix.pid_t) OpenError!Held {
+            const held = try Held.open(pid);
+            errdefer held.close();
+            if (!try held.isChild()) return error.Gone;
+            return held;
+        }
+
         fn close(held: Held) void {
             _ = c.close(held.pidfd);
         }
 
         /// Whether the process is a child of this one, reaped by nobody yet. Asked
         /// of the pidfd, so it is about this process and no other given its pid.
-        fn isChild(held: Held) bool {
+        fn isChild(held: Held) LookError!bool {
+            return held.isChildWith(PidfdWait);
+        }
+
+        const PidfdWait = struct {
+            fn child(pidfd: posix.fd_t, info: *linux.siginfo_t) linux.E {
+                return linux.errno(linux.waitid(.PIDFD, pidfd, info, wait_exited | wait_no_hang | wait_no_wait | wait_all, null));
+            }
+        };
+
+        fn isChildWith(held: Held, comptime System: type) LookError!bool {
             var info = std.mem.zeroes(linux.siginfo_t);
             while (true) {
-                const rc = linux.waitid(.PIDFD, held.pidfd, &info, wait_exited | wait_no_hang | wait_no_wait | wait_all, null);
-                switch (linux.errno(rc)) {
+                switch (System.child(held.pidfd, &info)) {
                     .SUCCESS => return true,
                     .INTR => continue,
                     // Not a child of this process: its own parent's, or reaped.
                     .CHILD => return false,
-                    // Anything else is not an answer, and "a child" is the answer
-                    // that takes nothing from anyone.
-                    else => return true,
+                    // An unknown answer cannot authorize adoption or a reap.
+                    else => return error.Unexpected,
                 }
             }
         }
@@ -610,7 +626,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var i: usize = 0;
         while (i < orphans.inner().own.items.len) {
             const held = orphans.inner().own.items[i];
-            if (held.isChild()) {
+            // Keep an existing hold until the kernel proves it was reaped.
+            // Unknown ownership only refuses a new claim; it never releases
+            // a pidfd that a later successful look may still need.
+            if (held.isChild() catch true) {
                 i += 1;
                 continue;
             }
@@ -623,13 +642,11 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     fn consider(orphans: *Orphans, pid: posix.pid_t) LookError!void {
         for (orphans.inner().own.items) |held| if (held.pid == pid) return;
         for (orphans.inner().adopted.items) |held| if (held.pid == pid) return;
-        var held = Held.open(pid) catch |err| switch (err) {
+        var held = Held.openChild(pid) catch |err| switch (err) {
             error.Gone => return,
             else => |e| return e,
         };
-        // Between the list and the pidfd the pid may have been reaped and given
-        // to a process that is nobody's child here.
-        if (!held.isChild()) return held.close();
+        // openChild proved reap ownership before the start-time lookup.
         held.start = tree.startTime(pid) catch unreachable; // Linux supports startTime; isChild and both locks hold reap ownership.
         orphans.inner().adopted.append(orphans.inner().allocator, held) catch {
             held.close();
@@ -641,11 +658,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
     /// `start`'s look: every child there is is somebody's.
     fn claim(orphans: *Orphans, pid: posix.pid_t) LookError!void {
-        const held = Held.open(pid) catch |err| switch (err) {
+        const held = Held.openChild(pid) catch |err| switch (err) {
             error.Gone => return,
             else => |e| return e,
         };
-        if (!held.isChild()) return held.close();
         orphans.inner().own.append(orphans.inner().allocator, held) catch {
             held.close();
             return error.OutOfMemory;
@@ -783,4 +799,14 @@ test "orphan records retain a pid and its captured start time" {
     var orphans: Orphans = .init(std.testing.allocator);
     defer orphans.deinit();
     try std.testing.expectEqual(@as(usize, 0), (try orphans.list(&storage)).len);
+}
+
+test "an unknown pidfd wait does not prove reap ownership" {
+    const Refused = struct {
+        fn child(_: posix.fd_t, _: *linux.siginfo_t) linux.E {
+            return .PERM;
+        }
+    };
+    const held: Orphans.Held = .{ .pid = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 1, .pidfd = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1 };
+    try std.testing.expectError(error.Unexpected, held.isChildWith(Refused));
 }

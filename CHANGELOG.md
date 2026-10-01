@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Orphans refuses new reap ownership when pidfd waitid cannot verify it, while retaining existing holds until retirement is known.
+
 - Expect waits for a buffer-space event when full, with discard and consumption waking the reader instead of an interval timer.
 
 - Expect deinit closes its lifetime before canceling, so even a never-started reader cannot be started afterwards.
