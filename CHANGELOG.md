@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.
+
 - Breaking: `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.
 
 - Breaking: `Orphans.Record` also copies group and session from the same verified adoption snapshot as its start time.

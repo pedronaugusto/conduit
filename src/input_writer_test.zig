@@ -25,8 +25,8 @@ fn reap(child: *Child) void {
 fn output(child: *Child, expected: []const u8) !void {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expect(Child.succeeded(result.term));
-    try testing.expectEqualStrings(expected, result.stdout);
+    try testing.expect(Child.succeeded(result.term()));
+    try testing.expectEqualStrings(expected, result.stdout());
 }
 
 // Tests run serially. The copied vtable keeps the original userdata, so every
@@ -237,14 +237,14 @@ test "InputWriter serializes concurrent producers without splitting their bytes"
     try writer.end(io);
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expect(Child.succeeded(result.term));
-    try testing.expectEqual(1024, result.stdout.len);
+    try testing.expect(Child.succeeded(result.term()));
+    try testing.expectEqual(1024, result.stdout().len);
     var counts: [4]usize = @splat(0);
     var offset: usize = 0;
-    while (offset < result.stdout.len) : (offset += 2) {
-        const id = result.stdout[offset];
+    while (offset < result.stdout().len) : (offset += 2) {
+        const id = result.stdout()[offset];
         try testing.expect(id < counts.len);
-        try testing.expectEqual(counts[id], result.stdout[offset + 1]);
+        try testing.expectEqual(counts[id], result.stdout()[offset + 1]);
         counts[id] += 1;
     }
     for (counts) |count| try testing.expectEqual(128, count);

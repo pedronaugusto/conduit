@@ -52,8 +52,8 @@ pub fn main() !void {
     var stdout = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
     const w = &stdout.interface;
     try w.print("the shell said:\n", .{});
-    var lines = std.mem.splitScalar(u8, std.mem.trim(u8, result.stdout, "\r\n"), '\n');
+    var lines = std.mem.splitScalar(u8, std.mem.trim(u8, result.stdout(), "\r\n"), '\n');
     while (lines.next()) |line| try w.print("  {s}\n", .{std.mem.trimEnd(u8, line, "\r")});
-    try w.print("and ended: {any}\n", .{result.term});
+    try w.print("and ended: {any}\n", .{result.term()});
     try w.flush();
 }

@@ -29,7 +29,7 @@ defer shell.deinit(io);
 // Everything it writes to its terminal, and how it ends, with a bound on
 // the whole thing. A terminal is one stream, so a child on a pair has no
 // separate standard error to collect.
-var result = try shell.child.output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
+var result = try shell.child().output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
 defer result.deinit(gpa);
 ```
 <!-- END GENERATED ci/readme_usage.sh -->
@@ -60,11 +60,11 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 | | |
 |---|---|
 | `Pty.open(allocator, options)` | A new pair. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
-| `pty.read`, `pty.write` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
+| `pty.readHandle()`, `pty.writeHandle()` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
 | `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, as `std.Io.File`s sharing the handle rather than duplicating it. |
-| `pty.slave` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
+| `pty.slaveHandle()` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
 | `pty.resize(size)`, `pty.size()` | The window size. `size` borrows the pair; it and `resize` share the Windows geometry owner and are safe while another task reads or writes. |
-| `pty.console` | Windows only: which of `OpenOptions.console` the system granted. `win32_input` for keys a terminal encoding cannot spell, `passthrough` for the child's own bytes rather than the console host's redraw of them, `resize_quirk` for a resize that does not reflow. A Windows too old for one of them refuses the whole call, so `open` asks again without it. |
+| `pty.consoleOptions()` | Windows only: which of `OpenOptions.console` the system granted. `win32_input` for keys a terminal encoding cannot spell, `passthrough` for the child's own bytes rather than the console host's redraw of them, `resize_quirk` for a resize that does not reflow. A Windows too old for one of them refuses the whole call, so `open` asks again without it. |
 | `pty.close(io)` | Everything. Idempotent, and correct after either of the next two. |
 | `pty.closeSlave(io)`, `pty.closeMaster(io)` | One end. The two systems want `closeSlave` at different moments — see Design. |
 
@@ -97,6 +97,11 @@ to read while a wait or Reaper runs.
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
 | `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
+
+`Child.Output` owns the collected bytes until `deinit(allocator)`. `stdout()`
+and `stderr()` borrow them; `takeStdout()` and `takeStderr()` transfer them
+for the caller to free with the collecting allocator. `term()`, `timedOut()`,
+`stdoutTruncated()` and `stderrTruncated()` copy the result facts.
 
 `conduit.Cgroup` is the cgroup a Linux child holds. Both cgroup handle types
 keep ownership opaque in fixed storage. `cgroup.id()` gives its
@@ -185,7 +190,7 @@ try input.wait(io);
 | `input.cancel(io)` | Abandon pending bytes, interrupt a blocked write and join the task. Later calls return `Canceled`; an earlier failure or completed delivery stays final. |
 | `input.deinit(io)` | Cancel, join and free. Stop the other callers first. Idempotent. |
 
-The writer owns the stdin pipe after successful construction; `child.stdin`
+The writer owns the stdin pipe after successful construction; `child.stdinFile()`
 is then null. Startup failure leaves it with the child. Only a separate pipe
 can be transferred: a child on a terminal is `NoStdinPipe`. The writer does
 not borrow the child. Its allocator and Io must outlive it, and an earlier
@@ -215,7 +220,7 @@ start; a start after `deinit` is `AlreadyStarted`, even if no reader ran.
 
 | | |
 |---|---|
-| `Expect.init(master, buffer)` | Over `Child.pty` or `Pty.master()`, with a buffer the caller owns. |
+| `Expect.init(master, buffer)` | Over `Child.terminalMaster()` or `Pty.master()`, with a buffer the caller owns. |
 | `expect.start(io)`, `expect.deinit(io)` | The one reading task, which runs between calls. A second `start` is `error.AlreadyStarted`. |
 | `expect.until(io, pattern, timeout_ms)` | Waits for a literal byte pattern and consumes through it: `Match.before` and `Match.found`. |
 | `expect.untilAny(io, patterns, timeout_ms)` | Waits for any of several. The earliest match wins, whatever order they were listed in; `Match.index` says which, and the ones that lost stay pending. |

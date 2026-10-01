@@ -319,10 +319,10 @@ test "a child on pipes: its output is collected and its exit code is seen" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "hello from the child") != null);
-    try testing.expect(!result.stdout_truncated);
-    try testing.expect(!result.timed_out);
-    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "hello from the child") != null);
+    try testing.expect(!result.stdoutTruncated());
+    try testing.expect(!result.timedOut());
+    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
 }
 
 test "a child on pipes can be written to" {
@@ -342,8 +342,8 @@ test "a child on pipes can be written to" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "a line") != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "a line") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "output stops at max_bytes and says it did" {
@@ -360,11 +360,11 @@ test "output stops at max_bytes and says it did" {
     var result = try child.output(io, gpa, .{ .max_bytes = 5, .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expectEqualStrings("hello", result.stdout);
-    try testing.expect(result.stdout_truncated);
+    try testing.expectEqualStrings("hello", result.stdout());
+    try testing.expect(result.stdoutTruncated());
     // Capped, not cut short: the child still ran to the end and its status is
     // the real one.
-    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
+    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
 }
 
 test "output keeps draining after allocation failure and reports out of memory" {
@@ -422,7 +422,7 @@ test "output gives up on a child that will not end, and ends it" {
     var result = try child.output(io, gpa, .{ .timeout_ms = 50, .grace_ms = 50 });
     defer result.deinit(gpa);
 
-    try testing.expect(result.timed_out);
+    try testing.expect(result.timedOut());
     // Reaped by `output`, so this cannot block.
     try testing.expect((try child.tryWait()) != null);
 }
@@ -976,7 +976,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "a line") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "a line") != null);
 }
 
 test "closeStdin is the half-close a child reading to end of file waits for" {
@@ -2551,10 +2551,10 @@ test "each stream is chosen on its own" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "to stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "to stderr") == null);
-    try testing.expectEqualStrings("", result.stderr);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "to stdout") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "to stderr") == null);
+    try testing.expectEqualStrings("", result.stderr());
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "the terminal end of a pair can be one stream and a pipe another" {
@@ -2682,8 +2682,8 @@ test "a signal this process ignores is back at its default action in the child" 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expectEqualStrings("", result.stdout);
-    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term);
+    try testing.expectEqualStrings("", result.stdout());
+    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term());
 }
 
 //======================================================================
@@ -2711,8 +2711,8 @@ test "a child's file-creation mask is the one it was given" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "77") != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "77") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "a uid and gid this process may take are taken, and one it may not is an error" {
@@ -2742,10 +2742,10 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     var wanted: [64]u8 = undefined;
     try testing.expect(std.mem.indexOf(
         u8,
-        result.stdout,
+        result.stdout(),
         try std.fmt.bufPrint(&wanted, "{d}", .{uid}),
     ) != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 
     // And a change this process is not allowed to make is an error from
     // `spawn`, not a child that started anyway with the credentials it had.
@@ -2786,8 +2786,8 @@ test "a resource limit set at spawn is the child's own" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "64") != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "64") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 
     // This process is not the one that was limited, which is the whole reason
     // the option exists: doing it here would have done it to everything this
@@ -2828,7 +2828,7 @@ test "a job limit bounds what the child's tree may do" {
     errdefer _ = free.killWait(io, 0) catch {};
     var without = try free.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer without.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, without.stdout, "NESTED") != null);
+    try testing.expect(std.mem.indexOf(u8, without.stdout(), "NESTED") != null);
 
     var bounded = try Child.spawn(io, gpa, .{
         .argv = argv,
@@ -2839,7 +2839,7 @@ test "a job limit bounds what the child's tree may do" {
     errdefer _ = bounded.killWait(io, 0) catch {};
     var with = try bounded.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer with.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, with.stdout, "NESTED") == null);
+    try testing.expect(std.mem.indexOf(u8, with.stdout(), "NESTED") == null);
 }
 
 test "Windows CPU job limits reject values outside a whole-system percentage" {
@@ -2909,9 +2909,9 @@ test "the child's environment and working directory are the ones asked for" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "present") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, script.working_directory_mark) != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "present") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), script.working_directory_mark) != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "a scrubbed environment is the only thing the child sees" {
@@ -2950,8 +2950,8 @@ test "a scrubbed environment is the only thing the child sees" {
 
     // The variable that was asked for, and nothing else: not this process's
     // `HOME`, and not the `PATH` the spawn itself searched.
-    try testing.expectEqualStrings("present|", result.stdout);
-    try testing.expect(conduit.succeeded(result.term));
+    try testing.expectEqualStrings("present|", result.stdout());
+    try testing.expect(conduit.succeeded(result.term()));
 }
 
 test "path_search decides which PATH a bare program name is looked up in" {
@@ -3188,9 +3188,9 @@ test "both spawn paths start the same child" {
 
         var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("out", result.stdout);
-        try testing.expectEqualStrings("err", result.stderr);
-        try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
+        try testing.expectEqualStrings("out", result.stdout());
+        try testing.expectEqualStrings("err", result.stderr());
+        try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
     }
 }
 
@@ -3224,8 +3224,8 @@ test "a child on the posix_spawn path starts with the same clean slate" {
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expectEqualStrings("", result.stdout);
-    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term);
+    try testing.expectEqualStrings("", result.stdout());
+    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term());
 }
 
 test "a spawn expressible by file actions makes no fork call" {
@@ -3302,8 +3302,8 @@ test "fd_policy close_all leaves the child its three streams and nothing else" {
     // The default hands it on, whichever path started the child; the policy
     // does not.
     const mask = @as(u64, 1) << @intCast(inheritable);
-    try testing.expect(descriptorSet(inherited.stdout) & mask != 0);
-    try testing.expect(descriptorSet(closed.stdout) & mask == 0);
+    try testing.expect(descriptorSet(inherited.stdout()) & mask != 0);
+    try testing.expect(descriptorSet(closed.stdout()) & mask == 0);
 }
 
 test "a caller's handle is as inheritable after a spawn as it was before" {
@@ -3615,7 +3615,7 @@ fn descriptorsOfAChild() !u64 {
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    return descriptorSet(result.stdout);
+    return descriptorSet(result.stdout());
 }
 
 /// `/dev/fd` is this process's own descriptors on both systems.
@@ -3666,11 +3666,11 @@ fn spawnAndList(each: usize, control: u64, strangers: *std.atomic.Value(u32)) st
         };
         defer result.deinit(gpa);
 
-        const unexpected = descriptorSet(result.stdout) & ~control;
+        const unexpected = descriptorSet(result.stdout()) & ~control;
         if (unexpected != 0) {
             std.debug.print("\na child was given descriptors 0x{x} nothing gave the control child; it saw:\n{s}\n", .{
                 unexpected,
-                result.stdout,
+                result.stdout(),
             });
             _ = strangers.fetchAdd(1, .release);
         }
@@ -4192,9 +4192,9 @@ test "output reads a published result before watching a retired process number" 
     State.get(&child).id = witness.processId().?;
     var output = try child.output(io, gpa, .{ .timeout_ms = 20 });
     defer output.deinit(gpa);
-    try testing.expectEqual(false, output.timed_out);
-    try testing.expectEqualStrings("retained", output.stdout);
-    try testing.expectEqual(Child.Term{ .exited = 7 }, output.term);
+    try testing.expectEqual(false, output.timedOut());
+    try testing.expectEqualStrings("retained", output.stdout());
+    try testing.expectEqual(Child.Term{ .exited = 7 }, output.term());
     try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
 }
 
@@ -4263,4 +4263,17 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     pair.closeMaster(io);
     stdin.restore();
     try testing.expectEqual(Child.Term{ .exited = 0 }, term);
+}
+
+test "collected output transfers bytes before releasing its owner" {
+    var child = try Child.spawn(io, gpa, .{ .argv = &script.out_and_err, .stdio = .{ .pipes = .{ .stdin = false } } });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var collected = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer collected.deinit(gpa);
+    const kept = collected.takeStdout();
+    defer gpa.free(kept);
+    try testing.expectEqual(@as(usize, 0), collected.stdout().len);
+    collected.deinit(gpa);
+    try testing.expect(std.mem.indexOf(u8, kept, "to stdout") != null);
 }

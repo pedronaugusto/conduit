@@ -708,7 +708,7 @@ pub const Child = enum(usize) {
     pub const ContainmentError = error{ BufferTooSmall, IdentityUnavailable };
 
     /// Copies the detached group and, on Linux, the cgroup path, directory inode
-    /// and boot id. Available through retirement, until deinit. No cgroup is null;
+    /// and boot id. Available through retirement, until transfer or deinit. No cgroup is null;
     /// a cgroup whose identity cannot be read is IdentityUnavailable, so a ledger
     /// never silently records incomplete containment. An undersized path buffer
     /// is BufferTooSmall; std.fs.max_path_bytes + 64 always holds our path.
@@ -1590,31 +1590,73 @@ pub const Child = enum(usize) {
     //======================================================================
 
     /// Everything the child wrote, and how it ended.
-    pub const Output = struct {
-        /// What arrived on `stdoutFile`. For a child on a pseudo-terminal this is
-        /// the whole terminal, output and error together, with the carriage
-        /// returns a terminal inserts.
+    const OutputState = struct {
         stdout: []u8,
-        /// What arrived on the standard-error pipe, or empty when there was none.
         stderr: []u8,
-        /// The child produced more than `OutputOptions.max_bytes` on that stream
-        /// and the rest was dropped, or the stream had not finished when
-        /// `drain_ms` ran out.
         stdout_truncated: bool,
         stderr_truncated: bool,
-        /// How the child ended.
         term: Term,
-        /// `timeout_ms` elapsed and the child was ended by `killWait` rather than
-        /// on its own.
         timed_out: bool,
+    };
 
-        /// Frees `stdout` and `stderr` with the allocator they were collected
-        /// with.
+    /// Owns collected bytes; move before sharing and never copy an owner.
+    pub const Output = enum(@Int(.unsigned, @sizeOf(OutputState) * 8)) {
+        _,
+        fn inner(collected: *Output) *OutputState {
+            return @ptrCast(@alignCast(collected)); // safe: collection initializes inline storage of the same size and alignment.
+        }
+        fn value(collected: *const Output) *const OutputState {
+            return @ptrCast(@alignCast(collected)); // safe: borrows initialized inline state without copying ownership.
+        }
+        fn init(state: OutputState) Output {
+            var collected: Output = undefined;
+            collected.inner().* = state;
+            return collected;
+        }
+        /// Borrows retained standard output until transfer or deinit.
+        pub fn stdout(collected: *const Output) []u8 {
+            return collected.value().stdout;
+        }
+        /// Borrows retained standard error until transfer or deinit.
+        pub fn stderr(collected: *const Output) []u8 {
+            return collected.value().stderr;
+        }
+        /// Transfers retained output bytes. The caller frees them with the collecting allocator.
+        pub fn takeStdout(collected: *Output) []u8 {
+            const state = collected.inner();
+            const taken = state.stdout;
+            state.stdout = &.{};
+            return taken;
+        }
+        /// Transfers retained error bytes. The caller frees them with the collecting allocator.
+        pub fn takeStderr(collected: *Output) []u8 {
+            const state = collected.inner();
+            const taken = state.stderr;
+            state.stderr = &.{};
+            return taken;
+        }
+        /// Whether bytes were dropped or the stream outlived the drain budget.
+        pub fn stdoutTruncated(collected: *const Output) bool {
+            return collected.value().stdout_truncated;
+        }
+        pub fn stderrTruncated(collected: *const Output) bool {
+            return collected.value().stderr_truncated;
+        }
+        /// How the child ended.
+        pub fn term(collected: *const Output) Term {
+            return collected.value().term;
+        }
+        /// Whether the child was ended after its execution budget elapsed.
+        pub fn timedOut(collected: *const Output) bool {
+            return collected.value().timed_out;
+        }
+        /// Frees bytes with their collecting allocator. Idempotent.
         pub fn deinit(collected: *Output, allocator: Allocator) void {
-            allocator.free(collected.stdout);
-            allocator.free(collected.stderr);
-            collected.stdout = &.{};
-            collected.stderr = &.{};
+            const state = collected.inner();
+            allocator.free(state.stdout);
+            allocator.free(state.stderr);
+            state.stdout = &.{};
+            state.stderr = &.{};
         }
     };
 
@@ -1762,14 +1804,14 @@ pub const Child = enum(usize) {
         const stdout_bytes = try out.list.toOwnedSlice(allocator);
         errdefer allocator.free(stdout_bytes);
         const stderr_bytes = try err.list.toOwnedSlice(allocator);
-        return .{
+        return Output.init(.{
             .stdout = stdout_bytes,
             .stderr = stderr_bytes,
             .stdout_truncated = out.truncated or !out.done.load(.acquire),
             .stderr_truncated = err.truncated or !err.done.load(.acquire),
             .term = term,
             .timed_out = timed_out,
-        };
+        });
     }
 
     /// One stream's worth of collected bytes, shared between the task reading it
@@ -1970,14 +2012,14 @@ pub const Child = enum(usize) {
         const stdout_bytes = try out.list.toOwnedSlice(allocator);
         errdefer allocator.free(stdout_bytes);
         const stderr_bytes = try err.list.toOwnedSlice(allocator);
-        return .{
+        return Output.init(.{
             .stdout = stdout_bytes,
             .stderr = stderr_bytes,
             .stdout_truncated = out.truncated or !out.done.load(.acquire),
             .stderr_truncated = err.truncated or !err.done.load(.acquire),
             .term = term.?,
             .timed_out = timed_out,
-        };
+        });
     }
 
     //======================================================================
@@ -2193,7 +2235,7 @@ pub const Child = enum(usize) {
         const delayed_io: std.Io = .{ .vtable = &vtable, .userdata = io.userdata };
         var collected = try child.outputOnTasks(delayed_io, testing.allocator, .{ .drain_ms = 20 });
         defer collected.deinit(testing.allocator);
-        try testing.expect(collected.stdout_truncated);
+        try testing.expect(collected.stdoutTruncated());
         try testing.expectEqual(@as(u32, 20), Clock.elapsed.load(.acquire));
     }
 
@@ -2256,5 +2298,8 @@ pub const Child = enum(usize) {
 
     test "Child exposes no writable lifecycle or stream ownership" {
         try std.testing.expect(@typeInfo(Child) == .@"enum");
+    }
+    test "Output exposes no writable collection ownership" {
+        try std.testing.expect(@typeInfo(Output) == .@"enum");
     }
 };
