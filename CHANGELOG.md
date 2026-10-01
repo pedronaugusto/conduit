@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expect waits for a buffer-space event when full, with discard and consumption waking the reader instead of an interval timer.
+
 - Expect deinit closes its lifetime before canceling, so even a never-started reader cannot be started afterwards.
 
 - Breaking: `Orphans.list` copies `Record` values with pid and start time captured during adoption, and reports `IdentityUnavailable` instead of returning an unverified number.

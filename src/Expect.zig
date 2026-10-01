@@ -88,6 +88,8 @@ const Implementation = struct {
     /// ends the moment the child speaks rather than at the end of a poll
     /// interval.
     arrived: std.Io.Event,
+    /// Set when consuming or discarding bytes makes buffer space available.
+    space: std.Io.Event,
     /// The task doing the reading.
     group: std.Io.Group,
     /// One claim for initialization, task ownership and closure. Deinit closes
@@ -136,6 +138,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .failed = false,
             .mutex = .init,
             .arrived = .unset,
+            .space = .unset,
             .group = .init,
             .lifetime = .init(.ready),
             .finished = .init(false),
@@ -428,6 +431,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer expect.inner().mutex.unlock(io);
         expect.inner().filled = 0;
         expect.inner().consumed = 0;
+        expect.inner().space.set(io);
     }
 
     //======================================================================
@@ -441,18 +445,17 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var chunk: [512]u8 = undefined;
         while (true) {
             if (expect.inner().lifetime.load(.acquire) == .closed) return expect.finish(io, .ended);
+            // Reset before checking the buffer under the consumer mutex. A
+            // consumer before this check leaves room; one after it sets space.
+            expect.inner().space.reset();
             const room = room: {
                 expect.inner().mutex.lockUncancelable(io);
                 defer expect.inner().mutex.unlock(io);
                 break :room expect.inner().buffer.len - expect.inner().filled;
             };
             if (room == 0) {
-                // The buffer is full of bytes no pattern has matched. Reading
-                // stops rather than dropping them: what the child wrote stays in
-                // the child's own terminal, and the caller is told `BufferFull`
-                // and can `discard`. This is the one place that polls, because it
-                // is waiting on the caller rather than on the child.
-                try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+                // Full means backpressure until the consumer makes room.
+                try expect.inner().space.wait(io);
                 continue;
             }
 
@@ -528,6 +531,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);
         expect.inner().filled = rest;
         expect.inner().consumed = 0;
+        expect.inner().space.set(io);
     }
 
     //======================================================================
@@ -1025,4 +1029,78 @@ test "Expect refuses a start after deinit before its first reader" {
     defer expect.deinit(std.testing.io);
     expect.deinit(std.testing.io);
     try std.testing.expectError(error.AlreadyStarted, expect.start(std.testing.io));
+}
+
+test "a full Expect buffer waits for its consumer without interval sleeps" {
+    const Backend = struct {
+        sleeps: usize = 0,
+        waits: usize = 0,
+        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.sleeps += 1;
+            return error.Canceled;
+        }
+        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.waits += 1;
+            return error.Canceled;
+        }
+        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
+    };
+    var backend: Backend = .{};
+    var vtable = std.testing.io.vtable.*;
+    vtable.sleep = Backend.sleep;
+    vtable.futexWait = Backend.wait;
+    vtable.futexWake = Backend.wake;
+    const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    var buffer: [1]u8 = .{'x'};
+    var expect = Expect.init(undefined, &buffer);
+    expect.inner().filled = buffer.len;
+    try std.testing.expectError(error.Canceled, expect.read(observed_io));
+    try std.testing.expectEqual(@as(usize, 0), backend.sleeps);
+    try std.testing.expectEqual(@as(usize, 1), backend.waits);
+}
+
+test "Expect discard and consumption wake a full reader at the wait boundary" {
+    const Backend = struct {
+        expect: *Expect,
+        io: std.Io = undefined,
+        consume: bool,
+        waits: usize = 0,
+        reads: usize = 0,
+        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.waits += 1;
+            if (backend.waits != 1) return error.Canceled;
+            // The reader has checked that it is full and is entering its
+            // wait. Make room here: this notification must not be lost.
+            if (backend.consume) {
+                backend.expect.inner().consumed = 1;
+                backend.expect.compact(backend.io);
+            } else backend.expect.discard(backend.io);
+        }
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.reads += 1;
+            operation.file_read_streaming.data[0][0] = 'b';
+            return .{ .file_read_streaming = 1 };
+        }
+        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
+    };
+    for ([_]bool{ false, true }) |consume| {
+        var buffer: [1]u8 = .{'a'};
+        const f = handles.file(if (is_windows) std.os.windows.INVALID_HANDLE_VALUE else -1);
+        var expect = Expect.init(.{ .read = f, .write = f }, &buffer);
+        expect.inner().filled = buffer.len;
+        var backend: Backend = .{ .expect = &expect, .consume = consume };
+        var vtable = std.testing.io.vtable.*;
+        vtable.futexWait = Backend.wait;
+        vtable.futexWake = Backend.wake;
+        vtable.operate = Backend.operate;
+        backend.io = .{ .userdata = &backend, .vtable = &vtable };
+        try std.testing.expectError(error.Canceled, expect.read(backend.io));
+        try std.testing.expectEqual(@as(usize, 2), backend.waits);
+        try std.testing.expectEqual(@as(usize, 1), backend.reads);
+        try std.testing.expectEqualStrings("b", expect.pending(backend.io));
+    }
 }
