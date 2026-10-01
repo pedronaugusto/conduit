@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Orphans.Spawn` keeps its adoption gate claim opaque; callers use `begin`, `started` and `finish`.
+
 - Breaking: `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.
 
 - Breaking: `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.

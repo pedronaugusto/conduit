@@ -400,15 +400,27 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// `started` with the child's pid after it, `finish` once that is done or
     /// there is no child. POSIX spawns go through this; outside Linux it is
     /// nothing.
-    pub const Spawn = struct {
+    const SpawnState = struct {
         orphans: ?*Orphans,
         holding: bool,
         look_after: bool = false,
+    };
+
+    pub const Spawn = enum(@Int(.unsigned, @sizeOf(SpawnState) * 8)) {
+        _,
+        fn inner(spawn: *Spawn) *SpawnState {
+            return @ptrCast(@alignCast(spawn)); // safe: begin initializes inline storage of this size and alignment.
+        }
+        fn init(orphans: ?*Orphans, holding: bool) Spawn {
+            var spawn: Spawn = undefined;
+            spawn.inner().* = .{ .orphans = orphans, .holding = holding };
+            return spawn;
+        }
 
         pub fn begin() Spawn {
-            if (!supported) return .{ .orphans = null, .holding = false };
+            if (!supported) return Spawn.init(null, false);
             gate.lockShared();
-            return .{ .orphans = current, .holding = true };
+            return Spawn.init(current, true);
         }
 
         /// Puts the child just started on the list of conduit's own. On an error
@@ -416,7 +428,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// conduit cannot tell from an orphan is not one to hand back.
         pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {
             if (!supported) return;
-            const orphans = spawn.orphans orelse return;
+            const orphans = spawn.inner().orphans orelse return;
             const held = Held.open(pid) catch |err| switch (err) {
                 // An unreaped child of this process has a pidfd to open.
                 error.Gone => return error.Unexpected,
@@ -428,18 +440,18 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 held.close();
                 return error.OutOfMemory;
             };
-            spawn.look_after = true;
+            spawn.inner().look_after = true;
         }
 
         /// Lets a look happen again, and — after a spawn that started a child —
         /// has one: the spawn is an event of conduit's, and a moment to take in
         /// what is waiting. Idempotent.
         pub fn finish(spawn: *Spawn) void {
-            if (!spawn.holding) return;
-            spawn.holding = false;
+            if (!spawn.inner().holding) return;
+            spawn.inner().holding = false;
             gate.unlockShared();
-            if (spawn.look_after) {
-                spawn.look_after = false;
+            if (spawn.inner().look_after) {
+                spawn.inner().look_after = false;
                 event();
             }
         }
@@ -880,4 +892,8 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
 test "orphan records copy group and session from the held adoption" {
     try std.testing.expect(@hasField(Orphans.Record, "group"));
     try std.testing.expect(@hasField(Orphans.Record, "session"));
+}
+
+test "Orphans Spawn exposes no writable adoption gate ownership" {
+    try std.testing.expect(@typeInfo(Orphans.Spawn) == .@"enum");
 }
