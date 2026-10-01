@@ -296,6 +296,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         pid: posix.pid_t,
         /// Linux clock ticks after boot, as returned by conduit.startTime.
         start: u64,
+        /// Group and session observed in the same adoption snapshot as start.
+        /// These are saved facts, not authority to signal a group later.
+        group: posix.pid_t,
+        session: posix.pid_t,
     };
 
     pub const ListError = LookError || error{IdentityUnavailable};
@@ -319,7 +323,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         orphans.reapEnded();
         const n = @min(out.len, orphans.inner().adopted.items.len);
         for (orphans.inner().adopted.items[0..n], out[0..n]) |held, *record| {
-            record.* = .{ .pid = held.pid, .start = held.start orelse return error.IdentityUnavailable };
+            record.* = held.record orelse return error.IdentityUnavailable;
         }
         return out[0..n];
     }
@@ -516,7 +520,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         pid: posix.pid_t,
         pidfd: posix.fd_t,
         asked: Asked = .nothing,
-        start: ?u64 = null,
+        record: ?Record = null,
 
         const Asked = enum(u8) { nothing, terminate, kill };
 
@@ -553,7 +557,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             var held = try System.open(pid);
             errdefer System.close(held.pidfd);
             if (!try held.isChildWith(System)) return error.Gone;
-            held.start = System.start(pid);
+            held.record = System.record(pid);
             // A by-number lookup may have met a replacement if another
             // reaper broke the contract. The pidfd must still prove that
             // this owner holds the original identity after that lookup.
@@ -576,8 +580,8 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 return Held.open(pid);
             }
 
-            fn start(pid: posix.pid_t) ?u64 {
-                return tree.startTime(pid) catch unreachable; // Linux supports startTime; the pidfd and reap ownership hold the process.
+            fn record(pid: posix.pid_t) ?Record {
+                return tree.adoptionRecord(pid);
             }
 
             fn close(pidfd: posix.fd_t) void {
@@ -854,11 +858,11 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
             return if (retired) .CHILD else .SUCCESS;
         }
 
-        fn start(_: posix.pid_t) ?u64 {
+        fn record(pid: posix.pid_t) ?Orphans.Record {
             // Force another reaper to retire the held process and let a
             // replacement occupy its pid before the by-number lookup returns.
             retired = true;
-            return 900;
+            return .{ .pid = pid, .start = 900, .group = pid, .session = pid };
         }
 
         fn close(_: posix.fd_t) void {
@@ -871,4 +875,9 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
     try std.testing.expectError(error.Gone, Orphans.Held.openAdoptedWith(if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 123, Reuse));
     try std.testing.expectEqual(@as(usize, 2), Reuse.checks);
     try std.testing.expectEqual(@as(usize, 1), Reuse.closes);
+}
+
+test "orphan records copy group and session from the held adoption" {
+    try std.testing.expect(@hasField(Orphans.Record, "group"));
+    try std.testing.expect(@hasField(Orphans.Record, "session"));
 }

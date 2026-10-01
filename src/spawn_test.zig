@@ -4222,6 +4222,8 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     const saved = listed[0];
     try testing.expectEqual(kept, saved.pid);
     try testing.expectEqual((try conduit.startTime(kept)).?, saved.start);
+    try testing.expectEqual(getpgid(kept), saved.group);
+    try testing.expectEqual(getsid(kept), saved.session);
     try orphans.end(io, 0);
     try testing.expectEqual(@as(usize, 0), (try orphans.list(&records)).len);
     try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);

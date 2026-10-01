@@ -355,6 +355,7 @@ const LinuxRelation = struct {
     state: u8,
     ppid: posix.pid_t,
     pgrp: posix.pid_t,
+    session: posix.pid_t,
     /// Field 22: when the process started, in clock ticks after boot.
     start: ?u64 = null,
 };
@@ -382,13 +383,20 @@ fn parseLinuxStat(text: []const u8) ?LinuxRelation {
     if (state.len != 1) return null;
     const ppid = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
     const pgrp = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
-    // Fields 6 to 21, then 22, the start time. A record that stops short of
+    const session = std.fmt.parseInt(posix.pid_t, fields.next() orelse return null, 10) catch return null;
+    // Fields 7 to 21, then 22, the start time. A record that stops short of
     // it still names the process's relations.
     var start: ?u64 = null;
-    for (6..22) |_| {
+    for (7..22) |_| {
         if (fields.next() == null) break;
     } else start = std.fmt.parseInt(u64, fields.next() orelse "", 10) catch null;
-    return .{ .state = state[0], .ppid = ppid, .pgrp = pgrp, .start = start };
+    return .{ .state = state[0], .ppid = ppid, .pgrp = pgrp, .session = session, .start = start };
+}
+
+/// One procfs snapshot for the adoption owner, checked against its held pidfd afterwards.
+pub fn adoptionRecord(pid: posix.pid_t) ?@import("Orphans.zig").Orphans.Record {
+    const relation = processRelationLinux(pid) orelse return null;
+    return .{ .pid = pid, .start = relation.start orelse return null, .group = relation.pgrp, .session = relation.session };
 }
 
 /// When the running process `pid` started, as a number no later process

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Orphans.Record` also copies group and session from the same verified adoption snapshot as its start time.
+
 - Breaking: `Cgroup.prepare` returns an opaque handoff; `joinDescriptor` borrows its descriptor and `started` or `abandon` consumes ownership.
 
 - Breaking: `Pty` keeps descriptors and Windows geometry opaque; `readHandle`, `writeHandle`, `slaveHandle` and `consoleOptions` borrow or copy observations.
