@@ -40,8 +40,9 @@
 //! `Child.deinit` removes the cgroup. One still holding processes — what a
 //! child started and nobody ended — cannot be removed while they run and is
 //! left to them: it is remembered, and removed by a later spawn or `deinit`
-//! of this process once it is empty. Those processes stay contained in a
-//! cgroup nothing addresses any more, and run on as they would have.
+//! of this process once it is empty. Up to sixteen such cgroups retain their
+//! directory handles so later cleanup cannot remove a replacement at the same
+//! name. Those processes stay contained and run on as they would have.
 //!
 //! What stays out of reach: a descendant that moves itself to another cgroup
 //! it may write to — asks systemd for a scope of its own, say. The cgroup is
@@ -286,7 +287,7 @@ const Name = struct {
 const Leftovers = struct {
     /// Sixteen at a time. Past that, one is left for whatever removes this
     /// process's own cgroup: systemd a unit's, a container runtime its own.
-    var names: [16]?Name = @splat(null);
+    var owners: [16]?LinuxCgroup = @splat(null);
     var held: std.atomic.Value(bool) = .init(false);
 
     fn lock() void {
@@ -297,21 +298,31 @@ const Leftovers = struct {
         held.store(false, .release);
     }
 
-    fn add(name: Name) void {
+    fn add(cgroup: LinuxCgroup) void {
         lock();
         defer unlock();
-        for (&names) |*slot| if (slot.* == null) {
-            slot.* = name;
+        for (&owners) |*slot| if (slot.* == null) {
+            slot.* = cgroup;
             return;
         };
+        // Bounded retention: a directory past the bound remains for the
+        // owner of this process's cgroup, with no later by-name removal.
+        _ = c.close(cgroup.innerConst().dir);
     }
 
     fn sweep() void {
         if (held.load(.monotonic)) return;
         lock();
         defer unlock();
-        for (&names) |*slot| if (slot.*) |name| {
-            if (name.remove()) slot.* = null;
+        for (&owners) |*slot| if (slot.*) |*cgroup| {
+            if (cgroup.remove()) {
+                slot.* = null;
+            } else if (cgroup.namedIdentity() == .gone) {
+                // The original is gone or no longer has our name. Retire
+                // only its handle; the replacement belongs to somebody else.
+                _ = c.close(cgroup.inner().dir);
+                slot.* = null;
+            }
         };
     }
 };
@@ -425,17 +436,29 @@ const LinuxCgroup = enum(@Int(.unsigned, @sizeOf(CgroupState) * 8)) {
         return cgroup.innerConst().name.path(buffer);
     }
 
+    const NamedIdentity = enum { matching, gone, unknown };
+
+    fn namedIdentity(cgroup: *const LinuxCgroup) NamedIdentity {
+        const owned_id = cgroup.id() orelse return .unknown;
+        var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+        const at = cgroup.path(&buffer) orelse return .unknown;
+        const current = c.open(at, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .NOFOLLOW = true, .CLOEXEC = true });
+        if (current < 0) return if (c.errno(@as(c_int, -1)) == .NOENT) .gone else .unknown;
+        defer _ = c.close(current);
+        const check = init(current, cgroup.innerConst().name);
+        const named_id = check.id() orelse return .unknown;
+        return if (named_id == owned_id) .matching else .gone;
+    }
+
     /// Remove an empty cgroup, refusing a path that now names another one.
     /// Returns false while it is populated or the path cannot be verified.
+    /// Linux cannot compare the inode and remove the name atomically; a
+    /// replacement between verification and removal can change the final entry.
     pub fn remove(cgroup: *LinuxCgroup) bool {
         if (!cgroup.active()) return true;
+        if (cgroup.namedIdentity() != .matching) return false;
         var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
         const at = cgroup.path(&buffer) orelse return false;
-        const current = c.open(at, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
-        if (current < 0) return false;
-        defer _ = c.close(current);
-        var check = init(current, cgroup.inner().name);
-        if (check.id() != cgroup.id()) return false;
         if (c.rmdir(at) != 0) return false;
         _ = c.close(cgroup.inner().dir);
         cgroup.* = none;
@@ -461,14 +484,29 @@ const LinuxCgroup = enum(@Int(.unsigned, @sizeOf(CgroupState) * 8)) {
     /// Lets go of the cgroup and removes it, or leaves it to be removed once
     /// what is in it has ended. Idempotent.
     pub fn release(cgroup: *LinuxCgroup) void {
-        if (!cgroup.active()) return;
-        if (cgroup.remove()) return;
-        _ = c.close(cgroup.inner().dir);
-        const name = cgroup.inner().name;
-        cgroup.* = none;
-        if (!name.remove()) Leftovers.add(name);
-        Leftovers.sweep();
+        releaseWith(cgroup, Cleanup);
     }
+
+    fn releaseWith(cgroup: *LinuxCgroup, comptime System: type) void {
+        if (!cgroup.active()) return;
+        if (System.remove(cgroup)) return;
+        const retained = cgroup.*;
+        cgroup.* = none;
+        System.remember(retained);
+        System.sweep();
+    }
+
+    const Cleanup = struct {
+        fn remove(cgroup: *LinuxCgroup) bool {
+            return cgroup.remove();
+        }
+        fn remember(cgroup: LinuxCgroup) void {
+            Leftovers.add(cgroup);
+        }
+        fn sweep() void {
+            Leftovers.sweep();
+        }
+    };
 };
 
 /// A cgroup found from a saved path and inode, with its parent held open.
@@ -906,4 +944,41 @@ test "a cgroup2 line of mountinfo names its mount point and root, and nothing el
 test "cgroup handles expose no writable directory ownership" {
     try std.testing.expect(@typeInfo(Cgroup) == .@"enum");
     try std.testing.expect(@typeInfo(Cgroup.Recorded) == .@"enum");
+}
+
+test "deferred cgroup cleanup keeps directory ownership instead of removing a replacement" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const Replacement = struct {
+        var unlinks: usize = 0;
+        var closes: usize = 0;
+        var retained: ?LinuxCgroup = null;
+
+        fn remove(_: *LinuxCgroup) bool {
+            // The owned directory has been renamed and its old name now
+            // belongs to a replacement. The identity-aware removal refuses.
+            return false;
+        }
+        fn close(_: posix.fd_t) void {
+            closes += 1;
+        }
+        fn removeName(_: Name) bool {
+            unlinks += 1;
+            return true;
+        }
+        fn remember(cgroup: LinuxCgroup) void {
+            retained = cgroup;
+        }
+        fn sweep() void {}
+    };
+    Replacement.unlinks = 0;
+    Replacement.closes = 0;
+    Replacement.retained = null;
+    var cgroup = LinuxCgroup.init(7, .{ .owner = 123, .sequence = 1 });
+    cgroup.releaseWith(Replacement);
+    try std.testing.expectEqual(@as(usize, 0), Replacement.unlinks);
+    try std.testing.expectEqual(@as(usize, 0), Replacement.closes);
+    try std.testing.expect(!cgroup.active());
+    var retained = Replacement.retained orelse return error.TestDirectoryOwnerLost;
+    try std.testing.expect(retained.active());
+    try std.testing.expectEqual(@as(posix.fd_t, 7), retained.inner().dir);
 }

@@ -466,7 +466,9 @@ cgroup is a write and there is no file action for one; this process holds
 one more descriptor per child, and makes and removes one directory per child
 under its own cgroup, named `conduit-<pid>-<n>`; `deinit` removes it, and
 one whose processes outlive the child is left to them and removed by a later
-spawn or `deinit` once they have ended. A descendant that moves itself to
+spawn or `deinit` once they have ended. Up to sixteen such cgroups retain
+their directory handles so later cleanup verifies the identity before removal.
+A descendant that moves itself to
 another cgroup it may write to — asks systemd for a scope of its own — has
 left the reach.
 
