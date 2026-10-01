@@ -4226,3 +4226,41 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     try testing.expectEqual(@as(usize, 0), (try orphans.list(&records)).len);
     try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);
 }
+
+test "a pty master in a standard slot cannot close the child's replacement stream" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var pair = try Pty.open(gpa, .{});
+    defer pair.close(io);
+    var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
+    defer stdin.restore();
+    _ = c.close(pair.read.?);
+    pair.read = 0;
+    pair.write = 0;
+    // Close the temporary master before restoring the runner's stdin,
+    // including on a failed spawn or assertion.
+    defer pair.closeMaster(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "read value && test \"$value\" = answer" },
+        .stdio = .{ .pty = &pair },
+        .detach = true,
+        .cwd = ".", // Both platforms use the fork implementation here.
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    pair.closeSlave(io);
+    var sink: Sink = .{};
+    try sink.start(pair.readFile());
+    var reading = true;
+    defer if (reading) sink.deinit();
+    try pair.writeFile().writeStreamingAll(io, "answer\n");
+    const term = try waitWithin(&child);
+    sink.deinit();
+    reading = false;
+    pair.closeMaster(io);
+    stdin.restore();
+    try testing.expectEqual(Child.Term{ .exited = 0 }, term);
+}

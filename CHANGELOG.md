@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Forked PTY children preserve standard streams that replaced a master descriptor in a standard slot.
+
 - Program lookup documentation distinguishes missing and empty PATH values and describes relative paths without search.
 
 - Cgroup handoffs consume their join descriptor and directory ownership once, so repeated cleanup cannot close a recycled descriptor or release the transferred cgroup.

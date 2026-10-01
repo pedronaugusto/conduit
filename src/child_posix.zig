@@ -380,10 +380,13 @@ fn childMain(
         // it stays open there, the parent closing its own copy does not hang
         // up the child's terminal, and a grandchild would inherit it too. The
         // spare copy of the slave goes the same way; the child's terminal is
-        // on 0, 1 and 2 now.
+        // on 0, 1 and 2 now. Those slots belong to the placed streams: a pair
+        // originally opened there has already been replaced, and its old
+        // number can no longer authorize closing the new descriptor.
         .pty => |pty| {
-            _ = c.close(pty.read.?);
-            if (pty.slave.? > 2) _ = c.close(pty.slave.?);
+            for ([_]posix.fd_t{ pty.read.?, pty.slave.? }) |fd| {
+                if (fd > 2) _ = c.close(fd);
+            }
         },
         else => {},
     }
