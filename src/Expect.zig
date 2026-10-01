@@ -90,12 +90,9 @@ const Implementation = struct {
     arrived: std.Io.Event,
     /// The task doing the reading.
     group: std.Io.Group,
-    /// Whether a reading task has been started. Atomic so two callers cannot both
-    /// get past `start` and put readers over the same buffer.
-    started: std.atomic.Value(bool),
-    /// Set by `deinit`, read by the task before every read it starts, so a reader
-    /// that is between reads when `deinit` begins does not start another one.
-    stopping: std.atomic.Value(bool),
+    /// One claim for initialization, task ownership and closure. Deinit closes
+    /// even a lifetime whose task has never been started.
+    lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
 };
 
 pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
@@ -140,8 +137,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .mutex = .init,
             .arrived = .unset,
             .group = .init,
-            .started = .init(false),
-            .stopping = .init(false),
+            .lifetime = .init(.ready),
             .finished = .init(false),
         };
         return expect;
@@ -159,13 +155,14 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// deadlocking at the first `until`. Everything the child says from this
     /// moment is kept; anything it said before it is not. An `Expect` has one
     /// reading task for its lifetime; a second successful-start attempt is
-    /// `error.AlreadyStarted`.
+    /// `error.AlreadyStarted`, including after deinit. A failed task submission
+    /// may be retried before deinit.
     pub fn start(expect: *Expect, io: std.Io) StartError!void {
-        if (expect.inner().started.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+        if (expect.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null) {
             return error.AlreadyStarted;
         }
         expect.inner().group.concurrent(io, read, .{ expect, io }) catch |err| {
-            expect.inner().started.store(false, .release);
+            _ = expect.inner().lifetime.cmpxchgStrong(.started, .ready, .release, .monotonic);
             return err;
         };
     }
@@ -182,14 +179,14 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// cancels: the `std.Io` implementation interrupts the read and keeps at it
     /// until the task has seen the request (on Windows `std.Io.Threaded` does it
     /// with `NtCancelSynchronousIoFile`, on POSIX with a signal). A reader between
-    /// reads is told by `stopping` not to start another.
+    /// reads observes the closed lifetime and starts no further read.
     ///
     /// Cancelling is the only request a read here answers. `CancelIoEx` from
     /// another thread does abort the pending read on Windows, but `std.Io.Threaded`
     /// issues it again straight away unless its own task was cancelled, so a
     /// reader asked that way never stops.
     pub fn deinit(expect: *Expect, io: std.Io) void {
-        expect.inner().stopping.store(true, .release);
+        expect.inner().lifetime.store(.closed, .release);
         expect.inner().group.cancel(io);
     }
 
@@ -443,7 +440,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer expect.markFinished(io);
         var chunk: [512]u8 = undefined;
         while (true) {
-            if (expect.inner().stopping.load(.acquire)) return expect.finish(io, .ended);
+            if (expect.inner().lifetime.load(.acquire) == .closed) return expect.finish(io, .ended);
             const room = room: {
                 expect.inner().mutex.lockUncancelable(io);
                 defer expect.inner().mutex.unlock(io);
@@ -1021,3 +1018,11 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         try testing.expect(@typeInfo(Expect) == .@"enum");
     }
 };
+
+test "Expect refuses a start after deinit before its first reader" {
+    var buffer: [1]u8 = undefined;
+    var expect = Expect.init(undefined, &buffer);
+    defer expect.deinit(std.testing.io);
+    expect.deinit(std.testing.io);
+    try std.testing.expectError(error.AlreadyStarted, expect.start(std.testing.io));
+}

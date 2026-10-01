@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Expect deinit closes its lifetime before canceling, so even a never-started reader cannot be started afterwards.
+
 - Breaking: `Orphans.list` copies `Record` values with pid and start time captured during adoption, and reports `IdentityUnavailable` instead of returning an unverified number.
 
 - Breaking: `Cgroup` and `Cgroup.Recorded` keep directory ownership opaque in fixed storage; their observation and cleanup methods retain their signatures.
