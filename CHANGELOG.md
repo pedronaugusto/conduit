@@ -8,6 +8,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Keep the quiet benchmark worktree outside Zig’s disposable cache.
 - Re-point the benchmark checkout and its current revision at main after per-child containment.
+- Reject undeclared dependencies, duplicate layer membership and imports of source executables.
+
+- Keep Darwin captures distinct from the platform-selected process fixture.
+
+- Preserve platform selection and private process captures in the relocated identity tests.
+- Check containment comments at their shared contract owner.
+
+- Keep child contracts below lifecycle storage and assemble owner tests above their implementations.
+
+- Check named source layers, cycles, entry files and dependency owners during source CI.
 
 - Bound local Zig build caches before builds, retaining downloaded packages and tools.
 - The former Windows Job-close fixture now requires the grandchild to have ended before lifecycle release.

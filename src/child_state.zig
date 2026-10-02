@@ -2,7 +2,7 @@
 const State = @This();
 const builtin = @import("builtin");
 const std = @import("std");
-const Child = @import("Child.zig").Child;
+const Child = @import("child_types.zig");
 const posix = std.posix;
 const windows = std.os.windows;
 const is_windows = builtin.os.tag == .windows;
@@ -110,7 +110,7 @@ identity_retired: bool = false,
 
 /// Only spawn creates this pointer, and deinit destroys it after all tasks join.
 pub fn optional(child: anytype) ?*State {
-    const value = if (@TypeOf(child) == Child) child else if (@TypeOf(child.*) == Child) child.* else child.*.*;
+    const value = if (@typeInfo(@TypeOf(child)) == .@"enum") child else if (@typeInfo(@TypeOf(child.*)) == .@"enum") child.* else child.*.*;
     const address = @intFromEnum(value);
     return if (address == 0) null else @ptrFromInt(address); // safe: spawn encodes its allocated State; zero is a closed owner.
 }
@@ -119,6 +119,6 @@ pub fn get(child: anytype) *State {
     return optional(child).?;
 }
 
-pub fn owner(state: *State) Child {
+pub fn owner(comptime Owner: type, state: *State) Owner {
     return @enumFromInt(@intFromPtr(state)); // safe: the Child takes this allocated State and releases it in deinit.
 }

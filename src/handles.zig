@@ -270,36 +270,11 @@ test "writeStreamingAll retains short writes after zero progress" {
     try std.testing.expectEqualStrings("abcdef", &ShortWrites.bytes);
 }
 
-test "Windows a closed pipe is a broken write and a file keeps its unexpected error" {
-    if (!is_windows) return error.SkipZigTest;
-    const testing = std.testing;
-    const io = testing.io;
-    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    var child = try @import("Child.zig").Child.spawn(io, testing.allocator, .{
-        .argv = &.{ @import("conduit_test_options").input_fixture, "exit" },
-        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
-    });
-    defer {
-        _ = child.killWait(io, 0) catch {};
-        child.release(io) catch unreachable;
-    }
-    try testing.expect((try child.waitTimeout(io, 5000)) != null);
-    try testing.expectError(error.BrokenPipe, writeStreamingAll(child.stdinFile().?, io, "closed"));
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const f = try tmp.dir.createFile(io, "file", .{});
-    defer f.close(io);
-    const FailWrite = struct {
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            if (operation == .file_write_streaming) return .{ .file_write_streaming = error.Unexpected };
-            return testing.io.vtable.operate(userdata, operation);
-        }
-    };
-    var vtable = io.vtable.*;
-    vtable.operate = FailWrite.operate;
-    const failed_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    try testing.expectError(error.Unexpected, writeStreamingAll(f, failed_io, "unchanged"));
-}
+pub const test_access = if (@import("builtin").is_test) struct {
+    pub const setCloseOnExecPosix = fixture_setCloseOnExecPosix;
+    pub const windowsPipeClosed = fixture_windowsPipeClosed;
+    pub const pipePosix = fixture_pipePosix;
+} else struct {};
+const fixture_setCloseOnExecPosix = setCloseOnExecPosix;
+const fixture_windowsPipeClosed = windowsPipeClosed;
+const fixture_pipePosix = pipePosix;

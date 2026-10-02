@@ -183,22 +183,9 @@ const Darwin = struct {
     }
 };
 
-test "a contained wait reports lost observation after reaping its held root" {
-    if (!supported) return error.SkipZigTest;
-    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
-    try watchdog.start(std.testing.io);
-    defer watchdog.deinit(std.testing.io);
-    testing_hook.fail_enumeration.store(true, .release);
-    defer testing_hook.fail_enumeration.store(false, .release);
-    var child = try @import("Child.zig").Child.spawn(std.testing.io, std.testing.allocator, .{
-        .argv = &.{ "/bin/sh", "-c", "read x" },
-        .descendants = .contain,
-        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
-    });
-    defer child.release(std.testing.io) catch unreachable;
-    const pid = child.processId().?;
-    try std.testing.expectError(error.Unexpected, child.waitTimeout(std.testing.io, 5000));
-    var status: c_int = 0;
-    try std.testing.expectEqual(@as(c_int, -1), c.waitpid(pid, &status, posix.W.NOHANG));
-    try std.testing.expectEqual(posix.E.CHILD, posix.errno(-1));
-}
+pub const test_access = if (@import("builtin").is_test) struct {
+    pub const tree = fixture_tree;
+    pub const Darwin = fixture_Darwin;
+} else struct {};
+const fixture_tree = tree;
+const fixture_Darwin = Darwin;

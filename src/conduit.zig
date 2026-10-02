@@ -237,28 +237,3 @@ pub const endRecorded = if (is_windows)
     @compileError("endRecorded is POSIX-only")
 else
     @import("tree.zig").endRecorded;
-
-test {
-    _ = @import("test_support.zig");
-    _ = @import("input_writer_test.zig");
-    _ = Pty;
-    _ = Child;
-    _ = Reaper;
-    _ = Orphans;
-    _ = @import("deadline.zig");
-    _ = console;
-    _ = Proxy;
-    _ = Expect;
-    // A module of its own, so its declarations are named here to be
-    // compiled for every target the check builds.
-    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty }) |decl| _ = decl;
-    _ = environ_impl;
-    _ = shell;
-    _ = @import("find.zig");
-    _ = @import("windows_search.zig");
-    _ = @import("spawn_test.zig");
-    _ = @import("descendants_test.zig");
-    _ = @import("windows_completion.zig");
-    if (builtin.os.tag == .linux) _ = @import("supervisor.zig");
-    _ = @import("lineage.zig");
-}

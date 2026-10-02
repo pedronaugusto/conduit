@@ -1,0 +1,78 @@
+const conduit = @import("conduit.zig");
+const builtin = @import("builtin");
+const tty = @import("conduit.tty");
+const environ_impl = @import("environ.zig");
+const shell = @import("shell.zig");
+const is_windows = builtin.os.tag == .windows;
+const Pty = conduit.Pty;
+const Child = conduit.Child;
+const InputWriter = conduit.InputWriter;
+const Reaper = conduit.Reaper;
+const Orphans = conduit.Orphans;
+const Cgroup = conduit.Cgroup;
+const console = conduit.console;
+const Proxy = conduit.Proxy;
+const Expect = conduit.Expect;
+const Term = conduit.Term;
+const succeeded = conduit.succeeded;
+const exitCode = conduit.exitCode;
+const signalName = conduit.signalName;
+const Size = conduit.Size;
+const Saved = conduit.Saved;
+const Handle = conduit.Handle;
+const spawnShell = conduit.spawnShell;
+const Shell = conduit.Shell;
+const ShellOptions = conduit.ShellOptions;
+const SpawnShellError = conduit.SpawnShellError;
+const findProgram = conduit.findProgram;
+const environ = conduit.environ;
+const rawMode = conduit.rawMode;
+const RawModeError = conduit.RawModeError;
+const restore = conduit.restore;
+const RestoreError = conduit.RestoreError;
+const winSize = conduit.winSize;
+const WinSizeError = conduit.WinSizeError;
+const setWinSize = conduit.setWinSize;
+const SetWinSizeError = conduit.SetWinSizeError;
+const isTty = conduit.isTty;
+const foregroundGroup = conduit.foregroundGroup;
+const ForegroundGroupError = conduit.ForegroundGroupError;
+const ttyName = conduit.ttyName;
+const TtyNameError = conduit.TtyNameError;
+const startTime = conduit.startTime;
+const CapturedPid = conduit.CapturedPid;
+const captureStarted = conduit.captureStarted;
+const endRecorded = conduit.endRecorded;
+test {
+    _ = @import("test_support.zig");
+    _ = @import("input_writer_test.zig");
+    _ = Pty;
+    _ = Child;
+    _ = Reaper;
+    _ = Orphans;
+    _ = @import("deadline.zig");
+    _ = console;
+    _ = Proxy;
+    _ = Expect;
+    // A module of its own, so its declarations are named here to be
+    // compiled for every target the check builds.
+    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty }) |decl| _ = decl;
+    _ = environ_impl;
+    _ = shell;
+    _ = @import("find.zig");
+    _ = @import("windows_search.zig");
+    _ = @import("spawn_test.zig");
+    _ = @import("descendants_test.zig");
+    _ = @import("windows_completion.zig");
+    if (builtin.os.tag == .linux) _ = @import("supervisor.zig");
+    _ = @import("lineage.zig");
+}
+
+test {
+    _ = @import("child_reaper_test.zig");
+    if (comptime !is_windows) _ = @import("tree_test.zig");
+    if (comptime !is_windows) _ = @import("wait_test.zig");
+    _ = @import("handles_test.zig");
+    _ = @import("lineage_test.zig");
+    _ = @import("expect_test.zig");
+}

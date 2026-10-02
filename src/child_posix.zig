@@ -11,7 +11,7 @@ const posix = std.posix;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig").Child;
+const Child = @import("child_types.zig");
 const State = @import("child_state.zig");
 const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
@@ -43,7 +43,7 @@ const Plan = stdio_plan.Plan(struct {
 });
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!Child {
+pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.
@@ -325,7 +325,7 @@ fn started(
     contained: cgroup.Cgroup,
     plan: *const Plan,
     options: SpawnOptions,
-) Child {
+) *State {
     state.* = .{
         .allocator = state.allocator,
         .descendants = options.descendants,
@@ -348,7 +348,7 @@ fn started(
             else => null,
         },
     };
-    return State.owner(state);
+    return state;
 }
 
 /// Where between the fork and the exec something went wrong, and with what
