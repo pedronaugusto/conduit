@@ -81,8 +81,22 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
 };
 
+pub const entries: []const []const u8 = &.{
+    "src/test_input_process.zig",
+    "src/test_process.zig",
+    "src/test_runner.zig",
+};
+
 pub const modules: []const gantry.NamedModule = &.{.{ .name = "conduit.tty", .path = "src/tty.zig" }};
 pub const references: []const gantry.rules.ReferenceRule = &.{
+    .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
+        "builtin",
+        "conduit_options",
+        "conduit_runner_options",
+        "conduit_test_options",
+        "standard_test_runner",
+        "std",
+    } },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
 };
 

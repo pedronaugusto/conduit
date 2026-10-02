@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Reject undeclared dependencies, duplicate layer membership and imports of source executables.
+
 - Keep Darwin captures distinct from the platform-selected process fixture.
 
 - Preserve platform selection and private process captures in the relocated identity tests.
