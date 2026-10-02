@@ -331,6 +331,8 @@ pub const Child = enum(usize) {
         /// group before the final reap releases its identity. Darwin also ends
         /// descendants whose lineage was observed from before exec; a fork and
         /// parent exit before enumeration or registration can still escape.
+        /// Linux's explicit Reaper subreaper scope also ends and reaps its
+        /// process-wide adopted set at Reaper completion.
         contain,
     };
 

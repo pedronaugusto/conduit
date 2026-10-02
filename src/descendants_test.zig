@@ -196,13 +196,15 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
 }
 
 test "containment ends a double-forked session after normal exit" {
-    if (builtin.os.tag != .macos and !windows) return error.SkipZigTest;
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux and !windows) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
         var fixture = try Fixture.start(.contain, "--double-fork");
         defer fixture.deinit();
+        // No host subreaper opt-in on this path: Linux needs its cgroup.
+        if (builtin.os.tag == .linux and !State.get(&fixture.child).cgroup.active()) return error.SkipZigTest;
         if (!windows) {
             const pid = fixture.daemon.held.processId();
             try std.testing.expect(getpgid(pid) != State.get(&fixture.child).pgid.?);
@@ -265,4 +267,81 @@ test "Darwin measures the fork then exit registration race" {
         std.debug.print("Darwin fork/exit registration ({d} ms observer delay): {d}/{d} detached descendants escaped\n", .{ delay_ms, escapes, attempts });
         if (delay_ms != 0) try std.testing.expect(escapes > 0);
     }
+}
+
+test "a Reaper subreaper ends and reaps a detached orphan without stealing another child" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const Reaper = @import("Reaper.zig").Reaper;
+    const cgroups = @import("cgroup.zig");
+    cgroups.testing_hook.off = true;
+    defer cgroups.testing_hook.off = false;
+    var fixture: Fixture = undefined;
+    var reaper: Reaper = .init(&fixture.child, .{});
+    // Activation precedes spawn: an intermediate can exit before start runs.
+    try reaper.enableSubreaper();
+    errdefer reaper.deinit(io);
+    fixture = try Fixture.start(.contain, "--double-fork");
+    defer fixture.deinit();
+    defer reaper.deinit(io);
+    var unrelated = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "read x; exit 7" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer unrelated.deinit(io);
+    defer _ = unrelated.killWait(io, 0) catch {};
+    try std.testing.expect(!State.get(&fixture.child).cgroup.active());
+    const daemon_id = fixture.daemon.held.processId();
+    try reaper.start(io);
+    fixture.child.closeStdin(io);
+    try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
+    try fixture.expectEnded();
+    var status: c_int = 0;
+    try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(daemon_id, &status, std.posix.W.NOHANG));
+    try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
+    try std.testing.expectEqual(@as(?Child.Term, null), try unrelated.tryWait());
+    unrelated.closeStdin(io);
+    try std.testing.expectEqual(Child.Term{ .exited = 7 }, (try unrelated.waitTimeout(io, budget_ms)).?);
+}
+
+test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const linux = std.os.linux;
+    const cgroups = @import("cgroup.zig");
+    cgroups.testing_hook.off = true;
+    defer cgroups.testing_hook.off = false;
+    var fixture: Fixture = undefined;
+    var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
+    try reaper.enableSubreaper();
+    errdefer reaper.deinit(io);
+    fixture = try Fixture.start(.contain, "--race");
+    defer fixture.deinit();
+    defer reaper.deinit(io);
+    try reaper.start(io);
+    const pid = fixture.daemon.held.processId();
+    const fd = linux.pidfd_open(pid, 0);
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(fd));
+    defer _ = linux.close(@intCast(fd));
+    var info = std.mem.zeroes(linux.siginfo_t);
+    const flags = linux.W.EXITED | linux.W.NOHANG | linux.W.NOWAIT;
+    // The intermediate was reaped before the fixture reported readiness.
+    // This proves adoption before CHILD could be used as evidence of a reap.
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null)));
+    try std.testing.expect(fixture.daemon.held.signal(.KILL));
+    const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+    while (deadline.remainingMs(io) > 0) {
+        const result = linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null));
+        if (result == .CHILD) break;
+        try std.testing.expect(result == .SUCCESS or result == .INTR);
+        try io.sleep(.fromMilliseconds(2), .awake);
+    }
+    try std.testing.expectEqual(linux.E.CHILD, linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null)));
+    try std.testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
+    fixture.child.closeStdin(io);
+    try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
 }
