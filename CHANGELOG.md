@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep Darwin captures distinct from the platform-selected process fixture.
+
 - Preserve platform selection and private process captures in the relocated identity tests.
 - Check containment comments at their shared contract owner.
 
