@@ -28,6 +28,8 @@ static char *program(const char *name, const char *fallback) {
 }
 
 static uint64_t now_ns(void) {
+    static uint64_t smoke_ticks;
+    if (getenv("SMOKE") && strcmp(getenv("SMOKE"), "1") == 0) return ++smoke_ticks;
     struct timespec ts;
     assert(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;

@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn now(io: std.Io) std.Io.Timestamp {
-    return std.Io.Clock.awake.now(io);
+    return benchmarkNow(io);
 }
 
 fn elapsedNs(start: std.Io.Timestamp, io: std.Io) f64 {
@@ -297,4 +297,11 @@ fn oneLeafKill(init: std.process.Init) ![2]f64 {
     const signalled = elapsedNs(start, init.io);
     _ = try child.wait(init.io);
     return .{ signalled, elapsedNs(start, init.io) };
+}
+
+// Smoke exercises correctness without sampling a benchmark clock.
+var smoke_ticks = std.atomic.Value(i64).init(0);
+fn benchmarkNow(io: std.Io) std.Io.Timestamp {
+    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    return std.Io.Clock.awake.now(io);
 }

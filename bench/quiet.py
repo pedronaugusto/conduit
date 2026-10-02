@@ -14,7 +14,9 @@ def main():
         env.update(BENCH_BUILD_ONLY='1',BENCH_BUILD_DIR=str(tools),PYTHON=sys.executable)
         if p.smoke: env['SMOKE']='1'
         else: env.pop('SMOKE',None)
-        p.run([p.here/'run.sh'],env=env)
+        p.setup_run([p.here/'run.sh'],env=env)
+        for asset in ('cargo/release/conduit-rust-bench','go-bench','c-bench','venv/bin/python','data'):
+            p.prepared.require(tools/asset)
         if p.smoke: p.env['SMOKE']='1'
         d = tools/'data'
         commands = {'rust':[tools/'cargo/release/conduit-rust-bench'], 'go':[tools/'go-bench'],

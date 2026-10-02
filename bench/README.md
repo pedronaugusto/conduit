@@ -58,9 +58,7 @@ bytes transferred, grace settings and workload boundaries are unchanged.
 Tiny runs have no timing assertions. Failure to build or complete a workload
 fails the entry point rather than silently dropping a side.
 
-Planning estimate: **15–30 minutes** for the full pass with dependencies ready;
-allow another **5–15 minutes** for a first setup. These are estimates, not
-measurements taken during preparation. `run.sh`, `alternate.sh` and
+Quiet-only planning estimate: **6–15 minutes**. See [QUIET-PREP.md](QUIET-PREP.md) for preparation, counts, sizes and assumptions. `run.sh`, `alternate.sh` and
 `per-commit.sh` remain low-level helpers; use `quiet.sh` for the complete pass.
 
 Standalone `zig build -Doptimize=Debug` compiles the pinned after harness

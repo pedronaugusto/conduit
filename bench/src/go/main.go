@@ -48,11 +48,11 @@ func spawnWait(n int) {
 	for i := 0; i < warm(n, 10); i++ {
 		oneSpawnWait()
 	}
-	start := time.Now()
+	start := benchmarkNow()
 	for i := 0; i < n; i++ {
 		oneSpawnWait()
 	}
-	report("go-os-exec", "SPAWN+WAIT", "latency", float64(time.Since(start).Nanoseconds())/float64(n)/1e3, "us")
+	report("go-os-exec", "SPAWN+WAIT", "latency", float64(benchmarkSince(start).Nanoseconds())/float64(n)/1e3, "us")
 }
 
 func oneCollect(arg string) {
@@ -72,11 +72,11 @@ func spawnCollect(n int, input []byte) {
 	for i := 0; i < warm(n, 5); i++ {
 		oneCollect(arg)
 	}
-	start := time.Now()
+	start := benchmarkNow()
 	for i := 0; i < n; i++ {
 		oneCollect(arg)
 	}
-	report("go-os-exec", "SPAWN+COLLECT", "latency", float64(time.Since(start).Nanoseconds())/float64(n)/1e3, "us")
+	report("go-os-exec", "SPAWN+COLLECT", "latency", float64(benchmarkSince(start).Nanoseconds())/float64(n)/1e3, "us")
 }
 
 func expectedPtyBytes(input []byte) int {
@@ -135,17 +135,17 @@ func ptySpawn(n int, input []byte) {
 	for i := 0; i < warm(n, 3); i++ {
 		onePty(input)
 	}
-	start := time.Now()
+	start := benchmarkNow()
 	for i := 0; i < n; i++ {
 		onePty(input)
 	}
-	report("go-creack-pty", "PTY SPAWN", "latency", float64(time.Since(start).Nanoseconds())/float64(n)/1e3, "us")
+	report("go-creack-pty", "PTY SPAWN", "latency", float64(benchmarkSince(start).Nanoseconds())/float64(n)/1e3, "us")
 }
 
 func ptyThroughput(input []byte) {
 	cmd, f := openCat()
 	done := make(chan error, 1)
-	start := time.Now()
+	start := benchmarkNow()
 	go func() { _, err := f.Write(input); done <- err }()
 	if drainExact(f, expectedPtyBytes(input)) == 0 {
 		panic("zero checksum")
@@ -153,7 +153,7 @@ func ptyThroughput(input []byte) {
 	if err := <-done; err != nil {
 		panic(err)
 	}
-	elapsed := time.Since(start).Seconds()
+	elapsed := benchmarkSince(start).Seconds()
 	if err := cmd.Process.Kill(); err != nil {
 		panic(err)
 	}
@@ -169,11 +169,11 @@ func oneWaitTimeout() float64 {
 	if err := cmd.Start(); err != nil {
 		panic(err)
 	}
-	start := time.Now()
+	start := benchmarkNow()
 	if err := cmd.Wait(); err != nil {
 		panic(err)
 	}
-	return float64(time.Since(start).Nanoseconds())
+	return float64(benchmarkSince(start).Nanoseconds())
 }
 
 func waitTimeout(n int) {
@@ -231,12 +231,12 @@ func oneTreeKill() float64 {
 		panic(err)
 	}
 	pids := childPids(cmd.Process.Pid)
-	start := time.Now()
+	start := benchmarkNow()
 	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
 		panic(err)
 	}
 	_ = cmd.Wait()
-	elapsed := time.Since(start).Seconds()
+	elapsed := benchmarkSince(start).Seconds()
 	confirmGone(pids)
 	return elapsed
 }
@@ -280,4 +280,13 @@ func main() {
 	default:
 		panic("unknown workload")
 	}
+}
+
+func benchmarkNow() time.Time {
+    if os.Getenv("SMOKE") == "1" { return time.Time{} }
+    return time.Now()
+}
+func benchmarkSince(start time.Time) time.Duration {
+    if os.Getenv("SMOKE") == "1" { return time.Nanosecond }
+    return time.Since(start)
 }

@@ -30,7 +30,7 @@ fn one_spawn_wait() {
 
 fn spawn_wait(n: usize) {
     for _ in 0..if std::env::var("SMOKE").as_deref() == Ok("1") { 0 } else { n.min(10) } { one_spawn_wait(); }
-    let start = Instant::now();
+    let start = BenchmarkInstant::now();
     for _ in 0..n { one_spawn_wait(); }
     report("rust-std", "SPAWN+WAIT", "latency", start.elapsed().as_secs_f64() * 1e6 / n as f64, "us");
 }
@@ -49,7 +49,7 @@ fn spawn_collect(n: usize, input: &[u8]) {
     assert_eq!(input.len(), 1024);
     let arg = std::str::from_utf8(input).unwrap();
     for _ in 0..if std::env::var("SMOKE").as_deref() == Ok("1") { 0 } else { n.min(5) } { one_collect(arg); }
-    let start = Instant::now();
+    let start = BenchmarkInstant::now();
     for _ in 0..n { one_collect(arg); }
     report("rust-std", "SPAWN+COLLECT", "latency", start.elapsed().as_secs_f64() * 1e6 / n as f64, "us");
 }
@@ -101,7 +101,7 @@ fn one_pty(input: &[u8]) {
 fn pty_spawn(n: usize, input: &[u8]) {
     assert_eq!(input.len(), 1024);
     for _ in 0..if std::env::var("SMOKE").as_deref() == Ok("1") { 0 } else { n.min(3) } { one_pty(input); }
-    let start = Instant::now();
+    let start = BenchmarkInstant::now();
     for _ in 0..n { one_pty(input); }
     report("rust-portable-pty", "PTY SPAWN", "latency", start.elapsed().as_secs_f64() * 1e6 / n as f64, "us");
 }
@@ -110,7 +110,7 @@ fn pty_throughput(input: &[u8]) {
     let (master, mut child) = open_cat();
     let mut reader = master.try_clone_reader().unwrap();
     let mut writer = master.take_writer().unwrap();
-    let start = Instant::now();
+    let start = BenchmarkInstant::now();
     std::thread::scope(|scope| {
         let tx = scope.spawn(|| writer.write_all(input).unwrap());
         assert_ne!(drain_exact(&mut *reader, expected_pty_bytes(input)), 0);
@@ -148,7 +148,7 @@ fn one_tree_kill() -> f64 {
     cmd.process_group(0);
     let mut child = cmd.spawn().unwrap();
     let pids = child_pids(child.id());
-    let start = Instant::now();
+    let start = BenchmarkInstant::now();
     assert_eq!(unsafe { kill(-(child.id() as i32), 9) }, 0);
     child.wait().unwrap();
     let elapsed = start.elapsed().as_secs_f64();
@@ -176,5 +176,16 @@ fn main() {
         "wait_timeout" => println!("rust-std\tWAIT-TIMEOUT\tovershoot\tn/a\tus"),
         "tree_kill" => tree_kill(n),
         _ => panic!("unknown workload"),
+    }
+}
+
+// Runtime smoke mode never starts a performance clock.
+struct BenchmarkInstant(Option<Instant>);
+impl BenchmarkInstant {
+    fn now() -> Self {
+        Self(if std::env::var("SMOKE").as_deref() == Ok("1") { None } else { Some(Instant::now()) })
+    }
+    fn elapsed(&self) -> std::time::Duration {
+        self.0.map_or(std::time::Duration::from_nanos(1), |start| start.elapsed())
     }
 }

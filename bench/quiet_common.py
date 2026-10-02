@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from prepared import Prepared
 
 class Pass:
     def __init__(self, here, configure=None):
@@ -18,6 +19,8 @@ class Pass:
         self.repo = self.here.parent
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument('--smoke', action='store_true')
+        parser.add_argument('--prepare-only', action='store_true', help='Build full artifacts without measurements')
+        parser.add_argument('--check-prepared', action='store_true', help='Verify full artifacts without building or measuring')
         parser.add_argument('--runs', type=int, default=5)
         parser.add_argument('--before')
         parser.add_argument('--after')
@@ -26,17 +29,31 @@ class Pass:
         if configure: configure(parser)
         self.args = parser.parse_args()
         if self.args.runs < 1: parser.error('--runs must be positive')
+        if self.args.smoke:
+            subprocess.run([sys.executable, str(self.here/'quiet.py'), *[a for a in sys.argv[1:] if a != '--smoke'], '--prepare-only'], check=True)
         self.smoke = self.args.smoke
+        self.preparing = self.smoke or self.args.prepare_only
+        self.plan_only = self.args.prepare_only or self.args.check_prepared
         self.runs = 1 if self.smoke else self.args.runs
         self.build = self.args.build_dir.resolve() / ('smoke' if self.smoke else 'full')
         self.out = (self.args.output or self.here / 'results' / datetime.date.today().isoformat()).resolve()
         self.build.mkdir(parents=True, exist_ok=True)
         self.out.mkdir(parents=True, exist_ok=True)
+        self.prepared = Prepared(self.here, self.build)
+        if not self.preparing:
+            self.prepared.check()
+            if not json.loads(self.prepared.receipt.read_text()).get('smoke_passed'):
+                raise RuntimeError('Preparation has not passed smoke; run bench/quiet.sh --smoke')
         self.env = os.environ.copy()
         self.env.update(PYTHONDONTWRITEBYTECODE='1', GIT_CONFIG_NOSYSTEM='1',
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0',
                         GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='gc.auto', GIT_CONFIG_VALUE_0='0',
                         GIT_CONFIG_KEY_1='maintenance.auto', GIT_CONFIG_VALUE_1='false')
+        cache = self.here/'build/quiet-cache'
+        for key, folder in {'ZIG_GLOBAL_CACHE_DIR':'zig-global', 'CARGO_HOME':'cargo-home',
+                            'CARGO_TARGET_DIR':'cargo-target', 'GOCACHE':'go-cache',
+                            'GOPATH':'go-path', 'GOMODCACHE':'go-mod'}.items():
+            self.env[key] = str(cache/folder)
         for key in ('GIT_DIR','GIT_WORK_TREE','RELIC_BENCH_REPEAT'): self.env.pop(key, None)
         pins = json.loads((self.here / 'revisions.json').read_text())
         self.revisions = {side: self.git('rev-parse', getattr(self.args, side) or pins[side]) for side in ('before','after')}
@@ -54,7 +71,7 @@ class Pass:
         self.metadata = pins
         self.save()
     def git(self, *args):
-        return subprocess.check_output(['git','-C',str(self.repo),*args],text=True).strip()
+        return subprocess.check_output(['git','-C',str(self.repo),*args],text=True,env=self.env).strip()
     def clean(self, value):
         if isinstance(value, dict): return {k:self.clean(v) for k,v in value.items()}
         if isinstance(value, (list,tuple)): return [self.clean(v) for v in value]
@@ -62,15 +79,23 @@ class Pass:
         for path, label in sorted(((self.build,'<build>'),(self.out,'<results>'),(self.repo,'<repo>'),(Path.home(),'<home>')), key=lambda p:-len(str(p[0]))):
             value = value.replace(str(path),label)
         return re.sub(r'/(?:private/)?(?:tmp|var/folders)/[^\s"\t]+','<scratch>',value)
-    def run(self, argv, cwd=None, env=None, timeout=1800):
+    def run(self, argv, cwd=None, env=None, timeout=None):
         proc = subprocess.run(list(map(str,argv)),cwd=cwd,env=env or self.env,
                               capture_output=True,text=True,timeout=timeout)
         if proc.returncode:
             # Do not persist output from a failed smoke either: it can contain timings.
             raise RuntimeError(self.clean(f'command failed (exit {proc.returncode}): '+str(argv)+'\n'+proc.stderr[-5000:]))
         return proc.stdout + proc.stderr
+    def setup_run(self, argv, **kwargs):
+        if self.preparing: return self.run(argv, **kwargs)
+        return ''
     def snapshot(self, side):
         target = self.build / 'sources' / side
+        if not self.preparing:
+            marker = target / '.bench-revision'
+            if not marker.exists() or marker.read_text() != self.revisions[side]:
+                raise RuntimeError('Snapshot revision differs from preparation; run bench/quiet.sh --smoke')
+            return target
         marker = target / '.bench-revision'
         if target.exists() and (not marker.exists() or marker.read_text() != self.revisions[side]):
             shutil.rmtree(target)
@@ -86,9 +111,10 @@ class Pass:
         return target
     def zig(self, source, sub='bench', *steps):
         install = source / sub / 'zig-out'
+        if not self.preparing: return self.prepared.require(install/'bin')
         self.run(['zig','build','-j1','-Doptimize=ReleaseFast',
                   '-Dsmoke='+str(self.smoke).lower(),*(['-Dsnapshot=true'] if sub == 'bench' else []),*steps],cwd=source/sub)
-        return install / 'bin'
+        return self.prepared.require(install / 'bin')
     def point(self, workload, side, argv, round, cwd=None, env=None, prepare=None, check=None):
         print(f'  {workload}: {side} ({round+1}/{self.runs})',flush=True)
         if prepare: prepare()
@@ -111,6 +137,10 @@ class Pass:
         self.save()
         return output
     def interleave(self, workload, commands, **kwargs):
+        if self.plan_only:
+            for _, argv in commands:
+                if Path(str(argv[0])).is_absolute(): self.prepared.require(argv[0])
+            return
         # Same order on every round: A, B, comparisons, A, B, comparisons ...
         if not self.smoke:
             for side, argv in commands:
@@ -126,7 +156,7 @@ class Pass:
                  'harness_dirty':bool(self.git('status','--porcelain','--untracked-files=no')),
                  'order':'A (before), B (after), comparisons; repeated per workload',
                  'samples':self.rows, 'failure':failure,
-                 'complete':self.complete, 'timings_recorded':not self.smoke})
+                 'complete':self.complete, 'timings_recorded':not self.smoke and not self.plan_only})
         name = 'smoke' if self.smoke else 'report'
         (self.out/(name+'.json')).write_text(json.dumps(report,indent=2)+'\n')
         lines = ['# '+('Smoke correctness' if self.smoke else 'Quiet benchmark'),'',
@@ -143,6 +173,8 @@ class Pass:
         if failure: lines += ['', 'Failure: '+str(report['failure'])]
         (self.out/(name+'.md')).write_text('\n'.join(lines)+'\n')
     def finish(self):
+        if self.args.prepare_only: self.prepared.write()
+        if self.smoke: Prepared(self.here, self.args.build_dir.resolve()/'full').certify()
         self.complete = True
         self.save()
         print(f"{'Smoke passed; no timings recorded' if self.smoke else 'Pass complete'}: {self.out}",flush=True)

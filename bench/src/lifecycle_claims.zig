@@ -22,6 +22,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn now(io: std.Io) std.Io.Timestamp {
+    if (smoke) return .{ .nanoseconds = 1 };
     return .now(io, .awake);
 }
 

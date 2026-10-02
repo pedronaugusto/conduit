@@ -6,13 +6,13 @@ var true_program: []const u8 = "true";
 var sleep_program: []const u8 = "sleep";
 
 fn spawnWait(io: std.Io, gpa: std.mem.Allocator, n: usize) !f64 {
-    const start = std.Io.Clock.awake.now(io);
+    const start = benchmarkNow(io);
     for (0..n) |_| {
         var child = try conduit.Child.spawn(io, gpa, .{ .argv = &.{true_program}, .stdio = .ignore });
         defer child.deinit(io);
         _ = try child.wait(io);
     }
-    const ns = start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds;
+    const ns = start.durationTo(benchmarkNow(io)).nanoseconds;
     return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(n)) / 1000.0;
 }
 
@@ -48,9 +48,9 @@ pub fn main(init: std.process.Init) !void {
         for (children[0..live]) |*ch| ch.* = try conduit.Child.spawn(io, gpa, .{ .argv = &.{ sleep_program, "100" }, .stdio = .ignore });
         var best: f64 = 1e9;
         for (0..(if (smoke) @as(usize, 1) else 7)) |_| {
-            const start = std.Io.Clock.awake.now(io);
+            const start = benchmarkNow(io);
             for (0..(if (smoke) @as(usize, 1) else 200)) |_| _ = try orphans.count();
-            const ns = start.durationTo(std.Io.Clock.awake.now(io)).nanoseconds;
+            const ns = start.durationTo(benchmarkNow(io)).nanoseconds;
             best = @min(best, @as(f64, @floatFromInt(ns)) / (if (smoke) @as(f64, 1) else 200) / 1000.0);
         }
         for (children[0..live]) |*ch| {
@@ -60,4 +60,11 @@ pub fn main(init: std.process.Init) !void {
         orphans.deinit();
         std.debug.print("look with {d} own children: {d:.1} us\n", .{ live, best });
     }
+}
+
+// Smoke exercises correctness without sampling a benchmark clock.
+var smoke_ticks = std.atomic.Value(i64).init(0);
+fn benchmarkNow(io: std.Io) std.Io.Timestamp {
+    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    return std.Io.Clock.awake.now(io);
 }
