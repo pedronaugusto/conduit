@@ -135,15 +135,35 @@ kill-on-close flag at the reap, retaining its resource limits; if that call
 fails, the wait reports the error and can be retried. Reap before deinit.
 
 Set `descendants = .contain` when the descendants belong to the child's
-lifetime. Windows keeps job kill-on-close, ending survivors at deinit. POSIX
-makes a private process group even with `detach = false`, and ends that group
-or the Linux cgroup before the final reap releases the child's identity.
-Every wait path, including `output` and `Reaper`, follows the same policy.
-A private group isolates the child from the parent's terminal signals, as
-`detach` does. A descendant that leaves its group and becomes orphaned is
-outside group containment; a Linux cgroup still holds it where one is
-available. Use this policy for cooperative subprocess trees, within the
-platform's reach described below.
+lifetime. POSIX makes a private process group even with `detach = false`,
+isolating the child from the parent's terminal signals. Every wait path,
+including `output` and `Reaper`, follows the same policy.
+
+| Platform | Containment after normal exit |
+| --- | --- |
+| Linux with a writable cgroup | Ends all members before reaping, including detached orphans. A process permitted to leave the cgroup can escape. |
+| Linux without a writable cgroup | Ends the private group before reaping. An orphan that left the group can escape. |
+| macOS | Ends the private group and every descendant whose lineage was observed before reaping. A fork followed by parent exit before enumeration or registration can escape. |
+| Windows | The Job Object retains descendants across separate consoles and intermediate exits; deinit ends its members. |
+| Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
+
+On macOS, a contained spawn holds the root before exec until its lineage
+observer is running. One task owns a kqueue with `NOTE_FORK`, `NOTE_EXEC`
+and `NOTE_EXIT` on every known descendant. Fork notes give no child id:
+the task promptly asks `proc_listchildpids`, captures and proves each edge
+through process unique ids, registers the child before expanding it, and
+retains that identity across exec and reparenting. Final cleanup uses audit
+tokens, so a recycled pid never authorizes a signal. The observer allocates
+from its own page allocator; it does not use the caller's allocator from
+another thread. Startup failure refuses the spawn; an observation failure
+ends the held root and makes the wait fail with `Unexpected`.
+
+This is observed lineage, not a kernel container. A parent can fork and
+exit before the observer discovers or registers its child, including while
+cleanup runs. That child and an unobserved branch below it may escape.
+No names or scans of init's children are used to guess the lost edge.
+The native test measures immediate double-forks and repeats them with a
+controlled observer delay; successful runs do not prove the race absent.
 
 Timeouts in `output`, output errors, `kill` and `killWait` still end the tree
 in either mode, within that same reach. `waitTimeout` remains an observation:

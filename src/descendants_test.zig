@@ -10,6 +10,8 @@ const Watchdog = @import("test_support.zig").Watchdog;
 const io = std.testing.io;
 const gpa = std.testing.allocator;
 const budget_ms = 5000;
+extern "c" fn getpgid(pid: std.posix.pid_t) std.posix.pid_t;
+extern "c" fn getsid(pid: std.posix.pid_t) std.posix.pid_t;
 
 const Process = if (windows) struct {
     handle: win32.HANDLE,
@@ -190,5 +192,77 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
             fixture.child.deinit(io);
             try fixture.expectEnded();
         }
+    }
+}
+
+test "containment ends a double-forked session after normal exit" {
+    if (builtin.os.tag != .macos and !windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
+        var fixture = try Fixture.start(.contain, "--double-fork");
+        defer fixture.deinit();
+        if (!windows) {
+            const pid = fixture.daemon.held.processId();
+            try std.testing.expect(getpgid(pid) != State.get(&fixture.child).pgid.?);
+            try std.testing.expect(getsid(pid) != fixture.child.processId().?);
+            try std.testing.expect(getsid(pid) != pid);
+        }
+        // The intermediate remains alive until EOF. Wait for all three
+        // registrations, so this tests retained lineage under any scheduler;
+        // immediate parent exit is measured separately below.
+        if (builtin.os.tag == .macos) {
+            const tracker = State.get(&fixture.child).lineage.?;
+            const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+            while (tracker.observed.load(.acquire) < 3 and deadline.remainingMs(io) > 0)
+                try io.sleep(.fromMilliseconds(2), .awake);
+            try std.testing.expect(tracker.observed.load(.acquire) >= 3);
+        }
+        fixture.child.closeStdin(io);
+        if (comptime std.mem.eql(u8, method, "tryWait")) {
+            const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+            const term = while (deadline.remainingMs(io) > 0) {
+                if (try fixture.child.tryWait()) |term| break term;
+                try io.sleep(.fromMilliseconds(2), .awake);
+            } else return error.TestChildDidNotExit;
+            try std.testing.expect(Child.succeeded(term));
+        } else if (comptime std.mem.eql(u8, method, "output")) {
+            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            defer output.deinit(gpa);
+            try std.testing.expect(Child.succeeded(output.term()));
+        } else if (comptime std.mem.eql(u8, method, "Reaper")) {
+            var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io);
+            try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
+        } else try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
+        fixture.child.deinit(io);
+        try fixture.expectEnded();
+    }
+}
+
+test "Darwin measures the fork then exit registration race" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const attempts = 100;
+    const hook = &@import("lineage.zig").testing_hook.delay_ms;
+    defer hook.store(0, .release);
+    for ([_]u32{ 0, 20 }) |delay_ms| {
+        hook.store(delay_ms, .release);
+        var escapes: usize = 0;
+        for (0..attempts) |_| {
+            var fixture = try Fixture.start(.contain, "--race");
+            defer fixture.deinit();
+            fixture.child.closeStdin(io);
+            try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
+            // A survivor is counted, then ended through the fixture's captured
+            // identity. Measuring a race does not turn it into a guarantee.
+            if (fixture.daemon.alive()) escapes += 1;
+        }
+        std.debug.print("Darwin fork/exit registration ({d} ms observer delay): {d}/{d} detached descendants escaped\n", .{ delay_ms, escapes, attempts });
+        if (delay_ms != 0) try std.testing.expect(escapes > 0);
     }
 }

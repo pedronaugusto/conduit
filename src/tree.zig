@@ -20,9 +20,9 @@
 //!   table through `sysctl`, so there the process group is the whole of the
 //!   reach, as it was.
 //!
-//! No system names a process that has *both* left the group and been orphaned
-//! before anyone looked: an orphan belongs to `init`, and nothing relates it
-//! to the child any more.
+//! A walk cannot name a process that left its group and was orphaned before
+//! anyone looked. Contained Darwin children retain observed lineage separately
+//! (`lineage.zig`).
 //!
 //! POSIX only. The walk uses a bounded stack buffer to name the tree, and
 //! reports `error.OutOfMemory` if it cannot hold the whole snapshot rather
@@ -865,11 +865,11 @@ const LinuxProcess = struct {
 
 const AuditToken = extern struct { val: [8]c_uint };
 
-const DarwinProcess = struct {
+pub const DarwinProcess = struct {
     pid: posix.pid_t,
     unique_id: u64,
 
-    fn capture(pid: posix.pid_t) ?DarwinProcess {
+    pub fn capture(pid: posix.pid_t) ?DarwinProcess {
         var info: ProcUniqueInfo = undefined;
         const written = proc_pidinfo(pid, proc_pid_unique_info, 0, &info, @sizeOf(ProcUniqueInfo));
         if (written != @sizeOf(ProcUniqueInfo)) return null;
@@ -885,6 +885,14 @@ const DarwinProcess = struct {
         if (info.bsd.status == proc_status_zombie) return null;
         if (info.bsd.start_tvsec *% std.time.us_per_s +% info.bsd.start_tvusec != since) return null;
         return .{ .pid = pid, .unique_id = info.unique.unique_id };
+    }
+
+    /// A lineage edge proved by kernel unique ids, even after reparenting.
+    /// Used only for candidates enumerated below the retained parent.
+    pub fn childOf(process: *const DarwinProcess, parent: *const DarwinProcess) bool {
+        var child: ProcUniqueInfo = undefined;
+        return proc_pidinfo(process.pid, proc_pid_unique_info, 0, &child, @sizeOf(ProcUniqueInfo)) == @sizeOf(ProcUniqueInfo) and
+            child.unique_id == process.unique_id and child.parent_unique_id == parent.unique_id;
     }
 
     /// The kernel refuses signal 0 through a token (`EINVAL`), so `alive`
@@ -1085,17 +1093,26 @@ fn childrenOfNobody(
 /// number.
 extern "c" fn proc_listchildpids(ppid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
-fn childrenOfDarwin(
+fn childrenOfDarwin(pid: posix.pid_t, into: *std.ArrayList(posix.pid_t), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+    observedChildrenOfDarwin(pid, into, allocator) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.SystemResources => return,
+    };
+}
+
+/// An observer must distinguish an unreadable list from an empty one.
+pub fn observedChildrenOfDarwin(
     pid: posix.pid_t,
     into: *std.ArrayList(posix.pid_t),
     allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!void {
+) error{ OutOfMemory, SystemResources }!void {
     // One call for the ordinary case. Asking for an estimate first doubles
     // the system calls for every leaf in the tree; only a full buffer needs
     // the sizing call and retry.
     var local: [32]posix.pid_t = undefined;
     const written = proc_listchildpids(pid, &local, @sizeOf(@TypeOf(local)));
-    if (written <= 0) return;
+    if (written < 0) return error.SystemResources;
+    if (written == 0) return;
     const local_count: usize = @intCast(written);
     if (local_count < local.len) {
         try into.appendSlice(allocator, local[0..local_count]);
@@ -1103,7 +1120,8 @@ fn childrenOfDarwin(
     }
 
     const estimate = proc_listchildpids(pid, null, 0);
-    if (estimate <= 0) return;
+    if (estimate < 0) return error.SystemResources;
+    if (estimate == 0) return;
     var capacity: usize = @max(@as(usize, @intCast(estimate)), local.len * 2);
     while (true) {
         const first = into.items.len;
@@ -1112,6 +1130,7 @@ fn childrenOfDarwin(
         const count = proc_listchildpids(pid, into.items[first..].ptr, bytes);
         if (count <= 0) {
             into.shrinkRetainingCapacity(first);
+            if (count < 0) return error.SystemResources;
             return;
         }
         const child_count: usize = @intCast(count);
@@ -1926,4 +1945,22 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     try testing.expect(process.alive());
     try testing.expect(process.signal(.KILL));
     try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.wait(io));
+}
+
+test "Darwin lineage proves the captured birth parent rather than its pid" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const Child = @import("Child.zig").Child;
+    var child = try Child.spawn(std.testing.io, std.testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(std.testing.io);
+    defer _ = child.killWait(std.testing.io, 0) catch {};
+    const held = DarwinProcess.capture(State.get(&child).id).?;
+    var parent = DarwinProcess.capture(c.getpid()).?;
+    try std.testing.expect(held.childOf(&parent));
+    parent.unique_id +%= 1;
+    try std.testing.expect(!held.childOf(&parent));
+    parent = held;
+    try std.testing.expect(!held.childOf(&parent));
 }

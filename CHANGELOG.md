@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Contained macOS children retain observed fork, exec and exit lineage across double-forks and session changes, with identity-safe ending and an explicitly measured registration race.
+
+| Platform | Containment after normal exit |
+| --- | --- |
+| Linux with a writable cgroup | Ends all members before reaping, including detached orphans; a process permitted to leave the cgroup can escape. |
+| Linux without a writable cgroup | Ends the private group before reaping; an orphan that left the group can escape. |
+| macOS | Ends the private group and observed lineage before reaping; a fork followed by parent exit before enumeration or registration can escape. |
+| Windows | Job Objects retain descendants across separate consoles and intermediate exits; deinit ends the members. |
+| Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
+
 - `SpawnOptions.descendants` chooses one lifecycle policy on every platform: the default `.survive` leaves descendants alone after normal, reaped completion, including Windows daemons; `.contain` ends survivors through job kill-on-close or a private POSIX group or Linux cgroup. Timeout, output error and explicit termination retain tree cleanup.
 - Native daemon tests prove default survival, containment through every reap path, and termination on timeout, kill, killWait and output error; Windows runs them on the hosted runner.
 

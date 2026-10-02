@@ -130,7 +130,14 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // it, so the program the child becomes cannot fork before the watch is
     // in. Without a pipe there is no watch, and `kill` walks as it always
     // did.
-    const go: ?[2]posix.fd_t = if (tree.Forks.supported) controlPipe() catch null else null;
+    const go: ?[2]posix.fd_t = if (tree.Forks.supported) controlPipe() catch |err| failed: {
+        if (options.descendants == .contain) {
+            file(report[0]).close(io);
+            file(report[1]).close(io);
+            return err;
+        }
+        break :failed null;
+    } else null;
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -177,6 +184,19 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // The watch, then the word to go on. This end of the pipe's reading side
     // is still open while the byte is written, so the write cannot meet a
     // pipe with no reader however the child has fared.
+    var lineage: ?*@import("lineage.zig").Tracker = null;
+    if (comptime @import("lineage.zig").supported) if (options.descendants == .contain) {
+        lineage = @import("lineage.zig").Tracker.start(pid) catch |err| {
+            discard(pid);
+            file(report[0]).close(io);
+            if (go) |ends| {
+                file(ends[0]).close(io);
+                file(ends[1]).close(io);
+            }
+            return err;
+        };
+    };
+    errdefer if (lineage) |tracker| tracker.deinit();
     var forks: tree.Forks = .none;
     if (go) |ends| {
         forks = .watch(pid);
@@ -213,7 +233,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
 
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
     contained = null;
-    return started(state, pid, forks, kept, &plan, options);
+    const child = started(state, pid, forks, kept, &plan, options);
+    state.lineage = lineage;
+    return child;
 }
 
 /// Ends and reaps a child that has just been started and will not be handed

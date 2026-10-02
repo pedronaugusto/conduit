@@ -8,6 +8,8 @@ const windows = std.os.windows;
 
 extern "c" fn pause() c_int;
 
+extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
+
 extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 
 pub fn main(init: std.process.Init) !void {
@@ -15,6 +17,13 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len > 1 and std.mem.eql(u8, args[1], "--daemon")) return daemonTree(init, args);
     if (builtin.os.tag != .windows) return posixTree(init, args.len > 1 and std.mem.eql(u8, args[1], "--fail-report"));
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--middle")) {
+        const id = try daemonWindows(init, args[0], false);
+        var buffer: [64]u8 = undefined;
+        const report = try std.fmt.bufPrint(&buffer, "{d}", .{id});
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "daemon-pid", .data = report });
+        return;
+    }
     if (args.len > 1 and std.mem.eql(u8, args[1], "--grandchild")) {
         Sleep(std.math.maxInt(windows.DWORD));
         return;
@@ -91,22 +100,12 @@ fn posixTree(init: std.process.Init, fail_report: bool) !void {
 // The root stays alive until the test has captured the daemon's identity.
 // No daemon inherits the root's pipes; no shell or personal config is read.
 fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
-    const escape = args.len > 2 and std.mem.eql(u8, args[2], "--escape");
-    const id = if (builtin.os.tag == .windows) win: {
-        const allocator = init.arena.allocator();
-        const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, args[0]);
-        const command = try std.fmt.allocPrint(allocator, "\"{s}\" --grandchild", .{args[0]});
-        const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
-        var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
-        startup.cb = @sizeOf(windows.STARTUPINFOW);
-        startup.dwFlags = windows.STARTF_USESHOWWINDOW;
-        var process: windows.PROCESS.INFORMATION = undefined;
-        if (windows.kernel32.CreateProcessW(program.ptr, line.ptr, null, null, .FALSE, .{ .create_new_console = true }, null, null, &startup, &process) == .FALSE)
-            return error.FixtureSpawnFailed;
-        windows.CloseHandle(process.hThread);
-        windows.CloseHandle(process.hProcess);
-        break :win process.dwProcessId;
-    } else posix: {
+    const racing = args.len > 2 and std.mem.eql(u8, args[2], "--race");
+    const double = racing or (args.len > 2 and std.mem.eql(u8, args[2], "--double-fork"));
+    const escape = double or (args.len > 2 and std.mem.eql(u8, args[2], "--escape"));
+    const id = if (builtin.os.tag == .windows)
+        try daemonWindows(init, args[0], double)
+    else posix: {
         const c = std.c;
         var ready: [2]c_int = undefined;
         if (c.pipe(&ready) != 0) return error.FixturePipeFailed;
@@ -115,18 +114,36 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
         if (pid == 0) {
             _ = c.close(ready[0]);
             if (escape and c.setsid() < 0) c._exit(1);
+            if (double) {
+                const grandchild = c.fork();
+                if (grandchild < 0) c._exit(1);
+                if (grandchild > 0) {
+                    // Keep the intermediate parent until the caller releases
+                    // normal exit; its child has already left the private group.
+                    var acknowledged: [1]u8 = undefined;
+                    if (!racing) _ = c.read(0, &acknowledged, 1);
+                    c._exit(0);
+                }
+            }
             _ = c.close(0);
             _ = c.close(1);
             _ = c.close(2);
-            if (c.write(ready[1], "r", 1) != 1) c._exit(1);
+            const daemon_pid: u32 = @intCast(c.getpid());
+            if (c.write(ready[1], std.mem.asBytes(&daemon_pid).ptr, @sizeOf(u32)) != @sizeOf(u32)) c._exit(1);
             _ = c.close(ready[1]);
             while (true) _ = pause();
         }
         _ = c.close(ready[1]);
         defer _ = c.close(ready[0]);
-        var byte: [1]u8 = undefined;
-        if (c.read(ready[0], &byte, 1) != 1) return error.FixtureHandshakeFailed;
-        break :posix @as(u32, @intCast(pid));
+        var daemon_pid: u32 = undefined;
+        if (c.read(ready[0], std.mem.asBytes(&daemon_pid).ptr, @sizeOf(u32)) != @sizeOf(u32)) return error.FixtureHandshakeFailed;
+        if (racing) {
+            var status: c_int = 0;
+            while (c.waitpid(pid, &status, 0) < 0) {
+                if (std.posix.errno(-1) != .INTR) return error.FixtureWaitFailed;
+            }
+        }
+        break :posix daemon_pid;
     };
     var buffer: [64]u8 = undefined;
     const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{id});
@@ -137,4 +154,27 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
         else => return err,
     };
     if (args.len > 2 and std.mem.eql(u8, args[2], "--exit-7")) std.process.exit(7);
+}
+
+/// Each generation has a separate console and inherits no root streams.
+/// The intermediate exits before the root reports its detached grandchild.
+fn daemonWindows(init: std.process.Init, executable: []const u8, double: bool) !u32 {
+    const allocator = init.arena.allocator();
+    const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, executable);
+    const command = try std.fmt.allocPrint(allocator, "\"{s}\" {s}", .{ executable, if (double) "--middle" else "--grandchild" });
+    const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
+    var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+    startup.cb = @sizeOf(windows.STARTUPINFOW);
+    startup.dwFlags = windows.STARTF_USESHOWWINDOW;
+    var process: windows.PROCESS.INFORMATION = undefined;
+    if (windows.kernel32.CreateProcessW(program.ptr, line.ptr, null, null, .FALSE, .{ .create_new_console = true }, null, null, &startup, &process) == .FALSE)
+        return error.FixtureSpawnFailed;
+    defer windows.CloseHandle(process.hThread);
+    defer windows.CloseHandle(process.hProcess);
+    if (!double) return process.dwProcessId;
+    if (WaitForSingleObject(process.hProcess, 5000) != 0)
+        return error.FixtureIntermediateDidNotExit;
+    var buffer: [64]u8 = undefined;
+    const report = try std.Io.Dir.cwd().readFile(init.io, "daemon-pid", &buffer);
+    return std.fmt.parseInt(u32, report, 10);
 }

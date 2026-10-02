@@ -328,8 +328,9 @@ pub const Child = enum(usize) {
         survive,
         /// End descendants on normal completion too. Windows retains job
         /// kill-on-close until deinit; POSIX ends the cgroup or private process
-        /// group before the final reap releases its identity. A process that
-        /// leaves that group is outside containment unless a cgroup holds it.
+        /// group before the final reap releases its identity. Darwin also ends
+        /// descendants whose lineage was observed from before exec; a fork and
+        /// parent exit before enumeration or registration can still escape.
         contain,
     };
 
@@ -628,7 +629,8 @@ pub const Child = enum(usize) {
     ///
     /// A normal, reaped exit leaves descendants alone by default. With
     /// `descendants = .contain`, Windows closes a job with kill-on-close and
-    /// POSIX has ended the private group or cgroup before reaping. Timeout,
+    /// POSIX has ended the private group, cgroup or observed Darwin lineage
+    /// before reaping. Timeout,
     /// output error and explicit termination end the tree in either policy.
     /// A Windows child dropped before reaping retains kill-on-close.
     /// `waitTree` must be asked before deinit closes the job and its port.
@@ -660,6 +662,7 @@ pub const Child = enum(usize) {
             if (State.get(child).handles_open) child.closeHandles();
             child.closeJob();
         } else {
+            if (State.get(child).lineage) |tracker| tracker.deinit();
             State.get(child).forks.close();
             State.get(child).cgroup.release();
         }
@@ -1047,6 +1050,7 @@ pub const Child = enum(usize) {
             switch (wait_for.endedUnreaped(State.get(child).id)) {
                 .running => return null,
                 .ended => {
+                    if (State.get(child).lineage) |tracker| if (!tracker.finish()) return null;
                     const contained = &State.get(child).cgroup;
                     if (!contained.active() or !contained.kill())
                         if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
@@ -1061,6 +1065,11 @@ pub const Child = enum(usize) {
             if (rc == 0) return null;
             if (rc > 0) {
                 const term = statusToTerm(@bitCast(status));
+                if (State.get(child).lineage) |tracker| if (tracker.failedTracking()) {
+                    State.get(child).identity_retired = true;
+                    published = true;
+                    return error.Unexpected;
+                };
                 child.publish(term);
                 published = true;
                 return term;
