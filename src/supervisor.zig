@@ -7,11 +7,16 @@ const posix = std.posix;
 const linux = std.os.linux;
 const Child = @import("Child.zig").Child;
 
+pub const testing_hook = struct {
+    pub var fail_request = false;
+};
+
 pub const Supervisor = struct {
     channel: posix.fd_t,
     record: Child.SupervisorRecord,
 
     pub fn request(self: Supervisor, signal: Child.Signal, cgroup_signalled: bool) Child.KillError!void {
+        if (@import("builtin").is_test and testing_hook.fail_request) return error.Unexpected;
         const byte: u8 = @as(u8, @intCast(@intFromEnum(signal.toPosix()))) | (if (cgroup_signalled) @as(u8, 128) else 0);
         while (true) {
             const rc = linux.sendto(self.channel, std.mem.asBytes(&byte).ptr, 1, linux.MSG.NOSIGNAL | linux.MSG.DONTWAIT, null, 0);

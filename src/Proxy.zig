@@ -372,7 +372,7 @@ test "bytes written to one terminal reach the program on the other, and back" {
         .stdio = .{ .pty = &terminal },
         .detach = true,
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     terminal.closeSlave(io);
 
     var input_buffer: [256]u8 = undefined;
@@ -420,7 +420,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
         .stdio = .{ .pty = &terminal },
         .detach = true,
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
     terminal.closeSlave(io);
 

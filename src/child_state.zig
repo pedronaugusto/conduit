@@ -19,6 +19,9 @@ pty: ?@import("Pty.zig").Pty.Master = null,
 allocator: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.
 descendants: Child.Descendants = .survive,
+/// Completion of the platform scope, independent of recovering root status.
+/// Only lifecycle teardown reads this after all borrowing tasks have joined.
+scope_complete: bool = false,
 /// A termination request owns tree cleanup even if the child catches it and
 /// exits normally. Protected by identity alongside signal delivery and reap.
 end_descendants: bool = false,

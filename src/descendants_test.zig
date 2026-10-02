@@ -61,7 +61,7 @@ const Fixture = struct {
         };
         if (policy == .contain) options.descendants = .contain;
         var child = try Child.spawn(io, gpa, options);
-        errdefer child.deinit(io);
+        errdefer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
         var buffer: [64]u8 = undefined;
         var reader = child.stdoutReader(io, &buffer).?;
@@ -80,7 +80,7 @@ const Fixture = struct {
 
     fn deinit(fixture: *Fixture) void {
         _ = fixture.child.killWait(io, 0) catch {};
-        fixture.child.deinit(io);
+        fixture.child.release(io) catch unreachable;
         fixture.daemon.end();
         fixture.tmp.cleanup();
     }
@@ -126,7 +126,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0);
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE == 0);
         }
-        fixture.child.deinit(io);
+        fixture.child.release(io) catch unreachable;
         try std.testing.expect(fixture.daemon.alive());
         // Observe beyond the asynchronous termination boundary as well.
         try io.sleep(.fromMilliseconds(50), .awake);
@@ -161,7 +161,7 @@ test "containment ends a daemon after normal completion through every reap" {
             defer reaper.deinit(io) catch unreachable;
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
         }
-        fixture.child.deinit(io);
+        fixture.child.release(io) catch unreachable;
         try fixture.expectEnded();
     }
 }
@@ -189,7 +189,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
                 defer _ = fixture.child.takeStdout();
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(io, gpa, .{}));
             }
-            fixture.child.deinit(io);
+            fixture.child.release(io) catch unreachable;
             try fixture.expectEnded();
         }
     }
@@ -238,7 +238,7 @@ test "containment ends a double-forked session after normal exit" {
             defer reaper.deinit(io) catch unreachable;
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
         } else try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
-        fixture.child.deinit(io);
+        fixture.child.release(io) catch unreachable;
         try fixture.expectEnded();
     }
 }
@@ -289,7 +289,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
         .argv = &.{ "/bin/sh", "-c", "read x; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer unrelated.deinit(io);
+    defer unrelated.release(io) catch unreachable;
     defer _ = unrelated.killWait(io, 0) catch {};
     try std.testing.expect(!State.get(&fixture.child).cgroup.active());
     const daemon_id = fixture.daemon.held.processId();
@@ -383,7 +383,7 @@ test "a private supervisor preserves the root exit code and signal" {
     defer watchdog.deinit(io);
     inline for (.{ "exit 7", "kill -TERM $$" }, .{ Child.Term{ .exited = 7 }, Child.Term{ .signal = .TERM } }) |script, expected| {
         var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         try std.testing.expectEqual(expected, (try child.waitTimeout(io, budget_ms)).?);
         try std.testing.expectEqual(expected, (try child.tryWait()).?);
     }
@@ -446,7 +446,7 @@ test "dropping a contained child ends and reaps its private supervisor" {
     defer {
         while (std.c.waitpid(scope, &status, 0) < 0 and std.posix.errno(-1) == .INTR) {}
     }
-    child.deinit(io);
+    child.release(io) catch unreachable;
     try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(scope, &status, std.posix.W.NOHANG));
     try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
 }
@@ -478,4 +478,29 @@ test "every catchable supervisor stop ends and reaps its detached adoptee" {
         try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term.?);
         try std.testing.expect(!fixture.daemon.alive());
     }
+}
+
+test "a failed private scope release keeps ownership for retry" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const supervisor = @import("supervisor.zig");
+    var fixture = try Fixture.start(.contain, "--race");
+    defer fixture.deinit();
+    const scope = State.get(&fixture.child).id;
+    supervisor.testing_hook.fail_request = true;
+    defer supervisor.testing_hook.fail_request = false;
+    const Release = struct {
+        fn run(child: *Child) !void {
+            if (@hasDecl(Child, "release")) try child.release(io) else child.deinit(io);
+        }
+    };
+    try std.testing.expectError(error.Unexpected, Release.run(&fixture.child));
+    try std.testing.expectEqual(scope, State.get(&fixture.child).id);
+    try std.testing.expect(fixture.daemon.alive());
+    supervisor.testing_hook.fail_request = false;
+    try Release.run(&fixture.child);
+    try std.testing.expect(State.optional(&fixture.child) == null);
+    try std.testing.expect(!fixture.daemon.alive());
 }

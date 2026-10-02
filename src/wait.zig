@@ -375,7 +375,7 @@ test "exit observation keeps the child's identity until its owner reaps it" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         .descendants = .contain,
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     const root = child.processId().?;
     // The owned wait identity is the private supervisor on Linux. The root

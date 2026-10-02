@@ -603,7 +603,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         .detach = true,
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [32]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
@@ -662,7 +662,7 @@ test "a rejected Reaper start releases its wake pipe before returning" {
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io) catch unreachable;
@@ -702,7 +702,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io) catch unreachable;
@@ -813,7 +813,7 @@ test "a subreaper teardown retains ownership until every direct child is reaped"
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer other.deinit(io);
+    defer other.release(io) catch unreachable;
     defer _ = other.killWait(io, 0) catch {};
     try std.testing.expectError(error.DirectChildrenRemain, owner.deinit(io));
     var during: c_int = 0;

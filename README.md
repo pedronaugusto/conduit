@@ -90,6 +90,7 @@ to read while a wait or Reaper runs.
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
+| `child.release(io)` | Ends an unfinished contained scope and closes resources only after confirmed completion. Failure retains ownership for retry. `deinit` requires an already completed scope. |
 | `child.containment(buffer)` | Copies the detached group, private Linux supervisor identity and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
@@ -168,8 +169,9 @@ root's grace. Once the root exits, remaining descendants are forced at once;
 The caller holds one socket, closed on exec and closed in the root. Loss of
 that socket ends the scope even if the caller crashes. The root watches its
 supervisor with a parent death `SIGKILL`; this contained policy takes precedence
-over `parent_death_signal`. Dropping an unreaped contained Child ends and reaps
-its supervisor before releasing the lifecycle. Wait first to learn failures.
+over `parent_death_signal`. `Child.release(io)` ends and reaps an unfinished contained scope before
+closing the lifecycle. Failure retains ownership for retry. `Child.deinit(io)`
+requires confirmed scope completion; it never performs hidden scope cleanup.
 
 The supervisor has [tini's](https://github.com/krallin/tini) single-root signal
 forwarding and zombie ownership, with scope completion like

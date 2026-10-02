@@ -59,10 +59,10 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     };
     var root = try Child.spawn(io, testing.allocator, options);
-    defer root.deinit(io);
+    defer root.release(io) catch unreachable;
     defer _ = root.killWait(io, 0) catch {};
     var witness = try Child.spawn(io, testing.allocator, options);
-    defer witness.deinit(io);
+    defer witness.release(io) catch unreachable;
     defer _ = witness.killWait(io, 0) catch {};
 
     // A listed descendant could have been reaped and its pid reused before
@@ -1900,7 +1900,7 @@ test "a captured process keeps its identity across exec" {
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
@@ -1936,7 +1936,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
@@ -1980,7 +1980,7 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(std.testing.io);
+    defer child.release(std.testing.io) catch unreachable;
     defer _ = child.killWait(std.testing.io, 0) catch {};
     const held = DarwinProcess.capture(State.get(&child).id).?;
     var parent = DarwinProcess.capture(c.getpid()).?;

@@ -627,40 +627,41 @@ pub const Child = enum(usize) {
         return @import("child_posix.zig").spawn(io, allocator, configured, state);
     }
 
-    /// Closes the streams this `Child` owns: the pipes `spawn` created, if any,
-    /// and on Windows the process and thread handles when the child was never
-    /// reaped, the job object, and the port the job reports on.
-    ///
-    /// Streams the caller supplied are left alone.
-    ///
-    /// A normal, reaped exit leaves descendants alone by default. With
-    /// `descendants = .contain`, Windows closes a job with kill-on-close and
-    /// POSIX has ended the private group, cgroup or observed Darwin lineage
-    /// before reaping. Timeout,
-    /// output error and explicit termination end the tree in either policy.
-    /// A Windows child dropped before reaping retains kill-on-close. A Linux
-    /// contained child dropped before reaping ends and reaps its supervisor;
-    /// wait before deinit to learn any failure of the scope.
-    /// `waitTree` must be asked before deinit closes the job and its port.
-    ///
-    /// Linux cgroups with surviving members are left until they empty, then
-    /// removed by a later spawn or deinit. No survivor is signalled for that.
-    ///
-    /// Releases the lifecycle allocation. Only deinit, processId, result and kill
-    /// may be called afterwards. Safe to call more than once and before it has been
-    /// reaped, though closing a pipe the child is still writing to earns it a
-    /// `SIGPIPE` on POSIX and a broken-pipe error on Windows.
+    pub const ReleaseError = KillWaitError || WaitTreeError;
+
+    /// Ends an unfinished contained scope, confirms completion, then closes
+    /// the streams and lifecycle. Failure retains the Child and its scope for
+    /// retry. A survival-policy child keeps the ordinary deinit behaviour.
+    /// Join every task borrowing this Child before releasing it.
+    pub fn release(child: *Child, io: std.Io) ReleaseError!void {
+        const state = State.optional(child) orelse return;
+        if (state.descendants == .contain and !state.scope_complete) {
+            _ = try child.killWait(io, 0);
+            if (is_windows) {
+                if (state.job) |job| if (win32.TerminateJobObject(job, 1) == .FALSE)
+                    return win32.unexpected(windows.GetLastError());
+                while (!try child.waitTree(io, std.math.maxInt(u32))) {}
+                state.scope_complete = true;
+            }
+        }
+        child.deinit(io);
+    }
+
+    /// Closes owned streams and lifecycle resources; supplied streams stay open.
+    /// A contained scope must already have confirmed completion. Use release
+    /// to end an unfinished scope and learn cleanup failures. Join every task
+    /// borrowing this Child first. Idempotent, including after release.
+    /// A reaped survival-policy child leaves descendants alone. Linux cgroups
+    /// with surviving members remain until empty and a later cleanup removes them.
     pub fn deinit(child: *Child, io: std.Io) void {
         if (State.optional(child) == null) return;
         const state = State.get(child);
+        std.debug.assert(state.descendants != .contain or state.scope_complete);
         defer {
             const allocator = state.allocator;
             allocator.destroy(state);
             child.* = @enumFromInt(0);
         }
-        if (comptime builtin.os.tag == .linux) if (state.supervisor != null and !state.reaped.load(.acquire)) child.abandon(io);
-        if (!is_windows and state.descendants == .contain and !state.reaped.load(.acquire))
-            child.kill(.kill) catch {};
         if (State.get(child).stdin) |f| f.close(io);
         if (State.get(child).stdout) |f| f.close(io);
         if (State.get(child).stderr) |f| f.close(io);
@@ -1090,6 +1091,7 @@ pub const Child = enum(usize) {
                     State.get(child).identity_retired = true;
                     return err;
                 } else @as(u32, @bitCast(status)) else @as(u32, @bitCast(status));
+                State.get(child).scope_complete = true;
                 const term = statusToTerm(root_status);
                 if (State.get(child).lineage) |tracker| if (tracker.failedTracking()) {
                     State.get(child).identity_retired = true;
@@ -2263,7 +2265,7 @@ pub const Child = enum(usize) {
                 .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
                 .detach = iteration % 2 == 0,
             });
-            defer child.deinit(io);
+            defer child.release(io) catch unreachable;
             defer _ = child.killWait(io, 0) catch {};
             var reaper: @import("Reaper.zig").Reaper = .init(&child, .{});
             stage = "starting Reaper";
@@ -2298,7 +2300,7 @@ pub const Child = enum(usize) {
             .argv = argv,
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         defer _ = child.killWait(io, 0) catch {};
         child.closeStdin(io);
         _ = (try child.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
@@ -2351,7 +2353,7 @@ pub const Child = enum(usize) {
             .argv = &.{ "/bin/sh", "-c", "exit 7" },
             .stdio = .ignore,
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         var status: c_int = undefined;
         while (c.waitpid(State.get(child).id, &status, 0) < 0) {
             if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
@@ -2364,7 +2366,7 @@ pub const Child = enum(usize) {
             .argv = &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
-        defer witness.deinit(io);
+        defer witness.release(io) catch unreachable;
         defer _ = witness.killWait(io, 0) catch {};
         // Substitute an unrelated live process's number for the retired label:
         // exercise PID reuse without relying on the kernel to recycle a pid.

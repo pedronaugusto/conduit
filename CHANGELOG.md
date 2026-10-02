@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Breaking: `Child.release` reports contained cleanup failures and retains ownership for retry; `Child.deinit` requires confirmed scope completion.
+
 - Private Linux supervisors have their own sessions and process groups, and end their scopes on catchable stops.
 
 - A recorded private scope stop stays pending until its supervisor observes it, including before the first poll.
