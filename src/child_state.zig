@@ -19,6 +19,9 @@ pty: ?@import("Pty.zig").Pty.Master = null,
 allocator: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.
 descendants: Child.Descendants = .survive,
+/// Completion of the platform scope, independent of recovering root status.
+/// Only lifecycle teardown reads this after all borrowing tasks have joined.
+scope_complete: bool = false,
 /// A termination request owns tree cleanup even if the child catches it and
 /// exits normally. Protected by identity alongside signal delivery and reap.
 end_descendants: bool = false,
@@ -66,6 +69,10 @@ forks: if (is_windows) void else tree.Forks,
 /// ends the whole of it. Elsewhere, and where none could be made, it is
 /// none, and `kill` walks. `deinit` removes it.
 cgroup: if (is_windows) void else cgroups.Cgroup,
+/// Linux: private adoption owner, with its root status returned on the channel.
+supervisor: if (builtin.os.tag == .linux) ?@import("supervisor.zig").Supervisor else void = if (builtin.os.tag == .linux) null else {},
+/// Darwin: lineage observer, started before the root is released to exec.
+lineage: if (is_windows) void else ?*@import("lineage.zig").Tracker = if (is_windows) {} else null,
 /// How the child ended, once it has been reaped. While this is `null` the
 /// child is still a process the operating system knows about.
 ///

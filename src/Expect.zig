@@ -582,7 +582,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .argv = argv,
             .stdio = .{ .pipes = .{ .stderr = false } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
 
         var buffer: [64]u8 = undefined;
@@ -611,7 +611,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .argv = argv,
             .stdio = .{ .pipes = .{ .stderr = false } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
 
         var buffer: [256]u8 = undefined;
@@ -649,7 +649,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .stdio = .{ .pty = &pty },
             .detach = true,
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
         pty.closeSlave(io);
 
@@ -696,7 +696,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .stdio = .{ .pty = &pty },
             .detach = !is_windows,
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         defer _ = child.killWait(io, 0) catch {};
         if (!is_windows) pty.closeSlave(io);
 
@@ -737,7 +737,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .argv = argv,
             .stdio = .{ .pipes = .{ .stderr = false } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
 
         var buffer: [256]u8 = undefined;
@@ -768,7 +768,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .argv = &.{ "/bin/sh", "-c", "printf 'first SECOND\n'" },
             .stdio = .{ .pipes = .{ .stderr = false } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
 
         var buffer: [256]u8 = undefined;
@@ -805,7 +805,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .argv = &.{ "/bin/sh", "-c", "printf 'here\n'; exec sleep 100" },
             .stdio = .{ .pipes = .{ .stderr = false } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         defer _ = child.killWait(io, 0) catch {};
 
         var buffer: [256]u8 = undefined;
@@ -837,7 +837,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .stdio = .{ .pty = &pty },
             .detach = true,
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
         pty.closeSlave(io);
 
@@ -872,7 +872,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .stdio = .{ .pty = &pty },
             .detach = true,
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         defer _ = child.killWait(io, 0) catch {};
         pty.closeSlave(io);
 
@@ -905,7 +905,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .argv = &.{ "/bin/sh", "-c", "printf 'aaaaaaaa'; read go; printf 'done\n'" },
             .stdio = .{ .pipes = .{ .stderr = false } },
         });
-        defer child.deinit(io);
+        defer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
 
         var buffer: [8]u8 = undefined;

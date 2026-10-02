@@ -7,6 +7,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - Keep the quiet benchmark worktree outside Zig’s disposable cache.
+- Re-point the benchmark checkout and its current revision at main after per-child containment.
+
+- Bound local Zig build caches before builds, retaining downloaded packages and tools.
+- The former Windows Job-close fixture now requires the grandchild to have ended before lifecycle release.
+
+- Contained Windows completion also consumes the Job termination notification, retaining the pending wait after accounting reaches zero.
+
+- The macOS platform table and containment policy comment state the measured fork/registration escape window and its observation boundary.
+
+- Breaking: contained Windows waits publish the root status only after ending the Job and confirming that every member has ended.
+
+- Breaking: `Child.release` reports contained cleanup failures and retains ownership for retry; `Child.deinit` requires confirmed scope completion.
+
+- Private Linux supervisors have their own sessions and process groups, and end their scopes on catchable stops.
+
+- A recorded private scope stop stays pending until its supervisor observes it, including before the first poll.
+- Contained Linux children have independent private subreaper supervisors, exact root status and saved scope identities, with orphan cleanup and reaping even without writable cgroups.
+- Reaper exposes copied adoption records and notifications without lending its scope owner.
+
+- A subreaper Reaper observes and reaps adopted exits even while another task owns the root wait.
+
+- Breaking: Reaper.deinit and Orphans.deinit report failed completion and retain their scope for retry until every direct child and adoptee is reaped.
+
+- `Reaper.enableSubreaper` explicitly owns Linux adoption before spawn, ends and reaps its process-wide orphan set on contained completion, and reaps adopted exits while the root waits; registered direct children keep their own statuses.
+
+- Contained macOS children retain observed fork, exec and exit lineage across double-forks and session changes, with identity-safe ending and an explicitly measured registration race.
+
+| Platform | Containment after normal exit |
+| --- | --- |
+| Linux with a writable cgroup | Ends all members before reaping, including detached orphans; a process permitted to leave the cgroup can escape. |
+| Linux without a writable cgroup, with a Reaper subreaper scope | Reaper completion ends and reaps the process-wide adopted set, including detached orphans; direct children keep their own waits. |
+| Linux without either | Ends the private group before reaping; an orphan that left the group can escape. |
+| macOS | Ends the private group and observed lineage before reaping; a fork followed by parent exit before enumeration or registration can escape. |
+| Windows | Job Objects retain descendants across separate consoles and intermediate exits; deinit ends the members. |
+| Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
+
+The subreaper scope requires conduit for every new direct child, no outside global reaper, and all direct children ended and reaped before teardown; it does not assign adopted orphans to individual children.
 
 - `SpawnOptions.descendants` chooses one lifecycle policy on every platform: the default `.survive` leaves descendants alone after normal, reaped completion, including Windows daemons; `.contain` ends survivors through job kill-on-close or a private POSIX group or Linux cgroup. Timeout, output error and explicit termination retain tree cleanup.
 - Native daemon tests prove default survival, containment through every reap path, and termination on timeout, kill, killWait and output error; Windows runs them on the hosted runner.

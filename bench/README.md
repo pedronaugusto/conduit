@@ -3,8 +3,8 @@
 Keep the `bench` worktree in the workspace’s `.bench/conduit`, outside `.zig-cache`; `bench/quiet.sh` resolves its files from its own directory.
 
 Pinned before: `8adf8af91329333c2deb7db5e2b14fdbae9520d8`.
-Pinned current main at preparation start: `8c1547ba457b4028c22d599e7fa0bf5ef7b4e1fd`.
-The active containment checkout and subsequent main changes are outside these pins.
+Pinned current main: `b615b27f36965131e0d085f31de660b1ab92a16f`.
+The current pin includes per-child containment on main.
 
 `bench/quiet.sh` is the complete pass. `bench/quiet.sh --smoke` exercises
 all available workloads once on tiny fixtures, without warmups or saved timing

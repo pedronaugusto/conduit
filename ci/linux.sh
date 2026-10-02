@@ -27,6 +27,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+sh ci/cache.sh
 
 readonly zig_version=0.16.0
 readonly modes=(Debug ReleaseSafe ReleaseFast ReleaseSmall)

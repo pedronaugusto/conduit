@@ -328,23 +328,23 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         return out[0..n];
     }
 
-    /// Reaps what has ended, lets go of every pidfd, and puts this process's
-    /// subreaper attribute back as `start` found it.
-    ///
-    /// It signals nothing. An adopted process still running stays this
-    /// process's child, and with nothing left to reap it, it is a zombie from the
-    /// moment it ends until this process ends: call `end` first. Orphans made
-    /// after this go where they went before `start`.
-    ///
-    /// Idempotent.
-    pub fn deinit(orphans: *Orphans) void {
+    /// Restores the process attribute and releases the scope after all direct
+    /// children and adoptees have been reaped. A failure keeps ownership and
+    /// every remaining identity intact, so the owner can end them and retry.
+    /// Idempotent after success. No child may be spawned during teardown.
+    pub const DeinitError = LookError || error{ DirectChildrenRemain, OrphansRemain };
+
+    pub fn deinit(orphans: *Orphans) DeinitError!void {
         if (!supported or !orphans.inner().running) return;
         gate.lock();
         defer gate.unlock();
         orphans.inner().lock.lock();
         defer orphans.inner().lock.unlock();
+        try orphans.look();
         orphans.reapEnded();
-        if (!orphans.inner().was_subreaper) setSubreaper(false) catch {};
+        if (orphans.inner().own.items.len != 0) return error.DirectChildrenRemain;
+        if (orphans.inner().adopted.items.len != 0) return error.OrphansRemain;
+        if (!orphans.inner().was_subreaper) try setSubreaper(false);
         active.store(false, .release);
         current = null;
         orphans.inner().running = false;
@@ -852,7 +852,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 test "orphan records retain a pid and its captured start time" {
     var storage: [1]Orphans.Record = undefined;
     var orphans: Orphans = .init(std.testing.allocator);
-    defer orphans.deinit();
+    defer orphans.deinit() catch unreachable;
     try std.testing.expectEqual(@as(usize, 0), (try orphans.list(&storage)).len);
 }
 

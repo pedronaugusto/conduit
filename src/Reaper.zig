@@ -55,6 +55,7 @@ const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 const handles = @import("handles.zig");
 const tree = if (is_windows) struct {} else @import("tree.zig");
+const Orphans = @import("Orphans.zig").Orphans;
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
 
 const Term = Child.Term;
@@ -105,6 +106,10 @@ const Implementation = struct {
     /// and has no deadline, so this is what ends it early. `null` until `start`,
     /// and where a pipe could not be had.
     wake: if (is_windows) void else ?[2]posix.fd_t,
+
+    /// The explicit process-wide adoption scope, owned until deinit.
+    orphans: ?*Orphans,
+    observation_failed: std.atomic.Value(bool),
 
     lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
 };
@@ -167,9 +172,54 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .answered = .unset,
             .stop = .{},
             .wake = if (is_windows) {} else null,
+            .orphans = null,
+            .observation_failed = .init(false),
             .lifetime = .init(.ready),
         };
         return reaper;
+    }
+
+    /// Make this process a Linux child subreaper before spawning the child.
+    /// One Reaper owns this process-wide scope. All adopted orphans belong to
+    /// it, including those from other direct children; they have no remaining
+    /// per-child attribution. Existing and conduit-spawned direct children keep
+    /// their own waits. Until deinit, every new direct child must use conduit,
+    /// and no outside waitpid(-1) or SIGCHLD reaper may consume their statuses.
+    /// The Child address may be reserved before spawn; start needs it initialized.
+    /// End and reap all direct children before deinit: a running direct child
+    /// could create another orphan while the process setting is restored.
+    /// Configure once, before start, from the owner's task. Unsupported off Linux.
+    /// An independent task observes and reaps exited adoptees every 5 ms, even
+    /// if another task owns the root wait. Scheduling and procfs access can
+    /// extend that interval.
+    pub fn enableSubreaper(reaper: *Reaper) Orphans.StartError!void {
+        if (reaper.inner().lifetime.load(.acquire) != .ready or reaper.inner().orphans != null)
+            return error.AlreadyStarted;
+        const allocator = std.heap.page_allocator;
+        const orphans = try allocator.create(Orphans);
+        errdefer allocator.destroy(orphans);
+        orphans.* = .init(allocator);
+        try orphans.start();
+        reaper.inner().orphans = orphans;
+    }
+
+    /// Copy identities owned by this explicit adoption scope. No record borrows
+    /// the scope or confers signal authority. Empty without enableSubreaper.
+    pub fn adoptionRecords(reaper: *Reaper, out: []Orphans.Record) Orphans.ListError![]Orphans.Record {
+        const owner = reaper.inner().orphans orelse return out[0..0];
+        return owner.list(out);
+    }
+
+    /// Notification of new scoped records, registered before start. Reset the
+    /// event, compare adoptionCount, and take another snapshot if it changed.
+    pub fn adoptionEvent(reaper: *Reaper, io: std.Io) ?*std.Io.Event {
+        const owner = reaper.inner().orphans orelse return null;
+        return owner.adoptionEvent(io);
+    }
+
+    pub fn adoptionCount(reaper: *const Reaper) u64 {
+        const owner = reaper.innerConst().orphans orelse return 0;
+        return owner.adoptionCount();
     }
 
     pub const StartError = std.Io.ConcurrentError || error{AlreadyStarted};
@@ -185,11 +235,16 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         if (reaper.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null)
             return error.AlreadyStarted;
         errdefer reaper.inner().lifetime.store(.ready, .release);
+        reaper.inner().observation_failed.store(false, .release);
         // Without a pipe the wait falls back to Child.wait, which is
         // a cancelation point of its own: the wake is how a better wait is ended,
         // not a condition of waiting at all.
         if (!is_windows) reaper.inner().wake = handles.pipe() catch null;
         errdefer reaper.closeWake();
+        if (reaper.inner().orphans != null) {
+            try reaper.inner().group.concurrent(io, observeAdoption, .{ reaper, io });
+        }
+        errdefer reaper.inner().group.cancel(io);
         return reaper.inner().group.concurrent(io, run, .{ reaper, io });
     }
 
@@ -281,14 +336,28 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// do goes with it — so a program that wants the child gone should see it
     /// gone first, with `stop` and `wait`.
     ///
-    /// Idempotent.
-    pub fn deinit(reaper: *Reaper, io: std.Io) void {
-        if (reaper.inner().lifetime.swap(.closed, .acq_rel) == .closed) return;
+    /// With enableSubreaper, call after all direct children ended and were reaped.
+    /// It ends and reaps remaining adoptees, then restores the process setting.
+    /// Cancellation, resource and restoration failures retain the scope for
+    /// retry. DirectChildrenRemain means a direct child still owns a wait.
+    /// Idempotent after successful completion.
+    pub const DeinitError = Orphans.EndError || Orphans.DeinitError;
+
+    pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {
+        if (reaper.inner().lifetime.swap(.closed, .acq_rel) == .closed and reaper.inner().orphans == null) return;
         if (!is_windows) if (reaper.inner().wake) |ends| {
             _ = c.write(ends[1], "x", 1);
         };
         reaper.inner().group.cancel(io);
         reaper.closeWake();
+        if (reaper.inner().orphans) |orphans| {
+            // A process-wide owner cannot leave an adoptee without a future
+            // wait. End before restoring the attribute and releasing pidfds.
+            try orphans.end(io, 0);
+            try orphans.deinit();
+            std.heap.page_allocator.destroy(orphans);
+            reaper.inner().orphans = null;
+        }
     }
 
     /// A rejected start and a joined task release the same owned wake handles.
@@ -300,10 +369,39 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         };
     }
 
+    /// Independent of root wait ownership: another task may hold that wait
+    /// for the root's whole lifetime. This observer still reaps adopted exits.
+    fn observeAdoption(reaper: *Reaper, io: std.Io) void {
+        if (builtin.os.tag != .linux) return;
+        while (reaper.inner().state.load(.acquire) == running) {
+            reaper.lookOrphans() catch {
+                reaper.inner().observation_failed.store(true, .release);
+                return;
+            };
+            io.sleep(.fromMilliseconds(wait_for.slice_ms), .awake) catch return;
+        }
+    }
+
     fn run(reaper: *Reaper, io: std.Io) void {
-        const result = reaper.reap(io);
+        const result = reaper.reapOwned(io);
         reaper.inner().state.store(if (result) |term| encode(term) else |err| encodeError(err), .release);
         reaper.inner().answered.set(io);
+    }
+
+    /// Adoption is process-wide, so its one owner cleans it after every reap
+    /// route, including a Child.wait that won the wait before this task.
+    fn reapOwned(reaper: *Reaper, io: std.Io) ExitError!Term {
+        const term = try reaper.reap(io);
+        if (reaper.inner().orphans) |orphans| {
+            if (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null or
+                State.get(reaper.inner().child).descendants == .contain)
+                orphans.end(io, reaper.inner().stop.remaining(io) orelse 0) catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    else => return error.Unexpected,
+                };
+        }
+        if (reaper.inner().observation_failed.load(.acquire)) return error.Unexpected;
+        return term;
     }
 
     fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
@@ -325,11 +423,11 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         if (try reaper.inner().child.result()) |term| return term;
         if (wait_for.Watch.open(State.get(reaper.inner().child).id)) |watch| {
             defer watch.close();
-            while (true) switch (watch.endedOrWoken(wake[0], null)) {
+            while (true) switch (watch.endedOrWoken(wake[0], if (reaper.inner().orphans != null) wait_for.slice_ms else null)) {
                 .ended => break,
                 .woken => return error.Canceled,
                 // a signal, not the end: ask again
-                .timed_out => {},
+                .timed_out => try reaper.lookOrphans(),
             };
         } else {
             // No watch. Darwin refuses one on a child that has already ended --
@@ -340,14 +438,18 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             // Child.wait, and the group is left as it is.
             while (true) switch (wait_for.endedUnreaped(State.get(reaper.inner().child).id)) {
                 .ended => break,
-                .running => if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled,
+                .running => {
+                    try reaper.lookOrphans();
+                    if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled;
+                },
                 .unknown => return held.wait(io),
             };
         }
         // Ended, and not yet reaped: the group's id is still the child's, and
         // what is left in the group can be addressed by it. A child in a cgroup
         // of its own has what it left in there, wherever its group went.
-        if (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null) {
+        const supervised = if (builtin.os.tag == .linux) State.get(reaper.inner().child).supervisor != null else false;
+        if (!supervised and (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null)) {
             if (State.get(reaper.inner().child).cgroup.active()) {
                 if (!reaper.endContained(io, wake[0])) return error.Canceled;
             } else if (State.get(reaper.inner().child).pgid) |pgid| {
@@ -355,6 +457,13 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             }
         }
         return held.wait(io);
+    }
+
+    /// Only an explicitly enabled scope pays this look. Linux provides no
+    /// adoption fd; bounded waits also collect and reap adoptees while the root
+    /// keeps running, so an idle root does not leave an exited orphan a zombie.
+    fn lookOrphans(reaper: *Reaper) ExitError!void {
+        if (reaper.inner().orphans) |orphans| _ = orphans.count() catch return error.Unexpected;
     }
 
     /// What the child left in its cgroup: asked, given the grace, then made.
@@ -494,7 +603,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         .detach = true,
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [32]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
@@ -553,10 +662,10 @@ test "a rejected Reaper start releases its wake pipe before returning" {
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var reaper: Reaper = .init(&child, .{});
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     const Reject = struct {
         reaper: *Reaper,
         ends: ?[2]posix.fd_t = null,
@@ -593,10 +702,10 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var reaper: Reaper = .init(&child, .{});
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     const Clock = struct {
         ms: u32 = 0,
         waits: usize = 0,
@@ -658,4 +767,57 @@ test "a stop keeps its first deadline and a force expires the same grace" {
     Clock.milliseconds = 200;
     try std.testing.expect(!stop.request(io, 100));
     try std.testing.expectEqual(@as(?u32, 0), stop.remaining(io));
+}
+
+test "subreaping belongs to one Reaper and restores the process attribute" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const linux = std.os.linux;
+    var before: c_int = 0;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&before), 0, 0, 0)));
+    var child: Child = @enumFromInt(0);
+    var owner: Reaper = .init(&child, .{});
+    try owner.enableSubreaper();
+    defer owner.deinit(std.testing.io) catch unreachable;
+    try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
+    var other: Reaper = .init(&child, .{});
+    defer other.deinit(std.testing.io) catch unreachable;
+    try std.testing.expectError(error.AlreadyStarted, other.enableSubreaper());
+    var during: c_int = 0;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
+    try std.testing.expectEqual(@as(c_int, 1), during);
+    owner.deinit(std.testing.io) catch unreachable;
+    owner.deinit(std.testing.io) catch unreachable;
+    try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
+    var after: c_int = 0;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&after), 0, 0, 0)));
+    try std.testing.expectEqual(before, after);
+    try other.enableSubreaper();
+}
+
+test "Reaper subreaping is unsupported off Linux" {
+    if (builtin.os.tag == .linux) return error.SkipZigTest;
+    var child: Child = @enumFromInt(0);
+    var reaper: Reaper = .init(&child, .{});
+    defer reaper.deinit(std.testing.io) catch unreachable;
+    try std.testing.expectError(error.Unsupported, reaper.enableSubreaper());
+}
+
+test "a subreaper teardown retains ownership until every direct child is reaped" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = std.testing.io;
+    var child: Child = @enumFromInt(0);
+    var owner: Reaper = .init(&child, .{});
+    try owner.enableSubreaper();
+    defer owner.deinit(io) catch unreachable;
+    var other = try Child.spawn(io, std.testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer other.release(io) catch unreachable;
+    defer _ = other.killWait(io, 0) catch {};
+    try std.testing.expectError(error.DirectChildrenRemain, owner.deinit(io));
+    var during: c_int = 0;
+    const linux = std.os.linux;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
+    try std.testing.expectEqual(@as(c_int, 1), during);
 }

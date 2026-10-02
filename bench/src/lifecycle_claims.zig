@@ -129,7 +129,7 @@ fn stopClaims(init: std.process.Init, stubborn: bool) !void {
     if (!std.mem.eql(u8, (try reader.interface.takeDelimiter('\n')).?, "ready")) return error.NotReady;
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(init.io);
-    defer reaper.deinit(init.io);
+    defer api.deinitReaper(&reaper, init.io);
     const grace: u32 = if (stubborn) 300 else 60_000;
     const start = now(init.io);
     reaper.stop(init.io, grace);
@@ -152,10 +152,10 @@ fn reaperJoin(init: std.process.Init) !void {
     defer _ = child.killWait(init.io, 0) catch {};
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(init.io);
-    defer reaper.deinit(init.io);
+    defer api.deinitReaper(&reaper, init.io);
     try init.io.sleep(.fromMilliseconds(20), .awake);
     const start = now(init.io);
-    reaper.deinit(init.io);
+    api.deinitReaper(&reaper, init.io);
     try report(init, "Reaper join with live child, us (before 5 s)", us(start, init.io), 5_000_000 - 1);
 }
 

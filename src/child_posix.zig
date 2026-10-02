@@ -20,6 +20,7 @@ const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
 const cgroup = @import("cgroup.zig");
 const Orphans = @import("Orphans.zig").Orphans;
+const supervisor = if (builtin.os.tag == .linux) @import("supervisor.zig") else struct {};
 
 const file = handles.file;
 
@@ -124,13 +125,30 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // How the fork child reports a failure that happens after the fork. The
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
+    const supervised = builtin.os.tag == .linux and options.descendants == .contain;
+    var channel_ends: ?[2]posix.fd_t = if (supervised) try supervisor.channel() else null;
+    errdefer if (channel_ends) |ends| {
+        _ = c.close(ends[0]);
+        _ = c.close(ends[1]);
+    };
+    const scope_kill: ?posix.fd_t = if (supervised) if (contained) |pending| cgroup.supervisorKillDescriptor(pending) else null else null;
+    defer if (scope_kill) |fd| {
+        _ = c.close(fd);
+    };
     const report = try controlPipe();
     // Where there is a watch on the child's forks (`tree.Forks`), the fork
     // child waits on this before its `execve` until the parent has registered
     // it, so the program the child becomes cannot fork before the watch is
     // in. Without a pipe there is no watch, and `kill` walks as it always
     // did.
-    const go: ?[2]posix.fd_t = if (tree.Forks.supported) controlPipe() catch null else null;
+    const go: ?[2]posix.fd_t = if (tree.Forks.supported or supervised) controlPipe() catch |err| failed: {
+        if (options.descendants == .contain) {
+            file(report[0]).close(io);
+            file(report[1]).close(io);
+            return err;
+        }
+        break :failed null;
+    } else null;
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -140,10 +158,35 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     if (builtin.is_test) @import("test_support.zig").SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
+        var root_parent = parent;
+        if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
+            _ = c.close(ends[0]);
+            clearSignals();
+            const prepared = switch (supervisor.prepare()) {
+                .ready => |prepared| prepared,
+                .failed => |errno| {
+                    const record: Failure = .{ .stage = .supervisor, .errno = @intFromEnum(errno) };
+                    _ = c.write(report[1], std.mem.asBytes(&record), @sizeOf(Failure));
+                    c._exit(127);
+                },
+            };
+            root_parent = c.getpid();
+            const root = c.fork();
+            if (root < 0) bail(report[1], .supervisor);
+            if (root != 0) {
+                const root_record: Failure = .{ .stage = .supervisor_root, .errno = @intCast(root) };
+                _ = c.write(report[1], std.mem.asBytes(&root_record), @sizeOf(Failure));
+                supervisor.run(root, ends[1], options.detach, prepared, scope_kill);
+            }
+            _ = c.close(ends[1]);
+            _ = c.close(prepared.signals);
+            _ = c.close(prepared.children);
+            if (scope_kill) |fd| _ = c.close(fd);
+        };
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
         const join: posix.fd_t = if (contained) |pending| pending.joinDescriptor() else -1;
-        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent, go, join);
+        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], root_parent, go, join);
     }
     handles.ForkGap.release();
 
@@ -171,12 +214,50 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
         return err;
     };
     adoption.finish();
+    if (channel_ends) |*ends| {
+        _ = c.close(ends[1]);
+        ends[1] = -1;
+    }
     file(report[1]).close(io);
     plan.closeChildSide(io);
 
     // The watch, then the word to go on. This end of the pipe's reading side
     // is still open while the byte is written, so the write cannot meet a
     // pipe with no reader however the child has fared.
+    var lineage: ?*@import("lineage.zig").Tracker = null;
+    if (comptime @import("lineage.zig").supported) if (options.descendants == .contain) {
+        lineage = @import("lineage.zig").Tracker.start(pid) catch |err| {
+            discard(pid);
+            file(report[0]).close(io);
+            if (go) |ends| {
+                file(ends[0]).close(io);
+                file(ends[1]).close(io);
+            }
+            return err;
+        };
+    };
+    errdefer if (lineage) |tracker| tracker.deinit();
+    const scope_record: ?Child.SupervisorRecord = if (supervised) .{
+        .pid = pid,
+        .start = (tree.startTime(pid) catch null) orelse {
+            discard(pid);
+            file(report[0]).close(io);
+            if (go) |ends| {
+                file(ends[0]).close(io);
+                file(ends[1]).close(io);
+            }
+            return error.Unexpected;
+        },
+        .boot = cgroup.bootIdentity() orelse {
+            discard(pid);
+            file(report[0]).close(io);
+            if (go) |ends| {
+                file(ends[0]).close(io);
+                file(ends[1]).close(io);
+            }
+            return error.Unexpected;
+        },
+    } else null;
     var forks: tree.Forks = .none;
     if (go) |ends| {
         forks = .watch(pid);
@@ -195,6 +276,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     var n = readAll(report[0], std.mem.asBytes(&record));
     // A child that could not join its cgroup says so and carries on; the
     // record after it, if any, is the one that ends the spawn.
+    var root_pid = pid;
+    if (n == @sizeOf(Failure) and record.stage == .supervisor_root) {
+        root_pid = @intCast(record.errno);
+        n = readAll(report[0], std.mem.asBytes(&record));
+    }
     var joined = contained != null;
     if (n == @sizeOf(Failure) and record.stage == .containment) {
         joined = false;
@@ -213,7 +299,14 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
 
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
     contained = null;
-    return started(state, pid, forks, kept, &plan, options);
+    const child = started(state, pid, forks, kept, &plan, options);
+    state.lineage = lineage;
+    if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
+        state.supervisor = .{ .channel = ends[0], .record = scope_record.? };
+        state.process_id = root_pid;
+        state.pgid = if (options.detach) root_pid else null;
+    };
+    return child;
 }
 
 /// Ends and reaps a child that has just been started and will not be handed
@@ -278,6 +371,8 @@ const Failure = extern struct {
         /// without one. Written before the exec, and followed by a failure
         /// or by nothing.
         containment,
+        supervisor,
+        supervisor_root,
     };
 
     fn toError(record: Failure) SpawnError {
@@ -301,6 +396,15 @@ const Failure = extern struct {
             },
             .exec => Child.execError(err),
             .parent_death_signal => posix.unexpectedErrno(err),
+            .supervisor => switch (err) {
+                .AGAIN => error.ResourceLimitReached,
+                .NOMEM => error.SystemResources,
+                .MFILE => error.ProcessFdQuotaExceeded,
+                .NFILE => error.SystemFdQuotaExceeded,
+                .NOSYS, .INVAL, .NOENT => error.Unsupported,
+                else => error.Unexpected,
+            },
+            .supervisor_root => error.Unexpected,
             // Never the record that ends a spawn; a second one would be.
             .containment => posix.unexpectedErrno(err),
         };
@@ -338,7 +442,7 @@ fn childMain(
     clearSignals();
 
     // `spawn` refuses the option anywhere but Linux.
-    if (builtin.os.tag == .linux) if (options.parent_death_signal) |signal| {
+    if (builtin.os.tag == .linux) if (if (options.descendants == .contain) @as(?Child.Signal, .kill) else options.parent_death_signal) |signal| {
         const sig = signal.toPosix();
         const rc = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_PDEATHSIG), @intFromEnum(sig), 0, 0, 0);
         if (std.os.linux.errno(rc) != .SUCCESS) bail(report, .parent_death_signal);

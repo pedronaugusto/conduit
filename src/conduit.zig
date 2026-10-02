@@ -258,4 +258,7 @@ test {
     _ = @import("windows_search.zig");
     _ = @import("spawn_test.zig");
     _ = @import("descendants_test.zig");
+    _ = @import("windows_completion.zig");
+    if (builtin.os.tag == .linux) _ = @import("supervisor.zig");
+    _ = @import("lineage.zig");
 }
