@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A subreaper Reaper observes and reaps adopted exits even while another task owns the root wait.
+
 - Breaking: Reaper.deinit and Orphans.deinit report failed completion and retain their scope for retry until every direct child and adoptee is reaped.
 
 - `Reaper.enableSubreaper` explicitly owns Linux adoption before spawn, ends and reaps its process-wide orphan set on contained completion, and reaps adopted exits while the root waits; registered direct children keep their own statuses.

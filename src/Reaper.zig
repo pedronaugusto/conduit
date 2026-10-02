@@ -109,6 +109,7 @@ const Implementation = struct {
 
     /// The explicit process-wide adoption scope, owned until deinit.
     orphans: ?*Orphans,
+    observation_failed: std.atomic.Value(bool),
 
     lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
 };
@@ -172,6 +173,7 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .stop = .{},
             .wake = if (is_windows) {} else null,
             .orphans = null,
+            .observation_failed = .init(false),
             .lifetime = .init(.ready),
         };
         return reaper;
@@ -187,8 +189,9 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// End and reap all direct children before deinit: a running direct child
     /// could create another orphan while the process setting is restored.
     /// Configure once, before start, from the owner's task. Unsupported off Linux.
-    /// While waiting, this scope looks for and reaps exited adoptees in 5 ms
-    /// wait slices. Scheduling and procfs access can extend that interval.
+    /// An independent task observes and reaps exited adoptees every 5 ms, even
+    /// if another task owns the root wait. Scheduling and procfs access can
+    /// extend that interval.
     pub fn enableSubreaper(reaper: *Reaper) Orphans.StartError!void {
         if (reaper.inner().lifetime.load(.acquire) != .ready or reaper.inner().orphans != null)
             return error.AlreadyStarted;
@@ -213,11 +216,16 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         if (reaper.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null)
             return error.AlreadyStarted;
         errdefer reaper.inner().lifetime.store(.ready, .release);
+        reaper.inner().observation_failed.store(false, .release);
         // Without a pipe the wait falls back to Child.wait, which is
         // a cancelation point of its own: the wake is how a better wait is ended,
         // not a condition of waiting at all.
         if (!is_windows) reaper.inner().wake = handles.pipe() catch null;
         errdefer reaper.closeWake();
+        if (reaper.inner().orphans != null) {
+            try reaper.inner().group.concurrent(io, observeAdoption, .{ reaper, io });
+        }
+        errdefer reaper.inner().group.cancel(io);
         return reaper.inner().group.concurrent(io, run, .{ reaper, io });
     }
 
@@ -342,6 +350,19 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         };
     }
 
+    /// Independent of root wait ownership: another task may hold that wait
+    /// for the root's whole lifetime. This observer still reaps adopted exits.
+    fn observeAdoption(reaper: *Reaper, io: std.Io) void {
+        if (builtin.os.tag != .linux) return;
+        while (reaper.inner().state.load(.acquire) == running) {
+            reaper.lookOrphans() catch {
+                reaper.inner().observation_failed.store(true, .release);
+                return;
+            };
+            io.sleep(.fromMilliseconds(wait_for.slice_ms), .awake) catch return;
+        }
+    }
+
     fn run(reaper: *Reaper, io: std.Io) void {
         const result = reaper.reapOwned(io);
         reaper.inner().state.store(if (result) |term| encode(term) else |err| encodeError(err), .release);
@@ -360,6 +381,7 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                     else => return error.Unexpected,
                 };
         }
+        if (reaper.inner().observation_failed.load(.acquire)) return error.Unexpected;
         return term;
     }
 

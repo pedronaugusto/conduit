@@ -319,9 +319,16 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
     try reaper.enableSubreaper();
     errdefer reaper.deinit(io) catch unreachable;
-    fixture = try Fixture.start(.contain, "--race");
-    defer fixture.deinit();
-    defer reaper.deinit(io) catch unreachable;
+    fixture = try Fixture.start(.survive, "--race");
+    const held = fixture.child.holdReap().?;
+    var holding = true;
+    defer {
+        if (holding) held.release();
+        reaper.stop(io, 0);
+        _ = fixture.child.killWait(io, 0) catch {};
+        reaper.deinit(io) catch unreachable;
+        fixture.deinit();
+    }
     try reaper.start(io);
     const pid = fixture.daemon.held.processId();
     const fd = linux.pidfd_open(pid, 0);
@@ -342,6 +349,8 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     }
     try std.testing.expectEqual(linux.E.CHILD, linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null)));
     try std.testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
+    held.release();
+    holding = false;
     fixture.child.closeStdin(io);
     try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
 }
