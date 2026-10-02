@@ -17,16 +17,79 @@ env:
   ZIG_VERSION: 0.16.0
 
 jobs:
-  # The whole suite on the hosts where it runs to the end. A pseudo-terminal is
-  # a kernel object and a process group is a kernel concept, so a
-  # cross-compilation check proves nothing about either: this job is where the
-  # behaviour is tested. Windows has a job of its own below.
+  # Debug catches safety faults; ReleaseSafe checks optimized code and timing on each host.
+  # ReleaseSafe exercises optimized fork/exec code; there is no separate ReleaseSmall assertion.
+  # The full test target already builds and runs the examples.
+  # The watchdog names stuck tests and teardown, so Windows no longer needs filtered rebuilds.
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, ${{ matrix.optimize }})
     runs-on: ${{ matrix.os }}
-    # A suite that hangs reports nothing and sits until the run is killed by
-    # hand. Every job here finishes in a couple of minutes; this is the bound
-    # that turns a hang into a failure.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        optimize: [Debug, ReleaseSafe]
+        include:
+          # One unchecked run catches optimizer-dependent behaviour; the other hosts have ReleaseSafe.
+          - os: ubuntu-latest
+            optimize: ReleaseFast
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      # The probe checks the watchdog's report, which an ordinary passing suite cannot check.
+      - name: A stuck backend names its test and source
+        if: runner.os != 'Windows' && matrix.optimize == 'Debug'
+        run: python3 ci/runner.py
+      - name: Test — ${{ matrix.optimize }}
+        run: zig build test -Doptimize=${{ matrix.optimize }} --test-timeout 45s
+
+  # ReleaseSmall must build; its unchecked tests add no distinct assertion to ReleaseFast.
+  small:
+    name: compile (ReleaseSmall)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build check -Doptimize=ReleaseSmall
+
+  # Reaper and Child share a child across tasks; ThreadSanitizer checks those accesses.
+  # Linux has a working runtime here; Debug is the detector's most complete instrumentation.
+  sanitizer:
+    name: ThreadSanitizer (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build unit -Dthread-sanitizer -Doptimize=Debug --test-timeout 120s
+
+  # Formatting and source-policy checks read the same files on every host; once is enough.
+  source:
+    name: source checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Formatting
+        run: zig fmt --check src examples build.zig
+      - name: Casts out of the type system carry their reason
+        run: python3 ci/casts.py
+
+  # Turning posix_spawn off reaches the second implementation of the same child contract.
+  fork:
+    name: fork (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -34,215 +97,36 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+      - run: zig build test -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
 
-      - name: Formatting
-        run: zig fmt --check src examples build.zig
-
-      - name: Casts out of the type system carry their reason
-        run: python3 ci/casts.py
-
-      - name: A stuck backend names its test and source
-        run: python3 ci/runner.py
-
-      # All four modes: every test here starts a real child process, and what
-      # runs between `fork` and `execve` is the kind of code a different
-      # inlining decision can change.
-      - name: Test — Debug
-        run: zig build test -Doptimize=Debug --test-timeout 45s
-
-      - name: Test — ReleaseSafe
-        run: zig build test -Doptimize=ReleaseSafe --test-timeout 45s
-
-      - name: Test — ReleaseFast
-        run: zig build test -Doptimize=ReleaseFast --test-timeout 45s
-
-      - name: Test — ReleaseSmall
-        run: zig build test -Doptimize=ReleaseSmall --test-timeout 45s
-
-      # The suite under ThreadSanitizer. `Reaper` and the owner of a `Child` are
-      # two tasks over one child, and a race between them is a claim a detector
-      # can check and a reader cannot. Debug, because that is the mode the
-      # detector instruments most completely. Linux only: Windows has no runtime
-      # for it, and on the hosted macOS runner the instrumented suite is killed
-      # by a segfault before its first test reports, while the same suite passes
-      # under ThreadSanitizer on a Mac, where it is run before a release.
-      - name: Test — ThreadSanitizer
-        if: runner.os == 'Linux'
-        run: zig build test -Dthread-sanitizer -Doptimize=Debug --test-timeout 120s
-
-      # The same suite with the `posix_spawn` path turned off. It is a second
-      # implementation of one contract, and this is what says the two produce
-      # the same child.
-      - name: Test — the fork path
-        run: zig build test -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
-
-      # Built AND run. An example that only compiles proves the names resolve;
-      # running it is what proves the library works.
-      - name: Examples
-        run: zig build examples
-
-  # Windows, in pieces.
-  #
-  # The Debug suite there has hung twice, and a step that runs out of its
-  # `timeout-minutes` has its log discarded — so nothing a hung run prints can
-  # be read afterwards. Two things answer that between them.
-  #
-  # `--test-timeout`, above and here, is the build runner's own bound on one
-  # test: it ends the test binary and names the test that did not finish, so a
-  # hang inside a test body fails the step with a message instead of running
-  # out the clock. It cannot see a hang that is not inside a test. (`CONDUIT_TRACE`
-  # in the environment of a step is the other half, when one is needed; it is
-  # off here because the job is green and a clean log is worth more.)
-  #
-  # For that, Debug is split: the examples on their own, then the suite one
-  # file at a time and `src/spawn_test.zig` in seven groups, each step named
-  # after what it runs and bounded at four minutes. `-Dtest-filter` matches a
-  # substring of a test's fully qualified name, which begins with the file it
-  # is in. Every filter changes the build hash, so each step compiles the test
-  # binary again; that is the cost of the bisection and the reason this job is
-  # allowed longer than the others.
-  test-windows:
-    name: test (windows-latest)
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - name: Formatting
-        run: zig fmt --check src examples build.zig
-
-      - name: Debug — examples
-        timeout-minutes: 4
-        run: zig build examples -Doptimize=Debug --summary all
-
-      - name: Debug — Pty
-        timeout-minutes: 4
-        run: zig build unit -Doptimize=Debug "-Dtest-filter=Pty.test" --test-timeout 45s --summary all
-
-      - name: Debug — Child, Reaper, Proxy, tty, environ, shell
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=Child.test" "-Dtest-filter=child_windows.test"
-          "-Dtest-filter=command_line.test"
-          "-Dtest-filter=find.test" "-Dtest-filter=windows_search.test"
-          "-Dtest-filter=Reaper.test" "-Dtest-filter=Proxy.test"
-          "-Dtest-filter=tty.test"
-          "-Dtest-filter=environ.test" "-Dtest-filter=shell.test"
-
-      - name: Debug — InputWriter
-        timeout-minutes: 4
-        run: zig build unit -Doptimize=Debug "-Dtest-filter=InputWriter" --test-timeout 45s --summary all
-
-      - name: Debug — Expect
-        timeout-minutes: 4
-        run: zig build unit -Doptimize=Debug "-Dtest-filter=Expect.test" --test-timeout 45s --summary all
-
-      - name: Debug — spawn, pipes and collecting
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=a child on pipes" "-Dtest-filter=max_bytes"
-          "-Dtest-filter=gives up on a child" "-Dtest-filter=tryWait is null"
-          "-Dtest-filter=Reaper.exit" "-Dtest-filter=legal while a Reaper"
-          "-Dtest-filter=Reaper was cancelled" "-Dtest-filter=waitTimeout costs"
-
-      - name: Debug — spawn, streams and half-close
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=stdinWriter" "-Dtest-filter=closeStdin is"
-          "-Dtest-filter=waitTimeout gives up" "-Dtest-filter=signalName say how"
-
-      - name: Debug — spawn, killing and process groups
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=killWait ends" "-Dtest-filter=process group of its own"
-          "-Dtest-filter=process group is the one" "-Dtest-filter=shares the parent"
-          "-Dtest-filter=killWait with no grace"
-          "-Dtest-filter=reaches what the child started"
-          "-Dtest-filter=end_tree on Windows"
-          "-Dtest-filter=waitTree says"
-          "-Dtest-filter=deinit ends a grandchild"
-          "-Dtest-filter=descendants_test"
-
-      # Traced: both tests here that put a child on a pseudoconsole have hung
-      # on a runner at one time or another, so this step says which stage it
-      # reached.
-      - name: Debug — spawn, pseudo-terminals
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=writes to its terminal reaches" "-Dtest-filter=on a pty"
-          "-Dtest-filter=cursor shape the child wrote"
-          "-Dtest-filter=Ctrl-C" "-Dtest-filter=foreground process group"
-          "-Dtest-filter=hangs the terminal up"
-
-      - name: Debug — spawn, per-stream stdio
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=stderr_to sends" "-Dtest-filter=each stream is chosen"
-          "-Dtest-filter=terminal end of a pair" "-Dtest-filter=a stream can be closed"
-          "-Dtest-filter=older stdio shapes"
-
-      - name: Debug — spawn, credentials and limits
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=file-creation mask" "-Dtest-filter=uid and gid"
-          "-Dtest-filter=resource limit set at spawn"
-          "-Dtest-filter=resource limits are refused"
-          "-Dtest-filter=credentials are refused"
-          "-Dtest-filter=a job limit bounds"
-          "-Dtest-filter=job limits are refused"
-          "-Dtest-filter=as inheritable after a spawn"
-
-      # Traced: `spawnShell starts the user's shell on a pair` hung here once
-      # with nothing to say, so this step says which stage it reached.
-      - name: Debug — spawn, environment, failure and the shell
-        timeout-minutes: 4
-        run: >
-          zig build unit -Doptimize=Debug --test-timeout 45s --summary all
-          "-Dtest-filter=environment and working directory"
-          "-Dtest-filter=scrubbed environment" "-Dtest-filter=path_search"
-          "-Dtest-filter=is not there" "-Dtest-filter=batch file"
-          "-Dtest-filter=spawnShell starts"
-
-      # Whole again, once Debug has said where it stands.
-      - name: Test — ReleaseSafe
-        timeout-minutes: 8
-        run: zig build test -Doptimize=ReleaseSafe --test-timeout 45s
-
-      - name: Test — ReleaseFast
-        timeout-minutes: 8
-        run: zig build test -Doptimize=ReleaseFast --test-timeout 45s
-
-      - name: Test — ReleaseSmall
-        timeout-minutes: 8
-        run: zig build test -Doptimize=ReleaseSmall --test-timeout 45s
-
-  # The same suite on musl, which is not what ubuntu-latest gives. `ptsname_r`
-  # reports failure differently on glibc and on musl, and this package reads
-  # `errno` on both rather than trusting the return value -- a claim worth a
-  # container to hold honest. ci/linux.sh is the same script a developer runs
-  # from a Mac.
+  # musl's ptsname_r reports errors differently from glibc; both safety modes run that libc.
+  # A writable cgroup runs containment tests that skip in the ordinary container.
+  # The old script repeated formatting and both unchecked modes; neither adds a musl contract.
   linux-musl:
-    name: test (alpine, musl)
+    name: musl (${{ matrix.optimize }}, cgroup=${{ matrix.cgroup }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [Debug, ReleaseSafe]
+        cgroup: [false]
+        include:
+          - optimize: Debug
+            cgroup: true
     steps:
       - uses: actions/checkout@v4
-      - run: ci/linux.sh --musl
+      - name: Build the musl image
+        run: docker build --quiet --file ci/linux.alpine.Dockerfile --build-arg ZIG=${{ env.ZIG_VERSION }} --tag conduit-musl ci
+      - name: Test
+        run: >-
+          docker run --rm --init ${{ matrix.cgroup && '--privileged' || '' }}
+          --volume "$PWD:/src" --workdir /src conduit-musl
+          zig build test -Doptimize=${{ matrix.optimize }} --test-timeout 45s
+          --cache-dir /tmp/zc --global-cache-dir /tmp/zg --summary all
 
   # README.md's Usage block is a region of examples/usage.zig, which the test
   # job builds and runs. This is what keeps the snippet a reader copies the
