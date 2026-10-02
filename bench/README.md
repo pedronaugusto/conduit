@@ -1,5 +1,7 @@
 # conduit benchmark preparation
 
+Keep the `bench` worktree in the workspace’s `.bench/conduit`, outside `.zig-cache`; `bench/quiet.sh` resolves its files from its own directory.
+
 Pinned before: `8adf8af91329333c2deb7db5e2b14fdbae9520d8`.
 Pinned current main at preparation start: `8c1547ba457b4028c22d599e7fa0bf5ef7b4e1fd`.
 The active containment checkout and subsequent main changes are outside these pins.
