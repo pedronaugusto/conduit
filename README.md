@@ -145,7 +145,7 @@ including `output` and `Reaper`, follows the same policy.
 | Linux with a writable cgroup | A private supervisor ends the cgroup and reaps its root and adoptees before completion. It also contains descendants that leave the cgroup. |
 | Linux without a writable cgroup | A private supervisor is the subreaper of this child alone. Normal exit, force and loss of the caller end and reap its tree, including detached orphans. |
 | macOS | Observation of lineage, without kernel enforcement. Ends the private group and observed descendants before reaping. The measured fork/registration window can let a fork followed by parent exit escape: 0/100 escapes with no added delay and 100/100 with a 20 ms observer delay in one run; counts depend on scheduling. |
-| Windows | The Job Object retains descendants across separate consoles and intermediate exits; every contained wait ends its members and confirms zero active processes before returning the root status. |
+| Windows | The Job Object retains descendants across separate consoles and intermediate exits; every contained wait ends its members and confirms zero active processes and the Job termination notification before returning the root status. |
 | Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
 
 On Linux, each contained child has a private supervisor process. It becomes a

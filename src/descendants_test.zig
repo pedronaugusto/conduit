@@ -511,6 +511,7 @@ test "a contained Windows wait confirms every Job member ended before returning"
     try watchdog.start(io);
     defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
+        std.debug.print("contained Windows completion via {s}\n", .{method});
         var fixture = try Fixture.start(.contain, "--exit-7");
         defer fixture.deinit();
         fixture.child.closeStdin(io);

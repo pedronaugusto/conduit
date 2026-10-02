@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Contained Windows completion also consumes the Job termination notification, retaining the pending wait after accounting reaches zero.
+
 - The macOS platform table and containment policy comment state the measured fork/registration escape window and its observation boundary.
 
 - Breaking: contained Windows waits publish the root status only after ending the Job and confirming that every member has ended.

@@ -2170,9 +2170,26 @@ pub const Child = enum(usize) {
             var counts: win32.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = undefined;
             if (win32.QueryInformationJobObject(job, win32.JobObjectBasicAccountingInformation, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
-            if (counts.ActiveProcesses != 0) return false;
-            State.get(child).tree_ended = true;
-            return true;
+            return counts.ActiveProcesses == 0;
+        }
+        pub fn ended(child: *Child) TryWaitError!bool {
+            if (State.get(child).tree_ended) return true;
+            const job = State.get(child).job orelse return error.Unexpected;
+            const port = State.get(child).job_port orelse return error.Unexpected;
+            while (true) {
+                var message: win32.DWORD = undefined;
+                var key: windows.ULONG_PTR = undefined;
+                var overlapped: ?*anyopaque = undefined;
+                if (win32.GetQueuedCompletionStatus(port, &message, &key, &overlapped, 0) == .FALSE)
+                    return switch (windows.GetLastError()) {
+                        .WAIT_TIMEOUT => false,
+                        else => |err| win32.unexpected(err),
+                    };
+                if (key == @intFromPtr(job) and message == win32.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) { // safe: the completion key is compared with the job handle, never dereferenced.
+                    State.get(child).tree_ended = true;
+                    return true;
+                }
+            }
         }
     };
 
