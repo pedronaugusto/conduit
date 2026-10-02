@@ -6,6 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A recorded private scope stop stays pending until its supervisor observes it, including before the first poll.
 - Contained Linux children have independent private subreaper supervisors, exact root status and saved scope identities, with orphan cleanup and reaping even without writable cgroups.
 - Reaper exposes copied adoption records and notifications without lending its scope owner.
 

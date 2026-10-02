@@ -60,12 +60,6 @@ pub fn channel() Child.SpawnError![2]posix.fd_t {
 /// never to the calling application, and the root does not inherit it.
 pub const Prepared = struct { signals: posix.fd_t, children: posix.fd_t };
 
-var external_stop: std.atomic.Value(bool) = .init(false);
-
-fn stopScope(_: posix.SIG) callconv(.c) void {
-    external_stop.store(true, .release);
-}
-
 pub const Preparation = union(enum) { ready: Prepared, failed: posix.E };
 
 pub fn prepare() Preparation {
@@ -74,12 +68,13 @@ pub fn prepare() Preparation {
     while (number < linux.NSIG) : (number += 1) {
         const sig: posix.SIG = @enumFromInt(number);
         if (sig == .KILL or sig == .STOP) continue;
-        const action: posix.Sigaction = .{ .handler = .{ .handler = if (sig == .TERM) stopScope else posix.SIG.DFL }, .mask = posix.sigemptyset(), .flags = 0 };
+        const action: posix.Sigaction = .{ .handler = .{ .handler = posix.SIG.DFL }, .mask = posix.sigemptyset(), .flags = 0 };
         _ = c.sigaction(sig, &action, null);
     }
-    external_stop.store(false, .release);
     var mask = linux.sigemptyset();
     linux.sigaddset(&mask, .CHLD);
+    // A saved-scope stop stays pending even if it precedes the first poll.
+    linux.sigaddset(&mask, .TERM);
     const mask_error = linux.errno(linux.sigprocmask(linux.SIG.BLOCK, &mask, null));
     if (mask_error != .SUCCESS) return .{ .failed = mask_error };
     const attribute_error = linux.errno(linux.prctl(@intFromEnum(linux.PR.SET_CHILD_SUBREAPER), 1, 0, 0, 0));
@@ -129,10 +124,12 @@ pub fn run(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Pr
             .{ .fd = prepared.signals, .events = linux.POLL.IN, .revents = 0 },
         };
         const ready = linux.poll(&pollfds, pollfds.len, if (ending) 5 else -1);
-        if (external_stop.load(.acquire)) ending = true;
         if (pollfds[1].revents & linux.POLL.IN != 0) {
-            var notices: [1024]u8 = undefined;
-            _ = c.read(prepared.signals, &notices, notices.len);
+            var notices: [8]linux.signalfd_siginfo = undefined;
+            const n = c.read(prepared.signals, std.mem.asBytes(&notices).ptr, @sizeOf(@TypeOf(notices)));
+            if (n > 0) for (notices[0 .. @as(usize, @intCast(n)) / @sizeOf(linux.signalfd_siginfo)]) |notice| {
+                if (notice.signo == @intFromEnum(posix.SIG.TERM)) ending = true;
+            };
         }
         if (linux.errno(ready) == .SUCCESS and pollfds[0].revents & (linux.POLL.IN | linux.POLL.HUP) != 0) {
             var byte: u8 = 0;
@@ -229,4 +226,50 @@ fn visit(pid: posix.pid_t, signal: ?posix.SIG, signalled_group: ?posix.pid_t) er
             else => return error.Unexpected,
         }
     }
+}
+
+test "a saved scope stop before its first poll still ends the scope" {
+    const t = std.testing;
+    const tree = @import("tree.zig");
+    const ends = try channel();
+    defer _ = c.close(ends[0]);
+    defer _ = c.close(ends[1]);
+    const owner_pid = c.fork();
+    if (owner_pid < 0) return error.SystemResources;
+    if (owner_pid == 0) {
+        _ = c.close(ends[0]);
+        const prepared = switch (prepare()) {
+            .ready => |value| value,
+            .failed => c._exit(1),
+        };
+        const root = c.fork();
+        if (root < 0) c._exit(2);
+        if (root == 0) while (true) {
+            _ = linux.pause();
+        };
+        _ = c.write(ends[1], std.mem.asBytes(&root).ptr, @sizeOf(posix.pid_t));
+        var go: u8 = 0;
+        if (c.read(ends[1], std.mem.asBytes(&go).ptr, 1) != 1) c._exit(3);
+        // Deliver the recorded-scope stop before run can enter its poll.
+        _ = c.kill(c.getpid(), .TERM);
+        run(root, ends[1], false, prepared, null);
+    }
+    var owner = (try tree.captureStarted(owner_pid, (try tree.startTime(owner_pid)).?)).?;
+    defer owner.deinit();
+    defer {
+        _ = owner.signal(.KILL);
+        var status: c_int = 0;
+        while (c.waitpid(owner_pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+    }
+    var root: posix.pid_t = 0;
+    try t.expectEqual(@as(isize, @sizeOf(posix.pid_t)), c.read(ends[0], std.mem.asBytes(&root).ptr, @sizeOf(posix.pid_t)));
+    var root_held = (try tree.captureStarted(root, (try tree.startTime(root)).?)).?;
+    defer root_held.deinit();
+    defer _ = root_held.signal(.KILL);
+    try t.expectEqual(@as(isize, 1), c.write(ends[0], "1", 1));
+    try t.expect(try owner.wait(t.io, 5000));
+    var answer: Result = undefined;
+    try t.expectEqual(@as(isize, @sizeOf(Result)), c.read(ends[0], std.mem.asBytes(&answer).ptr, @sizeOf(Result)));
+    try t.expectEqual(@as(u32, 0), answer.failed);
+    try t.expect(try root_held.wait(t.io, 5000));
 }
