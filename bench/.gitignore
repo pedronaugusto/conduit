@@ -9,3 +9,7 @@ results*.tsv
 results*.txt
 *.prof
 results*.tmp
+
+results/
+zig-pkg/
+__pycache__/

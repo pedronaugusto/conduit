@@ -26,7 +26,8 @@ CARGO_HOME="${CARGO_HOME:-$build/cargo-home}" \
 
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -pthread src/c/bench.c -o "$build/c-bench"
 
-if [ ! -x "$build/venv/bin/python" ]; then
+if ! "$build/venv/bin/python" -m pip --version >/dev/null 2>&1; then
+    rm -rf "$build/venv"
     "${PYTHON:-python3}" -m venv "$build/venv"
 fi
 PIP_CACHE_DIR="$build/pip-cache" \

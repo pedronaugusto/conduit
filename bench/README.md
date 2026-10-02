@@ -1,40 +1,62 @@
-# conduit benchmarks
+# conduit benchmark preparation
 
-Compares spawn/wait/capture, PTYs, timed wait and tree termination with
-Rust std/portable-pty, Go os/exec/creack/pty, C posix_spawn/fork/openpty,
-and Python subprocess/ptyprocess. Rust lacks timed wait. Orphans tracking
-is Linux-only; `linux.sh` runs optional conduit snapshots in Docker.
+Pinned before: `8adf8af91329333c2deb7db5e2b14fdbae9520d8`.
+Pinned current main at preparation start: `8c1547ba457b4028c22d599e7fa0bf5ef7b4e1fd`.
+The active containment checkout and subsequent main changes are outside these pins.
 
-From `bench/`, run `./run.sh` on a quiet machine. `SMOKE=1 ./run.sh` uses one
-iteration and 1 KiB fixtures without warm-up; `BENCH_BUILD_ONLY=1` builds
-only. The package is this repository at `..`. Build Orphans with
-`zig build -Doptimize=ReleaseFast` and run `zig-out/bin/orphans-cost`;
-`-Dsmoke=true` selects its tiny mode.
+`bench/quiet.sh` is the complete pass. `bench/quiet.sh --smoke` exercises
+all available workloads once on tiny fixtures, without warmups or saved timing
+values. Smoke is a correctness check, and never evidence for speed. Both
+modes write plain Markdown and JSON to `bench/results/<local-date>/`; generated
+results and build products are ignored. Smoke writes `smoke.md` / `smoke.json`;
+the quiet pass writes `report.md` / `report.json`, so smoke cannot overwrite a
+real pass. Use `--output <directory>` for a separate run on the same day.
 
-portable-pty 0.9.0/libc 0.2.189 are exact in `src/rust/Cargo.toml` and
-`Cargo.lock`. Go creack/pty v1.1.24/x/term v0.35.0 are pinned in
-`src/go/go.mod`/`go.sum`. Python pexpect 4.9.0/ptyprocess 0.7.0 are in
-`src/python/requirements.txt`. Record installed C/standard-library tool versions.
-`BENCH_BUILD_DIR`/`BENCH_RESULTS` select output, defaulting to `build/`.
-`ZIG`, `GO`, `CARGO`, `CC`, `PYTHON` select tools; `BENCH_TRUE`, `BENCH_ECHO`,
-`BENCH_CAT`, `BENCH_SH`, `BENCH_SLEEP` select child programs on PATH.
-Snapshot scripts take commits and `BENCH_REPO` (this repository by default).
-Generated files are ignored.
+The full pass warms each workload, then repeats A (before), B (after), and the
+comparison tools five times. `--runs N` changes the repetition count. Setup,
+fixture generation and compilation happen before the measured work. Both
+package builds use the same harness, toolchain and workloads. Compilation uses
+ReleaseFast. Sources come from `git archive` of the pinned revisions, independent
+of the working checkout or later main changes. `--before <revision>` and
+`--after <revision>` explicitly override the pins in `revisions.json`.
 
-`lifecycle-claims --quiet-machine` measures the speed claims moved out of the
-unit suite: deadline/blocking wait at 3:2, file-actions/fork spawn at 9:10,
-stop submission before its 300 ms grace, forced stop before grace plus 2 s,
-honoured stop before 5 s, and Reaper/Expect joins before 5 s. It reports each
-measurement and original limit; an `over` row is a quiet-machine result,
-never a CI assertion. Build with `zig build -Doptimize=ReleaseFast` and run
-`zig-out/bin/lifecycle-claims --quiet-machine` only on an exclusively idle
-machine. Tiny mode is for harness checks, not evidence for a speed claim.
-The spawn comparison requires cgroups unavailable (joining forces fork),
-POSIX file-actions enabled and `/usr/bin/true`. Deadline and grace correctness
-stay in controlled-clock unit tests; hang watchdogs stay in the unit suite.
+The cutoff is `2026-09-30T00:00:00+01:00` (Lisbon). Use an explicit midnight:
+Git's date-only `--before=2026-09-30` retains a time of day. Reports record the
+full package revisions, harness revision, machine model, OS, CPU, memory and
+tool versions, without a hostname or personal paths. Keep the raw samples;
+these are warm-cache measurements, with no cold-disk or universal speed claim.
 
-Historical measurements moved from the library comments (not current claims):
-M3 Max, 1000 null-device `/usr/bin/true` spawns: fork/exec 1336 µs,
-file actions 946 µs; orphan scans about 4 µs empty and 30 µs with 100
-processes; kevent64 zero timeout 14 µs versus KEVENT_FLAG_IMMEDIATE 0.3 µs.
-Reproduce on a quiet machine before using these numbers.
+`PYTHON` overrides the interpreter. With it unset, the wrapper prefers an
+already installed Python 3.13 found by `uv`, then falls back to `python3`; it
+installs no interpreter. This avoids the host's Python 3.14 ensurepip failure.
+Requires installed Zig 0.16.0, Git, Rust/Cargo, Go and Python. Build dependencies
+are pinned in the existing lockfiles. `--build-dir <directory>` changes the
+scratch/build location. Run the full pass only in the owner's quiet window.
+
+Harness history stays on `bench`; never merge this branch into main.
+
+Workloads: spawn/wait, capture, PTY lifecycle and transfer, deadline-aware wait,
+fixed-tree termination, leaf termination and the PTY single-child diagnostic.
+The pass also exercises the existing lifecycle wait/spawn ratios, stop/grace
+completion, Reaper and Expect joins, and Orphans costs. Orphans is unavailable
+on macOS and reports that fact; `linux.sh` remains the optional Linux/Docker
+snapshot helper. No container comparison is added to the Mac pass.
+
+Same-job tools retained: Rust std/portable-pty 0.9.0, Go os/exec/creack/pty
+1.1.24, C posix_spawn/fork/openpty, Python subprocess/ptyprocess 0.7.0
+(pexpect 4.9.0). Rust has no timeout-wait row. No new tool was added.
+The full PTY lifecycle uses 50 Rust and 20 Python iterations versus 500 for
+other tools, preserving the existing per-cycle metric and bounded trial size.
+Node PTY was never implemented and is not presented as a comparison.
+
+Compatibility adapters replace direct child/output/PTY field access with
+borrowing methods, and pass the allocator to PTY open where required. The
+before build takes the original API paths at compile time. Process trees,
+bytes transferred, grace settings and workload boundaries are unchanged.
+Tiny runs have no timing assertions. Failure to build or complete a workload
+fails the entry point rather than silently dropping a side.
+
+Planning estimate: **15–30 minutes** for the full pass with dependencies ready;
+allow another **5–15 minutes** for a first setup. These are estimates, not
+measurements taken during preparation. `run.sh`, `alternate.sh` and
+`per-commit.sh` remain low-level helpers; use `quiet.sh` for the complete pass.

@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const conduit = @import("conduit");
+const api = @import("api.zig");
 const smoke = @import("bench_options").smoke;
 const budget_ms = 5000;
 
@@ -124,7 +125,7 @@ fn stopClaims(init: std.process.Init, stubborn: bool) !void {
     defer child.deinit(init.io);
     defer _ = child.killWait(init.io, 0) catch {};
     var buffer: [64]u8 = undefined;
-    var reader = child.stdout.?.reader(init.io, &buffer);
+    var reader = api.stdout(child).reader(init.io, &buffer);
     if (!std.mem.eql(u8, (try reader.interface.takeDelimiter('\n')).?, "ready")) return error.NotReady;
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(init.io);
@@ -159,7 +160,7 @@ fn reaperJoin(init: std.process.Init) !void {
 }
 
 fn readerJoin(init: std.process.Init) !void {
-    var pty = try conduit.Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try api.openPty(init.gpa);
     defer pty.close(init.io);
     var child = try conduit.Child.spawn(init.io, init.gpa, .{
         .argv = &.{ "/bin/sh", "-c", "echo ready; read x" },
@@ -170,7 +171,7 @@ fn readerJoin(init: std.process.Init) !void {
     defer _ = child.killWait(init.io, 0) catch {};
     pty.closeSlave(init.io);
     var buffer: [1024]u8 = undefined;
-    var expect: conduit.Expect = .init(child.pty.?, &buffer);
+    var expect: conduit.Expect = .init(api.terminal(child), &buffer);
     try expect.start(init.io);
     defer expect.deinit(init.io);
     _ = try expect.until(init.io, "ready", budget_ms);

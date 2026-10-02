@@ -1,5 +1,6 @@
 const std = @import("std");
 const conduit = @import("conduit");
+const api = @import("api.zig");
 const smoke = @import("bench_options").smoke;
 const c = std.c;
 
@@ -81,7 +82,7 @@ fn oneCollect(init: std.process.Init, arg: []const u8) !void {
     defer child.deinit(init.io);
     var result = try child.output(init.io, init.gpa, .{ .max_bytes = 2048 });
     defer result.deinit(init.gpa);
-    if (!conduit.succeeded(result.term) or result.stdout.len != 1025 or result.stdout[1024] != '\n') return error.BadOutput;
+    if (!conduit.succeeded(api.outputTerm(&result)) or api.outputBytes(&result).len != 1025 or api.outputBytes(&result)[1024] != '\n') return error.BadOutput;
 }
 
 /// How the round trip ends the child. `.tree` is `killWait`, the call a
@@ -103,9 +104,9 @@ fn ptySpawn(init: std.process.Init, n: usize, input: []const u8, end: PtyEnd) !v
 }
 
 fn onePtyRoundTrip(init: std.process.Init, input: []const u8, end: PtyEnd) !u64 {
-    var pty = try conduit.Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try api.openPty(init.gpa);
     defer pty.close(init.io);
-    _ = try conduit.rawMode(pty.read.?);
+    _ = try conduit.rawMode(api.readHandle(pty));
     var child = try conduit.Child.spawn(init.io, init.gpa, .{
         .argv = &.{cat_program},
         .stdio = .{ .pty = &pty },
@@ -119,7 +120,7 @@ fn onePtyRoundTrip(init: std.process.Init, input: []const u8, end: PtyEnd) !u64 
     switch (end) {
         .tree => _ = try child.killWait(init.io, 0),
         .child => {
-            if (c.kill(child.id, .KILL) != 0) return error.KillFailed;
+            if (c.kill(api.pid(&child), .KILL) != 0) return error.KillFailed;
             _ = try child.wait(init.io);
         },
     }
@@ -156,9 +157,9 @@ fn writeAll(ctx: *WriteCtx) void {
 
 fn ptyThroughput(init: std.process.Init, input: []const u8) !void {
     if (input.len == 0 or input[input.len - 1] != '\n') return error.BadInput;
-    var pty = try conduit.Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try api.openPty(init.gpa);
     defer pty.close(init.io);
-    _ = try conduit.rawMode(pty.read.?);
+    _ = try conduit.rawMode(api.readHandle(pty));
     var child = try conduit.Child.spawn(init.io, init.gpa, .{
         .argv = &.{cat_program},
         .stdio = .{ .pty = &pty },
@@ -260,7 +261,7 @@ fn oneTreeKill(init: std.process.Init) !f64 {
     defer child.deinit(init.io);
     errdefer _ = child.killWait(init.io, 0) catch {};
     var storage: [8]std.posix.pid_t = undefined;
-    const descendants = try waitForTwoChildren(init.io, child.id, &storage);
+    const descendants = try waitForTwoChildren(init.io, api.pid(&child), &storage);
     const start = now(init.io);
     try child.kill(.kill);
     _ = try child.wait(init.io);
