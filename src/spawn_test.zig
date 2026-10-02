@@ -2084,8 +2084,8 @@ test "waitTree says the tree has ended, and does not say it early" {
     // `.kill` is `TerminateJobObject`: the job ends what is left in it, which
     // is the same end `deinit` reaches by closing the last handle to it, and
     // the port is what says so. `deinit` is the one this cannot use, because
-    // it closes the port the answer would arrive on -- "deinit ends a
-    // grandchild" is that half, asserted against the grandchild instead.
+    // it closes the port the answer would arrive on. Contained waits consume
+    // that completion before releasing the lifecycle.
     try child.kill(.kill);
     try testing.expect(try child.waitTree(io, budget_ms));
     try testing.expect(endedWithin(grandchild));
@@ -2097,11 +2097,11 @@ test "waitTree says the tree has ended, and does not say it early" {
     _ = try waitWithin(&child);
 }
 
-test "deinit ends a grandchild the child started and left behind" {
+test "a contained wait ends a grandchild before lifecycle release" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    // Windows only: explicit containment retains job kill-on-close.
+    // Windows only: contained completion confirms the whole Job.
     if (!is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(io, gpa, .{
@@ -2131,11 +2131,10 @@ test "deinit ends a grandchild the child started and left behind" {
     try expectFixtureInJob(grandchild, &child);
     stage = "waiting for the child and ending its tree";
 
-    // The child is gone and reaped, and nothing has been killed: `killWait` on
-    // a child that ended on its own signals nothing, so what is running now is
-    // running because the job is still open.
+    // A contained wait ends and confirms the Job before publishing its root.
+    // Resource release must have nothing left to end.
     _ = try waitWithin(&child);
-    try testing.expect(runningNow(grandchild));
+    try testing.expect(!runningNow(grandchild));
 
     const closed: Deadline = .in(io, budget_ms);
     while (!sink.ended() or !errors.ended()) {

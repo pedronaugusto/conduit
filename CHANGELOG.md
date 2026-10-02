@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The former Windows Job-close fixture now requires the grandchild to have ended before lifecycle release.
+
 - Contained Windows completion also consumes the Job termination notification, retaining the pending wait after accounting reaches zero.
 
 - The macOS platform table and containment policy comment state the measured fork/registration escape window and its observation boundary.
