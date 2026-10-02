@@ -37,7 +37,7 @@ for commit in "$@"; do
     sed 's|.path = ".."|.path = "conduit-src"|' "$here/build.zig.zon" > "$bb/build.zig.zon"
     cp "$here/src/conduit_bench.zig" "$bb/src/"
     docker run --rm -v "$bb:/b" -w /b "$image" \
-        "${ZIG:-zig}" build -j1 --prefix out -Doptimize=ReleaseFast --cache-dir cache --global-cache-dir global-cache
+        "${ZIG:-zig}" build -j1 --prefix out -Doptimize=ReleaseFast -Dsnapshot=true --cache-dir cache --global-cache-dir global-cache
     cp "$bb/out/bin/conduit-bench" "$out"
     rm -rf "$bb"
 done

@@ -87,7 +87,7 @@ class Pass:
     def zig(self, source, sub='bench', *steps):
         install = source / sub / 'zig-out'
         self.run(['zig','build','-j1','-Doptimize=ReleaseFast',
-                  '-Dsmoke='+str(self.smoke).lower(),*steps],cwd=source/sub)
+                  '-Dsmoke='+str(self.smoke).lower(),*(['-Dsnapshot=true'] if sub == 'bench' else []),*steps],cwd=source/sub)
         return install / 'bin'
     def point(self, workload, side, argv, round, cwd=None, env=None, prepare=None, check=None):
         print(f'  {workload}: {side} ({round+1}/{self.runs})',flush=True)

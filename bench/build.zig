@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const options = b.addOptions();
     options.addOption(bool, "smoke", b.option(bool, "smoke", "Run one tiny iteration") orelse false);
     const optimize = b.standardOptimizeOption(.{});
-    const conduit_dep = b.dependency("conduit", .{ .target = target, .optimize = optimize });
+    const conduit_dep = b.dependency(if (b.option(bool, "snapshot", "Build the archived local revision") orelse false) "conduit" else "after", .{ .target = target, .optimize = optimize });
 
     const exe = b.addExecutable(.{
         .name = "conduit-bench",

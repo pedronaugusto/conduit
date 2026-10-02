@@ -5,6 +5,10 @@
     .fingerprint = 0x21c673c426860ea0,
     .dependencies = .{
         .conduit = .{ .path = ".." },
+        .after = .{
+            .url = "https://github.com/pedronaugusto/conduit/archive/4a8cb70b061ceedb02ad7ccfb995a85d380bceeb.tar.gz",
+            .hash = "conduit-0.5.1-4rIA77WUEQB1u-dOhjB_ZJtnP0nU9xTAGUhNrqgUOQA_",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "orphans-cost-2026-09-28.zig" },
 }

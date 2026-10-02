@@ -19,7 +19,7 @@ for c in "$@"; do
     cp "$here/build.zig" "$bb/"
     sed 's|.path = ".."|.path = "conduit-src"|' "$here/build.zig.zon" > "$bb/build.zig.zon"
     cp "$here/src/conduit_bench.zig" "$bb/src/"
-    (cd "$bb" && "${ZIG:-zig}" build -j1 --prefix "$bb/out" -Doptimize=ReleaseFast)
+    (cd "$bb" && "${ZIG:-zig}" build -j1 --prefix "$bb/out" -Doptimize=ReleaseFast -Dsnapshot=true)
     cp "$bb/out/bin/conduit-bench" "$out"
     rm -rf "$bb"
 done
