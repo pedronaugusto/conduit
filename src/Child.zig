@@ -329,8 +329,9 @@ pub const Child = enum(usize) {
         /// Normal exit and deinit leave descendants running. The default, for
         /// helpers that deliberately start a daemon. Reap before deinit.
         survive,
-        /// End descendants on normal completion too. Windows retains job
-        /// kill-on-close until deinit; POSIX ends the cgroup or private process
+        /// End descendants on normal completion too. Windows ends the Job
+        /// members and confirms zero active processes before publishing the
+        /// root's status; POSIX ends the cgroup or private process
         /// group before the final reap releases its identity. Darwin also ends
         /// descendants whose lineage was observed from before exec; a fork and
         /// parent exit before enumeration or registration can still escape.
@@ -637,12 +638,6 @@ pub const Child = enum(usize) {
         const state = State.optional(child) orelse return;
         if (state.descendants == .contain and !state.scope_complete) {
             _ = try child.killWait(io, 0);
-            if (is_windows) {
-                if (state.job) |job| if (win32.TerminateJobObject(job, 1) == .FALSE)
-                    return win32.unexpected(windows.GetLastError());
-                while (!try child.waitTree(io, std.math.maxInt(u32))) {}
-                state.scope_complete = true;
-            }
         }
         child.deinit(io);
     }
@@ -955,6 +950,7 @@ pub const Child = enum(usize) {
                 // spent in slices and cancelation is asked about between them.
                 switch (win32.WaitForSingleObject(State.get(child).id, @min(left, windows_slice_ms))) {
                     win32.WAIT_TIMEOUT => {},
+                    win32.WAIT_OBJECT_0 => return child.reapEnded(io, deadline),
                     // Ended, or a handle that cannot be waited on: either way the
                     // reap below is what says so.
                     else => break,
@@ -1482,7 +1478,7 @@ pub const Child = enum(usize) {
     ///
     /// `true` means the job object the child was put in holds no process any more:
     /// not the child, and not a grandchild the child started and left behind. That
-    /// is a different question from `wait`, which is about the child alone, and it
+    /// is also confirmed by a contained `wait`. With the survival policy it
     /// is the question a program that is about to take down a subsystem has: a
     /// child that exits having started a server is a tree that is still running.
     /// `false` means the time ran out with something still in the job.
@@ -2148,12 +2144,34 @@ pub const Child = enum(usize) {
             .{ .exited = code }
         else
             .{ .unknown = 0 };
-        if (State.get(child).descendants == .survive and !State.get(child).end_descendants and term == .exited)
-            try child.releaseJobSurvivors();
+        const completed = try @import("windows_completion.zig").poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);
+        if (completed == null) return null;
+        if (State.get(child).descendants == .contain or State.get(child).end_descendants)
+            State.get(child).scope_complete = true;
         child.closeHandles();
         child.publish(term);
         return term;
     }
+
+    const WindowsCompletion = struct {
+        pub fn releaseSurvivors(child: *Child) TryWaitError!void {
+            try child.releaseJobSurvivors();
+        }
+        pub fn end(child: *Child) TryWaitError!void {
+            const job = State.get(child).job orelse return error.Unexpected;
+            if (win32.TerminateJobObject(job, 1) == .FALSE)
+                return win32.unexpected(windows.GetLastError());
+        }
+        pub fn empty(child: *Child) TryWaitError!bool {
+            const job = State.get(child).job orelse return error.Unexpected;
+            var counts: win32.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = undefined;
+            if (win32.QueryInformationJobObject(job, win32.JobObjectBasicAccountingInformation, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
+                return win32.unexpected(windows.GetLastError());
+            if (counts.ActiveProcesses != 0) return false;
+            State.get(child).tree_ended = true;
+            return true;
+        }
+    };
 
     /// Release only kill-on-close, retaining every resource limit the caller
     /// chose. Failure leaves the process handles and status available to retry.

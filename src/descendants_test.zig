@@ -504,3 +504,35 @@ test "a failed private scope release keeps ownership for retry" {
     try std.testing.expect(State.optional(&fixture.child) == null);
     try std.testing.expect(!fixture.daemon.alive());
 }
+
+test "a contained Windows wait confirms every Job member ended before returning" {
+    if (!windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
+        var fixture = try Fixture.start(.contain, "--exit-7");
+        defer fixture.deinit();
+        fixture.child.closeStdin(io);
+        const term = if (comptime std.mem.eql(u8, method, "tryWait")) term: {
+            const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+            while (deadline.remainingMs(io) > 0) {
+                if (try fixture.child.tryWait()) |ended| break :term ended;
+                try io.sleep(.fromMilliseconds(2), .awake);
+            }
+            return error.TestChildDidNotExit;
+        } else if (comptime std.mem.eql(u8, method, "output")) term: {
+            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            defer output.deinit(gpa);
+            break :term output.term();
+        } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
+            var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io) catch unreachable;
+            break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        try std.testing.expectEqual(Child.Term{ .exited = 7 }, term);
+        try std.testing.expect(!fixture.daemon.alive());
+        try std.testing.expect(try fixture.child.waitTree(io, 0));
+    }
+}
