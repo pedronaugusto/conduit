@@ -7,6 +7,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 - Bound local Zig build caches before builds, retaining downloaded packages and tools.
+- The former Windows Job-close fixture now requires the grandchild to have ended before lifecycle release.
+
+- Contained Windows completion also consumes the Job termination notification, retaining the pending wait after accounting reaches zero.
+
+- The macOS platform table and containment policy comment state the measured fork/registration escape window and its observation boundary.
+
+- Breaking: contained Windows waits publish the root status only after ending the Job and confirming that every member has ended.
+
+- Breaking: `Child.release` reports contained cleanup failures and retains ownership for retry; `Child.deinit` requires confirmed scope completion.
+
+- Private Linux supervisors have their own sessions and process groups, and end their scopes on catchable stops.
+
+- A recorded private scope stop stays pending until its supervisor observes it, including before the first poll.
+- Contained Linux children have independent private subreaper supervisors, exact root status and saved scope identities, with orphan cleanup and reaping even without writable cgroups.
+- Reaper exposes copied adoption records and notifications without lending its scope owner.
+
+- A subreaper Reaper observes and reaps adopted exits even while another task owns the root wait.
+
+- Breaking: Reaper.deinit and Orphans.deinit report failed completion and retain their scope for retry until every direct child and adoptee is reaped.
 
 - `Reaper.enableSubreaper` explicitly owns Linux adoption before spawn, ends and reaps its process-wide orphan set on contained completion, and reaps adopted exits while the root waits; registered direct children keep their own statuses.
 

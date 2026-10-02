@@ -19,7 +19,7 @@ fn spawn(mode: []const u8) !Child {
 
 fn reap(child: *Child) void {
     _ = child.killWait(io, 0) catch {};
-    child.deinit(io);
+    child.release(io) catch unreachable;
 }
 
 fn output(child: *Child, expected: []const u8) !void {

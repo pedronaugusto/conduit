@@ -59,10 +59,10 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     };
     var root = try Child.spawn(io, testing.allocator, options);
-    defer root.deinit(io);
+    defer root.release(io) catch unreachable;
     defer _ = root.killWait(io, 0) catch {};
     var witness = try Child.spawn(io, testing.allocator, options);
-    defer witness.deinit(io);
+    defer witness.release(io) catch unreachable;
     defer _ = witness.killWait(io, 0) catch {};
 
     // A listed descendant could have been reaped and its pid reused before
@@ -548,6 +548,9 @@ pub const RecordedOptions = struct {
     group: ?posix.pid_t = null,
     /// A handle returned by `Cgroup.openRecorded`, borrowed for this call.
     cgroup: ?*@import("cgroup.zig").Cgroup.Recorded = null,
+    /// Linux: the private adoption owner. It receives TERM as a request to
+    /// empty its scope; never kill that owner before it has reaped the tree.
+    supervisor: ?@import("Child.zig").Child.SupervisorRecord = null,
     grace_ms: u32,
 };
 
@@ -564,6 +567,29 @@ pub const RecordedOptions = struct {
 /// was something to end. A held identity cannot survive a delivered SIGKILL,
 /// even when the kernel has not yet made its exit observable to a waiter.
 pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
+    if (options.supervisor) |record| {
+        if (builtin.os.tag != .linux) return error.Unsupported;
+        const boot = @import("cgroup.zig").bootIdentity() orelse return error.Unproven;
+        if (!std.mem.eql(u8, &boot, &record.boot)) return error.Unproven;
+        var ended = false;
+        if (try captureStarted(record.pid, record.start)) |captured| {
+            var owner = captured;
+            defer owner.deinit();
+            if (!owner.signal(.TERM) and owner.alive()) return error.UnableToEnd;
+            if (!try owner.wait(io, options.grace_ms +| 1000)) return error.UnableToEnd;
+            ended = true;
+        }
+        if (options.cgroup) |contained| {
+            const had_members = contained.populated() != .none;
+            if (had_members) {
+                if (!contained.kill()) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, 1000)) return error.UnableToEnd;
+            }
+            _ = contained.remove();
+            ended = ended or had_members;
+        }
+        return ended;
+    }
     if (options.cgroup) |contained| {
         const had_members = contained.populated() != .none;
         if (had_members) {
@@ -1874,7 +1900,7 @@ test "a captured process keeps its identity across exec" {
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
@@ -1910,7 +1936,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
-    defer child.deinit(io);
+    defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
@@ -1954,7 +1980,7 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(std.testing.io);
+    defer child.release(std.testing.io) catch unreachable;
     defer _ = child.killWait(std.testing.io, 0) catch {};
     const held = DarwinProcess.capture(State.get(&child).id).?;
     var parent = DarwinProcess.capture(c.getpid()).?;

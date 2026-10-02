@@ -141,6 +141,20 @@ pub extern "kernel32" fn SetInformationJobObject(
     cbJobObjectInformationLength: DWORD,
 ) callconv(.winapi) BOOL;
 
+/// `JobObjectBasicAccountingInformation` in `JOBOBJECTINFOCLASS`.
+pub const JobObjectBasicAccountingInformation: c_int = 1;
+
+pub const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = extern struct {
+    TotalUserTime: windows.LARGE_INTEGER,
+    TotalKernelTime: windows.LARGE_INTEGER,
+    ThisPeriodTotalUserTime: windows.LARGE_INTEGER,
+    ThisPeriodTotalKernelTime: windows.LARGE_INTEGER,
+    TotalPageFaultCount: DWORD,
+    TotalProcesses: DWORD,
+    ActiveProcesses: DWORD,
+    TotalTerminatedProcesses: DWORD,
+};
+
 /// `JobObjectExtendedLimitInformation` in `JOBOBJECTINFOCLASS`.
 pub const JobObjectExtendedLimitInformation: c_int = 9;
 

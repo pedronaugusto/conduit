@@ -90,13 +90,14 @@ to read while a wait or Reaper runs.
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
-| `child.containment(buffer)` | Copies the detached group and optional Linux cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
+| `child.release(io)` | Ends an unfinished contained scope and closes resources only after confirmed completion. Failure retains ownership for retry. `deinit` requires an already completed scope. |
+| `child.containment(buffer)` | Copies the detached group, private Linux supervisor identity and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
-| `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
+| `child.deinit(io)` | Closes owned resources after confirmed containment completion. Use `release` for an unfinished contained child. Supplied streams stay open. |
 
 `Child.Output` owns the collected bytes until `deinit(allocator)`. `stdout()`
 and `stderr()` borrow them; `takeStdout()` and `takeStderr()` transfer them
@@ -141,12 +142,52 @@ including `output` and `Reaper`, follows the same policy.
 
 | Platform | Containment after normal exit |
 | --- | --- |
-| Linux with a writable cgroup | Ends all members before reaping, including detached orphans. A process permitted to leave the cgroup can escape. |
-| Linux without a writable cgroup, with a Reaper subreaper scope | Reaper completion ends and reaps the process-wide adopted set, including detached orphans. Direct children keep their own waits. |
-| Linux without either | Ends the private group before reaping. An orphan that left the group can escape. |
-| macOS | Ends the private group and every descendant whose lineage was observed before reaping. A fork followed by parent exit before enumeration or registration can escape. |
-| Windows | The Job Object retains descendants across separate consoles and intermediate exits; deinit ends its members. |
+| Linux with a writable cgroup | A private supervisor ends the cgroup and reaps its root and adoptees before completion. It also contains descendants that leave the cgroup. |
+| Linux without a writable cgroup | A private supervisor is the subreaper of this child alone. Normal exit, force and loss of the caller end and reap its tree, including detached orphans. |
+| macOS | Observation of lineage, without kernel enforcement. Ends the private group and observed descendants before reaping. The measured fork/registration window can let a fork followed by parent exit escape: 0/100 escapes with no added delay and 100/100 with a 20 ms observer delay in one run; counts depend on scheduling. |
+| Windows | The Job Object retains descendants across separate consoles and intermediate exits; every contained wait ends its members and confirms zero active processes and the Job termination notification before returning the root status. |
 | Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
+
+On Linux, each contained child has a private supervisor process. It becomes a
+subreaper before starting the root; neither the caller's process setting nor
+another child's ownership changes. The root's pid remains `processId`, and
+its exact exit code or signal remains the wait result. Its parent is the
+supervisor, in its own session and process group. Application group signals
+cannot stop it; a catchable stop sent directly to it ends its scope. The
+supervisor holds the root unreaped while ending and reaping
+all adoptees, including each new generation adopted during cleanup. It uses
+signalfd and the caller's command socket while idle, without a polling timer.
+All cleanup descriptors are reserved before the root runs; cleanup allocates
+nothing. Startup failure refuses the spawn. Lost supervisor status is
+`Unexpected`, never an invented root exit.
+
+A force ends the cgroup first where one is writable, then the adoption scope.
+An interrupt or termination request reaches the root's group and adoptees,
+and the other cgroup members where available. `Reaper.stop` supplies the
+root's grace. Once the root exits, remaining descendants are forced at once;
+`tree_grace_ms` governs `end_tree` on children with the survival policy.
+The caller holds one socket, closed on exec and closed in the root. Loss of
+that socket ends the scope even if the caller crashes. The root watches its
+supervisor with a parent death `SIGKILL`; this contained policy takes precedence
+over `parent_death_signal`. `Child.release(io)` ends and reaps an unfinished contained scope before
+closing the lifecycle. Failure retains ownership for retry. `Child.deinit(io)`
+requires confirmed scope completion; it never performs hidden scope cleanup.
+
+The supervisor has [tini's](https://github.com/krallin/tini) single-root signal
+forwarding and zombie ownership, with scope completion like
+[systemd's mixed kill policy](https://github.com/systemd/systemd/blob/main/man/systemd.kill.xml):
+a root exit also ends the remaining members. It needs readable procfs,
+subreaping and signalfd, but no cgroup delegation or PID namespace. Deliberately
+killing the supervisor from outside the library can defeat its adoption scope;
+a writable cgroup remains the kernel containment reach in that case.
+
+`containment` copies the supervisor's pid, start time and boot in `supervisor`,
+beside the root's group and optional cgroup facts. Save that complete record.
+`endRecorded` with its `supervisor` field verifies this identity through a
+pidfd and asks it to empty its scope. It never kills the adoption owner before
+the tree is reaped, and reports `UnableToEnd` if that completion cannot be
+established. A missing recorded supervisor does not authorize a root-group
+sweep; a separately verified cgroup can still be ended and removed.
 
 On macOS, a contained spawn holds the root before exec until its lineage
 observer is running. One task owns a kqueue with `NOTE_FORK`, `NOTE_EXEC`
@@ -172,8 +213,9 @@ Linux 5.4 or later and readable procfs. One Reaper owns the process setting;
 a second owner, including `Orphans.start`, is refused with `AlreadyStarted`.
 Cgroups remain the first reach where writable. With containment, Reaper ends
 and reaps all adopted orphans before publishing its completion. While waiting,
-it also collects and reaps exited adoptees in 5 ms wait slices; scheduling
-and procfs access can extend that interval. Adoption lookup failure makes
+an independent task collects and reaps exited adoptees every 5 ms, including
+while another task owns the root wait; scheduling and procfs access can extend
+that interval. Adoption lookup failure makes
 Reaper fail with `Unexpected` rather than report complete containment.
 
 The scope is process-wide, not per child: Linux records no former parent
@@ -183,9 +225,19 @@ and new conduit children retain their independent waits. Every new direct
 child must use conduit while the scope runs; an outside spawn or a
 `SIGCHLD` handler using `waitpid(-1)` breaks that ownership. End and reap
 all direct children before the owner's `deinit`, which ends remaining
-adoptees and restores the previous subreaper setting. A still-running direct
-child can create another orphan during teardown; this is not a scope for
-independent child lifetimes or independent orphan cleanup.
+adoptees and restores the previous subreaper setting. `Reaper.deinit` and
+`Orphans.deinit` are fallible. Cancellation, lookup or restoration failure
+retains the scope for retry; `DirectChildrenRemain` refuses to restore the
+attribute while another direct child still owns a wait. Handle these failures
+before releasing the owner's storage. This explicit process-wide scope is
+separate from each contained child's private supervisor.
+
+`reaper.adoptionRecords(out)` copies the explicit scope's `Orphans.Record`
+values without lending its owner. `reaper.adoptionEvent(io)` and
+`reaper.adoptionCount()` provide the same notification and reset handshake as
+Orphans. Register before start, snapshot, reset and compare the count to avoid
+losing a concurrent adoption. These records belong to the scope as a whole;
+they never claim a former child as their parent.
 
 Timeouts in `output`, output errors, `kill` and `killWait` still end the tree
 in either mode, within that same reach. `waitTimeout` remains an observation:
@@ -412,7 +464,8 @@ reports `IdentityUnavailable` if that snapshot could not be read. Retain
 these facts and the boot identity for a later `captureStarted` or
 `endRecorded`; records own no handles. `end(io, grace_ms)` ends them all through a pidfd
 each — `SIGTERM`, the grace, then
-`SIGKILL` — for the end of a program. `deinit()` puts the attribute back.
+`SIGKILL` — for the end of a program. `try deinit()` restores the attribute
+after every direct child and adoptee has been reaped; failure retains ownership.
 Opt-in, and only for a program that starts every child through conduit
 (below). `error.Unsupported` elsewhere.
 
@@ -576,8 +629,9 @@ until it is reaped; each child conduit starts while it runs holds one more
 descriptor until it has been reaped, and every Linux spawn takes that lock,
 running or not. `Child.kill` does not reach an adopted process on the
 child's account unless the child's cgroup holds it: nothing else says which
-child it came from, and it does not guess. `deinit` signals nothing, and an
-adopted process that ends after it is a zombie until this process ends.
+child it came from, and it does not guess. A contained Linux child instead
+has its private adoption supervisor. `Orphans.deinit` signals nothing and
+refuses to release a scope that still owns a direct child or adoptee.
 
 Otherwise POSIX has no container for a tree, so `kill` reaches three things:
 the child, the child's process group when `detach` made one, and every
@@ -685,7 +739,7 @@ once reaped, its process or group id is never used for signalling again.
 
 | | Mechanism | Suite |
 |---|---|---|
-| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 per child where one may be made; opt-in child subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
+| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 where writable and a private supervisor per contained child; opt-in process subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
 | Linux (musl) | the same | Alpine, in CI and with `ci/linux.sh --musl` |
 | macOS | the same | `macos-latest` |
 | Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |

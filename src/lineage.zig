@@ -195,7 +195,7 @@ test "a contained wait reports lost observation after reaping its held root" {
         .descendants = .contain,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(std.testing.io);
+    defer child.release(std.testing.io) catch unreachable;
     const pid = child.processId().?;
     try std.testing.expectError(error.Unexpected, child.waitTimeout(std.testing.io, 5000));
     var status: c_int = 0;

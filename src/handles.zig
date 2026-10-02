@@ -283,7 +283,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     });
     defer {
         _ = child.killWait(io, 0) catch {};
-        child.deinit(io);
+        child.release(io) catch unreachable;
     }
     try testing.expect((try child.waitTimeout(io, 5000)) != null);
     try testing.expectError(error.BrokenPipe, writeStreamingAll(child.stdinFile().?, io, "closed"));

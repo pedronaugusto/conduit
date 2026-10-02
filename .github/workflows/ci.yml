@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Retry the Windows matrix after a Windows-only failure
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -28,12 +33,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ inputs.windows_only && fromJSON('["windows-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
         optimize: [Debug, ReleaseSafe]
-        include:
-          # One unchecked run catches optimizer-dependent behaviour; the other hosts have ReleaseSafe.
-          - os: ubuntu-latest
-            optimize: ReleaseFast
+        # One unchecked Linux run catches optimizer-dependent behaviour.
+        include: ${{ inputs.windows_only && fromJSON('[]') || fromJSON('[{"os":"ubuntu-latest","optimize":"ReleaseFast"}]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -48,6 +51,7 @@ jobs:
 
   # ReleaseSmall must build; its unchecked tests add no distinct assertion to ReleaseFast.
   small:
+    if: ${{ !inputs.windows_only }}
     name: compile (ReleaseSmall)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -61,6 +65,7 @@ jobs:
   # Reaper and Child share a child across tasks; ThreadSanitizer checks those accesses.
   # Linux has a working runtime here; Debug is the detector's most complete instrumentation.
   sanitizer:
+    if: ${{ !inputs.windows_only }}
     name: ThreadSanitizer (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -73,6 +78,7 @@ jobs:
 
   # Formatting and source-policy checks read the same files on every host; once is enough.
   source:
+    if: ${{ !inputs.windows_only }}
     name: source checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -83,11 +89,14 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - name: Formatting
         run: zig fmt --check src examples build.zig
+      - name: Containment documentation states the observation boundary
+        run: python3 ci/containment_docs.py
       - name: Casts out of the type system carry their reason
         run: python3 ci/casts.py
 
   # Turning posix_spawn off reaches the second implementation of the same child contract.
   fork:
+    if: ${{ !inputs.windows_only }}
     name: fork (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -106,6 +115,7 @@ jobs:
   # A writable cgroup runs containment tests that skip in the ordinary container.
   # The old script repeated formatting and both unchecked modes; neither adds a musl contract.
   linux-musl:
+    if: ${{ !inputs.windows_only }}
     name: musl (${{ matrix.optimize }}, cgroup=${{ matrix.cgroup }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -132,6 +142,7 @@ jobs:
   # job builds and runs. This is what keeps the snippet a reader copies the
   # same text as the code CI executes.
   docs:
+    if: ${{ !inputs.windows_only }}
     name: documented usage
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -146,6 +157,7 @@ jobs:
   # the test binary because most of what is Windows-only here is reached from
   # a test and from nowhere else.
   cross-compile:
+    if: ${{ !inputs.windows_only }}
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
