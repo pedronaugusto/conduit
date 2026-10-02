@@ -82,7 +82,7 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     access.snapshot(State.get(&witness).id);
     defer access.snapshot(null);
     try testing.expectEqual(@as(usize, 0), try signalDescendants(State.get(&root).id, .CONT, null));
-    var captured = Process.capture(State.get(&root).id).?;
+    var captured = access.capture(State.get(&root).id).?;
     defer captured.deinit();
     try testing.expectEqual(@as(usize, 0), try captured.signalDescendants(.CONT, null));
 }
@@ -432,7 +432,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
-    var process = DarwinProcess.capture(child.processId().?).?;
+    var process = Darwinaccess.capture(child.processId().?).?;
     const version = access.current(&process).?.unique.id_version;
     const Exec = struct {
         var child_ptr: *Child = undefined;
@@ -473,8 +473,8 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
     });
     defer child.release(std.testing.io) catch unreachable;
     defer _ = child.killWait(std.testing.io, 0) catch {};
-    const held = DarwinProcess.capture(State.get(&child).id).?;
-    var parent = DarwinProcess.capture(c.getpid()).?;
+    const held = Darwinaccess.capture(State.get(&child).id).?;
+    var parent = Darwinaccess.capture(c.getpid()).?;
     try std.testing.expect(held.childOf(&parent));
     parent.unique_id +%= 1;
     try std.testing.expect(!held.childOf(&parent));

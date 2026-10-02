@@ -1567,6 +1567,7 @@ test "CapturedPid does not expose signal identities as writable fields" {
 
 pub const test_access = if (@import("builtin").is_test) struct {
     pub const current = DarwinProcess.current;
+    pub const capture = fixture_Process.capture;
     pub const Deadline = fixture_Deadline;
     pub const wait_for = fixture_wait_for;
     pub const signalDescendantsGuarded = fixture_signalDescendantsGuarded;

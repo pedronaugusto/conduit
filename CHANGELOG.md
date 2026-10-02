@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Preserve platform selection and private process captures in the relocated identity tests.
+- Check containment comments at their shared contract owner.
+
 - Keep child contracts below lifecycle storage and assemble owner tests above their implementations.
 
 - Check named source layers, cycles, entry files and dependency owners during source CI.
