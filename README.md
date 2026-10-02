@@ -721,6 +721,8 @@ before `CreateProcessW`; otherwise Windows resolves it.
 
 ## Testing
 
+Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap in `ci/cache.sh`; run `sh ci/cache.sh` before direct Zig builds (only a rebuild is lost).
+
 ```sh
 zig build test                   # the suite, and the examples, which are run
 zig build test -Dfork-spawn      # the same, with the posix_spawn path off

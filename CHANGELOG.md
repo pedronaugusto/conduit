@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Bound local Zig build caches before builds, retaining downloaded packages and tools.
+
 - `Reaper.enableSubreaper` explicitly owns Linux adoption before spawn, ends and reaps its process-wide orphan set on contained completion, and reaps adopted exits while the root waits; registered direct children keep their own statuses.
 
 - Contained macOS children retain observed fork, exec and exit lineage across double-forks and session changes, with identity-safe ending and an explicitly measured registration race.
