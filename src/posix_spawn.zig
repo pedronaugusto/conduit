@@ -75,6 +75,7 @@ pub const available = !options_for_build.force_fork_spawn and switch (builtin.os
 /// `spawn`, which has the plan.
 pub fn suits(options: SpawnOptions) bool {
     if (!available) return false;
+    if (builtin.os.tag == .linux and options.descendants == .contain) return false;
     if (tree.Forks.supported and options.descendants == .contain) return false;
     // A terminal of the child's own session only where opening it makes it
     // the controlling one; an attached child is handed the terminal as it

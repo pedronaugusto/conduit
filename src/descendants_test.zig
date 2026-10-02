@@ -203,8 +203,7 @@ test "containment ends a double-forked session after normal exit" {
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
         var fixture = try Fixture.start(.contain, "--double-fork");
         defer fixture.deinit();
-        // No host subreaper opt-in on this path: Linux needs its cgroup.
-        if (builtin.os.tag == .linux and !State.get(&fixture.child).cgroup.active()) return error.SkipZigTest;
+
         if (!windows) {
             const pid = fixture.daemon.held.processId();
             try std.testing.expect(getpgid(pid) != State.get(&fixture.child).pgid.?);
@@ -353,4 +352,101 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     holding = false;
     fixture.child.closeStdin(io);
     try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
+}
+
+test "independent contained Linux children end only their own detached orphans" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const cgroups = @import("cgroup.zig");
+    cgroups.testing_hook.off = true;
+    defer cgroups.testing_hook.off = false;
+    var first = try Fixture.start(.contain, "--race");
+    defer first.deinit();
+    var second = try Fixture.start(.contain, "--race");
+    defer second.deinit();
+    first.child.closeStdin(io);
+    try std.testing.expect(Child.succeeded((try first.child.waitTimeout(io, budget_ms)).?));
+    try first.expectEnded();
+    try std.testing.expect(second.daemon.alive());
+    try std.testing.expectEqual(@as(?Child.Term, null), try second.child.tryWait());
+    second.child.closeStdin(io);
+    try std.testing.expect(Child.succeeded((try second.child.waitTimeout(io, budget_ms)).?));
+    try second.expectEnded();
+}
+
+test "a private supervisor preserves the root exit code and signal" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    inline for (.{ "exit 7", "kill -TERM $$" }, .{ Child.Term{ .exited = 7 }, Child.Term{ .signal = .TERM } }) |script, expected| {
+        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
+        defer child.deinit(io);
+        try std.testing.expectEqual(expected, (try child.waitTimeout(io, budget_ms)).?);
+        try std.testing.expectEqual(expected, (try child.tryWait()).?);
+    }
+}
+
+test "a saved private supervisor ends only its recorded scope" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const cgroups = @import("cgroup.zig");
+    cgroups.testing_hook.off = true;
+    defer cgroups.testing_hook.off = false;
+    var first = try Fixture.start(.contain, "--race");
+    defer first.deinit();
+    var second = try Fixture.start(.contain, "--race");
+    defer second.deinit();
+    var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const record = try first.child.containment(&buffer);
+    try std.testing.expect(record.supervisor != null);
+    try std.testing.expect(record.supervisor.?.pid != first.child.processId().?);
+    var wrong = record.supervisor.?;
+    wrong.start += 1;
+    try std.testing.expect(!try tree.endRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = wrong, .grace_ms = 0 }));
+    try std.testing.expect(first.daemon.alive());
+    try std.testing.expect(try tree.endRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = record.supervisor, .grace_ms = 0 }));
+    try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try first.child.waitTimeout(io, budget_ms)).?);
+    try first.expectEnded();
+    try std.testing.expect(second.daemon.alive());
+}
+
+test "a failed contained exec leaves no private supervisor to wait for" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    try std.testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+        .argv = &.{"/no-such-conduit-contained-executable"},
+        .descendants = .contain,
+        .stdio = .ignore,
+    }));
+    // Tests run one at a time and own every child in this test process.
+    var status: c_int = 0;
+    try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(-1, &status, std.posix.W.NOHANG));
+    try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
+}
+
+test "dropping a contained child ends and reaps its private supervisor" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .descendants = .contain,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    const scope = State.get(&child).id;
+    var status: c_int = 0;
+    defer {
+        while (std.c.waitpid(scope, &status, 0) < 0 and std.posix.errno(-1) == .INTR) {}
+    }
+    child.deinit(io);
+    try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(scope, &status, std.posix.W.NOHANG));
+    try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
 }

@@ -203,6 +203,25 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         reaper.inner().orphans = orphans;
     }
 
+    /// Copy identities owned by this explicit adoption scope. No record borrows
+    /// the scope or confers signal authority. Empty without enableSubreaper.
+    pub fn adoptionRecords(reaper: *Reaper, out: []Orphans.Record) Orphans.ListError![]Orphans.Record {
+        const owner = reaper.inner().orphans orelse return out[0..0];
+        return owner.list(out);
+    }
+
+    /// Notification of new scoped records, registered before start. Reset the
+    /// event, compare adoptionCount, and take another snapshot if it changed.
+    pub fn adoptionEvent(reaper: *Reaper, io: std.Io) ?*std.Io.Event {
+        const owner = reaper.inner().orphans orelse return null;
+        return owner.adoptionEvent(io);
+    }
+
+    pub fn adoptionCount(reaper: *const Reaper) u64 {
+        const owner = reaper.innerConst().orphans orelse return 0;
+        return owner.adoptionCount();
+    }
+
     pub const StartError = std.Io.ConcurrentError || error{AlreadyStarted};
 
     /// Puts the wait in flight.
@@ -429,7 +448,8 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // Ended, and not yet reaped: the group's id is still the child's, and
         // what is left in the group can be addressed by it. A child in a cgroup
         // of its own has what it left in there, wherever its group went.
-        if (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null) {
+        const supervised = if (builtin.os.tag == .linux) State.get(reaper.inner().child).supervisor != null else false;
+        if (!supervised and (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null)) {
             if (State.get(reaper.inner().child).cgroup.active()) {
                 if (!reaper.endContained(io, wake[0])) return error.Canceled;
             } else if (State.get(reaper.inner().child).pgid) |pgid| {

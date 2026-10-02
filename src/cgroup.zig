@@ -842,6 +842,15 @@ pub const Pending = enum(@Int(.unsigned, @sizeOf(PendingState) * 8)) {
     }
 };
 
+/// Internal fork handoff: reserve the scope's final force before the root runs.
+/// The supervisor owns only this descriptor, never the caller's Cgroup state.
+pub fn supervisorKillDescriptor(pending: Pending) ?posix.fd_t {
+    if (!supported) return null;
+    const state: *const PendingState = @ptrCast(@alignCast(&pending)); // safe: borrows initialized inline storage without transferring its descriptors.
+    const fd = c.openat(state.cgroup.innerConst().dir, "cgroup.kill", .{ .ACCMODE = .WRONLY, .CLOEXEC = true });
+    return if (fd >= 0) fd else null;
+}
+
 /// Puts the calling process in the cgroup `procs` is the `cgroup.procs` of.
 /// For the fork child: one `write`, async-signal-safe.
 pub fn join(procs: posix.fd_t) bool {

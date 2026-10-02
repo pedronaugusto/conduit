@@ -6,6 +6,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Contained Linux children have independent private subreaper supervisors, exact root status and saved scope identities, with orphan cleanup and reaping even without writable cgroups.
+- Reaper exposes copied adoption records and notifications without lending its scope owner.
+
 - A subreaper Reaper observes and reaps adopted exits even while another task owns the root wait.
 
 - Breaking: Reaper.deinit and Orphans.deinit report failed completion and retain their scope for retry until every direct child and adoptee is reaped.

@@ -548,6 +548,9 @@ pub const RecordedOptions = struct {
     group: ?posix.pid_t = null,
     /// A handle returned by `Cgroup.openRecorded`, borrowed for this call.
     cgroup: ?*@import("cgroup.zig").Cgroup.Recorded = null,
+    /// Linux: the private adoption owner. It receives TERM as a request to
+    /// empty its scope; never kill that owner before it has reaped the tree.
+    supervisor: ?@import("Child.zig").Child.SupervisorRecord = null,
     grace_ms: u32,
 };
 
@@ -564,6 +567,29 @@ pub const RecordedOptions = struct {
 /// was something to end. A held identity cannot survive a delivered SIGKILL,
 /// even when the kernel has not yet made its exit observable to a waiter.
 pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
+    if (options.supervisor) |record| {
+        if (builtin.os.tag != .linux) return error.Unsupported;
+        const boot = @import("cgroup.zig").bootIdentity() orelse return error.Unproven;
+        if (!std.mem.eql(u8, &boot, &record.boot)) return error.Unproven;
+        var ended = false;
+        if (try captureStarted(record.pid, record.start)) |captured| {
+            var owner = captured;
+            defer owner.deinit();
+            if (!owner.signal(.TERM) and owner.alive()) return error.UnableToEnd;
+            if (!try owner.wait(io, options.grace_ms +| 1000)) return error.UnableToEnd;
+            ended = true;
+        }
+        if (options.cgroup) |contained| {
+            const had_members = contained.populated() != .none;
+            if (had_members) {
+                if (!contained.kill()) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, 1000)) return error.UnableToEnd;
+            }
+            _ = contained.remove();
+            ended = ended or had_members;
+        }
+        return ended;
+    }
     if (options.cgroup) |contained| {
         const had_members = contained.populated() != .none;
         if (had_members) {

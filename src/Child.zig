@@ -313,6 +313,9 @@ pub const Child = enum(usize) {
         /// `std.Io.Threaded`'s workers do, that is the program; a thread that
         /// ends earlier takes its children with it. The setting survives
         /// `execve` except into a set-user-ID or set-group-ID program.
+        /// A contained Linux root instead watches its private supervisor with
+        /// SIGKILL. Loss of the caller's socket asks that supervisor to end and
+        /// reap the whole scope, independently of this option.
         ///
         /// Anywhere else it is `error.Unsupported`: macOS has no such thing, and
         /// a program there that must not leave children behind a crash keeps
@@ -331,8 +334,9 @@ pub const Child = enum(usize) {
         /// group before the final reap releases its identity. Darwin also ends
         /// descendants whose lineage was observed from before exec; a fork and
         /// parent exit before enumeration or registration can still escape.
-        /// Linux's explicit Reaper subreaper scope also ends and reaps its
-        /// process-wide adopted set at Reaper completion.
+        /// Linux uses a private subreaper supervisor per contained child,
+        /// with or without a writable cgroup. It reaps the root and every
+        /// adoptee before completion, preserving the root's exact status.
         contain,
     };
 
@@ -634,7 +638,9 @@ pub const Child = enum(usize) {
     /// POSIX has ended the private group, cgroup or observed Darwin lineage
     /// before reaping. Timeout,
     /// output error and explicit termination end the tree in either policy.
-    /// A Windows child dropped before reaping retains kill-on-close.
+    /// A Windows child dropped before reaping retains kill-on-close. A Linux
+    /// contained child dropped before reaping ends and reaps its supervisor;
+    /// wait before deinit to learn any failure of the scope.
     /// `waitTree` must be asked before deinit closes the job and its port.
     ///
     /// Linux cgroups with surviving members are left until they empty, then
@@ -652,6 +658,7 @@ pub const Child = enum(usize) {
             allocator.destroy(state);
             child.* = @enumFromInt(0);
         }
+        if (comptime builtin.os.tag == .linux) if (state.supervisor != null and !state.reaped.load(.acquire)) child.abandon(io);
         if (!is_windows and state.descendants == .contain and !state.reaped.load(.acquire))
             child.kill(.kill) catch {};
         if (State.get(child).stdin) |f| f.close(io);
@@ -664,6 +671,7 @@ pub const Child = enum(usize) {
             if (State.get(child).handles_open) child.closeHandles();
             child.closeJob();
         } else {
+            if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| owner.close();
             if (State.get(child).lineage) |tracker| tracker.deinit();
             State.get(child).forks.close();
             State.get(child).cgroup.release();
@@ -717,7 +725,15 @@ pub const Child = enum(usize) {
     /// Containment facts for a survivor record, with no owned handles.
     /// The cgroup path borrows the buffer passed to containment; everything else
     /// is copied. Keep that buffer with the record, independently of this Child.
+    pub const SupervisorRecord = struct {
+        pid: Id,
+        start: u64,
+        boot: [36]u8,
+    };
+
     pub const Containment = struct {
+        /// Linux: a private scope identity, independently of the root pid.
+        supervisor: ?SupervisorRecord = null,
         group: ?ProcessGroupId,
         cgroup: ?struct {
             path: [:0]const u8,
@@ -729,7 +745,7 @@ pub const Child = enum(usize) {
     pub const ContainmentError = error{ BufferTooSmall, IdentityUnavailable };
 
     /// Copies the detached group and, on Linux, the cgroup path, directory inode
-    /// and boot id. Available through retirement, until transfer or deinit. No cgroup is null;
+    /// boot id and private supervisor identity. Available through retirement, until transfer or deinit. No cgroup is null;
     /// a cgroup whose identity cannot be read is IdentityUnavailable, so a ledger
     /// never silently records incomplete containment. An undersized path buffer
     /// is BufferTooSmall; std.fs.max_path_bytes + 64 always holds our path.
@@ -740,6 +756,9 @@ pub const Child = enum(usize) {
         if (State.optional(child) == null) return .{ .group = null };
         const state = State.get(child);
         var record: Containment = .{ .group = state.pgid };
+        if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| {
+            record.supervisor = owner.record;
+        };
         if (comptime !is_windows) if (state.cgroup.active()) {
             const path = state.cgroup.path(buffer) orelse return error.BufferTooSmall;
             const id = state.cgroup.id() orelse return error.IdentityUnavailable;
@@ -1045,7 +1064,8 @@ pub const Child = enum(usize) {
             return term;
         }
 
-        if (State.get(child).force_tree or State.get(child).end_descendants or State.get(child).descendants == .contain) {
+        const supervised = if (builtin.os.tag == .linux) State.get(child).supervisor != null else false;
+        if (!supervised and (State.get(child).force_tree or State.get(child).end_descendants or State.get(child).descendants == .contain)) {
             // Normal containment and every termination request share this
             // final force. Once waitid observes the root ended, its last fork
             // has finished and its group id is still ours until waitpid.
@@ -1066,7 +1086,11 @@ pub const Child = enum(usize) {
             const rc = c.waitpid(State.get(child).id, &status, c.W.NOHANG);
             if (rc == 0) return null;
             if (rc > 0) {
-                const term = statusToTerm(@bitCast(status));
+                const root_status = if (builtin.os.tag == .linux) if (State.get(child).supervisor) |owner| owner.result() catch |err| {
+                    State.get(child).identity_retired = true;
+                    return err;
+                } else @as(u32, @bitCast(status)) else @as(u32, @bitCast(status));
+                const term = statusToTerm(root_status);
                 if (State.get(child).lineage) |tracker| if (tracker.failedTracking()) {
                     State.get(child).identity_retired = true;
                     published = true;
@@ -1184,6 +1208,12 @@ pub const Child = enum(usize) {
     /// in a default container, a cgroup owned by another user, a kernel before
     /// 5.14 — a child is reached as on the other POSIX systems, below.
     ///
+    /// A contained Linux child has a private supervisor. Signals go through
+    /// its command socket, so the caller cannot signal a recycled root pid.
+    /// Its root group and adoptees receive requests, with other cgroup members
+    /// reached where available. A force recursively ends and reaps the whole
+    /// adoption scope; completion retains the root's own exit status.
+    ///
     /// Where `Orphans` runs, a descendant whose parent ended before the signal is
     /// this process's child by then, adopted, and is reached here only through
     /// the child's cgroup: nothing else says which child it came from, and this
@@ -1241,6 +1271,13 @@ pub const Child = enum(usize) {
         if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
         if (is_windows) return child.killWindows(signal);
 
+        if (comptime builtin.os.tag == .linux) if (State.get(child).supervisor) |owner| {
+            if (signal == .kill and State.get(child).cgroup.active()) _ = State.get(child).cgroup.kill();
+            var cgroup_signalled = false;
+            if (signal != .kill and State.get(child).cgroup.active())
+                cgroup_signalled = (try State.get(child).cgroup.signalMembers(signal.toPosix(), State.get(child).process_id, State.get(child).pgid)) != null;
+            return owner.request(signal, cgroup_signalled);
+        };
         const sig = signal.toPosix();
         if (sig == .KILL) State.get(child).force_tree = true;
         const target: posix.pid_t = if (State.get(child).pgid) |pgid| -pgid else State.get(child).id;
