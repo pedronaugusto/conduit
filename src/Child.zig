@@ -333,8 +333,11 @@ pub const Child = enum(usize) {
         /// members and confirms zero active processes before publishing the
         /// root's status; POSIX ends the cgroup or private process
         /// group before the final reap releases its identity. Darwin also ends
-        /// descendants whose lineage was observed from before exec; a fork and
-        /// parent exit before enumeration or registration can still escape.
+        /// descendants whose lineage was observed from before exec. This is
+        /// observation, without kernel enforcement: a fork followed by parent
+        /// exit before enumeration or registration can escape. The measured
+        /// window yielded 0/100 escapes with no added delay and 100/100 with
+        /// a 20 ms observer delay in one run; counts depend on scheduling.
         /// Linux uses a private subreaper supervisor per contained child,
         /// with or without a writable cgroup. It reaps the root and every
         /// adoptee before completion, preserving the root's exact status.

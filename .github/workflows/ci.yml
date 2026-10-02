@@ -83,6 +83,8 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - name: Formatting
         run: zig fmt --check src examples build.zig
+      - name: Containment documentation states the observation boundary
+        run: python3 ci/containment_docs.py
       - name: Casts out of the type system carry their reason
         run: python3 ci/casts.py
 

@@ -97,7 +97,7 @@ to read while a wait or Reaper runs.
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
-| `child.deinit(io)` | Closes what the `Child` owns, and nothing the caller supplied. |
+| `child.deinit(io)` | Closes owned resources after confirmed containment completion. Use `release` for an unfinished contained child. Supplied streams stay open. |
 
 `Child.Output` owns the collected bytes until `deinit(allocator)`. `stdout()`
 and `stderr()` borrow them; `takeStdout()` and `takeStderr()` transfer them
@@ -144,7 +144,7 @@ including `output` and `Reaper`, follows the same policy.
 | --- | --- |
 | Linux with a writable cgroup | A private supervisor ends the cgroup and reaps its root and adoptees before completion. It also contains descendants that leave the cgroup. |
 | Linux without a writable cgroup | A private supervisor is the subreaper of this child alone. Normal exit, force and loss of the caller end and reap its tree, including detached orphans. |
-| macOS | Ends the private group and every descendant whose lineage was observed before reaping. A fork followed by parent exit before enumeration or registration can escape. |
+| macOS | Observation of lineage, without kernel enforcement. Ends the private group and observed descendants before reaping. The measured fork/registration window can let a fork followed by parent exit escape: 0/100 escapes with no added delay and 100/100 with a 20 ms observer delay in one run; counts depend on scheduling. |
 | Windows | The Job Object retains descendants across separate consoles and intermediate exits; every contained wait ends its members and confirms zero active processes before returning the root status. |
 | Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
 

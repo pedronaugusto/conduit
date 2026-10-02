@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The macOS platform table and containment policy comment state the measured fork/registration escape window and its observation boundary.
+
 - Breaking: contained Windows waits publish the root status only after ending the Job and confirming that every member has ended.
 
 - Breaking: `Child.release` reports contained cleanup failures and retains ownership for retry; `Child.deinit` requires confirmed scope completion.
