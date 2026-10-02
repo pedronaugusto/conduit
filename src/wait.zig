@@ -377,15 +377,18 @@ test "exit observation keeps the child's identity until its owner reaps it" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    const pid = child.processId().?;
+    const root = child.processId().?;
+    // The owned wait identity is the private supervisor on Linux. The root
+    // belongs to that supervisor; waitid in this process cannot observe it.
+    const pid = State.get(&child).id;
     try testing.expectEqual(Ended.running, endedUnreaped(pid));
     child.closeStdin(io);
     const deadline: Deadline = .in(io, 5000);
     while (endedUnreaped(pid) == .running and deadline.remainingMs(io) > 0)
         try io.sleep(.fromMilliseconds(1), .awake);
     try testing.expectEqual(Ended.ended, endedUnreaped(pid));
-    // Observation left the zombie and the private group id owned by us.
-    try testing.expectEqual(pid, child.processId().?);
+    // Observation left the wait identity unreaped and the root label intact.
+    try testing.expectEqual(root, child.processId().?);
     try testing.expectEqual(@as(c_int, 0), c.kill(pid, @enumFromInt(0)));
     try testing.expect(Child.succeeded((try child.waitTimeout(io, 5000)).?));
 }
