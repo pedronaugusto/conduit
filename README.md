@@ -763,3 +763,5 @@ Zig 0.16.0. libc on POSIX; none on Windows.
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+`Reaper.deinit` and `Orphans.deinit` are fallible. End and reap every direct child before closing an adoption scope. A cancellation, resource failure or failed attribute restoration keeps the scope owned; handle the error and retry before releasing its storage.

@@ -2231,7 +2231,7 @@ pub const Child = enum(usize) {
             var reaper: @import("Reaper.zig").Reaper = .init(&child, .{});
             stage = "starting Reaper";
             try reaper.start(io);
-            defer reaper.deinit(io);
+            defer reaper.deinit(io) catch unreachable;
 
             var probe: SignalProbe = .{ .reaper = &reaper };
             signal_probe = &probe;

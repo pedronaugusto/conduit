@@ -115,7 +115,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
             var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io);
+            defer reaper.deinit(io) catch unreachable;
             break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .exited = if (comptime std.mem.eql(u8, method, "exit-7")) 7 else 0 }, term);
@@ -158,7 +158,7 @@ test "containment ends a daemon after normal completion through every reap" {
         } else {
             var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io);
+            defer reaper.deinit(io) catch unreachable;
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
         }
         fixture.child.deinit(io);
@@ -236,7 +236,7 @@ test "containment ends a double-forked session after normal exit" {
         } else if (comptime std.mem.eql(u8, method, "Reaper")) {
             var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io);
+            defer reaper.deinit(io) catch unreachable;
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
         } else try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
         fixture.child.deinit(io);
@@ -282,10 +282,10 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     var reaper: Reaper = .init(&fixture.child, .{});
     // Activation precedes spawn: an intermediate can exit before start runs.
     try reaper.enableSubreaper();
-    errdefer reaper.deinit(io);
+    errdefer reaper.deinit(io) catch unreachable;
     fixture = try Fixture.start(.contain, "--double-fork");
     defer fixture.deinit();
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     var unrelated = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -318,10 +318,10 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     var fixture: Fixture = undefined;
     var reaper: @import("Reaper.zig").Reaper = .init(&fixture.child, .{});
     try reaper.enableSubreaper();
-    errdefer reaper.deinit(io);
+    errdefer reaper.deinit(io) catch unreachable;
     fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     try reaper.start(io);
     const pid = fixture.daemon.held.processId();
     const fd = linux.pidfd_open(pid, 0);

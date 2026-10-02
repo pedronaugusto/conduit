@@ -459,7 +459,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
 
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     try testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
 
@@ -507,7 +507,7 @@ test "a Reaper started after reaping never watches a reused identity" {
     State.get(&child).pgid = State.get(&witness).pgid;
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     try testing.expectEqual(@as(?Child.Term, term), try reaper.waitTimeout(io, 20));
     try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
 }
@@ -531,7 +531,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
 
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     // Confirmed running: `exit` is null while the wait is in flight.
     try std.Io.sleep(io, .fromMilliseconds(50), .awake);
@@ -577,7 +577,7 @@ test "a wait whose Reaper was cancelled is still a wait" {
         try reaper.start(io);
         try std.Io.sleep(io, .fromMilliseconds(50), .awake);
         try testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
-        reaper.deinit(io);
+        reaper.deinit(io) catch unreachable;
     }
 
     child.closeStdin(io);
@@ -597,7 +597,7 @@ test "Reaper.wait blocks until the child has ended, and answers everyone who ask
 
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     // Still running: a bounded wait says so, and says it no sooner than asked.
     try testing.expectEqual(@as(?Child.Term, null), try reaper.waitTimeout(io, 30));
@@ -635,7 +635,7 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
 
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     const grace_ms = 300;
     const Count = struct {
@@ -685,7 +685,7 @@ test "Reaper.stop is over the moment a child that honours the request ends" {
 
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     reaper.stop(io, 60_000);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
@@ -715,7 +715,7 @@ test "Reaper.stop with no grace is the force, now" {
 
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     reaper.stop(io, 60_000);
     reaper.stop(io, 0);
@@ -801,7 +801,7 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     const grace_ms = 300;
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = grace_ms });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     child.closeStdin(io);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
@@ -850,7 +850,7 @@ test "end_tree: a child that ended before its Reaper started still takes what it
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = 300 });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .exited = 4 }, term);
     deadline = .in(io, budget_ms);
@@ -897,7 +897,7 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     _ = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     // Reaped, and the job ended with it: the grandchild is gone before
     // anything has called `deinit`.
@@ -920,7 +920,7 @@ test "end_tree: a child that leaves nothing is reaped without waiting on its gro
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = 60_000 });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
 
     child.closeStdin(io);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
@@ -948,7 +948,7 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
         join_watchdog.limit_ms = budget_ms;
         try join_watchdog.start(io);
         defer join_watchdog.deinit(io);
-        reaper.deinit(io);
+        reaper.deinit(io) catch unreachable;
     }
     try testing.expectError(error.Canceled, reaper.exit());
 
@@ -1544,7 +1544,7 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace_ms = 2000 });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     child.closeStdin(io);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .exited = 3 }, term);
@@ -1688,7 +1688,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
     var orphans: Orphans = .init(gpa);
-    defer orphans.deinit();
+    defer orphans.deinit() catch unreachable;
     if (!Orphans.supported) {
         try testing.expectError(error.Unsupported, orphans.start());
         return error.SkipZigTest;
@@ -1781,7 +1781,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try expectGone(kept);
     try testing.expectEqual(@as(usize, 0), try orphans.count());
 
-    orphans.deinit();
+    orphans.deinit() catch unreachable;
     try testing.expect(!subreaperNow());
 }
 
@@ -1792,7 +1792,7 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
     if (is_windows or !Orphans.supported) return error.SkipZigTest;
     if (setsidProgram() == null) return error.SkipZigTest;
     var orphans: Orphans = .init(gpa);
-    defer orphans.deinit();
+    defer orphans.deinit() catch unreachable;
     orphans.start() catch |err| switch (err) {
         error.Unsupported => return error.SkipZigTest,
         else => return err,
@@ -1835,7 +1835,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
     defer _ = before.killWait(io, 0) catch {};
 
     var orphans: Orphans = .init(gpa);
-    defer orphans.deinit();
+    defer orphans.deinit() catch unreachable;
     orphans.start() catch |err| switch (err) {
         error.Unsupported => return error.SkipZigTest,
         else => return err,
@@ -3998,7 +3998,7 @@ test "blocking waits and Reaper report status reaped elsewhere" {
         if (background) {
             var reaper: conduit.Reaper = .init(&child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io);
+            defer reaper.deinit(io) catch unreachable;
             try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, budget_ms));
         } else {
             try testing.expectError(error.ReapedElsewhere, child.wait(io));
@@ -4018,7 +4018,7 @@ test "Windows wait and Reaper preserve the control exit status" {
         const term = if (background) blk: {
             var reaper: conduit.Reaper = .init(&child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io);
+            defer reaper.deinit(io) catch unreachable;
             break :blk (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         } else try waitWithin(&child);
         try testing.expectEqual(@as(u32, 0xc000013a), conduit.exitCode(term).?);
@@ -4037,7 +4037,7 @@ test "Child identity and result access share the Reaper's retirement" {
     try testing.expectEqual(@as(?Child.Term, null), try child.result());
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     var buffer: [32]u8 = undefined;
     var writer = child.stdinFile().?.writer(io, &buffer);
     try writer.interface.writeAll("exit\n");
@@ -4081,7 +4081,7 @@ test "a Reaper started after status loss never watches a reused identity" {
     State.get(&child).pgid = State.get(&witness).pgid;
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, 100));
     try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
 }
@@ -4148,10 +4148,10 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
     }
     var reaper: conduit.Reaper = .init(&child, .{});
     try reaper.start(io);
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
-    reaper.deinit(io);
+    reaper.deinit(io) catch unreachable;
     try testing.expectEqual(@as(?Child.Id, null), child.processId());
     var retired_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
     const retired = try child.containment(&retired_buffer);
@@ -4178,7 +4178,7 @@ test "Reaper start cannot replace an active task or restart a joined lifetime" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var reaper: conduit.Reaper = .init(&child, .{});
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     try reaper.start(io);
     // Equality of errors keeps this regression compilable before the error
     // has been added to StartError. A duplicate task can be canceled safely.
@@ -4190,7 +4190,7 @@ test "Reaper start cannot replace an active task or restart a joined lifetime" {
     try testing.expect(rejected);
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
-    reaper.deinit(io);
+    reaper.deinit(io) catch unreachable;
     try testing.expectError(error.AlreadyStarted, reaper.start(io));
 }
 
@@ -4235,7 +4235,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     defer watchdog.deinit(io);
     var orphans: Orphans = .init(gpa);
     try orphans.start();
-    defer orphans.deinit();
+    defer orphans.deinit() catch unreachable;
     defer orphans.end(io, 0) catch {};
     var keeper = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },

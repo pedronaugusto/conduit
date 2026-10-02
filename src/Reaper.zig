@@ -311,9 +311,13 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     ///
     /// With enableSubreaper, call after all direct children ended and were reaped.
     /// It ends and reaps remaining adoptees, then restores the process setting.
-    /// Idempotent.
-    pub fn deinit(reaper: *Reaper, io: std.Io) void {
-        if (reaper.inner().lifetime.swap(.closed, .acq_rel) == .closed) return;
+    /// Cancellation, resource and restoration failures retain the scope for
+    /// retry. DirectChildrenRemain means a direct child still owns a wait.
+    /// Idempotent after successful completion.
+    pub const DeinitError = Orphans.EndError || Orphans.DeinitError;
+
+    pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {
+        if (reaper.inner().lifetime.swap(.closed, .acq_rel) == .closed and reaper.inner().orphans == null) return;
         if (!is_windows) if (reaper.inner().wake) |ends| {
             _ = c.write(ends[1], "x", 1);
         };
@@ -322,8 +326,8 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         if (reaper.inner().orphans) |orphans| {
             // A process-wide owner cannot leave an adoptee without a future
             // wait. End before restoring the attribute and releasing pidfds.
-            orphans.end(io, 0) catch {};
-            orphans.deinit();
+            try orphans.end(io, 0);
+            try orphans.deinit();
             std.heap.page_allocator.destroy(orphans);
             reaper.inner().orphans = null;
         }
@@ -619,7 +623,7 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var reaper: Reaper = .init(&child, .{});
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     const Reject = struct {
         reaper: *Reaper,
         ends: ?[2]posix.fd_t = null,
@@ -659,7 +663,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var reaper: Reaper = .init(&child, .{});
-    defer reaper.deinit(io);
+    defer reaper.deinit(io) catch unreachable;
     const Clock = struct {
         ms: u32 = 0,
         waits: usize = 0,
@@ -731,16 +735,16 @@ test "subreaping belongs to one Reaper and restores the process attribute" {
     var child: Child = @enumFromInt(0);
     var owner: Reaper = .init(&child, .{});
     try owner.enableSubreaper();
-    defer owner.deinit(std.testing.io);
+    defer owner.deinit(std.testing.io) catch unreachable;
     try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
     var other: Reaper = .init(&child, .{});
-    defer other.deinit(std.testing.io);
+    defer other.deinit(std.testing.io) catch unreachable;
     try std.testing.expectError(error.AlreadyStarted, other.enableSubreaper());
     var during: c_int = 0;
     try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
     try std.testing.expectEqual(@as(c_int, 1), during);
-    owner.deinit(std.testing.io);
-    owner.deinit(std.testing.io);
+    owner.deinit(std.testing.io) catch unreachable;
+    owner.deinit(std.testing.io) catch unreachable;
     try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
     var after: c_int = 0;
     try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&after), 0, 0, 0)));
@@ -752,6 +756,26 @@ test "Reaper subreaping is unsupported off Linux" {
     if (builtin.os.tag == .linux) return error.SkipZigTest;
     var child: Child = @enumFromInt(0);
     var reaper: Reaper = .init(&child, .{});
-    defer reaper.deinit(std.testing.io);
+    defer reaper.deinit(std.testing.io) catch unreachable;
     try std.testing.expectError(error.Unsupported, reaper.enableSubreaper());
+}
+
+test "a subreaper teardown retains ownership until every direct child is reaped" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const io = std.testing.io;
+    var child: Child = @enumFromInt(0);
+    var owner: Reaper = .init(&child, .{});
+    try owner.enableSubreaper();
+    defer owner.deinit(io) catch unreachable;
+    var other = try Child.spawn(io, std.testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer other.deinit(io);
+    defer _ = other.killWait(io, 0) catch {};
+    try std.testing.expectError(error.DirectChildrenRemain, owner.deinit(io));
+    var during: c_int = 0;
+    const linux = std.os.linux;
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
+    try std.testing.expectEqual(@as(c_int, 1), during);
 }
