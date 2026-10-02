@@ -63,6 +63,16 @@ pub const Prepared = struct { signals: posix.fd_t, children: posix.fd_t };
 pub const Preparation = union(enum) { ready: Prepared, failed: posix.E };
 
 pub fn prepare() Preparation {
+    // Leave the application's signal group before starting anything it owns.
+    const session_error = linux.errno(linux.setsid());
+    if (session_error != .SUCCESS) return .{ .failed = session_error };
+    // Every catchable asynchronous stop is consumed through signalfd. Keep
+    // harmless notifications at their default disposition; KILL and STOP
+    // cannot be caught. This mask is installed before resetting handlers.
+    var mask = linux.sigfillset();
+    inline for (.{ linux.SIG.KILL, linux.SIG.STOP, linux.SIG.CONT, linux.SIG.WINCH, linux.SIG.URG }) |sig| linux.sigdelset(&mask, sig);
+    const mask_error = linux.errno(linux.sigprocmask(linux.SIG.SETMASK, &mask, null));
+    if (mask_error != .SUCCESS) return .{ .failed = mask_error };
     // A supervisor never execs: inherited handlers must be reset here too.
     var number: u32 = 1;
     while (number < linux.NSIG) : (number += 1) {
@@ -71,12 +81,6 @@ pub fn prepare() Preparation {
         const action: posix.Sigaction = .{ .handler = .{ .handler = posix.SIG.DFL }, .mask = posix.sigemptyset(), .flags = 0 };
         _ = c.sigaction(sig, &action, null);
     }
-    var mask = linux.sigemptyset();
-    linux.sigaddset(&mask, .CHLD);
-    // A saved-scope stop stays pending even if it precedes the first poll.
-    linux.sigaddset(&mask, .TERM);
-    const mask_error = linux.errno(linux.sigprocmask(linux.SIG.BLOCK, &mask, null));
-    if (mask_error != .SUCCESS) return .{ .failed = mask_error };
     const attribute_error = linux.errno(linux.prctl(@intFromEnum(linux.PR.SET_CHILD_SUBREAPER), 1, 0, 0, 0));
     if (attribute_error != .SUCCESS) return .{ .failed = attribute_error };
     const signals = linux.signalfd(-1, &mask, linux.SFD.CLOEXEC | linux.SFD.NONBLOCK);
@@ -128,7 +132,7 @@ pub fn run(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Pr
             var notices: [8]linux.signalfd_siginfo = undefined;
             const n = c.read(prepared.signals, std.mem.asBytes(&notices).ptr, @sizeOf(@TypeOf(notices)));
             if (n > 0) for (notices[0 .. @as(usize, @intCast(n)) / @sizeOf(linux.signalfd_siginfo)]) |notice| {
-                if (notice.signo == @intFromEnum(posix.SIG.TERM)) ending = true;
+                if (notice.signo != @intFromEnum(posix.SIG.CHLD)) ending = true;
             };
         }
         if (linux.errno(ready) == .SUCCESS and pollfds[0].revents & (linux.POLL.IN | linux.POLL.HUP) != 0) {

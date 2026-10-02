@@ -450,3 +450,32 @@ test "dropping a contained child ends and reaps its private supervisor" {
     try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(scope, &status, std.posix.W.NOHANG));
     try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
 }
+
+test "a private supervisor has its own session and process group" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var fixture = try Fixture.start(.contain, "--race");
+    defer fixture.deinit();
+    const scope = State.get(&fixture.child).id;
+    try std.testing.expectEqual(scope, getsid(scope));
+    try std.testing.expectEqual(scope, getpgid(scope));
+    try std.testing.expect(getsid(scope) != getsid(0));
+    try std.testing.expect(getpgid(scope) != getpgid(0));
+}
+
+test "every catchable supervisor stop ends and reaps its detached adoptee" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const cgroups = @import("cgroup.zig");
+    cgroups.testing_hook.off = true;
+    defer cgroups.testing_hook.off = false;
+    inline for (.{ std.posix.SIG.HUP, std.posix.SIG.INT, std.posix.SIG.QUIT, std.posix.SIG.TERM, std.posix.SIG.TSTP }) |signal| {
+        var fixture = try Fixture.start(.contain, "--race");
+        defer fixture.deinit();
+        try std.testing.expectEqual(@as(c_int, 0), std.c.kill(State.get(&fixture.child).id, signal));
+        const term = try fixture.child.waitTimeout(io, budget_ms);
+        try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term.?);
+        try std.testing.expect(!fixture.daemon.alive());
+    }
+}

@@ -151,7 +151,9 @@ On Linux, each contained child has a private supervisor process. It becomes a
 subreaper before starting the root; neither the caller's process setting nor
 another child's ownership changes. The root's pid remains `processId`, and
 its exact exit code or signal remains the wait result. Its parent is the
-supervisor. The supervisor holds the root unreaped while ending and reaping
+supervisor, in its own session and process group. Application group signals
+cannot stop it; a catchable stop sent directly to it ends its scope. The
+supervisor holds the root unreaped while ending and reaping
 all adoptees, including each new generation adopted during cleanup. It uses
 signalfd and the caller's command socket while idle, without a polling timer.
 All cleanup descriptors are reserved before the root runs; cleanup allocates
