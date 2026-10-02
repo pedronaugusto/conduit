@@ -99,8 +99,43 @@ pub fn build(b: *std.Build) void {
     });
     test_module.addOptions("conduit_options", conduit_options);
 
+    // A native tree with a known descendant identity and stream lifetime.
+    // Only tests depend on this executable; it is never part of the library.
+    {
+        const fixture = b.addExecutable(.{
+            .name = "conduit-tree-fixture",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/test_process.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = link_libc,
+            }),
+        });
+        const test_options = b.addOptions();
+        test_options.addOptionPath("tree_fixture", fixture.getEmittedBin());
+        const input_fixture = b.addExecutable(.{
+            .name = "conduit-input-fixture",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/test_input_process.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = link_libc,
+            }),
+        });
+        test_options.addOptionPath("input_fixture", input_fixture.getEmittedBin());
+        test_module.addOptions("conduit_test_options", test_options);
+    }
+
+    const runner_options = b.addOptions();
+    runner_options.addOption(u32, "watchdog_ms", b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown") orelse 30_000);
+    test_module.addOptions("conduit_runner_options", runner_options);
+    test_module.addAnonymousImport("standard_test_runner", .{
+        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ b.graph.zig_lib_directory.path.?, "compiler", "test_runner.zig" }) },
+    });
+
     const tests = b.addTest(.{
         .name = "conduit-tests",
+        .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .server },
         .filters = test_filters,
         .root_module = test_module,
     });

@@ -77,6 +77,50 @@ pub fn readStreaming(
     }
 }
 
+/// Writes the whole slice, retaining short writes and checking cancellation
+/// when a backend reports zero progress. File.writeStreamingAll retries that
+/// zero without a cancellation point, so a task could otherwise spin past a
+/// request to stop. The same rule belongs to every writer in this package.
+pub fn writeStreamingAll(f: std.Io.File, io: std.Io, bytes: []const u8) std.Io.File.Writer.Error!void {
+    // Zig 0.16 maps STATUS_PIPE_CLOSING to Unexpected. Ask the pipe before
+    // writing so this ordinary peer closure does not emit an unexpected-error
+    // trace; check again on failure for a reader that closed during the write.
+    if (bytes.len != 0 and is_windows and windowsPipeClosed(f)) return error.BrokenPipe;
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const n = f.writeStreaming(io, &.{}, &.{bytes[offset..]}, 1) catch |err| {
+            if (err == error.Unexpected and is_windows and windowsPipeClosed(f)) return error.BrokenPipe;
+            return err;
+        };
+        if (n == 0) try std.Io.checkCancel(io);
+        offset += n;
+    }
+}
+
+/// The peer has closed this Windows pipe. A file, console, or failed query
+/// proves nothing and leaves the Io backend's error unchanged. This is a
+/// metadata query on the handle the writer still owns, never another write.
+fn windowsPipeClosed(f: std.Io.File) bool {
+    if (!is_windows) unreachable;
+    // A query on an asynchronous handle can pend and retain the stack's
+    // status block. Only the synchronous handles conduit creates are probed.
+    if (f.flags.nonblocking) return false;
+    const windows = std.os.windows;
+    var status: windows.IO_STATUS_BLOCK = undefined;
+    var info: windows.FILE.PIPE.LOCAL_INFORMATION = undefined;
+    return switch (windows.ntdll.NtQueryInformationFile(
+        f.handle,
+        &status,
+        &info,
+        @sizeOf(@TypeOf(info)),
+        .PipeLocal,
+    )) {
+        .SUCCESS => info.NamedPipeState == .CLOSING or info.NamedPipeState == .DISCONNECTED,
+        .PIPE_CLOSING, .PIPE_BROKEN, .PIPE_DISCONNECTED => true,
+        else => false,
+    };
+}
+
 /// Whether a descriptor on this system can be opened close-on-exec in one
 /// call, or needs a second one.
 ///
@@ -197,4 +241,65 @@ test "readStreaming retries a permitted zero-byte result" {
     const n = try readStreaming(f, zero_io, &.{&buffer});
     try std.testing.expect(state.returned_zero);
     try std.testing.expectEqualStrings("after zero", buffer[0..n]);
+}
+
+test "writeStreamingAll retains short writes after zero progress" {
+    const ShortWrites = struct {
+        var calls: usize = 0;
+        var used: usize = 0;
+        var bytes: [6]u8 = undefined;
+
+        fn operate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            std.debug.assert(operation == .file_write_streaming);
+            calls += 1;
+            if (calls == 1) return .{ .file_write_streaming = 0 };
+            const data = operation.file_write_streaming.data[0];
+            const n = @min(data.len, 2);
+            @memcpy(bytes[used..][0..n], data[0..n]);
+            used += n;
+            return .{ .file_write_streaming = n };
+        }
+    };
+    ShortWrites.calls = 0;
+    ShortWrites.used = 0;
+    var vtable = std.testing.io.vtable.*;
+    vtable.operate = ShortWrites.operate;
+    const io: std.Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
+    try writeStreamingAll(std.Io.File.stdout(), io, "abcdef");
+    try std.testing.expectEqual(4, ShortWrites.calls);
+    try std.testing.expectEqualStrings("abcdef", &ShortWrites.bytes);
+}
+
+test "Windows a closed pipe is a broken write and a file keeps its unexpected error" {
+    if (!is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try @import("Child.zig").Child.spawn(io, testing.allocator, .{
+        .argv = &.{ @import("conduit_test_options").input_fixture, "exit" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer {
+        _ = child.killWait(io, 0) catch {};
+        child.deinit(io);
+    }
+    try testing.expect((try child.waitTimeout(io, 5000)) != null);
+    try testing.expectError(error.BrokenPipe, writeStreamingAll(child.stdinFile().?, io, "closed"));
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const f = try tmp.dir.createFile(io, "file", .{});
+    defer f.close(io);
+    const FailWrite = struct {
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            if (operation == .file_write_streaming) return .{ .file_write_streaming = error.Unexpected };
+            return testing.io.vtable.operate(userdata, operation);
+        }
+    };
+    var vtable = io.vtable.*;
+    vtable.operate = FailWrite.operate;
+    const failed_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    try testing.expectError(error.Unexpected, writeStreamingAll(f, failed_io, "unchanged"));
 }

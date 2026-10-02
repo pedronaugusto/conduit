@@ -47,959 +47,1060 @@
 //! * `deinit` must run before it goes out of scope, including on the path
 //!   where the child never says anything.
 
-const Expect = @This();
-
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Pty = @import("Pty.zig");
+const Pty = @import("Pty.zig").Pty;
 const handles = @import("handles.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
-/// What the child says, and where a reply goes.
-///
-/// `Child.pty` is already this shape, and `Child.expect` builds one for a
-/// child on pipes out of its standard output and standard input. Borrowed:
-/// `deinit` closes neither file.
-master: Pty.Master,
-/// Where what the child says is kept. The caller's, and borrowed: nothing
-/// here frees it, and it must outlive the `Expect`.
-buffer: []u8,
-/// How much of `buffer` has arrived.
-filled: usize,
-/// How much of `buffer[0..filled]` a match has already accounted for.
-///
-/// Those bytes are not dropped when the match is returned but at the start of
-/// the next call, which is what keeps the slices in a `Match` readable after
-/// the call that produced them.
-consumed: usize,
-/// The reading task reached the end of the stream.
-ended: bool,
-/// The reading task could not read, for a reason other than the end.
-failed: bool,
-/// The reading task has stopped, for any reason, cancellation included.
-/// Atomic and not under `mutex`, so it can be read without taking anything
-/// the task holds.
-finished: std.atomic.Value(bool),
-/// Guards the four fields above: the reading task appends to them, and the
-/// caller's task consumes from them.
-mutex: std.Io.Mutex,
-/// Set by the reading task whenever one of those fields changes, so a wait
-/// ends the moment the child speaks rather than at the end of a poll
-/// interval.
-arrived: std.Io.Event,
-/// The task doing the reading.
-group: std.Io.Group,
-/// Whether a reading task has been started. Atomic so two callers cannot both
-/// get past `start` and put readers over the same buffer.
-started: std.atomic.Value(bool),
-/// Set by `deinit`, read by the task before every read it starts, so a reader
-/// that is between reads when `deinit` begins does not start another one.
-stopping: std.atomic.Value(bool),
-
-/// Where a pattern was found, in the bytes that had arrived when it was.
-///
-/// Both slices point into the caller's buffer and are valid until the next
-/// call on the same `Expect`.
-pub const Match = struct {
-    /// Which pattern this was: an index into what `untilAny` was given, and
-    /// always zero from `until`, which is given one.
-    index: usize,
-    /// Everything that arrived before the pattern, in the order it arrived.
-    /// Empty when the pattern was the next thing the child said.
-    before: []const u8,
-    /// The pattern, as it was found. The same bytes that were asked for; it
-    /// is here so that `before.ptr + before.len` needs no arithmetic and a
-    /// caller keeping the whole exchange can print the two together.
-    found: []const u8,
+const Implementation = struct {
+    /// What the child says, and where a reply goes.
+    ///
+    /// `Child.pty` is already this shape, and `Child.expect` builds one for a
+    /// child on pipes out of its standard output and standard input. Borrowed:
+    /// `deinit` closes neither file.
+    master: Pty.Master,
+    /// Where what the child says is kept. The caller's, and borrowed: nothing
+    /// here frees it, and it must outlive the `Expect`.
+    buffer: []u8,
+    /// How much of `buffer` has arrived.
+    filled: usize,
+    /// How much of `buffer[0..filled]` a match has already accounted for.
+    ///
+    /// Those bytes are not dropped when the match is returned but at the start of
+    /// the next call, which is what keeps the slices in a `Match` readable after
+    /// the call that produced them.
+    consumed: usize,
+    /// The reading task reached the end of the stream.
+    ended: bool,
+    /// The reading task could not read, for a reason other than the end.
+    failed: bool,
+    /// The reading task has stopped, for any reason, cancellation included.
+    /// Atomic and not under `mutex`, so it can be read without taking anything
+    /// the task holds.
+    finished: std.atomic.Value(bool),
+    /// Guards the four fields above: the reading task appends to them, and the
+    /// caller's task consumes from them.
+    mutex: std.Io.Mutex,
+    /// Set by the reading task whenever one of those fields changes, so a wait
+    /// ends the moment the child speaks rather than at the end of a poll
+    /// interval.
+    arrived: std.Io.Event,
+    /// Set when consuming or discarding bytes makes buffer space available.
+    space: std.Io.Event,
+    /// The task doing the reading.
+    group: std.Io.Group,
+    /// One claim for initialization, task ownership and closure. Deinit closes
+    /// even a lifetime whose task has never been started.
+    lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
 };
 
-/// An `Expect` that is not reading yet. `start` puts the reading task in
-/// flight.
-///
-/// The buffer should be at least as large as the longest pattern that will be
-/// waited for plus whatever the child may say before it; a few kilobytes is
-/// generous for a line-oriented conversation.
-pub fn init(master: Pty.Master, buffer: []u8) Expect {
-    return .{
-        .master = master,
-        .buffer = buffer,
-        .filled = 0,
-        .consumed = 0,
-        .ended = false,
-        .failed = false,
-        .mutex = .init,
-        .arrived = .unset,
-        .group = .init,
-        .started = .init(false),
-        .stopping = .init(false),
-        .finished = .init(false),
-    };
-}
+pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
+    _,
 
-pub const StartError = error{
-    /// This `Expect` already has, or had, its one reading task.
-    AlreadyStarted,
-} || std.Io.ConcurrentError;
-
-/// Begins reading.
-///
-/// The task must be able to run alongside the caller, so an `std.Io`
-/// implementation with no concurrency to offer fails here rather than
-/// deadlocking at the first `until`. Everything the child says from this
-/// moment is kept; anything it said before it is not. An `Expect` has one
-/// reading task for its lifetime; a second successful-start attempt is
-/// `error.AlreadyStarted`.
-pub fn start(expect: *Expect, io: std.Io) StartError!void {
-    if (expect.started.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-        return error.AlreadyStarted;
+    fn inner(expect: *Expect) *Implementation {
+        return @ptrCast(@alignCast(expect)); // safe: init writes inline state; the enum holds its size and alignment.
     }
-    expect.group.concurrent(io, read, .{ expect, io }) catch |err| {
-        expect.started.store(false, .release);
-        return err;
+
+    /// Where a pattern was found, in the bytes that had arrived when it was.
+    ///
+    /// Both slices point into the caller's buffer and are valid until the next
+    /// call on the same `Expect`.
+    pub const Match = struct {
+        /// Which pattern this was: an index into what `untilAny` was given, and
+        /// always zero from `until`, which is given one.
+        index: usize,
+        /// Everything that arrived before the pattern, in the order it arrived.
+        /// Empty when the pattern was the next thing the child said.
+        before: []const u8,
+        /// The pattern, as it was found. The same bytes that were asked for; it
+        /// is here so that `before.ptr + before.len` needs no arithmetic and a
+        /// caller keeping the whole exchange can print the two together.
+        found: []const u8,
     };
-}
 
-/// Stops reading and releases the task.
-///
-/// Idempotent, and safe after the child has gone. Bytes that had arrived and
-/// were never matched are simply forgotten; the buffer is the caller's and is
-/// untouched.
-///
-/// The task is inside a read, and a read ends when the far end finishes, when
-/// the handle goes away, or when the task is cancelled. For a pseudo-terminal
-/// master whose console is still open the first two do not happen, so this
-/// cancels: the `std.Io` implementation interrupts the read and keeps at it
-/// until the task has seen the request (on Windows `std.Io.Threaded` does it
-/// with `NtCancelSynchronousIoFile`, on POSIX with a signal). A reader between
-/// reads is told by `stopping` not to start another.
-///
-/// Cancelling is the only request a read here answers. `CancelIoEx` from
-/// another thread does abort the pending read on Windows, but `std.Io.Threaded`
-/// issues it again straight away unless its own task was cancelled, so a
-/// reader asked that way never stops.
-pub fn deinit(expect: *Expect, io: std.Io) void {
-    expect.stopping.store(true, .release);
-    expect.group.cancel(io);
-}
-
-pub const WaitError = error{
-    /// The deadline passed with the pattern still not there. The bytes that
-    /// did arrive are still pending, and `pending` is where to look at them.
-    Timeout,
-    /// The child's end of the stream closed with the pattern still not there.
-    /// Final: nothing more will ever arrive.
-    EndOfStream,
-    /// The buffer is full of bytes the pattern does not match, or the pattern
-    /// — or the count — is longer than the buffer could ever hold. Nothing
-    /// was dropped; `discard` is how to make room.
-    BufferFull,
-    /// The stream could not be read, for a reason other than ending.
-    ReadFailed,
-} || std.Io.Cancelable;
-
-/// Waits for `pattern` to appear in what the child says, and consumes
-/// everything up to and including it.
-///
-/// The match is literal and the first one wins. Bytes that arrived before it
-/// come back in `Match.before`; bytes that arrived after it stay pending for
-/// the next call, which is what makes a sequence of `until` calls a
-/// conversation rather than a series of races.
-///
-/// An empty pattern matches at once, before anything has arrived.
-pub fn until(
-    expect: *Expect,
-    io: std.Io,
-    pattern: []const u8,
-    timeout_ms: u32,
-) WaitError!Match {
-    return expect.untilAny(io, &.{pattern}, timeout_ms);
-}
-
-/// Waits for any of `patterns` to appear, and consumes everything up to and
-/// including the one that did.
-///
-/// This is the prompt-or-error shape, which one pattern at a time cannot
-/// express: three `until` calls for three possible answers race each other,
-/// and whichever is asked for first eats the bytes the others were looking
-/// for.
-///
-/// **The earliest match wins**, not the first pattern in the list: whichever
-/// of them appears soonest in what the child has said is the one reported, and
-/// two that match at the same place are settled by their order in `patterns`.
-/// So a caller may list them in whatever order reads best.
-///
-/// **The others are left where they are.** Only the bytes up to and including
-/// the winner are consumed, so a pattern that had also arrived, later, is
-/// still pending and the next call finds it. That is what makes a sequence of
-/// these a conversation.
-///
-/// `Match.index` says which one it was. An empty pattern matches at once,
-/// before anything has arrived; a pattern longer than the buffer could ever
-/// hold is `error.BufferFull`, since no wait could satisfy it; and an empty
-/// list matches nothing, so it ends the way a pattern that never comes does.
-pub fn untilAny(
-    expect: *Expect,
-    io: std.Io,
-    patterns: []const []const u8,
-    timeout_ms: u32,
-) WaitError!Match {
-    expect.compact(io);
-
-    for (patterns, 0..) |pattern, index| {
-        if (pattern.len == 0) return .{
-            .index = index,
-            .before = expect.buffer[0..0],
-            .found = expect.buffer[0..0],
+    /// An `Expect` that is not reading yet. `start` puts the reading task in
+    /// flight.
+    ///
+    /// The buffer should be at least as large as the longest pattern that will be
+    /// waited for plus whatever the child may say before it; a few kilobytes is
+    /// generous for a line-oriented conversation.
+    pub fn init(master: Pty.Master, buffer: []u8) Expect {
+        var expect: Expect = undefined;
+        expect.inner().* = .{
+            .master = master,
+            .buffer = buffer,
+            .filled = 0,
+            .consumed = 0,
+            .ended = false,
+            .failed = false,
+            .mutex = .init,
+            .arrived = .unset,
+            .space = .unset,
+            .group = .init,
+            .lifetime = .init(.ready),
+            .finished = .init(false),
         };
-        if (pattern.len > expect.buffer.len) return error.BufferFull;
+        return expect;
     }
 
-    const deadline = deadlineIn(io, timeout_ms);
-    var search: Search = .init(patterns);
-    while (true) {
-        expect.arrived.reset();
+    pub const StartError = error{
+        /// This `Expect` already has, or had, its one reading task.
+        AlreadyStarted,
+    } || std.Io.ConcurrentError;
 
-        var winner: ?Match = null;
-        var full = false;
-        var ended = false;
-        var failed = false;
-        {
-            expect.mutex.lockUncancelable(io);
-            defer expect.mutex.unlock(io);
+    /// Begins reading.
+    ///
+    /// The task must be able to run alongside the caller, so an `std.Io`
+    /// implementation with no concurrency to offer fails here rather than
+    /// deadlocking at the first `until`. Everything the child says from this
+    /// moment is kept; anything it said before it is not. An `Expect` has one
+    /// reading task for its lifetime; a second successful-start attempt is
+    /// `error.AlreadyStarted`, including after deinit. A failed task submission
+    /// may be retried before deinit.
+    pub fn start(expect: *Expect, io: std.Io) StartError!void {
+        if (expect.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null) {
+            return error.AlreadyStarted;
+        }
+        expect.inner().group.concurrent(io, read, .{ expect, io }) catch |err| {
+            _ = expect.inner().lifetime.cmpxchgStrong(.started, .ready, .release, .monotonic);
+            return err;
+        };
+    }
 
-            if (search.find(expect.buffer[0..expect.filled], patterns)) |found| {
-                const pattern = patterns[found.index];
-                winner = .{
-                    .index = found.index,
-                    .before = expect.buffer[0..found.at],
-                    .found = expect.buffer[found.at..][0..pattern.len],
-                };
-                expect.consumed = found.at + pattern.len;
-            } else {
-                full = expect.filled == expect.buffer.len;
-                ended = expect.ended;
-                failed = expect.failed;
-            }
+    /// Stops reading and releases the task.
+    ///
+    /// Idempotent, and safe after the child has gone. Bytes that had arrived and
+    /// were never matched are simply forgotten; the buffer is the caller's and is
+    /// untouched.
+    ///
+    /// The task is inside a read, and a read ends when the far end finishes, when
+    /// the handle goes away, or when the task is cancelled. For a pseudo-terminal
+    /// master whose console is still open the first two do not happen, so this
+    /// cancels: the `std.Io` implementation interrupts the read and keeps at it
+    /// until the task has seen the request (on Windows `std.Io.Threaded` does it
+    /// with `NtCancelSynchronousIoFile`, on POSIX with a signal). A reader between
+    /// reads observes the closed lifetime and starts no further read.
+    ///
+    /// Cancelling is the only request a read here answers. `CancelIoEx` from
+    /// another thread does abort the pending read on Windows, but `std.Io.Threaded`
+    /// issues it again straight away unless its own task was cancelled, so a
+    /// reader asked that way never stops.
+    pub fn deinit(expect: *Expect, io: std.Io) void {
+        expect.inner().lifetime.store(.closed, .release);
+        expect.inner().group.cancel(io);
+    }
+
+    pub const WaitError = error{
+        /// The deadline passed with the pattern still not there. The bytes that
+        /// did arrive are still pending, and `pending` is where to look at them.
+        Timeout,
+        /// The child's end of the stream closed with the pattern still not there.
+        /// Final: nothing more will ever arrive.
+        EndOfStream,
+        /// The buffer is full of bytes the pattern does not match, or the pattern
+        /// — or the count — is longer than the buffer could ever hold. Nothing
+        /// was dropped; `discard` is how to make room.
+        BufferFull,
+        /// The stream could not be read, for a reason other than ending.
+        ReadFailed,
+    } || std.Io.Cancelable;
+
+    /// Waits for `pattern` to appear in what the child says, and consumes
+    /// everything up to and including it.
+    ///
+    /// The match is literal and the first one wins. Bytes that arrived before it
+    /// come back in `Match.before`; bytes that arrived after it stay pending for
+    /// the next call, which is what makes a sequence of `until` calls a
+    /// conversation rather than a series of races.
+    ///
+    /// An empty pattern matches at once, before anything has arrived.
+    pub fn until(
+        expect: *Expect,
+        io: std.Io,
+        pattern: []const u8,
+        timeout_ms: u32,
+    ) WaitError!Match {
+        return expect.untilAny(io, &.{pattern}, timeout_ms);
+    }
+
+    /// Waits for any of `patterns` to appear, and consumes everything up to and
+    /// including the one that did.
+    ///
+    /// This is the prompt-or-error shape, which one pattern at a time cannot
+    /// express: three `until` calls for three possible answers race each other,
+    /// and whichever is asked for first eats the bytes the others were looking
+    /// for.
+    ///
+    /// **The earliest match wins**, not the first pattern in the list: whichever
+    /// of them appears soonest in what the child has said is the one reported, and
+    /// two that match at the same place are settled by their order in `patterns`.
+    /// So a caller may list them in whatever order reads best.
+    ///
+    /// **The others are left where they are.** Only the bytes up to and including
+    /// the winner are consumed, so a pattern that had also arrived, later, is
+    /// still pending and the next call finds it. That is what makes a sequence of
+    /// these a conversation.
+    ///
+    /// `Match.index` says which one it was. An empty pattern matches at once,
+    /// before anything has arrived; a pattern longer than the buffer could ever
+    /// hold is `error.BufferFull`, since no wait could satisfy it; and an empty
+    /// list matches nothing, so it ends the way a pattern that never comes does.
+    pub fn untilAny(
+        expect: *Expect,
+        io: std.Io,
+        patterns: []const []const u8,
+        timeout_ms: u32,
+    ) WaitError!Match {
+        expect.compact(io);
+
+        for (patterns, 0..) |pattern, index| {
+            if (pattern.len == 0) return .{
+                .index = index,
+                .before = expect.inner().buffer[0..0],
+                .found = expect.inner().buffer[0..0],
+            };
+            if (pattern.len > expect.inner().buffer.len) return error.BufferFull;
         }
 
-        if (winner) |match| return match;
-        if (failed) return error.ReadFailed;
-        if (ended) return error.EndOfStream;
-        if (full) return error.BufferFull;
-        try expect.sleepUntil(io, deadline);
+        const deadline = deadlineIn(io, timeout_ms);
+        var search: Search = .init(patterns);
+        while (true) {
+            expect.inner().arrived.reset();
+
+            var winner: ?Match = null;
+            var full = false;
+            var ended = false;
+            var failed = false;
+            {
+                expect.inner().mutex.lockUncancelable(io);
+                defer expect.inner().mutex.unlock(io);
+
+                if (search.find(expect.inner().buffer[0..expect.inner().filled], patterns)) |found| {
+                    const pattern = patterns[found.index];
+                    winner = .{
+                        .index = found.index,
+                        .before = expect.inner().buffer[0..found.at],
+                        .found = expect.inner().buffer[found.at..][0..pattern.len],
+                    };
+                    expect.inner().consumed = found.at + pattern.len;
+                } else {
+                    full = expect.inner().filled == expect.inner().buffer.len;
+                    ended = expect.inner().ended;
+                    failed = expect.inner().failed;
+                }
+            }
+
+            if (winner) |match| return match;
+            if (failed) return error.ReadFailed;
+            if (ended) return error.EndOfStream;
+            if (full) return error.BufferFull;
+            try expect.sleepUntil(io, deadline);
+        }
     }
-}
 
-/// The search `untilAny` runs again every time more bytes arrive.
-///
-/// A call asks repeatedly as the child says more, and the bytes it has already
-/// looked at cannot become a match on their own: only the tail a pattern could
-/// still straddle is searched again, and with several patterns that tail is the
-/// longest one's. That is what keeps a wait for a pattern that never comes from
-/// costing the length of everything the child said, squared.
-///
-/// The bound is exact rather than generous. A match beginning before `from`
-/// would have ended before the previous search's last byte, so that search
-/// would have found it and the call would already have returned.
-const Search = struct {
-    /// Where the next search starts.
-    from: usize,
-    /// The longest pattern, which is how much of the tail a later byte could
-    /// still complete.
-    longest: usize,
-
-    const Found = struct { index: usize, at: usize };
-
-    fn init(patterns: []const []const u8) Search {
-        var longest: usize = 0;
-        for (patterns) |pattern| longest = @max(longest, pattern.len);
-        return .{ .from = 0, .longest = longest };
-    }
-
-    /// The earliest of `patterns` in `said`, or `null`, in which case the next
-    /// search starts where a pattern could still straddle what arrives next.
+    /// The search `untilAny` runs again every time more bytes arrive.
     ///
-    /// **The earliest match wins**, whatever order the patterns were listed
-    /// in; two that begin at the same byte are settled by that order.
-    fn find(search: *Search, said: []const u8, patterns: []const []const u8) ?Found {
-        var winner: ?Found = null;
-        var earliest: usize = said.len;
+    /// A call asks repeatedly as the child says more, and the bytes it has already
+    /// looked at cannot become a match on their own: only the tail a pattern could
+    /// still straddle is searched again, and with several patterns that tail is the
+    /// longest one's. That is what keeps a wait for a pattern that never comes from
+    /// costing the length of everything the child said, squared.
+    ///
+    /// The bound is exact rather than generous. A match beginning before `from`
+    /// would have ended before the previous search's last byte, so that search
+    /// would have found it and the call would already have returned.
+    const Search = struct {
+        /// Where the next search starts.
+        from: usize,
+        /// The longest pattern, which is how much of the tail a later byte could
+        /// still complete.
+        longest: usize,
+
+        const Found = struct { index: usize, at: usize };
+
+        fn init(patterns: []const []const u8) Search {
+            var longest: usize = 0;
+            for (patterns) |pattern| longest = @max(longest, pattern.len);
+            return .{ .from = 0, .longest = longest };
+        }
+
+        /// The earliest of `patterns` in `said`, or `null`, in which case the next
+        /// search starts where a pattern could still straddle what arrives next.
+        ///
+        /// **The earliest match wins**, whatever order the patterns were listed
+        /// in; two that begin at the same byte are settled by that order.
+        fn find(search: *Search, said: []const u8, patterns: []const []const u8) ?Found {
+            var winner: ?Found = null;
+            var earliest: usize = said.len;
+            for (patterns, 0..) |pattern, index| {
+                const at = std.mem.indexOfPos(u8, said, search.from, pattern) orelse continue;
+                if (at >= earliest) continue;
+                earliest = at;
+                winner = .{ .index = index, .at = at };
+            }
+            if (winner == null) search.from = said.len -| (search.longest -| 1);
+            return winner;
+        }
+    };
+
+    /// Waits for `count` bytes to arrive, and consumes them.
+    ///
+    /// The counterpart of `until` for a child whose output has a length rather
+    /// than a shape — a fixed-width record, or the body a header just announced.
+    /// A count larger than the buffer is `error.BufferFull`, because no wait
+    /// could ever satisfy it.
+    pub fn bytes(
+        expect: *Expect,
+        io: std.Io,
+        count: usize,
+        timeout_ms: u32,
+    ) WaitError![]const u8 {
+        expect.compact(io);
+        if (count > expect.inner().buffer.len) return error.BufferFull;
+
+        const deadline = deadlineIn(io, timeout_ms);
+        while (true) {
+            expect.inner().arrived.reset();
+
+            var enough = false;
+            var ended = false;
+            var failed = false;
+            {
+                expect.inner().mutex.lockUncancelable(io);
+                defer expect.inner().mutex.unlock(io);
+                enough = expect.inner().filled >= count;
+                if (enough) {
+                    expect.inner().consumed = count;
+                } else {
+                    ended = expect.inner().ended;
+                    failed = expect.inner().failed;
+                }
+            }
+
+            if (enough) return expect.inner().buffer[0..count];
+            if (failed) return error.ReadFailed;
+            if (ended) return error.EndOfStream;
+            try expect.sleepUntil(io, deadline);
+        }
+    }
+
+    pub const SendError = error{
+        /// Nothing is reading the other end any more: the child has gone, or
+        /// closed its terminal.
+        BrokenPipe,
+        /// The reply could not be written, for another reason.
+        WriteFailed,
+    } || std.Io.Cancelable;
+
+    /// Writes `reply` to the child, as if it had been typed at its terminal.
+    ///
+    /// Whole or not at all, as far as the operating system allows: this returns
+    /// once every byte has been handed over. A terminal in its default mode ends
+    /// a line on `"\n"`, and the end-of-file the line discipline makes is
+    /// `"\x04"`.
+    pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
+        handles.writeStreamingAll(expect.inner().master.write, io, reply) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            error.BrokenPipe => return error.BrokenPipe,
+            else => return error.WriteFailed,
+        };
+    }
+
+    /// What has arrived and no match has accounted for yet.
+    ///
+    /// A snapshot: more may arrive the moment it returns, and the slice is valid
+    /// only until the next call on this `Expect`. This is what to print when a
+    /// wait fails — a `Timeout` whose message says what the child said instead is
+    /// worth a great deal more than one that does not.
+    pub fn pending(expect: *Expect, io: std.Io) []const u8 {
+        expect.inner().mutex.lockUncancelable(io);
+        defer expect.inner().mutex.unlock(io);
+        return expect.inner().buffer[expect.inner().consumed..expect.inner().filled];
+    }
+
+    /// Forgets everything pending, and starts the buffer again from empty.
+    ///
+    /// The answer to `error.BufferFull` for a caller who does not need what
+    /// filled it — a child that paints a screen before it asks a question, say.
+    /// Reading resumes at once.
+    pub fn discard(expect: *Expect, io: std.Io) void {
+        expect.inner().mutex.lockUncancelable(io);
+        defer expect.inner().mutex.unlock(io);
+        expect.inner().filled = 0;
+        expect.inner().consumed = 0;
+        expect.inner().space.set(io);
+    }
+
+    //======================================================================
+    // The reading task.
+    //======================================================================
+
+    /// Reads the master into the caller's buffer until the stream ends, the read
+    /// fails, or the task is cancelled.
+    fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
+        defer expect.markFinished(io);
+        var chunk: [512]u8 = undefined;
+        while (true) {
+            if (expect.inner().lifetime.load(.acquire) == .closed) return expect.finish(io, .ended);
+            // Reset before checking the buffer under the consumer mutex. A
+            // consumer before this check leaves room; one after it sets space.
+            expect.inner().space.reset();
+            const room = room: {
+                expect.inner().mutex.lockUncancelable(io);
+                defer expect.inner().mutex.unlock(io);
+                break :room expect.inner().buffer.len - expect.inner().filled;
+            };
+            if (room == 0) {
+                // Full means backpressure until the consumer makes room.
+                try expect.inner().space.wait(io);
+                continue;
+            }
+
+            const n = handles.readStreaming(expect.inner().master.read, io, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
+            };
+            {
+                expect.inner().mutex.lockUncancelable(io);
+                defer expect.inner().mutex.unlock(io);
+                @memcpy(expect.inner().buffer[expect.inner().filled..][0..n], chunk[0..n]);
+                expect.inner().filled += n;
+            }
+            expect.inner().arrived.set(io);
+        }
+    }
+
+    /// Records why an ordinary read end stopped. The task defer publishes that it
+    /// has finished, including when cancellation bypasses this function.
+    fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
+        {
+            expect.inner().mutex.lockUncancelable(io);
+            defer expect.inner().mutex.unlock(io);
+            switch (why) {
+                .ended => expect.inner().ended = true,
+                .failed => expect.inner().failed = true,
+            }
+        }
+        expect.inner().arrived.set(io);
+    }
+
+    /// Published on every exit from the reading task. Stored outside the mutex so
+    /// it can be observed without taking anything the task might hold.
+    fn markFinished(expect: *Expect, io: std.Io) void {
+        expect.inner().finished.store(true, .release);
+        expect.inner().arrived.set(io);
+    }
+
+    //======================================================================
+    // Waiting, and the buffer.
+    //======================================================================
+
+    fn deadlineIn(io: std.Io, timeout_ms: u32) std.Io.Clock.Timestamp {
+        return .fromNow(io, .{ .raw = .fromMilliseconds(timeout_ms), .clock = .awake });
+    }
+
+    /// Waits for the reading task to say something has changed, or for the
+    /// deadline.
+    fn sleepUntil(expect: *Expect, io: std.Io, deadline: std.Io.Clock.Timestamp) WaitError!void {
+        expect.inner().arrived.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            // A wakeup is allowed to be spurious and to report itself as a
+            // timeout, so the clock decides whether there is time left rather
+            // than the return value.
+            error.Timeout => {
+                const now: std.Io.Clock.Timestamp = .now(io, deadline.clock);
+                if (deadline.compare(.lte, now)) return error.Timeout;
+            },
+        };
+    }
+
+    /// Drops the bytes a previous match accounted for, moving what is left to the
+    /// front of the buffer.
+    ///
+    /// Called at the start of a wait rather than at the end of the one before it,
+    /// which is what keeps a `Match`'s slices readable until the caller asks for
+    /// something else.
+    fn compact(expect: *Expect, io: std.Io) void {
+        expect.inner().mutex.lockUncancelable(io);
+        defer expect.inner().mutex.unlock(io);
+        if (expect.inner().consumed == 0) return;
+        const rest = expect.inner().filled - expect.inner().consumed;
+        std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);
+        expect.inner().filled = rest;
+        expect.inner().consumed = 0;
+        expect.inner().space.set(io);
+    }
+
+    //======================================================================
+    // Tests.
+    //======================================================================
+
+    const testing = std.testing;
+    const Child = @import("Child.zig").Child;
+    const Watchdog = @import("test_support.zig").Watchdog;
+
+    /// Generous: it is a failure budget, not a timing assertion.
+    const budget_ms = 5000;
+
+    test "a canceled reading task publishes that it finished" {
+        const io = testing.io;
+        const CancelRead = struct {
+            base: std.Io,
+
+            fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+                const state: *@This() = @ptrCast(@alignCast(userdata.?));
+                if (operation == .file_read_streaming) return error.Canceled;
+                return state.base.vtable.operate(state.base.userdata, operation);
+            }
+        };
+        var state: CancelRead = .{ .base = io };
+        var vtable = io.vtable.*;
+        vtable.operate = CancelRead.operate;
+        const cancel_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
+
+        var buffer: [32]u8 = undefined;
+        var expect: Expect = .init(undefined, &buffer);
+        try testing.expectError(error.Canceled, expect.read(cancel_io));
+        try testing.expect(expect.inner().finished.load(.acquire));
+    }
+
+    test "start refuses to put a second reader over the buffer" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+
+        const argv: []const []const u8 = if (is_windows)
+            &.{ "cmd.exe", "/c", "echo one reader" }
+        else
+            &.{ "/bin/sh", "-c", "printf 'one reader'" };
+        var child = try Child.spawn(io, gpa, .{
+            .argv = argv,
+            .stdio = .{ .pipes = .{ .stderr = false } },
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+
+        var buffer: [64]u8 = undefined;
+        var expect = child.expect(&buffer).?;
+        try expect.start(io);
+        defer expect.deinit(io);
+        try testing.expectError(error.AlreadyStarted, expect.start(io));
+        try testing.expectEqualStrings("one reader", (try expect.until(io, "one reader", budget_ms)).found);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    test "a conversation over pipes: wait for what the child echoes, then answer" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        // Both systems. The shell that reads a line and echoes it is the smallest
+        // program that can be talked to, and `Child.expect` finds the two pipes.
+        const argv: []const []const u8 = if (is_windows)
+            &.{ "cmd.exe", "/v:on", "/c", "set /p line=& echo you said !line!" }
+        else
+            &.{ "/bin/sh", "-c", "read line; printf 'you said %s\\n' \"$line\"" };
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = argv,
+            .stdio = .{ .pipes = .{ .stderr = false } },
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+
+        var buffer: [256]u8 = undefined;
+        var expect = child.expect(&buffer).?;
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        try expect.send(io, "a line\n");
+        const match = try expect.until(io, "you said a line", budget_ms);
+        try testing.expectEqualStrings("you said a line", match.found);
+
+        child.closeStdin(io);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    test "a conversation on a pseudo-terminal, one prompt at a time" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        // POSIX only for the fixture, not for the feature: this needs a shell that
+        // prompts, reads and prompts again, which is three words of `sh` and no
+        // words of `cmd.exe`.
+        if (is_windows) return error.SkipZigTest;
+
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        defer pty.close(io);
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{
+                "/bin/sh",                                                                                      "-c",
+                "printf 'first? '; read a; printf 'second? '; read b; printf 'got %s and %s\\n' \"$a\" \"$b\"",
+            },
+            .stdio = .{ .pty = &pty },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+        pty.closeSlave(io);
+
+        var buffer: [1024]u8 = undefined;
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        // Each wait consumes through its pattern, so the second prompt is found in
+        // what arrived after the first rather than in the terminal's echo of the
+        // answer to it.
+        _ = try expect.until(io, "first? ", budget_ms);
+        try expect.send(io, "one\n");
+        _ = try expect.until(io, "second? ", budget_ms);
+        try expect.send(io, "two\n");
+
+        const match = try expect.until(io, "got one and two", budget_ms);
+        try testing.expectEqualStrings("got one and two", match.found);
+
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    test "deinit stops the reader while the terminal is still open" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        // Both systems, and Windows is the one this is about. The child says its
+        // piece and waits for a line, so its console stays open and nothing but
+        // `deinit` will end the read the task is in. Asked with `CancelIoEx`, a
+        // Windows read of the master was issued again at once, and `deinit` did
+        // not return within the watchdog's thirty seconds.
+        const argv: []const []const u8 = if (is_windows)
+            &.{ "cmd.exe", "/c", "echo ready& set /p ignored=" }
+        else
+            &.{ "/bin/sh", "-c", "printf 'ready\\n'; read ignored" };
+
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        defer pty.close(io);
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = argv,
+            .stdio = .{ .pty = &pty },
+            .detach = !is_windows,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        if (!is_windows) pty.closeSlave(io);
+
+        var buffer: [1024]u8 = undefined;
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
+        try expect.start(io);
+        defer expect.deinit(io);
+        _ = try expect.until(io, "ready", budget_ms);
+
+        {
+            var join_watchdog: Watchdog = .init(@src());
+            join_watchdog.limit_ms = budget_ms;
+            try join_watchdog.start(io);
+            defer join_watchdog.deinit(io);
+            expect.deinit(io);
+        }
+        try testing.expect(expect.inner().finished.load(.acquire));
+        // Still running: the read ended because it was asked to, not because the
+        // stream did.
+        try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    }
+
+    test "untilAny says which of several answers came, and leaves the rest" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        // Both systems. The shape is the one a single pattern cannot express: a
+        // child that will say one of two things, and a caller that has to wait for
+        // either without knowing which.
+        const argv: []const []const u8 = if (is_windows)
+            &.{ "cmd.exe", "/v:on", "/c", "set /p line=& if !line!==a (echo GOOD) else (echo BAD)" }
+        else
+            &.{ "/bin/sh", "-c", "read x; case $x in a) echo GOOD;; *) echo BAD;; esac" };
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = argv,
+            .stdio = .{ .pipes = .{ .stderr = false } },
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+
+        var buffer: [256]u8 = undefined;
+        var expect = child.expect(&buffer).?;
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        try expect.send(io, "a\n");
+        const match = try expect.untilAny(io, &.{ "GOOD", "BAD" }, budget_ms);
+        try testing.expectEqual(@as(usize, 0), match.index);
+        try testing.expectEqualStrings("GOOD", match.found);
+
+        child.closeStdin(io);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    test "untilAny takes the earliest match and leaves the later one pending" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        // POSIX only for the fixture: this needs a child that writes two words in
+        // one breath, which `printf` says in one word.
+        if (is_windows) return error.SkipZigTest;
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "printf 'first SECOND\n'" },
+            .stdio = .{ .pipes = .{ .stderr = false } },
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+
+        var buffer: [256]u8 = undefined;
+        var expect = child.expect(&buffer).?;
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        // `SECOND` is listed first and arrives second, so the order in the list is
+        // not what decides: the earliest match is.
+        const match = try expect.untilAny(io, &.{ "SECOND", "first" }, budget_ms);
+        try testing.expectEqual(@as(usize, 1), match.index);
+        try testing.expectEqualStrings("first", match.found);
+        try testing.expectEqualStrings("", match.before);
+
+        // And the one that lost is still there to be waited for.
+        const later = try expect.until(io, "SECOND", budget_ms);
+        try testing.expectEqual(@as(usize, 0), later.index);
+        try testing.expectEqualStrings("SECOND", later.found);
+        try testing.expectEqualStrings(" ", later.before);
+
+        child.closeStdin(io);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    test "untilAny with nothing to wait for ends the way a pattern that never comes does" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        if (is_windows) return error.SkipZigTest;
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "printf 'here\n'; exec sleep 100" },
+            .stdio = .{ .pipes = .{ .stderr = false } },
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+
+        var buffer: [256]u8 = undefined;
+        var expect = child.expect(&buffer).?;
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        try testing.expectError(error.Timeout, expect.untilAny(io, &.{}, 50));
+        // An empty pattern is the other end of it: it matches before anything has
+        // arrived, and says which one it was.
+        const empty = try expect.untilAny(io, &.{ "never", "" }, budget_ms);
+        try testing.expectEqual(@as(usize, 1), empty.index);
+        try testing.expectEqualStrings("", empty.found);
+    }
+
+    test "bytes waits for a count, and what follows stays pending" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        if (is_windows) return error.SkipZigTest;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        defer pty.close(io);
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "printf 'ABCDEFGH'" },
+            .stdio = .{ .pty = &pty },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+        pty.closeSlave(io);
+
+        var buffer: [64]u8 = undefined;
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        try testing.expectEqualStrings("ABCD", try expect.bytes(io, 4, budget_ms));
+        try testing.expectEqualStrings("EFGH", try expect.bytes(io, 4, budget_ms));
+
+        // And the stream really has ended, which is a different answer from a
+        // deadline running out.
+        try testing.expectError(error.EndOfStream, expect.bytes(io, 1, budget_ms));
+
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    test "a pattern that never comes is a timeout, and what did come is still pending" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        if (is_windows) return error.SkipZigTest;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        defer pty.close(io);
+
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "printf 'here I am\\n'; exec sleep 100" },
+            .stdio = .{ .pty = &pty },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        pty.closeSlave(io);
+
+        var buffer: [256]u8 = undefined;
+        var expect: Expect = .init(child.terminalMaster().?, &buffer);
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        _ = try expect.until(io, "here I am", budget_ms);
+        // The child is alive and quiet, which is exactly the case a deadline
+        // exists for: not an ended stream, not a match.
+        try testing.expectError(error.Timeout, expect.until(io, "never said", 50));
+    }
+
+    test "a buffer that fills says so, and discard makes room" {
+        const io = testing.io;
+        const gpa = testing.allocator;
+        var watchdog: Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        // POSIX only for the fixture, not for the feature: this needs a child that
+        // writes an exact number of bytes and then waits, which `printf` says in
+        // one word and `cmd.exe` cannot say at all.
+        if (is_windows) return error.SkipZigTest;
+
+        // Pipes rather than a pair, so the byte counts here are the child's alone:
+        // a terminal would echo the answer back and turn every newline into two
+        // bytes.
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "printf 'aaaaaaaa'; read go; printf 'done\n'" },
+            .stdio = .{ .pipes = .{ .stderr = false } },
+        });
+        defer child.deinit(io);
+        errdefer _ = child.killWait(io, 0) catch {};
+
+        var buffer: [8]u8 = undefined;
+        var expect = child.expect(&buffer).?;
+        try expect.start(io);
+        defer expect.deinit(io);
+
+        // Eight bytes of 'a' and no 'z' anywhere: the buffer fills with bytes the
+        // pattern cannot match, and nothing is thrown away to make room.
+        try testing.expectError(error.BufferFull, expect.until(io, "zzz", budget_ms));
+        try testing.expectEqualStrings("aaaaaaaa", expect.pending(io));
+        // A pattern longer than the buffer could ever hold is the same answer,
+        // and it does not wait to give it.
+        try testing.expectError(error.BufferFull, expect.until(io, "zzzzzzzzzzzz", budget_ms));
+
+        expect.discard(io);
+        try expect.send(io, "go\n");
+        const match = try expect.until(io, "done", budget_ms);
+        try testing.expectEqualStrings("done", match.found);
+
+        child.closeStdin(io);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+    }
+
+    /// Waits for the child to end, and kills it if it will not within the budget,
+    /// so a misbehaving child fails a test rather than stopping the run.
+    fn waitWithin(io: std.Io, child: *Child) !Child.Term {
+        const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+        while (true) {
+            if (try child.tryWait()) |term| return term;
+            if (deadline.remainingMs(io) == 0) break;
+            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        }
+        _ = child.killWait(io, 0) catch {};
+        return error.TestChildDidNotExit;
+    }
+
+    //======================================================================
+    // The search, against a search that keeps nothing.
+    //======================================================================
+
+    test "the incremental search finds what a search of the whole buffer would" {
+        try testing.fuzz({}, searchMatchesAFullScan, .{});
+    }
+
+    /// The property: however the child's bytes are cut into arrivals, the
+    /// incremental search reports the same match, at the same place, as a search
+    /// that starts from the beginning every time — and reports none while a full
+    /// scan finds none.
+    ///
+    /// This is where `Search.from` earns its keep or loses it. A bound that moved
+    /// too far would step over a pattern straddling two arrivals and the wait
+    /// would hang until its deadline; one that never moved would be correct and
+    /// quadratic. Only the first is a fault a reader would not see, and it is the
+    /// one an arrival split at an awkward byte finds.
+    fn searchMatchesAFullScan(_: void, smith: *std.testing.Smith) !void {
+        @disableInstrumentation();
+
+        // A three-letter alphabet, so that patterns actually occur: over 256 bytes
+        // a match would be a rare accident and the fuzzer would be exercising the
+        // miss and nothing else.
+        const alphabet: []const std.testing.Smith.Weight = &.{.rangeAtMost(u8, 'a', 'c', 1)};
+
+        var pattern_storage: [4][8]u8 = undefined;
+        var patterns: [4][]const u8 = undefined;
+        const count = smith.valueRangeAtMost(u8, 1, patterns.len);
+        for (patterns[0..count], pattern_storage[0..count]) |*pattern, *storage| {
+            // An empty pattern matches before anything arrives and `untilAny`
+            // answers it without searching, so the search never sees one.
+            const length = smith.valueRangeAtMost(u8, 1, storage.len);
+            smith.bytesWeighted(storage[0..length], alphabet);
+            pattern.* = storage[0..length];
+        }
+        const wanted = patterns[0..count];
+
+        var stream: [64]u8 = undefined;
+        const said = stream[0..smith.sliceWeightedBytes(&stream, alphabet)];
+
+        var search: Search = .init(wanted);
+        var arrived: usize = 0;
+        while (arrived < said.len) {
+            arrived += smith.valueRangeAtMost(u8, 1, @intCast(said.len - arrived));
+            const so_far = said[0..arrived];
+
+            const full = fullScan(so_far, wanted);
+            if (search.find(so_far, wanted)) |found| {
+                // Nothing may be reported that a full scan does not also find, in
+                // the same place and as the same pattern.
+                try testing.expect(full != null);
+                try testing.expectEqual(full.?.at, found.at);
+                try testing.expectEqual(full.?.index, found.index);
+                // A match ends the call, so the search stops here too.
+                return;
+            }
+            // And nothing may be missed.
+            try testing.expect(full == null);
+        }
+    }
+
+    /// The same question asked the expensive way: every pattern against every
+    /// byte, every time.
+    fn fullScan(said: []const u8, patterns: []const []const u8) ?Search.Found {
+        @disableInstrumentation();
+        var winner: ?Search.Found = null;
         for (patterns, 0..) |pattern, index| {
-            const at = std.mem.indexOfPos(u8, said, search.from, pattern) orelse continue;
-            if (at >= earliest) continue;
-            earliest = at;
+            const at = std.mem.indexOf(u8, said, pattern) orelse continue;
+            if (winner) |already| if (at >= already.at) continue;
             winner = .{ .index = index, .at = at };
         }
-        if (winner == null) search.from = said.len -| (search.longest -| 1);
         return winner;
+    }
+
+    test "Expect exposes no writable conversation state" {
+        try testing.expect(@typeInfo(Expect) == .@"enum");
     }
 };
 
-/// Waits for `count` bytes to arrive, and consumes them.
-///
-/// The counterpart of `until` for a child whose output has a length rather
-/// than a shape — a fixed-width record, or the body a header just announced.
-/// A count larger than the buffer is `error.BufferFull`, because no wait
-/// could ever satisfy it.
-pub fn bytes(
-    expect: *Expect,
-    io: std.Io,
-    count: usize,
-    timeout_ms: u32,
-) WaitError![]const u8 {
-    expect.compact(io);
-    if (count > expect.buffer.len) return error.BufferFull;
-
-    const deadline = deadlineIn(io, timeout_ms);
-    while (true) {
-        expect.arrived.reset();
-
-        var enough = false;
-        var ended = false;
-        var failed = false;
-        {
-            expect.mutex.lockUncancelable(io);
-            defer expect.mutex.unlock(io);
-            enough = expect.filled >= count;
-            if (enough) {
-                expect.consumed = count;
-            } else {
-                ended = expect.ended;
-                failed = expect.failed;
-            }
-        }
-
-        if (enough) return expect.buffer[0..count];
-        if (failed) return error.ReadFailed;
-        if (ended) return error.EndOfStream;
-        try expect.sleepUntil(io, deadline);
-    }
+test "Expect refuses a start after deinit before its first reader" {
+    var buffer: [1]u8 = undefined;
+    var expect = Expect.init(undefined, &buffer);
+    defer expect.deinit(std.testing.io);
+    expect.deinit(std.testing.io);
+    try std.testing.expectError(error.AlreadyStarted, expect.start(std.testing.io));
 }
 
-pub const SendError = error{
-    /// Nothing is reading the other end any more: the child has gone, or
-    /// closed its terminal.
-    BrokenPipe,
-    /// The reply could not be written, for another reason.
-    WriteFailed,
-} || std.Io.Cancelable;
-
-/// Writes `reply` to the child, as if it had been typed at its terminal.
-///
-/// Whole or not at all, as far as the operating system allows: this returns
-/// once every byte has been handed over. A terminal in its default mode ends
-/// a line on `"\n"`, and the end-of-file the line discipline makes is
-/// `"\x04"`.
-pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
-    expect.master.write.writeStreamingAll(io, reply) catch |err| switch (err) {
-        error.Canceled => return error.Canceled,
-        error.BrokenPipe => return error.BrokenPipe,
-        else => return error.WriteFailed,
+test "a full Expect buffer waits for its consumer without interval sleeps" {
+    const Backend = struct {
+        sleeps: usize = 0,
+        waits: usize = 0,
+        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.sleeps += 1;
+            return error.Canceled;
+        }
+        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.waits += 1;
+            return error.Canceled;
+        }
+        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
     };
+    var backend: Backend = .{};
+    var vtable = std.testing.io.vtable.*;
+    vtable.sleep = Backend.sleep;
+    vtable.futexWait = Backend.wait;
+    vtable.futexWake = Backend.wake;
+    const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    var buffer: [1]u8 = .{'x'};
+    var expect = Expect.init(undefined, &buffer);
+    expect.inner().filled = buffer.len;
+    try std.testing.expectError(error.Canceled, expect.read(observed_io));
+    try std.testing.expectEqual(@as(usize, 0), backend.sleeps);
+    try std.testing.expectEqual(@as(usize, 1), backend.waits);
 }
 
-/// What has arrived and no match has accounted for yet.
-///
-/// A snapshot: more may arrive the moment it returns, and the slice is valid
-/// only until the next call on this `Expect`. This is what to print when a
-/// wait fails — a `Timeout` whose message says what the child said instead is
-/// worth a great deal more than one that does not.
-pub fn pending(expect: *Expect, io: std.Io) []const u8 {
-    expect.mutex.lockUncancelable(io);
-    defer expect.mutex.unlock(io);
-    return expect.buffer[expect.consumed..expect.filled];
-}
-
-/// Forgets everything pending, and starts the buffer again from empty.
-///
-/// The answer to `error.BufferFull` for a caller who does not need what
-/// filled it — a child that paints a screen before it asks a question, say.
-/// Reading resumes at once.
-pub fn discard(expect: *Expect, io: std.Io) void {
-    expect.mutex.lockUncancelable(io);
-    defer expect.mutex.unlock(io);
-    expect.filled = 0;
-    expect.consumed = 0;
-}
-
-//======================================================================
-// The reading task.
-//======================================================================
-
-/// Reads the master into the caller's buffer until the stream ends, the read
-/// fails, or the task is cancelled.
-fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
-    defer expect.markFinished(io);
-    var chunk: [512]u8 = undefined;
-    while (true) {
-        if (expect.stopping.load(.acquire)) return expect.finish(io, .ended);
-        const room = room: {
-            expect.mutex.lockUncancelable(io);
-            defer expect.mutex.unlock(io);
-            break :room expect.buffer.len - expect.filled;
-        };
-        if (room == 0) {
-            // The buffer is full of bytes no pattern has matched. Reading
-            // stops rather than dropping them: what the child wrote stays in
-            // the child's own terminal, and the caller is told `BufferFull`
-            // and can `discard`. This is the one place that polls, because it
-            // is waiting on the caller rather than on the child.
-            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
-            continue;
+test "Expect discard and consumption wake a full reader at the wait boundary" {
+    const Backend = struct {
+        expect: *Expect,
+        io: std.Io = undefined,
+        consume: bool,
+        waits: usize = 0,
+        reads: usize = 0,
+        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.waits += 1;
+            if (backend.waits != 1) return error.Canceled;
+            // The reader has checked that it is full and is entering its
+            // wait. Make room here: this notification must not be lost.
+            if (backend.consume) {
+                backend.expect.inner().consumed = 1;
+                backend.expect.compact(backend.io);
+            } else backend.expect.discard(backend.io);
         }
-
-        const n = handles.readStreaming(expect.master.read, io, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
-            error.Canceled => return error.Canceled,
-            else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
-        };
-        {
-            expect.mutex.lockUncancelable(io);
-            defer expect.mutex.unlock(io);
-            @memcpy(expect.buffer[expect.filled..][0..n], chunk[0..n]);
-            expect.filled += n;
-        }
-        expect.arrived.set(io);
-    }
-}
-
-/// Records why an ordinary read end stopped. The task defer publishes that it
-/// has finished, including when cancellation bypasses this function.
-fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
-    {
-        expect.mutex.lockUncancelable(io);
-        defer expect.mutex.unlock(io);
-        switch (why) {
-            .ended => expect.ended = true,
-            .failed => expect.failed = true,
-        }
-    }
-    expect.arrived.set(io);
-}
-
-/// Published on every exit from the reading task. Stored outside the mutex so
-/// it can be observed without taking anything the task might hold.
-fn markFinished(expect: *Expect, io: std.Io) void {
-    expect.finished.store(true, .release);
-    expect.arrived.set(io);
-}
-
-//======================================================================
-// Waiting, and the buffer.
-//======================================================================
-
-fn deadlineIn(io: std.Io, timeout_ms: u32) std.Io.Clock.Timestamp {
-    return .fromNow(io, .{ .raw = .fromMilliseconds(timeout_ms), .clock = .awake });
-}
-
-/// Waits for the reading task to say something has changed, or for the
-/// deadline.
-fn sleepUntil(expect: *Expect, io: std.Io, deadline: std.Io.Clock.Timestamp) WaitError!void {
-    expect.arrived.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
-        error.Canceled => return error.Canceled,
-        // A wakeup is allowed to be spurious and to report itself as a
-        // timeout, so the clock decides whether there is time left rather
-        // than the return value.
-        error.Timeout => {
-            const now: std.Io.Clock.Timestamp = .now(io, deadline.clock);
-            if (deadline.compare(.lte, now)) return error.Timeout;
-        },
-    };
-}
-
-/// Drops the bytes a previous match accounted for, moving what is left to the
-/// front of the buffer.
-///
-/// Called at the start of a wait rather than at the end of the one before it,
-/// which is what keeps a `Match`'s slices readable until the caller asks for
-/// something else.
-fn compact(expect: *Expect, io: std.Io) void {
-    expect.mutex.lockUncancelable(io);
-    defer expect.mutex.unlock(io);
-    if (expect.consumed == 0) return;
-    const rest = expect.filled - expect.consumed;
-    std.mem.copyForwards(u8, expect.buffer[0..rest], expect.buffer[expect.consumed..expect.filled]);
-    expect.filled = rest;
-    expect.consumed = 0;
-}
-
-//======================================================================
-// Tests.
-//======================================================================
-
-const testing = std.testing;
-const Child = @import("Child.zig");
-const Watchdog = @import("test_support.zig").Watchdog;
-
-/// Generous: it is a failure budget, not a timing assertion.
-const budget_ms = 5000;
-
-test "a canceled reading task publishes that it finished" {
-    const io = testing.io;
-    const CancelRead = struct {
-        base: std.Io,
-
         fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *@This() = @ptrCast(@alignCast(userdata.?));
-            if (operation == .file_read_streaming) return error.Canceled;
-            return state.base.vtable.operate(state.base.userdata, operation);
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.reads += 1;
+            operation.file_read_streaming.data[0][0] = 'b';
+            return .{ .file_read_streaming = 1 };
         }
+        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
     };
-    var state: CancelRead = .{ .base = io };
-    var vtable = io.vtable.*;
-    vtable.operate = CancelRead.operate;
-    const cancel_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
-
-    var buffer: [32]u8 = undefined;
-    var expect: Expect = .init(undefined, &buffer);
-    try testing.expectError(error.Canceled, expect.read(cancel_io));
-    try testing.expect(expect.finished.load(.acquire));
-}
-
-test "start refuses to put a second reader over the buffer" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
-    const argv: []const []const u8 = if (is_windows)
-        &.{ "cmd.exe", "/c", "echo one reader" }
-    else
-        &.{ "/bin/sh", "-c", "printf 'one reader'" };
-    var child = try Child.spawn(io, gpa, .{
-        .argv = argv,
-        .stdio = .{ .pipes = .{ .stderr = false } },
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-
-    var buffer: [64]u8 = undefined;
-    var expect = child.expect(&buffer).?;
-    try expect.start(io);
-    defer expect.deinit(io);
-    try testing.expectError(error.AlreadyStarted, expect.start(io));
-    try testing.expectEqualStrings("one reader", (try expect.until(io, "one reader", budget_ms)).found);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-test "a conversation over pipes: wait for what the child echoes, then answer" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    // Both systems. The shell that reads a line and echoes it is the smallest
-    // program that can be talked to, and `Child.expect` finds the two pipes.
-    const argv: []const []const u8 = if (is_windows)
-        &.{ "cmd.exe", "/v:on", "/c", "set /p line=& echo you said !line!" }
-    else
-        &.{ "/bin/sh", "-c", "read line; printf 'you said %s\\n' \"$line\"" };
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = argv,
-        .stdio = .{ .pipes = .{ .stderr = false } },
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-
-    var buffer: [256]u8 = undefined;
-    var expect = child.expect(&buffer).?;
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    try expect.send(io, "a line\n");
-    const match = try expect.until(io, "you said a line", budget_ms);
-    try testing.expectEqualStrings("you said a line", match.found);
-
-    child.closeStdin(io);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-test "a conversation on a pseudo-terminal, one prompt at a time" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    // POSIX only for the fixture, not for the feature: this needs a shell that
-    // prompts, reads and prompts again, which is three words of `sh` and no
-    // words of `cmd.exe`.
-    if (is_windows) return error.SkipZigTest;
-
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
-    defer pty.close(io);
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{
-            "/bin/sh",                                                                                      "-c",
-            "printf 'first? '; read a; printf 'second? '; read b; printf 'got %s and %s\\n' \"$a\" \"$b\"",
-        },
-        .stdio = .{ .pty = &pty },
-        .detach = true,
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    pty.closeSlave(io);
-
-    var buffer: [1024]u8 = undefined;
-    var expect: Expect = .init(child.pty.?, &buffer);
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    // Each wait consumes through its pattern, so the second prompt is found in
-    // what arrived after the first rather than in the terminal's echo of the
-    // answer to it.
-    _ = try expect.until(io, "first? ", budget_ms);
-    try expect.send(io, "one\n");
-    _ = try expect.until(io, "second? ", budget_ms);
-    try expect.send(io, "two\n");
-
-    const match = try expect.until(io, "got one and two", budget_ms);
-    try testing.expectEqualStrings("got one and two", match.found);
-
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-test "deinit stops the reader while the terminal is still open" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    // Both systems, and Windows is the one this is about. The child says its
-    // piece and waits for a line, so its console stays open and nothing but
-    // `deinit` will end the read the task is in. Asked with `CancelIoEx`, a
-    // Windows read of the master was issued again at once, and `deinit` did
-    // not return within the watchdog's thirty seconds.
-    const argv: []const []const u8 = if (is_windows)
-        &.{ "cmd.exe", "/c", "echo ready& set /p ignored=" }
-    else
-        &.{ "/bin/sh", "-c", "printf 'ready\\n'; read ignored" };
-
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
-    defer pty.close(io);
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = argv,
-        .stdio = .{ .pty = &pty },
-        .detach = !is_windows,
-    });
-    defer child.deinit(io);
-    defer _ = child.killWait(io, 0) catch {};
-    if (!is_windows) pty.closeSlave(io);
-
-    var buffer: [1024]u8 = undefined;
-    var expect: Expect = .init(child.pty.?, &buffer);
-    try expect.start(io);
-    defer expect.deinit(io);
-    _ = try expect.until(io, "ready", budget_ms);
-
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
-    expect.deinit(io);
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
-    try testing.expect(expect.finished.load(.acquire));
-    // Still running: the read ended because it was asked to, not because the
-    // stream did.
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
-}
-
-test "untilAny says which of several answers came, and leaves the rest" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    // Both systems. The shape is the one a single pattern cannot express: a
-    // child that will say one of two things, and a caller that has to wait for
-    // either without knowing which.
-    const argv: []const []const u8 = if (is_windows)
-        &.{ "cmd.exe", "/v:on", "/c", "set /p line=& if !line!==a (echo GOOD) else (echo BAD)" }
-    else
-        &.{ "/bin/sh", "-c", "read x; case $x in a) echo GOOD;; *) echo BAD;; esac" };
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = argv,
-        .stdio = .{ .pipes = .{ .stderr = false } },
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-
-    var buffer: [256]u8 = undefined;
-    var expect = child.expect(&buffer).?;
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    try expect.send(io, "a\n");
-    const match = try expect.untilAny(io, &.{ "GOOD", "BAD" }, budget_ms);
-    try testing.expectEqual(@as(usize, 0), match.index);
-    try testing.expectEqualStrings("GOOD", match.found);
-
-    child.closeStdin(io);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-test "untilAny takes the earliest match and leaves the later one pending" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    // POSIX only for the fixture: this needs a child that writes two words in
-    // one breath, which `printf` says in one word.
-    if (is_windows) return error.SkipZigTest;
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "/bin/sh", "-c", "printf 'first SECOND\n'" },
-        .stdio = .{ .pipes = .{ .stderr = false } },
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-
-    var buffer: [256]u8 = undefined;
-    var expect = child.expect(&buffer).?;
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    // `SECOND` is listed first and arrives second, so the order in the list is
-    // not what decides: the earliest match is.
-    const match = try expect.untilAny(io, &.{ "SECOND", "first" }, budget_ms);
-    try testing.expectEqual(@as(usize, 1), match.index);
-    try testing.expectEqualStrings("first", match.found);
-    try testing.expectEqualStrings("", match.before);
-
-    // And the one that lost is still there to be waited for.
-    const later = try expect.until(io, "SECOND", budget_ms);
-    try testing.expectEqual(@as(usize, 0), later.index);
-    try testing.expectEqualStrings("SECOND", later.found);
-    try testing.expectEqualStrings(" ", later.before);
-
-    child.closeStdin(io);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-test "untilAny with nothing to wait for ends the way a pattern that never comes does" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    if (is_windows) return error.SkipZigTest;
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "/bin/sh", "-c", "printf 'here\n'; exec sleep 100" },
-        .stdio = .{ .pipes = .{ .stderr = false } },
-    });
-    defer child.deinit(io);
-    defer _ = child.killWait(io, 0) catch {};
-
-    var buffer: [256]u8 = undefined;
-    var expect = child.expect(&buffer).?;
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    try testing.expectError(error.Timeout, expect.untilAny(io, &.{}, 50));
-    // An empty pattern is the other end of it: it matches before anything has
-    // arrived, and says which one it was.
-    const empty = try expect.untilAny(io, &.{ "never", "" }, budget_ms);
-    try testing.expectEqual(@as(usize, 1), empty.index);
-    try testing.expectEqualStrings("", empty.found);
-}
-
-test "bytes waits for a count, and what follows stays pending" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
-    defer pty.close(io);
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "/bin/sh", "-c", "printf 'ABCDEFGH'" },
-        .stdio = .{ .pty = &pty },
-        .detach = true,
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    pty.closeSlave(io);
-
-    var buffer: [64]u8 = undefined;
-    var expect: Expect = .init(child.pty.?, &buffer);
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    try testing.expectEqualStrings("ABCD", try expect.bytes(io, 4, budget_ms));
-    try testing.expectEqualStrings("EFGH", try expect.bytes(io, 4, budget_ms));
-
-    // And the stream really has ended, which is a different answer from a
-    // deadline running out.
-    try testing.expectError(error.EndOfStream, expect.bytes(io, 1, budget_ms));
-
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-test "a pattern that never comes is a timeout, and what did come is still pending" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
-    defer pty.close(io);
-
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "/bin/sh", "-c", "printf 'here I am\\n'; exec sleep 100" },
-        .stdio = .{ .pty = &pty },
-        .detach = true,
-    });
-    defer child.deinit(io);
-    defer _ = child.killWait(io, 0) catch {};
-    pty.closeSlave(io);
-
-    var buffer: [256]u8 = undefined;
-    var expect: Expect = .init(child.pty.?, &buffer);
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    _ = try expect.until(io, "here I am", budget_ms);
-    // The child is alive and quiet, which is exactly the case a deadline
-    // exists for: not an ended stream, not a match.
-    try testing.expectError(error.Timeout, expect.until(io, "never said", 50));
-}
-
-test "a buffer that fills says so, and discard makes room" {
-    const io = testing.io;
-    const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-    // POSIX only for the fixture, not for the feature: this needs a child that
-    // writes an exact number of bytes and then waits, which `printf` says in
-    // one word and `cmd.exe` cannot say at all.
-    if (is_windows) return error.SkipZigTest;
-
-    // Pipes rather than a pair, so the byte counts here are the child's alone:
-    // a terminal would echo the answer back and turn every newline into two
-    // bytes.
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ "/bin/sh", "-c", "printf 'aaaaaaaa'; read go; printf 'done\n'" },
-        .stdio = .{ .pipes = .{ .stderr = false } },
-    });
-    defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-
-    var buffer: [8]u8 = undefined;
-    var expect = child.expect(&buffer).?;
-    try expect.start(io);
-    defer expect.deinit(io);
-
-    // Eight bytes of 'a' and no 'z' anywhere: the buffer fills with bytes the
-    // pattern cannot match, and nothing is thrown away to make room.
-    try testing.expectError(error.BufferFull, expect.until(io, "zzz", budget_ms));
-    try testing.expectEqualStrings("aaaaaaaa", expect.pending(io));
-    // A pattern longer than the buffer could ever hold is the same answer,
-    // and it does not wait to give it.
-    try testing.expectError(error.BufferFull, expect.until(io, "zzzzzzzzzzzz", budget_ms));
-
-    expect.discard(io);
-    try expect.send(io, "go\n");
-    const match = try expect.until(io, "done", budget_ms);
-    try testing.expectEqualStrings("done", match.found);
-
-    child.closeStdin(io);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
-}
-
-/// Waits for the child to end, and kills it if it will not within the budget,
-/// so a misbehaving child fails a test rather than stopping the run.
-fn waitWithin(io: std.Io, child: *Child) !Child.Term {
-    const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
-    while (true) {
-        if (try child.tryWait()) |term| return term;
-        if (deadline.remainingMs(io) == 0) break;
-        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    for ([_]bool{ false, true }) |consume| {
+        var buffer: [1]u8 = .{'a'};
+        const f = handles.file(if (is_windows) std.os.windows.INVALID_HANDLE_VALUE else -1);
+        var expect = Expect.init(.{ .read = f, .write = f }, &buffer);
+        expect.inner().filled = buffer.len;
+        var backend: Backend = .{ .expect = &expect, .consume = consume };
+        var vtable = std.testing.io.vtable.*;
+        vtable.futexWait = Backend.wait;
+        vtable.futexWake = Backend.wake;
+        vtable.operate = Backend.operate;
+        backend.io = .{ .userdata = &backend, .vtable = &vtable };
+        try std.testing.expectError(error.Canceled, expect.read(backend.io));
+        try std.testing.expectEqual(@as(usize, 2), backend.waits);
+        try std.testing.expectEqual(@as(usize, 1), backend.reads);
+        try std.testing.expectEqualStrings("b", expect.pending(backend.io));
     }
-    _ = child.killWait(io, 0) catch {};
-    return error.TestChildDidNotExit;
-}
-
-//======================================================================
-// The search, against a search that keeps nothing.
-//======================================================================
-
-test "the incremental search finds what a search of the whole buffer would" {
-    try testing.fuzz({}, searchMatchesAFullScan, .{});
-}
-
-/// The property: however the child's bytes are cut into arrivals, the
-/// incremental search reports the same match, at the same place, as a search
-/// that starts from the beginning every time — and reports none while a full
-/// scan finds none.
-///
-/// This is where `Search.from` earns its keep or loses it. A bound that moved
-/// too far would step over a pattern straddling two arrivals and the wait
-/// would hang until its deadline; one that never moved would be correct and
-/// quadratic. Only the first is a fault a reader would not see, and it is the
-/// one an arrival split at an awkward byte finds.
-fn searchMatchesAFullScan(_: void, smith: *std.testing.Smith) !void {
-    @disableInstrumentation();
-
-    // A three-letter alphabet, so that patterns actually occur: over 256 bytes
-    // a match would be a rare accident and the fuzzer would be exercising the
-    // miss and nothing else.
-    const alphabet: []const std.testing.Smith.Weight = &.{.rangeAtMost(u8, 'a', 'c', 1)};
-
-    var pattern_storage: [4][8]u8 = undefined;
-    var patterns: [4][]const u8 = undefined;
-    const count = smith.valueRangeAtMost(u8, 1, patterns.len);
-    for (patterns[0..count], pattern_storage[0..count]) |*pattern, *storage| {
-        // An empty pattern matches before anything arrives and `untilAny`
-        // answers it without searching, so the search never sees one.
-        const length = smith.valueRangeAtMost(u8, 1, storage.len);
-        smith.bytesWeighted(storage[0..length], alphabet);
-        pattern.* = storage[0..length];
-    }
-    const wanted = patterns[0..count];
-
-    var stream: [64]u8 = undefined;
-    const said = stream[0..smith.sliceWeightedBytes(&stream, alphabet)];
-
-    var search: Search = .init(wanted);
-    var arrived: usize = 0;
-    while (arrived < said.len) {
-        arrived += smith.valueRangeAtMost(u8, 1, @intCast(said.len - arrived));
-        const so_far = said[0..arrived];
-
-        const full = fullScan(so_far, wanted);
-        if (search.find(so_far, wanted)) |found| {
-            // Nothing may be reported that a full scan does not also find, in
-            // the same place and as the same pattern.
-            try testing.expect(full != null);
-            try testing.expectEqual(full.?.at, found.at);
-            try testing.expectEqual(full.?.index, found.index);
-            // A match ends the call, so the search stops here too.
-            return;
-        }
-        // And nothing may be missed.
-        try testing.expect(full == null);
-    }
-}
-
-/// The same question asked the expensive way: every pattern against every
-/// byte, every time.
-fn fullScan(said: []const u8, patterns: []const []const u8) ?Search.Found {
-    @disableInstrumentation();
-    var winner: ?Search.Found = null;
-    for (patterns, 0..) |pattern, index| {
-        const at = std.mem.indexOf(u8, said, pattern) orelse continue;
-        if (winner) |already| if (at >= already.at) continue;
-        winner = .{ .index = index, .at = at };
-    }
-    return winner;
 }

@@ -112,10 +112,26 @@ pub extern "kernel32" fn AssignProcessToJobObject(
     hProcess: HANDLE,
 ) callconv(.winapi) BOOL;
 
+/// Whether a held process belongs to this specific job. The test fixtures
+/// prove this before asking job termination to reach the grandchild.
+pub extern "kernel32" fn IsProcessInJob(
+    ProcessHandle: HANDLE,
+    JobHandle: HANDLE,
+    Result: *BOOL,
+) callconv(.winapi) BOOL;
+
 /// Ends every process in the job, each with `uExitCode`.
 pub extern "kernel32" fn TerminateJobObject(
     hJob: HANDLE,
     uExitCode: UINT,
+) callconv(.winapi) BOOL;
+
+pub extern "kernel32" fn QueryInformationJobObject(
+    hJob: HANDLE,
+    JobObjectInformationClass: c_int,
+    lpJobObjectInformation: *anyopaque,
+    cbJobObjectInformationLength: DWORD,
+    lpReturnLength: ?*DWORD,
 ) callconv(.winapi) BOOL;
 
 pub extern "kernel32" fn SetInformationJobObject(
@@ -301,12 +317,6 @@ pub extern "kernel32" fn CreateFileW(
     hTemplateFile: ?HANDLE,
 ) callconv(.winapi) HANDLE;
 
-pub const STD_INPUT_HANDLE: DWORD = @bitCast(@as(i32, -10));
-pub const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11));
-pub const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
-
-pub extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
-
 //======================================================================
 // Process and thread attribute lists.
 //======================================================================
@@ -370,6 +380,7 @@ pub extern "kernel32" fn TerminateProcess(
 /// how it ended. Used by the tests, which is where a process named only by its
 /// id has to be looked at.
 pub const SYNCHRONIZE: DWORD = 0x00100000;
+pub const PROCESS_TERMINATE: DWORD = 0x00000001;
 pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x00001000;
 
 pub extern "kernel32" fn OpenProcess(
@@ -383,15 +394,8 @@ pub extern "kernel32" fn GetExitCodeProcess(
     lpExitCode: *DWORD,
 ) callconv(.winapi) BOOL;
 
-/// The exit code a process that is still running reports. A process that
-/// genuinely exits with this value is indistinguishable from a running one,
-/// which is why `tryWait` asks `WaitForSingleObject` first.
-pub const STILL_ACTIVE: DWORD = 259;
-
 pub const WAIT_OBJECT_0: DWORD = 0;
 pub const WAIT_TIMEOUT: DWORD = 258;
-pub const WAIT_FAILED: DWORD = 0xFFFFFFFF;
-
 pub extern "kernel32" fn WaitForSingleObject(
     hHandle: HANDLE,
     dwMilliseconds: DWORD,
@@ -420,24 +424,7 @@ pub extern "kernel32" fn GenerateConsoleCtrlEvent(
 ) callconv(.winapi) BOOL;
 
 //======================================================================
-// Consoles: declared in the terminal module, whose calls they are.
+// Console mode: declared in the terminal module, whose call it is.
 //======================================================================
 
-pub const ENABLE_PROCESSED_INPUT = console.ENABLE_PROCESSED_INPUT;
-pub const ENABLE_LINE_INPUT = console.ENABLE_LINE_INPUT;
-pub const ENABLE_ECHO_INPUT = console.ENABLE_ECHO_INPUT;
-pub const ENABLE_WINDOW_INPUT = console.ENABLE_WINDOW_INPUT;
-pub const ENABLE_MOUSE_INPUT = console.ENABLE_MOUSE_INPUT;
-pub const ENABLE_INSERT_MODE = console.ENABLE_INSERT_MODE;
-pub const ENABLE_QUICK_EDIT_MODE = console.ENABLE_QUICK_EDIT_MODE;
-pub const ENABLE_EXTENDED_FLAGS = console.ENABLE_EXTENDED_FLAGS;
-pub const ENABLE_VIRTUAL_TERMINAL_INPUT = console.ENABLE_VIRTUAL_TERMINAL_INPUT;
-pub const ENABLE_PROCESSED_OUTPUT = console.ENABLE_PROCESSED_OUTPUT;
-pub const ENABLE_WRAP_AT_EOL_OUTPUT = console.ENABLE_WRAP_AT_EOL_OUTPUT;
-pub const ENABLE_VIRTUAL_TERMINAL_PROCESSING = console.ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-pub const DISABLE_NEWLINE_AUTO_RETURN = console.DISABLE_NEWLINE_AUTO_RETURN;
 pub const GetConsoleMode = console.GetConsoleMode;
-pub const SetConsoleMode = console.SetConsoleMode;
-pub const SMALL_RECT = console.SMALL_RECT;
-pub const CONSOLE_SCREEN_BUFFER_INFO = console.CONSOLE_SCREEN_BUFFER_INFO;
-pub const GetConsoleScreenBufferInfo = console.GetConsoleScreenBufferInfo;

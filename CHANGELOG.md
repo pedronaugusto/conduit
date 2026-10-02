@@ -6,8 +6,120 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- The bench harness measures wait and spawn ratios, stop submission and completion, and joins with live streams on an exclusively quiet machine.
+- `SpawnOptions.descendants` chooses one lifecycle policy on every platform: the default `.survive` leaves descendants alone after normal, reaped completion, including Windows daemons; `.contain` ends survivors through job kill-on-close or a private POSIX group or Linux cgroup. Timeout, output error and explicit termination retain tree cleanup.
+- Native daemon tests prove default survival, containment through every reap path, and termination on timeout, kill, killWait and output error; Windows runs them on the hosted runner.
 
+- Force delivery retains group cleanup through the final held reap, catching a late fork before identity retirement; Reaper stop spends one grace on its owned tree.
+
+- Deadline expiry tests use controlled clock readings instead of elapsed wall time.
+
+- Adoption spawn handoffs reject registration after success or finish, so a released gate cannot authorize later ownership.
+
+- Breaking: `Orphans.Spawn` keeps its adoption gate claim opaque; callers use `begin`, `started` and `finish`.
+
+- Every test has an independent native watchdog through Io teardown, reporting its name, source module and phase before the runner can lose contact.
+
+- Breaking: `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.
+
+- Breaking: `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.
+
+- Breaking: `Orphans.Record` also copies group and session from the same verified adoption snapshot as its start time.
+
+- Breaking: `Cgroup.prepare` returns an opaque handoff; `joinDescriptor` borrows its descriptor and `started` or `abandon` consumes ownership.
+
+- Breaking: `Pty` keeps descriptors and Windows geometry opaque; `readHandle`, `writeHandle`, `slaveHandle` and `consoleOptions` borrow or copy observations.
+
+- Breaking: `Child` hides lifecycle and owned pipes; `stdinFile`, `stdoutFile`, `stderrFile` and `terminalMaster` borrow streams, and `takeStdin`, `takeStdout` and `takeStderr` transfer pipes.
+
+- Breaking: `InputWriter` keeps its allocated queue and pipe ownership behind an opaque value; callers construct it through its methods.
+
+- Forked PTY children preserve standard streams that replaced a master descriptor in a standard slot.
+
+- Program lookup documentation distinguishes missing and empty PATH values and describes relative paths without search.
+
+- Cgroup handoffs consume their join descriptor and directory ownership once, so repeated cleanup cannot close a recycled descriptor or release the transferred cgroup.
+
+- Deferred cgroup cleanup retains owned directory handles and verifies their identity before removal, leaving replacement directories alone.
+
+- Orphan identity capture verifies pidfd reap ownership after reading start time, refusing a process number recycled during the lookup.
+
+- Orphans refuses new reap ownership when pidfd waitid cannot verify it, while retaining existing holds until retirement is known.
+
+- Expect waits for a buffer-space event when full, with discard and consumption waking the reader instead of an interval timer.
+
+- Expect deinit closes its lifetime before canceling, so even a never-started reader cannot be started afterwards.
+
+- Breaking: `Orphans.list` copies `Record` values with pid and start time captured during adoption, and reports `IdentityUnavailable` instead of returning an unverified number.
+
+- Breaking: `Cgroup` and `Cgroup.Recorded` keep directory ownership opaque in fixed storage; their observation and cleanup methods retain their signatures.
+
+- Breaking: `Orphans` keeps adoption and lifecycle state opaque in fixed storage; its methods own every list and notification.
+
+- Breaking: `Expect` keeps conversation state opaque in fixed storage; construction and observations use its methods.
+
+- `InputWriter.isOpen(io)` gives adapters an uncancelable acceptance snapshot, independent of backlog space.
+
+- Breaking: `Pty.open` takes a caller allocator retained for Windows geometry until every end closes; `spawnShell` forwards its allocator.
+
+- The root API documentation describes the stable Darwin process identity and the audit version checked at delivery.
+
+- `Child.output` reads a published result before opening an exit watch, draining an already reaped child without watching its retired process number.
+
+- Proxy resize forwarding checks cancellation even when tickets keep changing, yields for zero intervals, and measures each refresh interval by one deadline.
+
+- Unit tests count spawn calls, native wait sleeps and stop tasks instead of asserting speed; deadline tests use controlled clocks, and timing claims live on the bench branch.
+
+- Breaking: `HeldReap` and Reaper state are opaque; `Reaper.StartError` includes `AlreadyStarted`, and a successful start or deinit prevents another start in that lifetime.
+
+- Breaking: `CapturedPid` is opaque; `processId()` replaces its numeric field, and Darwin captures retain process identity across exec while checking refreshed audit versions for signal delivery.
+
+- `Child.containment` copies the detached group and Linux cgroup path, directory identity and boot identity for records retained through retirement.
+
+- Windows whole writes report `BrokenPipe` for a pipe whose peer has closed, including the closing state Zig 0.16 reports as `Unexpected`.
+
+- Whole writes check cancellation after zero progress, through one file helper shared by `InputWriter`, `Expect`, and `Proxy`.
+
+- `Child.inputWriter` transfers stdin to a bounded `InputWriter` task, with ordered delivery and end, retained write failures, and cancellation that joins before closure.
+
+- POSIX tree fixtures end and reap their owned descendant on every return, including a failed report.
+
+- Signal-name documentation distinguishes Windows wait results from a supplied signal term.
+
+- Reaper documentation states the resource and result ownership behind its one-start lifetime.
+
+- A refused group signal addresses the still-held child directly before reporting permission denial, covering Darwin's exit-to-wait observation gap.
+
+- Recorded-tree fixtures report a stopped descendant after the kernel confirms readiness and observe its exit through the held identity after kill delivery.
+
+- Windows tree fixtures create a native descendant in a separate console with no inherited pipes, and prove the parent's streams ended before closing them.
+
+- Windows program lookup refuses directories and batch scripts as spawn does, sharing the same batch-file policy.
+
+- Documentation describes opaque lifecycle ownership, exit observation before reaping, and complete Windows exit statuses.
+
+- Windows tree fixtures retry successful empty reads, launch direct children and prove a live grandchild belongs to the specific job before testing cleanup.
+
+- A Reaper started after observed status loss reports `ReapedElsewhere` before watching or addressing the retired process identity.
+
+- A rejected Reaper start closes its wake pipe before returning, so retrying cannot overwrite and leak its descriptors.
+
+- PID fixtures report malformed or missing output and stop when the stream ends; Windows tree fixtures report the failing stage, child result, stdout, stderr and process-open errors.
+
+- Breaking: `Pty.size` borrows a pointer; Windows geometry is opaque and synchronized with the OS resize, so stream borrows never copy a changing cache.
+
+- Breaking: Child owns opaque lifecycle state until `deinit`; `processId` and `result` synchronize identity and result access, replacing public handles and mutable lifecycle fields.
+
+- Breaking: conduit owns `Term`, whose `exited` payload and `exitCode` retain all 32 bits of a Windows exit status.
+
+- Breaking: blocking Child waits and Reaper report `ReapedElsewhere` when another owner took the child's status.
+
+- A deadline keeps its final fraction of a millisecond until it has actually elapsed, so tree cleanup cannot cut a grace short by rounding it down.
+- Forked children reset ignored real-time signals as well as named signals, while leaving numbers reserved by libc alone.
+- Fork handshakes keep their control pipes above standard descriptors, so placing streams cannot overwrite an exec failure report when the parent's streams were closed.
+- Descendant signalling proves ancestry through held process identities before delivery, so a recycled pid in a snapshot cannot authorize a signal to a stranger.
+- Reaper tree cleanup and task-based output draining measure their remaining budgets against clock deadlines, including interrupted polls and delayed wakes.
+- A Reaper started after the child was reaped returns its published term before opening a watch or addressing the old process group.
+- Signalling and final reaping share the child's identity, so a concurrent wait cannot release its pid or close its Windows handles during delivery.
 - `Orphans.list` names the adopted processes still running after a look, so
   a program can write them down for a later one to end.
 - A detached child on a pseudo-terminal is started by `posix_spawn` on Linux:

@@ -1,6 +1,6 @@
 //! Child processes and pseudo-terminals, on POSIX and on Windows.
 //!
-//! Four things the standard library has no answer for, and one it does:
+//! Processes and terminal operations behind one portable API:
 //!
 //! * `Pty` opens a pseudo-terminal pair and sets and reads its window size.
 //! * `Child` spawns a program on that pair — which is what makes the child
@@ -11,9 +11,8 @@
 //!   program needs on its own standard streams.
 //! * `spawnShell` is the user's shell on a pair, with the defaults every
 //!   terminal program would otherwise write out itself.
-//! * `wait` is the standard library's: `Child.wait` hands the process on to
-//!   `std.process.Child.wait`, so it is a cancelation point and uses whatever
-//!   the `std.Io` implementation has for waiting on a process.
+//! * `Child.wait` observes exit before reaping, so signalling keeps the
+//!   identity until delivery finishes. It remains a cancelation point.
 //!
 //! `Reaper` puts a wait on a background task so a program can poll for a
 //! child's death, `Proxy` is the two-direction byte pump between a master and
@@ -42,8 +41,9 @@
 //! systems themselves disagree:
 //!
 //! * **The master is two handles.** POSIX gives one bidirectional descriptor;
-//!   ConPTY gives two pipes. So `Pty` has `read` and `write` on both — the
-//!   same descriptor twice on POSIX — and no caller has to know which it holds.
+//!   ConPTY gives two pipes. `Pty.master()` borrows `read` and `write` on both
+//!   — the same descriptor twice on POSIX — and no caller has to know which
+//!   it holds.
 //! * **`Pty.closeSlave` is wanted at different moments.** On POSIX, right
 //!   after `Child.spawn`, or a read of the master never finishes. On Windows
 //!   it is `ClosePseudoConsole`, which ends the child, so it is called when the
@@ -60,8 +60,6 @@
 //! much less.
 
 const builtin = @import("builtin");
-const std = @import("std");
-
 const tty = @import("conduit.tty");
 const environ_impl = @import("environ.zig");
 const shell = @import("shell.zig");
@@ -100,16 +98,18 @@ comptime {
 }
 
 /// A pseudo-terminal pair.
-pub const Pty = @import("Pty.zig");
+pub const Pty = @import("Pty.zig").Pty;
 /// A child process on a pseudo-terminal, on pipes, or on inherited streams.
-pub const Child = @import("Child.zig");
+pub const Child = @import("Child.zig").Child;
+/// Bounded input, queued without waiting for a child to read, on its own task.
+pub const InputWriter = @import("InputWriter.zig").InputWriter;
 /// A background wait, so a caller can poll for a child's death.
-pub const Reaper = @import("Reaper.zig");
+pub const Reaper = @import("Reaper.zig").Reaper;
 /// Linux, opt-in: this process as the parent of every orphan below it, the
 /// ended ones reaped whenever this package reaps or spawns a child, and all
 /// of them ended by `end`, for a program that starts every child through
 /// this package. No task, no timer.
-pub const Orphans = @import("Orphans.zig");
+pub const Orphans = @import("Orphans.zig").Orphans;
 /// A Linux child's cgroup. `Cgroup.openRecorded` returns the separate
 /// `Cgroup.Recorded` handle for a cgroup saved by an earlier run. On other
 /// systems the handles are empty.
@@ -121,9 +121,9 @@ pub const console = tty.console;
 pub const Proxy = @import("Proxy.zig");
 /// A conversation with a child: wait for a byte pattern, for any of several,
 /// or for a byte count, each with a deadline, then send a reply.
-pub const Expect = @import("Expect.zig");
+pub const Expect = @import("Expect.zig").Expect;
 
-/// How a child process ended. An alias for `std.process.Child.Term`.
+/// How a child process ended, including the full Windows exit code.
 pub const Term = Child.Term;
 /// Whether a `Term` is the one a program that did its job ends with: exited,
 /// with a status of zero.
@@ -213,9 +213,11 @@ pub const startTime = if (is_windows)
 else
     @import("tree.zig").startTime;
 /// A process held by a kernel identity rather than by its number — a pidfd
-/// on Linux, an audit token on Darwin — so that `signal` reaches it or
-/// nothing, and never a process given the same pid since. `alive` says
-/// whether it has ended; `deinit` lets go of it. POSIX only.
+/// on Linux, a stable unique process id on Darwin. Darwin checks that id
+/// before refreshing the audit version for delivery, so exec preserves the
+/// capture and a reused pid cannot authorize a signal. `processId()` reads
+/// the number for reports; `alive` says whether it has ended. Release exactly
+/// once with `deinit` and do not copy an owning capture. POSIX only.
 pub const CapturedPid = if (is_windows)
     @compileError("CapturedPid is POSIX-only")
 else
@@ -237,6 +239,8 @@ else
     @import("tree.zig").endRecorded;
 
 test {
+    _ = @import("test_support.zig");
+    _ = @import("input_writer_test.zig");
     _ = Pty;
     _ = Child;
     _ = Reaper;
@@ -253,4 +257,5 @@ test {
     _ = @import("find.zig");
     _ = @import("windows_search.zig");
     _ = @import("spawn_test.zig");
+    _ = @import("descendants_test.zig");
 }

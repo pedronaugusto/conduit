@@ -5,9 +5,7 @@
 //! much memory the parent has mapped. `posix_spawn` does not: the systems here
 //! implement it with `vfork` or with a kernel call of their own, and the child
 //! is described by a list of file actions and a set of attributes rather than
-//! by code running in it. Measured on an M3 Max, 1000 spawns of `/usr/bin/true`
-//! on the null device: 1336 µs a spawn through `fork` and `execve`, 946 µs
-//! through `posix_spawn`.
+//! by code running in it.
 //!
 //! # What it cannot do
 //!
@@ -48,7 +46,7 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const tree = @import("tree.zig");
 const options_for_build = @import("conduit_options");
 
@@ -134,7 +132,7 @@ pub fn spawn(
     var terminal_name: [std.fs.max_path_bytes:0]u8 = undefined;
     var terminal_slot: ?posix.fd_t = null;
     if (session) {
-        const slave = options.stdio.pty.slave.?;
+        const slave = options.stdio.pty.slaveHandle().?;
         if (ttyname_r(slave, &terminal_name, terminal_name.len) != 0) return null;
     }
 
@@ -144,7 +142,7 @@ pub fn spawn(
         // way that means the same thing on both systems.
         .close => return null,
         .place => |fd| {
-            if (session and fd == options.stdio.pty.slave.?) {
+            if (session and fd == options.stdio.pty.slaveHandle().?) {
                 if (terminal_slot) |first| {
                     if (posix_spawn_file_actions_adddup2(&actions, first, @intCast(slot)) != 0) return error.SystemResources;
                 } else {
@@ -197,6 +195,7 @@ pub fn spawn(
     var best: posix.E = .NOENT;
     for (candidates) |candidate| {
         var pid: posix.pid_t = undefined;
+        if (builtin.is_test) @import("test_support.zig").SpawnCalls.file_actions += 1;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) return try started(pid);
         switch (@as(posix.E, @enumFromInt(rc))) {

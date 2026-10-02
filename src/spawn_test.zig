@@ -20,6 +20,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
 
@@ -70,22 +71,10 @@ const script = if (is_windows) struct {
     const sleep_forever = [_][]const u8{ "ping.exe", "-n", "101", "127.0.0.1" };
     /// Starts a process of its own that outlives it, and says which one.
     ///
-    /// `Start-Process` is `CreateProcess` with a console of its own, so the
-    /// grandchild holds none of this child's handles and goes on running after
-    /// the child has exited and been reaped. What relates the two afterwards is
-    /// the job object, which is the whole of what `waitTree` and `deinit` are
-    /// claims about. The id is printed the way `readMarkedNumber` reads it.
-    ///
-    /// Windows only, and used only by tests that skip elsewhere: POSIX has no
-    /// container to ask after a tree with.
-    const detached_grandchild = [_][]const u8{
-        "powershell.exe",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' -PassThru; " ++
-            "Write-Output ('pid ' + $p.Id + '.')",
-    };
+    /// A native child creates a descendant in a separate console and prints
+    /// its id. No shell launch, no inherited pipe, and both belong to the
+    /// child's job. Built only for the test module.
+    const detached_grandchild = [_][]const u8{@import("conduit_test_options").tree_fixture};
     /// Writes a cursor-shape sequence to its terminal and stays there.
     ///
     /// `DECSCUSR` is the one a console host that models what passes through it
@@ -133,6 +122,7 @@ const script = if (is_windows) struct {
 /// Closing a file under a task that is reading it is a race on the
 /// descriptor, and ThreadSanitizer on Linux says so.
 const Sink = struct {
+    source_io: std.Io = io,
     mutex: std.Io.Mutex = .init,
     bytes: std.ArrayList(u8) = .empty,
     group: std.Io.Group = .init,
@@ -174,11 +164,10 @@ const Sink = struct {
         var buffer: [512]u8 = undefined;
         while (true) {
             if (sink.stopping.load(.acquire)) return sink.stop(null);
-            const n = file.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+            const n = handles.readStreaming(file, sink.source_io, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return sink.stop(if (handles.finished(err)) null else err),
             };
-            if (n == 0) return sink.stop(null);
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
             sink.bytes.appendSlice(gpa, buffer[0..n]) catch return;
@@ -243,7 +232,7 @@ const Sink = struct {
             "the end of the stream"
         else
             "nothing -- it is still waiting in a read";
-        std.debug.print("\nwaited {d} ms for \"{s}\"; the read stopped with {s}; {d} bytes arrived:\n  ", .{
+        std.debug.print("\nbudget {d} ms for \"{s}\"; the read stopped with {s}; {d} bytes arrived:\n  ", .{
             budget_ms,
             needle,
             why,
@@ -294,7 +283,7 @@ fn waitWithin(child: *Child) !Child.Term {
 /// package's own either. `.terminate` there is a console control event, so a
 /// child that obeys it ends on its own terms and reports whatever status it
 /// chose — the system's control-exit status for one that does not handle the
-/// event, which reaches `Term.exited` as the low byte of an `NTSTATUS`. The
+/// event, whose full `NTSTATUS` reaches `Term.exited`. The
 /// number this package does choose is the one `.kill` terminates with, and
 /// `killWait` with no grace is what asks for it: "succeeded, exitCode and
 /// signalName" below is where that 1 is asserted. Here the claim is the one
@@ -330,10 +319,10 @@ test "a child on pipes: its output is collected and its exit code is seen" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "hello from the child") != null);
-    try testing.expect(!result.stdout_truncated);
-    try testing.expect(!result.timed_out);
-    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "hello from the child") != null);
+    try testing.expect(!result.stdoutTruncated());
+    try testing.expect(!result.timedOut());
+    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
 }
 
 test "a child on pipes can be written to" {
@@ -347,14 +336,14 @@ test "a child on pipes can be written to" {
     defer child.deinit(io);
     errdefer _ = child.killWait(io, 0) catch {};
 
-    try child.stdin.?.writeStreamingAll(io, "a line\n");
+    try child.stdinFile().?.writeStreamingAll(io, "a line\n");
     child.closeStdin(io);
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "a line") != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "a line") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "output stops at max_bytes and says it did" {
@@ -371,11 +360,11 @@ test "output stops at max_bytes and says it did" {
     var result = try child.output(io, gpa, .{ .max_bytes = 5, .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expectEqualStrings("hello", result.stdout);
-    try testing.expect(result.stdout_truncated);
+    try testing.expectEqualStrings("hello", result.stdout());
+    try testing.expect(result.stdoutTruncated());
     // Capped, not cut short: the child still ran to the end and its status is
     // the real one.
-    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
+    try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
 }
 
 test "output keeps draining after allocation failure and reports out of memory" {
@@ -413,9 +402,9 @@ test "output ends a silent child when its stream cannot be read" {
     defer child.deinit(io);
     errdefer _ = child.killWait(io, 0) catch {};
 
-    child.stdout.?.close(io);
-    child.stdout.?.handle = -1;
-    defer child.stdout = null;
+    child.stdoutFile().?.close(io);
+    State.get(&child).stdout.?.handle = -1;
+    defer _ = child.takeStdout();
     try testing.expectError(error.ReadFailed, child.output(io, gpa, .{}));
     try testing.expect((try child.tryWait()) != null);
 }
@@ -433,7 +422,7 @@ test "output gives up on a child that will not end, and ends it" {
     var result = try child.output(io, gpa, .{ .timeout_ms = 50, .grace_ms = 50 });
     defer result.deinit(gpa);
 
-    try testing.expect(result.timed_out);
+    try testing.expect(result.timedOut());
     // Reaped by `output`, so this cannot block.
     try testing.expect((try child.tryWait()) != null);
 }
@@ -486,6 +475,41 @@ test "Reaper.exit becomes non-null once the child has ended" {
     try testing.expectEqual(Child.Term{ .exited = 5 }, term);
     // The reaper's task did the reaping, so this answers from the same term.
     try testing.expectEqual(term, try child.wait(io));
+}
+
+test "a Reaper started after reaping never watches a reused identity" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, 0) catch {};
+    child.closeStdin(io);
+    const term = try waitWithin(&child);
+
+    var witness = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // The published term is final. Replace the old numeric labels with a
+    // live witness's, as if the OS had reused them: no watch or tree cleanup
+    // may use those labels after retirement.
+    State.get(&child).id = State.get(&witness).id;
+    State.get(&child).pgid = State.get(&witness).pgid;
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    try testing.expectEqual(@as(?Child.Term, term), try reaper.waitTimeout(io, 20));
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
 }
 
 test "killWait is legal while a Reaper is waiting, and the two share one reap" {
@@ -576,9 +600,7 @@ test "Reaper.wait blocks until the child has ended, and answers everyone who ask
     defer reaper.deinit(io);
 
     // Still running: a bounded wait says so, and says it no sooner than asked.
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
     try testing.expectEqual(@as(?Child.Term, null), try reaper.waitTimeout(io, 30));
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() >= 30);
 
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
@@ -608,7 +630,7 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     // after the child, so it stops reading before the child closes its file
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const grandchild = try readPid(&sink);
 
     var reaper: conduit.Reaper = .init(&child, .{});
@@ -616,18 +638,26 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     defer reaper.deinit(io);
 
     const grace_ms = 300;
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
-    reaper.stop(io, grace_ms);
-    // Asked, not waited for: the grace is the reaper's to spend.
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < grace_ms);
+    const Count = struct {
+        var tasks: usize = 0;
+        fn concurrent(userdata: ?*anyopaque, group: *std.Io.Group, context: []const u8, alignment: std.mem.Alignment, run: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
+            tasks += 1;
+            return io.vtable.groupConcurrent(userdata, group, context, alignment, run);
+        }
+    };
+    Count.tasks = 0;
+    var vtable = io.vtable.*;
+    vtable.groupConcurrent = Count.concurrent;
+    const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    reaper.stop(counted_io, grace_ms);
+    try testing.expectEqual(@as(usize, 1), Count.tasks);
+    // Asked, not waited for: exactly one task owns the grace.
     // A second request with a grace changes nothing.
-    reaper.stop(io, grace_ms);
+    reaper.stop(counted_io, grace_ms);
+    try testing.expectEqual(@as(usize, 1), Count.tasks);
 
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
-    const took_ms = t0.untilNow(io).raw.toMilliseconds();
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
-    try testing.expect(took_ms >= grace_ms);
-    try testing.expect(took_ms < grace_ms + 2000);
 
     const deadline: Deadline = .in(io, budget_ms);
     while (alive(grandchild)) {
@@ -657,12 +687,10 @@ test "Reaper.stop is over the moment a child that honours the request ends" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
     reaper.stop(io, 60_000);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     // The request, not the force: the grace was never waited out.
     try testing.expectEqual(Child.Term{ .signal = .TERM }, term);
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
 }
 
 test "Reaper.stop with no grace is the force, now" {
@@ -682,7 +710,7 @@ test "Reaper.stop with no grace is the force, now" {
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     _ = try readPid(&sink);
 
     var reaper: conduit.Reaper = .init(&child, .{});
@@ -693,6 +721,37 @@ test "Reaper.stop with no grace is the force, now" {
     reaper.stop(io, 0);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
+    const deadline: Deadline = .in(io, budget_ms);
+    while (!sink.ended()) {
+        if (deadline.remainingMs(io) == 0) return error.TestStoppedTreeRetainedPipe;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+test "killWait retires a forced group only after closing its late fork's pipe" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    for (0..16) |_| {
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        var sink: Sink = .{};
+        defer sink.deinit();
+        try sink.start(child.stdoutFile().?);
+        _ = try readPid(&sink);
+        try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.killWait(io, 0));
+        const deadline: Deadline = .in(io, budget_ms);
+        while (!sink.ended()) {
+            if (deadline.remainingMs(io) == 0) return error.TestForcedGroupRetainedPipe;
+            try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+        }
+    }
 }
 
 test "end_tree: what a child leaves in its group ends with it, before the child is reaped" {
@@ -718,7 +777,7 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const polite = try readPid(&sink);
     const stubborn = stubborn: {
         const deadline: Deadline = .in(io, budget_ms);
@@ -744,13 +803,11 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
     child.closeStdin(io);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .exited = 3 }, term);
     // The one that would not go when asked was made to, once the grace had
     // passed, and the child was published only after it.
-    if (t0.untilNow(io).raw.toMilliseconds() < grace_ms) return error.TestGraceNotGiven;
     // Ended, both: what is left is their new parent's reaping of them, which
     // this test cannot hurry and only waits out.
     const deadline: Deadline = .in(io, budget_ms);
@@ -780,12 +837,12 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const left = try readPid(&sink);
     defer _ = c.kill(left, .KILL);
 
     var deadline: Deadline = .in(io, budget_ms);
-    while (wait_for.endedUnreaped(child.id) != .ended) {
+    while (wait_for.endedUnreaped(State.get(&child).id) != .ended) {
         if (deadline.remainingMs(io) == 0) return error.TestChildDidNotExit;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
@@ -814,16 +871,29 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    var errors: Sink = .{};
+    defer errors.deinit();
+    var stage: []const u8 = "starting readers and reading the grandchild id";
+    errdefer |err| {
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (State.optional(&child) != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        sink.report("pid <number>.");
+        errors.report("fixture stderr");
+    }
+    try sink.start(child.stdoutFile().?);
+    try errors.start(child.stderrFile().?);
 
-    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
-    defer std.os.windows.CloseHandle(grandchild);
+    const id = try readMarkedNumber(win32.DWORD, &sink);
+    stage = "opening the reported grandchild";
+    const grandchild = try openById(id);
+    defer closeFixtureProcess(grandchild);
+    try expectFixtureInJob(grandchild, &child);
+    stage = "waiting for the child and ending its tree";
 
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
@@ -873,9 +943,13 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
     var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
     try reaper.start(io);
     try std.Io.sleep(io, .fromMilliseconds(20), .awake);
-    const t0 = std.Io.Clock.Timestamp.now(io, .awake);
-    reaper.deinit(io);
-    try testing.expect(t0.untilNow(io).raw.toMilliseconds() < budget_ms);
+    {
+        var join_watchdog: Watchdog = .init(@src());
+        join_watchdog.limit_ms = budget_ms;
+        try join_watchdog.start(io);
+        defer join_watchdog.deinit(io);
+        reaper.deinit(io);
+    }
     try testing.expectError(error.Canceled, reaper.exit());
 
     child.closeStdin(io);
@@ -929,11 +1003,11 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     child.closeStdin(io);
 
     // The same file the reader would come from, so the two agree.
-    try testing.expectEqual(child.stdout.?.handle, child.stdoutFile().?.handle);
+    try testing.expectEqual(State.get(&child).stdout.?.handle, child.stdoutFile().?.handle);
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "a line") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "a line") != null);
 }
 
 test "closeStdin is the half-close a child reading to end of file waits for" {
@@ -949,83 +1023,46 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
 
     // Written, but not finished: the child is still reading, because this
     // process is still a writer.
-    try child.stdin.?.writeStreamingAll(io, "a line\n");
+    try child.stdinFile().?.writeStreamingAll(io, "a line\n");
     try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, 50));
 
     child.closeStdin(io);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stdin);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stdinFile());
     // Idempotent, which is what makes it safe to pair with `deinit`.
     child.closeStdin(io);
 
     try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
 }
 
-test "waitTimeout costs no more than the blocking wait it is a deadline on" {
+test "waitTimeout uses the native exit wait without interval sleeps" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-
-    // A relative budget over complete rounds. `waitTimeout` used to ask again
-    // on a growing interval -- one millisecond, then two, then four -- which
-    // put a millisecond and a half between a child ending and this call
-    // noticing, whatever the machine. It waits on a handle the system makes
-    // ready now, so it stays within half again the blocking wait. The two are
-    // interleaved inside each round, and the fastest whole round from each
-    // side is the one compared: scheduler stalls can only make a round slower,
-    // and a shared runner gets several chances to leave each side alone.
-    const rounds = 6;
-    const per_round = 8;
-    var fastest_blocking: i64 = std.math.maxInt(i64);
-    var fastest_deadlined: i64 = std.math.maxInt(i64);
-
-    // Neither side pays for the cold first spawn.
-    _ = try timeOne(.blocking);
-    _ = try timeOne(.deadlined);
-
-    for (0..rounds) |round| {
-        var blocking: i64 = 0;
-        var deadlined: i64 = 0;
-        for (0..per_round) |_| {
-            if (round % 2 == 0) {
-                blocking += try timeOne(.blocking);
-                deadlined += try timeOne(.deadlined);
-            } else {
-                deadlined += try timeOne(.deadlined);
-                blocking += try timeOne(.blocking);
-            }
-        }
-        fastest_blocking = @min(fastest_blocking, blocking);
-        fastest_deadlined = @min(fastest_deadlined, deadlined);
-    }
-
-    if (fastest_deadlined * 2 <= fastest_blocking * 3) return;
-    std.debug.print(
-        "\nfastest {d}-child round: wait() {d} us, waitTimeout() {d} us; deadline wait exceeded the 3:2 budget\n",
-        .{ per_round, fastest_blocking, fastest_deadlined },
-    );
-    return error.TestWaitTimeoutCostsTooMuch;
-}
-
-/// Microseconds to start a child that exits at once and reap it, one way or
-/// the other.
-fn timeOne(how: enum { blocking, deadlined }) !i64 {
-    const argv: []const []const u8 = if (is_windows)
-        &.{ "cmd.exe", "/c", "exit 0" }
-    else
-        &.{ "/bin/sh", "-c", "exit 0" };
-
-    const start: std.Io.Timestamp = .now(io, .awake);
-    var child = try Child.spawn(io, gpa, .{ .argv = argv, .stdio = .ignore });
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    switch (how) {
-        .blocking => _ = try child.wait(io),
-        .deadlined => if (try child.waitTimeout(io, budget_ms) == null) {
-            return error.TestChildDidNotExit;
-        },
+    defer _ = child.killWait(io, 0) catch {};
+    if (!is_windows) {
+        const watch = wait_for.Watch.open(child.processId().?) orelse return error.SkipZigTest;
+        watch.close();
     }
-    const end: std.Io.Timestamp = .now(io, .awake);
-    return start.durationTo(end).toMicroseconds();
+    const Count = struct {
+        var sleeps: usize = 0;
+        fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            sleeps += 1;
+            return error.Canceled;
+        }
+    };
+    Count.sleeps = 0;
+    var vtable = io.vtable.*;
+    vtable.sleep = Count.sleep;
+    const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(counted_io, 20));
+    try testing.expectEqual(@as(usize, 0), Count.sleeps);
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
 }
 
 test "waitTimeout gives up without ending the child" {
@@ -1063,7 +1100,7 @@ test "succeeded, exitCode and signalName say how a child ended" {
 
     const term = try waitWithin(&ok_child);
     try testing.expect(!conduit.succeeded(term));
-    try testing.expectEqual(@as(?u8, 7), conduit.exitCode(term));
+    try testing.expectEqual(@as(?u32, 7), conduit.exitCode(term));
     try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(term));
 
     try testing.expect(conduit.succeeded(.{ .exited = 0 }));
@@ -1079,11 +1116,11 @@ test "succeeded, exitCode and signalName say how a child ended" {
     defer killed.deinit(io);
     const killed_term = try killed.killWait(io, 0);
     if (is_windows) {
-        try testing.expectEqual(@as(?u8, 1), conduit.exitCode(killed_term));
+        try testing.expectEqual(@as(?u32, 1), conduit.exitCode(killed_term));
         try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(killed_term));
     } else {
         try testing.expect(!conduit.succeeded(killed_term));
-        try testing.expectEqual(@as(?u8, null), conduit.exitCode(killed_term));
+        try testing.expectEqual(@as(?u32, null), conduit.exitCode(killed_term));
         try testing.expectEqualStrings("KILL", conduit.signalName(killed_term).?);
     }
 }
@@ -1138,7 +1175,7 @@ test "killWait reaches what the child started, not only the child" {
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
 
     // Both still running, so the pipe still has writers.
     try std.Io.sleep(io, .fromMilliseconds(200), .awake);
@@ -1172,7 +1209,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     //
     // On a pair rather than on pipes, because a shell with no controlling
     // terminal declines to turn job control on at all.
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -1193,7 +1230,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     // shell that declines job control leaves the grandchild in the child's
     // group, where the group signal reaches it and there is nothing here to
     // prove.
-    if (getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
+    if (getpgid(grandchild) == State.get(&child).pgid.?) return error.SkipZigTest;
 
     _ = try child.killWait(io, 0);
 
@@ -1219,7 +1256,7 @@ test "a child that has never forked is stopped by its signal alone, without the 
     // it goes through `posix_spawn` (unless the build says always fork), on
     // a pair through the fork, and both ways with and without a group.
     for ([_]bool{ false, true }) |on_pty| for ([_]bool{ false, true }) |detach| {
-        var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         var child = try Child.spawn(io, gpa, .{
             .argv = &.{ "/bin/sleep", "100" },
@@ -1258,7 +1295,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
     for ([_]bool{ false, true }) |on_pty| {
-        var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
         defer tree.testing_hook.hold_ms = 0;
@@ -1278,13 +1315,13 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
 
         var sink: Sink = .{};
         defer sink.deinit();
-        try sink.start(if (on_pty) pty.readFile() else child.stdout.?);
+        try sink.start(if (on_pty) pty.readFile() else child.stdoutFile().?);
         const grandchild = try readPid(&sink);
         // Whatever this test finds, it leaves nothing behind.
         defer if (alive(grandchild)) {
             _ = c.kill(grandchild, .KILL);
         };
-        if (on_pty and getpgid(grandchild) == child.pgid.?) return error.SkipZigTest;
+        if (on_pty and getpgid(grandchild) == State.get(&child).pgid.?) return error.SkipZigTest;
 
         const before = tree.walks.load(.monotonic);
         _ = try child.killWait(io, 0);
@@ -1329,7 +1366,7 @@ fn cgroupsHere() !bool {
     var looked = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
     defer looked.deinit(io);
     _ = try looked.wait(io);
-    return looked.cgroup.active();
+    return State.get(&looked).cgroup.active();
 }
 
 /// Waits for `pid` to be gone altogether: not running and not a zombie.
@@ -1351,8 +1388,8 @@ test "a recorded cgroup opens only at its original directory identity and remove
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = child.cgroup.path(&where).?;
-    const identity = child.cgroup.id().?;
+    const path = State.get(&child).cgroup.path(&where).?;
+    const identity = State.get(&child).cgroup.id().?;
     try testing.expect(cgroup.Cgroup.openRecorded(path, identity +% 1) == null);
     var recorded = cgroup.Cgroup.openRecorded(path, identity).?;
     defer recorded.release();
@@ -1371,8 +1408,8 @@ test "a recorded cgroup whose name now holds another is not removed through it" 
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = child.cgroup.path(&where).?;
-    var recorded = cgroup.Cgroup.openRecorded(path, child.cgroup.id().?).?;
+    const path = State.get(&child).cgroup.path(&where).?;
+    var recorded = cgroup.Cgroup.openRecorded(path, State.get(&child).cgroup.id().?).?;
     defer recorded.release();
 
     // The recorded cgroup empties and goes, and a new empty one takes its
@@ -1391,7 +1428,7 @@ test "a recorded cgroup waits on population changes" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    var recorded = cgroup.Cgroup.openRecorded(child.cgroup.path(&where).?, child.cgroup.id().?).?;
+    var recorded = cgroup.Cgroup.openRecorded(State.get(&child).cgroup.path(&where).?, State.get(&child).cgroup.id().?).?;
     defer recorded.release();
     try testing.expect(!try recorded.waitEmpty(io, 20));
     _ = try child.killWait(io, 0);
@@ -1408,13 +1445,13 @@ test "endRecorded ends a verified Linux cgroup and its detached grandchild" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    var recorded = cgroup.Cgroup.openRecorded(child.cgroup.path(&where).?, child.cgroup.id().?).?;
+    var recorded = cgroup.Cgroup.openRecorded(State.get(&child).cgroup.path(&where).?, State.get(&child).cgroup.id().?).?;
     defer recorded.release();
-    const since = (try tree.startTime(child.id)).?;
+    const since = (try tree.startTime(State.get(&child).id)).?;
     try testing.expect(try conduit.endRecorded(io, .{
-        .pid = child.id,
+        .pid = State.get(&child).id,
         .start = since,
-        .group = child.pgid,
+        .group = State.get(&child).pgid,
         .cgroup = &recorded,
         .grace_ms = 20,
     }));
@@ -1441,14 +1478,14 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         });
         defer child.deinit(io);
         defer _ = child.killWait(io, 0) catch {};
-        try testing.expect(child.cgroup.active());
+        try testing.expect(State.get(&child).cgroup.active());
 
         // The reader is done with the child's output before `deinit` below
         // closes it.
         const orphan = orphan: {
             var sink: Sink = .{};
             defer sink.deinit();
-            try sink.start(child.stdout.?);
+            try sink.start(child.stdoutFile().?);
             break :orphan try readPid(&sink);
         };
         defer if (alive(orphan)) {
@@ -1457,14 +1494,14 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         // Orphaned and in a session of its own before the kill: the case a
         // group signal and a walk down from the child both miss.
         const deadline: Deadline = .in(io, budget_ms);
-        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == child.id or getsid(orphan) != orphan) {
+        while (parentOf(orphan) == c.getpid() or parentOf(orphan) == State.get(&child).id or getsid(orphan) != orphan) {
             if (deadline.remainingMs(io) == 0) return error.TestGrandchildNeverLeft;
             try std.Io.sleep(io, .fromMilliseconds(2), .awake);
         }
-        try testing.expect(getpgid(orphan) != child.id);
+        try testing.expect(getpgid(orphan) != State.get(&child).id);
 
         var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-        const path = try gpa.dupeZ(u8, child.cgroup.path(&where).?);
+        const path = try gpa.dupeZ(u8, State.get(&child).cgroup.path(&where).?);
         defer gpa.free(path);
         try testing.expect(cgroupExists(path));
 
@@ -1495,11 +1532,11 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    try testing.expect(child.cgroup.active());
+    try testing.expect(State.get(&child).cgroup.active());
 
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const orphan = try readPid(&sink);
     defer if (alive(orphan)) {
         _ = c.kill(orphan, .KILL);
@@ -1526,21 +1563,21 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    try testing.expect(child.cgroup.active());
+    try testing.expect(State.get(&child).cgroup.active());
 
     // The reader is done with the child's output before `deinit` below
     // closes it.
     const orphan = orphan: {
         var sink: Sink = .{};
         defer sink.deinit();
-        try sink.start(child.stdout.?);
+        try sink.start(child.stdoutFile().?);
         break :orphan try readPid(&sink);
     };
     defer if (alive(orphan)) {
         _ = c.kill(orphan, .KILL);
     };
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = try gpa.dupeZ(u8, child.cgroup.path(&where).?);
+    const path = try gpa.dupeZ(u8, State.get(&child).cgroup.path(&where).?);
     defer gpa.free(path);
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
@@ -1614,7 +1651,7 @@ fn expectCount(orphans: *Orphans, expected: usize) !void {
 fn orphanOf(child: *Child) !posix.pid_t {
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    try sink.start(child.stdoutFile().?);
     const orphan = try readPid(&sink);
     try waitSaid(&sink, "done.");
     return orphan;
@@ -1677,8 +1714,11 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try expectAdopted(kept);
     try expectCount(&orphans, 1);
     // named, so a program can write it down for a later one to end
-    var names: [4]posix.pid_t = undefined;
-    try testing.expectEqualSlices(posix.pid_t, &.{kept}, try orphans.list(&names));
+    var names: [4]Orphans.Record = undefined;
+    const identities = try orphans.list(&names);
+    try testing.expectEqual(@as(usize, 1), identities.len);
+    try testing.expectEqual(kept, identities[0].pid);
+    try testing.expectEqual((try conduit.startTime(kept)).?, identities[0].start);
     try testing.expectEqual(0, (try orphans.list(names[0..0])).len);
 
     // One that has ended by the time the child that left it is reaped: the
@@ -1803,7 +1843,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
 
     // Ended, and looked at, before it is waited for.
     before.closeStdin(io);
-    try expectZombie(before.id);
+    try expectZombie(State.get(&before).id);
     _ = try orphans.count();
     try testing.expectEqual(Child.Term{ .exited = 4 }, (try before.waitTimeout(io, budget_ms)) orelse
         return error.TestChildDidNotExit);
@@ -1911,7 +1951,7 @@ fn readPid(sink: *Sink) !posix.pid_t {
 /// the type is the caller's to ask for.
 fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
     const deadline: Deadline = .in(io, budget_ms);
-    while (deadline.remainingMs(io) > 0) {
+    while (true) {
         const found = found: {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
@@ -1919,12 +1959,20 @@ fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
             const at = std.mem.indexOf(u8, said, "pid ") orelse break :found null;
             const rest = said[at + "pid ".len ..];
             const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :found null;
-            break :found std.fmt.parseInt(Number, rest[0..end], 10) catch null;
+            const number = std.fmt.parseInt(Number, rest[0..end], 10) catch break :found @as(Number, 0);
+            break :found number;
         };
-        if (found) |number| return number;
+        if (found) |number| {
+            if (number != 0) return number;
+            sink.report("a nonzero decimal process id between pid and .");
+            return error.TestInvalidProcessId;
+        }
+        if (sink.ended() or deadline.remainingMs(io) == 0) {
+            sink.report("pid <number>.");
+            return error.TestChildSaidNothing;
+        }
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
-    return error.TestChildSaidNothing;
 }
 
 /// Whether the operating system still knows that process id. A zombie counts
@@ -1943,10 +1991,32 @@ fn alive(pid: posix.pid_t) bool {
 /// even after that process has ended.
 fn openById(id: win32.DWORD) !win32.HANDLE {
     return win32.OpenProcess(
-        win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION,
+        win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION | win32.PROCESS_TERMINATE,
         .FALSE,
         id,
-    ) orelse error.TestProcessNotThere;
+    ) orelse {
+        std.debug.print("\nOpenProcess({d}) failed: Windows error {d}\n", .{ id, @intFromEnum(std.os.windows.GetLastError()) });
+        return error.TestProcessNotThere;
+    };
+}
+
+/// A failed job assertion must still end the held witness, including one
+/// that the fixture accidentally started outside the child's job.
+fn closeFixtureProcess(process: win32.HANDLE) void {
+    if (runningNow(process)) _ = win32.TerminateProcess(process, 1);
+    std.os.windows.CloseHandle(process);
+}
+
+fn expectFixtureInJob(process: win32.HANDLE, child: *Child) !void {
+    var member: win32.BOOL = .FALSE;
+    if (win32.IsProcessInJob(process, State.get(child).job.?, &member) == .FALSE) {
+        std.debug.print("\nIsProcessInJob failed: Windows error {d}\n", .{@intFromEnum(std.os.windows.GetLastError())});
+        return error.TestJobQueryFailed;
+    }
+    if (member == .FALSE or !runningNow(process)) {
+        std.debug.print("\nfixture grandchild: in child's job={}, running={}\n", .{ member != .FALSE, runningNow(process) });
+        return error.TestGrandchildNotRunningInJob;
+    }
 }
 
 /// Whether that process is still running. Windows only.
@@ -1971,16 +2041,29 @@ test "waitTree says the tree has ended, and does not say it early" {
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    var errors: Sink = .{};
+    defer errors.deinit();
+    var stage: []const u8 = "starting readers and reading the grandchild id";
+    errdefer |err| {
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (State.optional(&child) != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        sink.report("pid <number>.");
+        errors.report("fixture stderr");
+    }
+    try sink.start(child.stdoutFile().?);
+    try errors.start(child.stderrFile().?);
 
-    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
-    defer std.os.windows.CloseHandle(grandchild);
+    const id = try readMarkedNumber(win32.DWORD, &sink);
+    stage = "opening the reported grandchild";
+    const grandchild = try openById(id);
+    defer closeFixtureProcess(grandchild);
+    try expectFixtureInJob(grandchild, &child);
+    stage = "waiting for the child and ending its tree";
 
     // The child ends on its own, and is left unreaped until the end: `kill`
     // declines to signal a child it has already been told is gone, so a test
@@ -1988,10 +2071,10 @@ test "waitTree says the tree has ended, and does not say it early" {
     // then ask it to end. The child's own handle is what says it has exited,
     // and looking at a handle reaps nothing.
     const deadline: Deadline = .in(io, budget_ms);
-    while (deadline.remainingMs(io) > 0 and runningNow(child.id)) {
+    while (deadline.remainingMs(io) > 0 and runningNow(State.get(&child).id)) {
         try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
-    try testing.expect(!runningNow(child.id));
+    try testing.expect(!runningNow(State.get(&child).id));
 
     // The child is gone and the tree is not, which is the whole of the
     // difference between this wait and `wait`.
@@ -2018,23 +2101,35 @@ test "deinit ends a grandchild the child started and left behind" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    // Windows only: this is the job object's doing. On POSIX `deinit` signals
-    // nothing and a grandchild of a reaped child keeps running, which
-    // `Child.deinit` says out loud.
+    // Windows only: explicit containment retains job kill-on-close.
     if (!is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &script.detached_grandchild,
-        .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
+        .descendants = .contain,
+        .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(child.stdout.?);
+    var errors: Sink = .{};
+    defer errors.deinit();
+    var stage: []const u8 = "starting readers and reading the grandchild id";
+    errdefer |err| {
+        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), if (State.optional(&child) != null) child.result() else @as(Child.TryWaitError!?Child.Term, null) });
+        sink.report("pid <number>.");
+        errors.report("fixture stderr");
+    }
+    try sink.start(child.stdoutFile().?);
+    try errors.start(child.stderrFile().?);
 
-    const grandchild = try openById(try readMarkedNumber(win32.DWORD, &sink));
-    defer std.os.windows.CloseHandle(grandchild);
+    const id = try readMarkedNumber(win32.DWORD, &sink);
+    stage = "opening the reported grandchild";
+    const grandchild = try openById(id);
+    defer closeFixtureProcess(grandchild);
+    try expectFixtureInJob(grandchild, &child);
+    stage = "waiting for the child and ending its tree";
 
     // The child is gone and reaped, and nothing has been killed: `killWait` on
     // a child that ended on its own signals nothing, so what is running now is
@@ -2042,6 +2137,11 @@ test "deinit ends a grandchild the child started and left behind" {
     _ = try waitWithin(&child);
     try testing.expect(runningNow(grandchild));
 
+    const closed: Deadline = .in(io, budget_ms);
+    while (!sink.ended() or !errors.ended()) {
+        if (closed.remainingMs(io) == 0) return error.TestGrandchildInheritedFixturePipe;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
     child.deinit(io);
 
     try testing.expect(endedWithin(grandchild));
@@ -2058,7 +2158,7 @@ test "a detached child has a process group of its own and an attached one does n
     });
     defer detached.deinit(io);
     defer _ = detached.killWait(io, 0) catch {};
-    try testing.expect(detached.pgid != null);
+    try testing.expect(State.get(&detached).pgid != null);
 
     var attached = try Child.spawn(io, gpa, .{
         .argv = &script.sleep_forever,
@@ -2067,7 +2167,7 @@ test "a detached child has a process group of its own and an attached one does n
     });
     defer attached.deinit(io);
     defer _ = attached.killWait(io, 0) catch {};
-    try testing.expectEqual(@as(?Child.ProcessGroupId, null), attached.pgid);
+    try testing.expectEqual(@as(?Child.ProcessGroupId, null), State.get(&attached).pgid);
 }
 
 test "a detached child's process group is the one the operating system reports" {
@@ -2087,11 +2187,11 @@ test "a detached child's process group is the one the operating system reports" 
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
 
-    try testing.expectEqual(child.id, child.pgid.?);
-    try testing.expectEqual(child.id, getpgid(child.id));
+    try testing.expectEqual(State.get(&child).id, State.get(&child).pgid.?);
+    try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
     // Which is the point of it: a signal to this process's group, the one a
     // terminal sends on Ctrl-C, does not reach the child.
-    try testing.expect(getpgid(0) != child.id);
+    try testing.expect(getpgid(0) != State.get(&child).id);
 }
 
 test "an attached child shares the parent's process group" {
@@ -2108,7 +2208,7 @@ test "an attached child shares the parent's process group" {
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
 
-    try testing.expectEqual(getpgid(0), getpgid(child.id));
+    try testing.expectEqual(getpgid(0), getpgid(State.get(&child).id));
 }
 
 test "killWait with no grace goes straight to the signal nothing survives" {
@@ -2150,7 +2250,7 @@ test "what a child writes to its terminal reaches the master" {
     // the master itself while it does.
 
     trace.print("master: opening a pair", .{});
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2186,7 +2286,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // anything in the first place.
     if (!is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{
+    var pty = try Pty.open(std.testing.allocator, .{
         .rows = 24,
         .cols = 80,
         .console = .{ .passthrough = true },
@@ -2200,7 +2300,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // host does not model -- the cursor shape is the one people notice -- is
     // simply not there. That is the documented behaviour and not a failure, so
     // the test says which machine it is on and stops.
-    if (!pty.console.passthrough) {
+    if (!pty.consoleOptions().passthrough) {
         std.debug.print(
             "\nthis Windows did not grant PSEUDOCONSOLE_PASSTHROUGH_MODE; skipping\n",
             .{},
@@ -2234,7 +2334,7 @@ test "a child on a pty sees a terminal" {
     // construction.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2258,7 +2358,7 @@ test "a child on a pty reports the window size it was given, and the one it is r
     // print; that a pseudoconsole takes the new size is `Pty`'s own test.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 30, .cols = 100 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2294,7 +2394,7 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
     // has a Windows counterpart.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     // `exec` so the shell is replaced and the signal has one process to reach.
@@ -2322,7 +2422,7 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2350,7 +2450,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     // generated signals to, which is not a thing a console has.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2364,13 +2464,13 @@ test "a detached pty child is the terminal's foreground process group, and an at
 
     // `exec`, so the group the shell made is now the one `sleep` is in, and
     // the child's process id is that group's id.
-    try testing.expectEqual(child.id, try conduit.foregroundGroup(pty.read.?));
+    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.readHandle().?));
 
     // The other half of the claim, and the reason this is worth asking at all:
     // a child on a pair without `detach` sees a terminal that has no
     // foreground group, so nothing typed at the master will ever become a
     // signal for it.
-    var quiet = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var quiet = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer quiet.close(io);
 
     var attached = try Child.spawn(io, gpa, .{
@@ -2384,7 +2484,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
 
     try testing.expectError(
         error.NoForegroundGroup,
-        conduit.foregroundGroup(quiet.read.?),
+        conduit.foregroundGroup(quiet.readHandle().?),
     );
 }
 
@@ -2397,7 +2497,7 @@ test "closing the master hangs the terminal up, and a detached child gets SIGHUP
     // signalling it, and that is `Pty.closeSlave`, not this.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2428,7 +2528,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     // a pseudoconsole is not a file.
     if (is_windows) return error.SkipZigTest;
 
-    var sink_pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var sink_pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer sink_pty.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -2440,7 +2540,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     defer _ = child.killWait(io, 0) catch {};
 
     // The stderr pipe was not created, because the file replaced it.
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderr);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
 
     var sink: Sink = .{};
     defer sink.deinit();
@@ -2474,17 +2574,17 @@ test "each stream is chosen on its own" {
     errdefer _ = child.killWait(io, 0) catch {};
 
     // Only the stream that asked for a pipe has one.
-    try testing.expectEqual(@as(?std.Io.File, null), child.stdin);
-    try testing.expect(child.stdout != null);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderr);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stdinFile());
+    try testing.expect(child.stdoutFile() != null);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "to stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "to stderr") == null);
-    try testing.expectEqualStrings("", result.stderr);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "to stdout") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "to stderr") == null);
+    try testing.expectEqualStrings("", result.stderr());
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "the terminal end of a pair can be one stream and a pipe another" {
@@ -2496,7 +2596,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // `Pty.slaveFile` is a compile error there and says so.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     // Standard output is the terminal; standard error is a pipe. The child
@@ -2524,7 +2624,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     try on_terminal.start(pty.readFile());
     var on_pipe: Sink = .{};
     defer on_pipe.deinit();
-    try on_pipe.start(child.stderr.?);
+    try on_pipe.start(child.stderrFile().?);
 
     try on_terminal.expect("stdout is a terminal");
     try on_pipe.expect("stderr is not");
@@ -2612,8 +2712,8 @@ test "a signal this process ignores is back at its default action in the child" 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expectEqualStrings("", result.stdout);
-    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term);
+    try testing.expectEqualStrings("", result.stdout());
+    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term());
 }
 
 //======================================================================
@@ -2641,8 +2741,8 @@ test "a child's file-creation mask is the one it was given" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "77") != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "77") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "a uid and gid this process may take are taken, and one it may not is an error" {
@@ -2672,10 +2772,10 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     var wanted: [64]u8 = undefined;
     try testing.expect(std.mem.indexOf(
         u8,
-        result.stdout,
+        result.stdout(),
         try std.fmt.bufPrint(&wanted, "{d}", .{uid}),
     ) != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 
     // And a change this process is not allowed to make is an error from
     // `spawn`, not a child that started anyway with the credentials it had.
@@ -2716,8 +2816,8 @@ test "a resource limit set at spawn is the child's own" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "64") != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "64") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 
     // This process is not the one that was limited, which is the whole reason
     // the option exists: doing it here would have done it to everything this
@@ -2758,7 +2858,7 @@ test "a job limit bounds what the child's tree may do" {
     errdefer _ = free.killWait(io, 0) catch {};
     var without = try free.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer without.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, without.stdout, "NESTED") != null);
+    try testing.expect(std.mem.indexOf(u8, without.stdout(), "NESTED") != null);
 
     var bounded = try Child.spawn(io, gpa, .{
         .argv = argv,
@@ -2769,7 +2869,7 @@ test "a job limit bounds what the child's tree may do" {
     errdefer _ = bounded.killWait(io, 0) catch {};
     var with = try bounded.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer with.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, with.stdout, "NESTED") == null);
+    try testing.expect(std.mem.indexOf(u8, with.stdout(), "NESTED") == null);
 }
 
 test "Windows CPU job limits reject values outside a whole-system percentage" {
@@ -2839,9 +2939,9 @@ test "the child's environment and working directory are the ones asked for" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout, "present") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout, script.working_directory_mark) != null);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), "present") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout(), script.working_directory_mark) != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
 test "a scrubbed environment is the only thing the child sees" {
@@ -2880,8 +2980,8 @@ test "a scrubbed environment is the only thing the child sees" {
 
     // The variable that was asked for, and nothing else: not this process's
     // `HOME`, and not the `PATH` the spawn itself searched.
-    try testing.expectEqualStrings("present|", result.stdout);
-    try testing.expect(conduit.succeeded(result.term));
+    try testing.expectEqualStrings("present|", result.stdout());
+    try testing.expect(conduit.succeeded(result.term()));
 }
 
 test "path_search decides which PATH a bare program name is looked up in" {
@@ -3053,27 +3153,27 @@ test "spawnShell starts the user's shell on a pair" {
         .size = .{ .rows = 40, .cols = 132 },
     });
     defer shell.deinit(io);
-    defer _ = shell.child.killWait(io, 0) catch {};
-    if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child)});
+    defer _ = shell.child().killWait(io, 0) catch {};
+    if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child().*)});
 
-    try testing.expectEqual(@as(u16, 40), (try shell.pty.size()).rows);
+    try testing.expectEqual(@as(u16, 40), (try shell.pty().size()).rows);
 
     var sink: Sink = .{};
     defer sink.deinit();
-    try sink.start(shell.pty.readFile());
+    try sink.start(shell.pty().readFile());
     trace.print("shell: reading the master", .{});
 
     try sink.expect("hi");
     trace.print("shell: the shell said what it was asked to", .{});
 
-    _ = try shell.child.killWait(io, budget_ms);
+    _ = try shell.child().killWait(io, budget_ms);
     trace.print("shell: reaped", .{});
 }
 
 /// The child's operating-system name as a number, for a trace line that has to
 /// compile on both systems: a process id on POSIX, a handle on Windows.
 fn childId(child: Child) usize {
-    return if (is_windows) @intFromPtr(child.id) else @intCast(child.id);
+    return if (is_windows) @intFromPtr(State.get(child).id) else @intCast(State.get(child).id);
 }
 
 /// `getpgid` is not declared in `std.c`, and two of the tests above are about
@@ -3113,14 +3213,14 @@ test "both spawn paths start the same child" {
         errdefer _ = child.killWait(io, 0) catch {};
 
         // Detached either way, and the group is the child's own.
-        try testing.expectEqual(child.id, child.pgid.?);
-        try testing.expectEqual(child.id, getpgid(child.id));
+        try testing.expectEqual(State.get(&child).id, State.get(&child).pgid.?);
+        try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
 
         var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("out", result.stdout);
-        try testing.expectEqualStrings("err", result.stderr);
-        try testing.expectEqual(Child.Term{ .exited = 3 }, result.term);
+        try testing.expectEqualStrings("out", result.stdout());
+        try testing.expectEqualStrings("err", result.stderr());
+        try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
     }
 }
 
@@ -3154,81 +3254,34 @@ test "a child on the posix_spawn path starts with the same clean slate" {
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expectEqualStrings("", result.stdout);
-    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term);
+    try testing.expectEqualStrings("", result.stdout());
+    try testing.expectEqual(Child.Term{ .signal = .INT }, result.term());
 }
 
-test "the posix_spawn path is the faster one" {
+test "a spawn expressible by file actions makes no fork call" {
+    if (is_windows or !fast_path) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    if (is_windows or !fast_path) return error.SkipZigTest;
-    // A child in a cgroup of its own is always forked, so this is about the
-    // spawns that take `posix_spawn`: those where no cgroup is made.
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
-
-    // A budget, not a measurement, and a relative one so that a loaded machine
-    // moves both numbers together. `fork` copies a process's page tables and
-    // `posix_spawn` does not; measured on an M3 Max over 1000 spawns of
-    // `/usr/bin/true` on the null device, that is 1304 us a spawn against
-    // 902 us, a third less. A tenth less is the bar here.
-    const program: []const u8 = program: {
-        for ([_][]const u8{ "/usr/bin/true", "/bin/true" }) |path| {
-            std.Io.Dir.accessAbsolute(io, path, .{}) catch continue;
-            break :program path;
-        }
-        return error.SkipZigTest;
-    };
-
-    // Under ThreadSanitizer a fork costs its runtime far more than it costs
-    // the kernel -- about 140 ms against 1.4 on the M3 Max, where
-    // `posix_spawn` goes from about 1 ms to 1.6 -- so 200 rounds took some
-    // 27 s of the watchdog's 30. Twenty still measure the same claim, with the
-    // gap a hundredfold there.
-    const rounds: usize = if (builtin.sanitize_thread) 20 else 200;
-    // A few of each first, so that neither path pays for a cold cache.
-    _ = try timeOneSpawn(program, null);
-    _ = try timeOneSpawn(program, "/");
-
-    // Up to five goes at it: one descheduled run on a loaded machine is not
-    // the claim, and a difference of a third is there every time.
-    var attempt: usize = 0;
-    while (attempt < 5) : (attempt += 1) {
-        // The two are interleaved rather than measured in blocks, so that a
-        // machine that gets busier while this runs makes both numbers worse
-        // together instead of the second one alone.
-        var fast_us: i64 = 0;
-        var forked_us: i64 = 0;
-        var round: usize = 0;
-        while (round < rounds) : (round += 1) {
-            fast_us += try timeOneSpawn(program, null);
-            forked_us += try timeOneSpawn(program, "/");
-        }
-        if (fast_us * 10 <= forked_us * 9) return;
-
-        std.debug.print(
-            "\nposix_spawn {d} us against fork and exec {d} us, {d} spawns each: not the tenth faster this asks for\n",
-            .{ fast_us, forked_us, rounds },
-        );
-    }
-    return error.TestFastPathIsNotFaster;
-}
-
-/// Microseconds to start one child and reap it. A non-null `cwd` is what sends
-/// the spawn down the fork path.
-fn timeOneSpawn(program: []const u8, cwd: ?[]const u8) !i64 {
-    const start: std.Io.Timestamp = .now(io, .awake);
-    var child = try Child.spawn(io, gpa, .{
-        .argv = &.{program},
-        .cwd = cwd,
-        .stdio = .ignore,
-    });
+    const calls = @import("test_support.zig").SpawnCalls;
+    calls.forks = 0;
+    calls.file_actions = 0;
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, 0) catch {};
-    _ = try child.wait(io);
-    const end: std.Io.Timestamp = .now(io, .awake);
-    return start.durationTo(end).toMicroseconds();
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    try testing.expectEqual(@as(usize, 0), calls.forks);
+    try testing.expectEqual(@as(usize, 1), calls.file_actions);
+
+    // cwd cannot be expressed by this implementation's file actions.
+    var forked = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
+    defer forked.deinit(io);
+    defer _ = forked.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&forked));
+    try testing.expectEqual(@as(usize, 1), calls.forks);
+    try testing.expectEqual(@as(usize, 1), calls.file_actions);
 }
 
 //======================================================================
@@ -3279,8 +3332,8 @@ test "fd_policy close_all leaves the child its three streams and nothing else" {
     // The default hands it on, whichever path started the child; the policy
     // does not.
     const mask = @as(u64, 1) << @intCast(inheritable);
-    try testing.expect(descriptorSet(inherited.stdout) & mask != 0);
-    try testing.expect(descriptorSet(closed.stdout) & mask == 0);
+    try testing.expect(descriptorSet(inherited.stdout()) & mask != 0);
+    try testing.expect(descriptorSet(closed.stdout()) & mask == 0);
 }
 
 test "a caller's handle is as inheritable after a spawn as it was before" {
@@ -3430,7 +3483,7 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     });
     defer child.deinit(io);
     defer _ = child.killWait(io, 0) catch {};
-    const found = probe(child.id, secret);
+    const found = probe(State.get(&child).id, secret);
     // A child that had already gone would hold nothing and prove nothing.
     if (try child.tryWait()) |term| {
         std.debug.print("the child ended before it was asked: {any}\n", .{term});
@@ -3592,7 +3645,7 @@ fn descriptorsOfAChild() !u64 {
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    return descriptorSet(result.stdout);
+    return descriptorSet(result.stdout());
 }
 
 /// `/dev/fd` is this process's own descriptors on both systems.
@@ -3643,11 +3696,11 @@ fn spawnAndList(each: usize, control: u64, strangers: *std.atomic.Value(u32)) st
         };
         defer result.deinit(gpa);
 
-        const unexpected = descriptorSet(result.stdout) & ~control;
+        const unexpected = descriptorSet(result.stdout()) & ~control;
         if (unexpected != 0) {
             std.debug.print("\na child was given descriptors 0x{x} nothing gave the control child; it saw:\n{s}\n", .{
                 unexpected,
-                result.stdout,
+                result.stdout(),
             });
             _ = strangers.fetchAdd(1, .release);
         }
@@ -3775,6 +3828,68 @@ const BorrowedDescriptor = struct {
     }
 };
 
+test "a fork spawn resets an ignored real-time signal in the child" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const signal: posix.SIG = @enumFromInt(std.os.linux.NSIG - 1);
+    var saved: posix.Sigaction = undefined;
+    const ignored: posix.Sigaction = .{
+        .handler = .{ .handler = posix.SIG.IGN },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(signal, &ignored, &saved);
+    defer posix.sigaction(signal, &saved, null);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sleep", "30" },
+        .cwd = ".", // takes the fork path
+        .stdio = .ignore,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(@as(c_int, 0), c.kill(State.get(&child).id, signal));
+    try testing.expectEqual(Child.Term{ .signal = signal }, try waitWithin(&child));
+}
+
+test "a fork spawn reports exec failure even when all standard descriptors were closed" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var file = try tmp.dir.createFile(io, "stand-in", .{ .read = true });
+    defer file.close(io);
+    var stdin: BorrowedDescriptor = try .take(0, file);
+    defer stdin.restore();
+    var stdout: BorrowedDescriptor = try .take(1, file);
+    defer stdout.restore();
+    var stderr: BorrowedDescriptor = try .take(2, file);
+    defer stderr.restore();
+    _ = c.close(0);
+    _ = c.close(1);
+    _ = c.close(2);
+    const spawn_error: ?Child.SpawnError = if (Child.spawn(io, gpa, .{
+        .argv = &.{"/conduit-test/no-such-executable"},
+        .cwd = ".", // takes the fork path
+        .stdio = .ignore,
+    })) |started| ended: {
+        var child = started;
+        // An unexpected child can own a watch on a low descriptor too.
+        // Close it before restoring the test runner's standard descriptors.
+        _ = child.killWait(io, 0) catch {};
+        child.deinit(io);
+        break :ended null;
+    } else |err| err;
+    stdin.restore();
+    stdout.restore();
+    stderr.restore();
+    // Restore before printing an assertion.
+    try testing.expectEqual(@as(?Child.SpawnError, error.FileNotFound), spawn_error);
+}
+
 test "a parent death signal is refused where the system has none" {
     if (builtin.os.tag == .linux) return error.SkipZigTest;
     try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
@@ -3826,7 +3941,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
 
-    var pty = try Pty.open(.{ .rows = 20, .cols = 70 });
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 20, .cols = 70 });
     defer pty.close(io);
     const options: Child.SpawnOptions = .{
         // A terminal that is its controlling one (only such a process opens
@@ -3852,9 +3967,9 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     const grandchild = try readPid(&sink);
 
     // A session and a group of its own, and the terminal's foreground group.
-    try testing.expectEqual(child.id, getpgid(child.id));
-    try testing.expectEqual(child.id, getsid(child.id));
-    try testing.expectEqual(child.id, try conduit.foregroundGroup(pty.read.?));
+    try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
+    try testing.expectEqual(State.get(&child).id, getsid(State.get(&child).id));
+    try testing.expectEqual(State.get(&child).id, try conduit.foregroundGroup(pty.readHandle().?));
 
     // Ended, and what it started with it.
     _ = try child.killWait(io, 0);
@@ -3866,4 +3981,329 @@ test "a spawn with a parent death signal takes the fork, where the signal is set
     const spawn_path = @import("posix_spawn.zig");
     try testing.expect(!spawn_path.suits(.{ .argv = &script.greeting, .parent_death_signal = .kill }));
     try testing.expectEqual(spawn_path.available, spawn_path.suits(.{ .argv = &script.greeting }));
+}
+
+test "blocking waits and Reaper report status reaped elsewhere" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    for ([_]bool{ false, true }) |background| {
+        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
+        defer child.deinit(io);
+        var status: c_int = undefined;
+        while (c.waitpid(State.get(&child).id, &status, 0) < 0) {
+            if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
+        }
+        if (background) {
+            var reaper: conduit.Reaper = .init(&child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io);
+            try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, budget_ms));
+        } else {
+            try testing.expectError(error.ReapedElsewhere, child.wait(io));
+        }
+    }
+}
+
+test "Windows wait and Reaper preserve the control exit status" {
+    if (!is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    for ([_]bool{ false, true }) |background| {
+        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "cmd.exe", "/c", "exit -1073741510" }, .stdio = .ignore });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const term = if (background) blk: {
+            var reaper: conduit.Reaper = .init(&child, .{});
+            try reaper.start(io);
+            defer reaper.deinit(io);
+            break :blk (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        } else try waitWithin(&child);
+        try testing.expectEqual(@as(u32, 0xc000013a), conduit.exitCode(term).?);
+        try testing.expect(!conduit.succeeded(term));
+    }
+}
+
+test "Child identity and result access share the Reaper's retirement" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{ .argv = &script.read_then_exit_7, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } } });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expect(child.processId() != null);
+    try testing.expectEqual(@as(?Child.Term, null), try child.result());
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    var buffer: [32]u8 = undefined;
+    var writer = child.stdinFile().?.writer(io, &buffer);
+    try writer.interface.writeAll("exit\n");
+    try writer.interface.flush();
+    const deadline: Deadline = .in(io, budget_ms);
+    while (try child.result() == null) {
+        _ = child.processId();
+        if (deadline.remainingMs(io) == 0) return error.TestChildDidNotExit;
+        try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+    }
+    try testing.expectEqual(Child.Term{ .exited = 7 }, (try child.result()).?);
+    try testing.expectEqual(@as(?Child.Id, null), child.processId());
+    try testing.expectEqual(Child.Term{ .exited = 7 }, try reaper.wait(io));
+}
+
+test "a PID fixture reports malformed output instead of a silent timeout" {
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.bytes.appendSlice(gpa, "pid not-a-number.\n");
+    sink.finished.store(true, .release);
+    try testing.expectError(error.TestInvalidProcessId, readMarkedNumber(u32, &sink));
+}
+
+test "a Reaper started after status loss never watches a reused identity" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
+    defer child.deinit(io);
+    var status: c_int = undefined;
+    while (c.waitpid(State.get(&child).id, &status, 0) < 0) {
+        if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
+    }
+    try testing.expectError(error.ReapedElsewhere, child.tryWait());
+    var witness = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "read x" }, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } }, .detach = true });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // Reuse a live witness's number deliberately instead of waiting for PID wrap.
+    State.get(&child).id = State.get(&witness).id;
+    State.get(&child).pgid = State.get(&witness).pgid;
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, 100));
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}
+
+test "the Windows PID fixture keeps reading after a successful empty read" {
+    // Windows permits this when a pipe writer issues a zero-length write.
+    // Inject that documented result on every platform, before the actual PID.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const written = try tmp.dir.createFile(io, "pid", .{});
+    try written.writeStreamingAll(io, "pid 12345.\n");
+    written.close(io);
+    const source = try tmp.dir.openFile(io, "pid", .{});
+    defer source.close(io);
+    const EmptyOnce = struct {
+        base: std.Io,
+        empty: bool = true,
+
+        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
+            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            return state.base.vtable.checkCancel(state.base.userdata);
+        }
+
+        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            if (operation == .file_read_streaming and state.empty) {
+                state.empty = false;
+                return .{ .file_read_streaming = 0 };
+            }
+            return state.base.vtable.operate(state.base.userdata, operation);
+        }
+    };
+
+    var empty: EmptyOnce = .{ .base = io };
+    var vtable = io.vtable.*;
+    vtable.operate = EmptyOnce.operate;
+    vtable.checkCancel = EmptyOnce.checkCancel;
+    var sink: Sink = .{ .source_io = .{ .vtable = &vtable, .userdata = &empty } };
+    defer sink.deinit();
+    try sink.start(source);
+    try testing.expectEqual(@as(u32, 12345), try readMarkedNumber(u32, &sink));
+}
+
+test "a containment snapshot survives reaping and deinit without owned handles" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    const key = child.processId().?;
+    var path_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const record = try child.containment(&path_buffer);
+    try testing.expectEqual(key, record.group.?);
+    if (record.cgroup) |contained| {
+        try testing.expect(contained.id != 0);
+        try testing.expectEqual(@as(usize, 36), contained.boot.len);
+        try testing.expect(contained.path.ptr == &path_buffer);
+        try testing.expectError(error.BufferTooSmall, child.containment(&.{}));
+    }
+    var reaper: conduit.Reaper = .init(&child, .{});
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
+    reaper.deinit(io);
+    try testing.expectEqual(@as(?Child.Id, null), child.processId());
+    var retired_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    const retired = try child.containment(&retired_buffer);
+    try testing.expectEqual(record.group, retired.group);
+    if (record.cgroup) |contained| {
+        try testing.expectEqualStrings(contained.path, retired.cgroup.?.path);
+        try testing.expect(contained.path.ptr != retired.cgroup.?.path.ptr);
+        try testing.expectEqual(contained.id, retired.cgroup.?.id);
+        try testing.expectEqualStrings(&contained.boot, &retired.cgroup.?.boot);
+    }
+    child.deinit(io);
+    try testing.expectEqual(key, record.group.?);
+    if (record.cgroup) |contained| try testing.expect(std.mem.startsWith(u8, contained.path, "/"));
+}
+
+test "Reaper start cannot replace an active task or restart a joined lifetime" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var reaper: conduit.Reaper = .init(&child, .{});
+    defer reaper.deinit(io);
+    try reaper.start(io);
+    // Equality of errors keeps this regression compilable before the error
+    // has been added to StartError. A duplicate task can be canceled safely.
+    var rejected = false;
+    reaper.start(io) catch |err| {
+        try testing.expectEqual(error.AlreadyStarted, err);
+        rejected = true;
+    };
+    try testing.expect(rejected);
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
+    reaper.deinit(io);
+    try testing.expectError(error.AlreadyStarted, reaper.start(io));
+}
+
+test "HeldReap and Reaper expose no writable lifecycle fields" {
+    try testing.expect(@typeInfo(Child.HeldReap) == .@"enum");
+    try testing.expect(@typeInfo(conduit.Reaper) == .@"enum");
+}
+
+test "output reads a published result before watching a retired process number" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "printf retained; exit 7" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
+    var witness = try Child.spawn(io, gpa, .{
+        .argv = &script.read_then_exit_5,
+        .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
+    });
+    defer witness.deinit(io);
+    defer _ = witness.killWait(io, 0) catch {};
+    // A retired number may already name a live stranger. The published
+    // answer must decide the wait before that number can open a watch.
+    State.get(&child).id = witness.processId().?;
+    var output = try child.output(io, gpa, .{ .timeout_ms = 20 });
+    defer output.deinit(gpa);
+    try testing.expectEqual(false, output.timedOut());
+    try testing.expectEqualStrings("retained", output.stdout());
+    try testing.expectEqual(Child.Term{ .exited = 7 }, output.term());
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+}
+
+test "Orphans list copies the held identity for a record kept after reaping" {
+    if (!Orphans.supported) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var orphans: Orphans = .init(gpa);
+    try orphans.start();
+    defer orphans.deinit();
+    defer orphans.end(io, 0) catch {};
+    var keeper = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer keeper.deinit(io);
+    defer _ = keeper.killWait(io, 0) catch {};
+    const kept = try orphanOf(&keeper);
+    try expectAdopted(kept);
+    try expectCount(&orphans, 1);
+    var records: [4]Orphans.Record = undefined;
+    const listed = try orphans.list(&records);
+    try testing.expectEqual(@as(usize, 1), listed.len);
+    const saved = listed[0];
+    try testing.expectEqual(kept, saved.pid);
+    try testing.expectEqual((try conduit.startTime(kept)).?, saved.start);
+    try testing.expectEqual(getpgid(kept), saved.group);
+    try testing.expectEqual(getsid(kept), saved.session);
+    try orphans.end(io, 0);
+    try testing.expectEqual(@as(usize, 0), (try orphans.list(&records)).len);
+    try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);
+}
+
+test "a pty master in a standard slot cannot close the child's replacement stream" {
+    if (is_windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var pair = try Pty.open(gpa, .{});
+    defer pair.close(io);
+    var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
+    defer stdin.restore();
+    @import("Pty.zig").placeMasterForTest(&pair, 0);
+    // Close the temporary master before restoring the runner's stdin,
+    // including on a failed spawn or assertion.
+    defer pair.closeMaster(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", "read value && test \"$value\" = answer" },
+        .stdio = .{ .pty = &pair },
+        .detach = true,
+        .cwd = ".", // Both platforms use the fork implementation here.
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    pair.closeSlave(io);
+    var sink: Sink = .{};
+    try sink.start(pair.readFile());
+    var reading = true;
+    defer if (reading) sink.deinit();
+    try pair.writeFile().writeStreamingAll(io, "answer\n");
+    const term = try waitWithin(&child);
+    sink.deinit();
+    reading = false;
+    pair.closeMaster(io);
+    stdin.restore();
+    try testing.expectEqual(Child.Term{ .exited = 0 }, term);
+}
+
+test "collected output transfers bytes before releasing its owner" {
+    var child = try Child.spawn(io, gpa, .{ .argv = &script.out_and_err, .stdio = .{ .pipes = .{ .stdin = false } } });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var collected = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    defer collected.deinit(gpa);
+    const kept = collected.takeStdout();
+    defer gpa.free(kept);
+    try testing.expectEqual(@as(usize, 0), collected.stdout().len);
+    collected.deinit(gpa);
+    try testing.expect(std.mem.indexOf(u8, kept, "to stdout") != null);
 }

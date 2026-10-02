@@ -62,10 +62,11 @@ pub fn inherit(
 /// "remove it" and "it was never there" are the same thing in an environment
 /// built from nothing, which makes one list usable with both functions.
 ///
-/// With `Child.SpawnOptions.path_search` left at its default, a child with no
-/// `PATH` also means a bare `argv[0]` is not found. `.parent_environ` is the
-/// setting for a scrubbed environment whose program should still be looked up
-/// the ordinary way.
+/// With `Child.SpawnOptions.path_search` left at its default, a missing
+/// `PATH` uses the POSIX default directories; Windows still checks its fixed
+/// program directories. An empty `PATH` searches the child's current directory
+/// on POSIX. `.parent_environ` selects the parent's `PATH` on POSIX, when a
+/// scrubbed environment should still find a program installed there.
 pub fn only(
     allocator: Allocator,
     variables: []const Override,

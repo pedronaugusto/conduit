@@ -43,7 +43,7 @@ pub fn main() !void {
     // Everything it writes to its terminal, and how it ends, with a bound on
     // the whole thing. A terminal is one stream, so a child on a pair has no
     // separate standard error to collect.
-    var result = try shell.child.output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
+    var result = try shell.child().output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
     defer result.deinit(gpa);
 
     // --- README:usage ---
@@ -52,8 +52,8 @@ pub fn main() !void {
     var stdout = std.Io.File.stdout().writerStreaming(io, &stdout_buffer);
     const w = &stdout.interface;
     try w.print("the shell said:\n", .{});
-    var lines = std.mem.splitScalar(u8, std.mem.trim(u8, result.stdout, "\r\n"), '\n');
+    var lines = std.mem.splitScalar(u8, std.mem.trim(u8, result.stdout(), "\r\n"), '\n');
     while (lines.next()) |line| try w.print("  {s}\n", .{std.mem.trimEnd(u8, line, "\r")});
-    try w.print("and ended: {any}\n", .{result.term});
+    try w.print("and ended: {any}\n", .{result.term()});
     try w.flush();
 }

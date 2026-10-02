@@ -9,9 +9,9 @@ const std = @import("std");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
+const State = @import("child_state.zig");
 const command_line = @import("command_line.zig");
-const Pty = @import("Pty.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("trace.zig");
 const win32 = @import("win32.zig");
@@ -22,7 +22,7 @@ const SpawnOptions = Child.SpawnOptions;
 const file = @import("handles.zig").file;
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
+pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!Child {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -120,7 +120,10 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     plan.closeChildSide(io);
 
-    return .{
+    state.* = .{
+        .allocator = state.allocator,
+        .descendants = options.descendants,
+        .process_id = information.dwProcessId,
         .id = information.hProcess,
         .thread = information.hThread,
         .job = job.handle,
@@ -132,6 +135,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
         .pgid = if (options.detach) information.dwProcessId else null,
         .forks = {},
         .cgroup = {},
+        .term = null,
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -139,18 +143,18 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             .pty => |pty| pty.master(),
             else => null,
         },
-        .term = null,
     };
+    return State.owner(state);
 }
 
 /// Says what the child is attached to or handed, in the two records
 /// `CreateProcessW` takes them in.
 ///
 /// A pseudoconsole is attached through an attribute list rather than through
-/// the standard handles, and the two are mutually exclusive:
-/// `STARTF_USESTDHANDLES` alongside `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` is
-/// documented as unsupported. Nothing needs to be inheritable in that case
-/// either, which is why `inheritHandles` differs.
+/// the standard handles. Naming a standard handle alongside a pseudoconsole
+/// is unsupported; `STARTF_USESTDHANDLES` with three null handles keeps the
+/// parent's streams out. Nothing needs to be inheritable in that case either,
+/// which is why `inheritHandles` differs.
 fn describeChild(
     arena: Allocator,
     options: SpawnOptions,
@@ -161,7 +165,7 @@ fn describeChild(
 ) SpawnError!void {
     switch (options.stdio) {
         .pty => |pty| {
-            const console = pty.slave.?;
+            const console = pty.slaveHandle().?;
             var list = try AttributeList.init(arena, 1);
             try list.setPseudoConsole(console);
             if (trace.enabled()) {
@@ -319,7 +323,7 @@ fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
     // choices remain unsupported rather than being silently treated as it.
     if (options.path_search != .child_environ) return error.Unsupported;
 
-    if (isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
+    if (windows_search.isBatchFile(options.argv[0])) return error.UnsupportedBatchFile;
 
     // A pseudoconsole is attached through the attribute list, and Windows
     // documents `STARTF_USESTDHANDLES` as unsupported alongside it -- so there
@@ -739,26 +743,6 @@ const AttributeList = struct {
 };
 
 //======================================================================
-// The program.
-//======================================================================
-
-/// Whether the program is a batch script, which this package refuses to run.
-///
-/// `cmd.exe` re-parses the command line of a `.bat` or `.cmd` with rules no
-/// argument serialisation survives, so an argument containing the right
-/// characters becomes a second command. Refusing is the only honest answer for
-/// an API whose argument list is data; a caller who wants a script can invoke
-/// `cmd.exe /c` themselves and take responsibility for what they pass it.
-fn isBatchFile(program: []const u8) bool {
-    return endsWithIgnoringCase(program, ".bat") or endsWithIgnoringCase(program, ".cmd");
-}
-
-fn endsWithIgnoringCase(haystack: []const u8, suffix: []const u8) bool {
-    if (haystack.len < suffix.len) return false;
-    return std.ascii.eqlIgnoreCase(haystack[haystack.len - suffix.len ..], suffix);
-}
-
-//======================================================================
 // Errors.
 //======================================================================
 
@@ -778,17 +762,4 @@ fn createError() SpawnError {
         .MAX_THRDS_REACHED => error.ResourceLimitReached,
         else => |err| win32.unexpected(err),
     };
-}
-
-//======================================================================
-// Tests.
-//======================================================================
-
-const testing = std.testing;
-
-test "batch files are recognised whatever their case" {
-    try testing.expect(isBatchFile("go.bat"));
-    try testing.expect(isBatchFile("C:\\x\\GO.CMD"));
-    try testing.expect(!isBatchFile("go.exe"));
-    try testing.expect(!isBatchFile("bat"));
 }

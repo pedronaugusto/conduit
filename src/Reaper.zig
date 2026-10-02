@@ -41,16 +41,15 @@
 //! enough. Only one of them is inside the operating system's wait at a time,
 //! and the one that is publishes the term to the rest — so `tryWait` answers
 //! `null` while this holds the wait, and `killWait` returns the term this
-//! task reaped rather than asking for a second one. `Child.term` documents
+//! task reaped rather than asking for a second one. `Child.result` documents
 //! the handshake.
-
-const Reaper = @This();
 
 const builtin = @import("builtin");
 const std = @import("std");
+const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
@@ -59,364 +58,604 @@ const tree = if (is_windows) struct {} else @import("tree.zig");
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
 
 const Term = Child.Term;
+const Deadline = @import("deadline.zig").Deadline;
 
-/// The child being waited for. Borrowed.
-child: *Child,
-options: Options,
-/// The task running the wait, and the one `stop` insists on.
-group: std.Io.Group,
-/// `running`, a term encoded by `encode`, or an error encoded by
-/// `encodeError`. Written once by the task and read by anyone.
-state: std.atomic.Value(u64),
-/// Set once `state` holds the answer, whatever it is.
-answered: std.Io.Event,
-/// Whether `stop` has been asked, so that a second request does not insist
-/// a second time.
-stopping: std.atomic.Value(bool),
-/// POSIX: a pipe whose reading end the task waits on beside the child, and
-/// which `deinit` writes to. The wait on the child is not a cancelation point
-/// and has no deadline, so this is what ends it early. `null` until `start`,
-/// and where a pipe could not be had.
-wake: if (is_windows) void else ?[2]posix.fd_t,
+// Published before signalling, and retained until the held reap ends the tree.
+// Only the small deadline snapshot is under this lock; no I/O is done in it.
+const Stop = struct {
+    mutex: std.atomic.Mutex = .unlocked,
+    deadline: ?Deadline = null,
 
-pub const Options = struct {
-    /// End what the child leaves running when it ends, and reap the child only
-    /// once that is done.
-    ///
-    /// **Linux, for a child in a cgroup of its own** (`Child.cgroup`, detached
-    /// or not): once the child has ended, and before it is reaped, whatever
-    /// is still running in the cgroup is asked to end with `SIGTERM`, given
-    /// `tree_grace_ms`, and ended with `cgroup.kill` if it has not — however
-    /// it had changed its group or session, and orphaned or not.
-    ///
-    /// **POSIX otherwise**, for a child spawned with `detach`: once the child has
-    /// ended, and before it is reaped, what is left in its process group is
-    /// asked to end with `SIGTERM`, given `tree_grace_ms` to do so, and sent
-    /// `SIGKILL` if it has not. The child, ended but not reaped, still holds
-    /// the group's id, so the signal cannot reach a group that has since been
-    /// given the same number. A descendant that left the group before the
-    /// child ended is related to nothing any more and is not reached, which is
-    /// the limit `Child.kill` states too; Linux and Darwin are asked whether
-    /// the group is empty, and elsewhere what is left is sent `SIGKILL` at
-    /// once. A child that was not detached has no group of its own, and
-    /// nothing is signalled for it. The wait needs a handle on the child's
-    /// end (`waitTimeout` says which), and without one the child is reaped
-    /// as it would have been and nothing is signalled.
-    ///
-    /// **Windows**: the job the child was put in is ended as soon as the
-    /// child is reaped. There is no request there a process outside the
-    /// child's console group can catch, so there is no grace to give.
-    ///
-    /// The term published is the child's own, however long its tree took.
-    end_tree: bool = false,
-    /// With `end_tree`, how long what the child left gets between being asked
-    /// to end and being made to.
-    tree_grace_ms: u32 = 1000,
+    fn lock(stop: *Stop) void {
+        while (!stop.mutex.tryLock()) std.Thread.yield() catch {};
+    }
+
+    fn request(stop: *Stop, io: std.Io, grace_ms: u32) bool {
+        const deadline: Deadline = .in(io, grace_ms);
+        stop.lock();
+        defer stop.mutex.unlock();
+        if (grace_ms != 0 and stop.deadline != null) return false;
+        stop.deadline = deadline;
+        return true;
+    }
+
+    fn remaining(stop: *Stop, io: std.Io) ?u32 {
+        stop.lock();
+        const deadline = stop.deadline;
+        stop.mutex.unlock();
+        return if (deadline) |at| at.remainingMs(io) else null;
+    }
 };
 
-/// A `Reaper` that is not waiting for anything yet. Call `start` to put the
-/// wait in flight.
-pub fn init(child: *Child, options: Options) Reaper {
-    return .{
-        .child = child,
-        .options = options,
-        .group = .init,
-        .state = .init(running),
-        .answered = .unset,
-        .stopping = .init(false),
-        .wake = if (is_windows) {} else null,
-    };
-}
+const Implementation = struct {
+    /// The child being waited for. Borrowed.
+    child: *Child,
+    options: Reaper.Options,
+    /// The task running the wait, and the one `stop` insists on.
+    group: std.Io.Group,
+    /// `running`, a term encoded by `encode`, or an error encoded by
+    /// `encodeError`. Written once by the task and read by anyone.
+    state: std.atomic.Value(u64),
+    /// Set once `state` holds the answer, whatever it is.
+    answered: std.Io.Event,
+    /// The first stop deadline; force requests replace it with immediate expiry.
+    stop: Stop,
+    /// POSIX: a pipe whose reading end the task waits on beside the child, and
+    /// which `deinit` writes to. The wait on the child is not a cancelation point
+    /// and has no deadline, so this is what ends it early. `null` until `start`,
+    /// and where a pipe could not be had.
+    wake: if (is_windows) void else ?[2]posix.fd_t,
 
-pub const StartError = std.Io.ConcurrentError;
+    lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
+};
 
-/// Puts the wait in flight.
-///
-/// The task must be able to run alongside the caller, so an `std.Io`
-/// implementation with no concurrency to offer fails here rather than
-/// deadlocking later. Calling this twice on one `Reaper` starts a second wait,
-/// which is a bug: the second one finds no child.
-pub fn start(reaper: *Reaper, io: std.Io) StartError!void {
-    // Without a pipe the wait falls back to the standard library's, which is
-    // a cancelation point of its own: the wake is how a better wait is ended,
-    // not a condition of waiting at all.
-    if (!is_windows) reaper.wake = handles.pipe() catch null;
-    return reaper.group.concurrent(io, run, .{ reaper, io });
-}
+pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
+    _,
 
-pub const ExitError = Child.WaitError;
-
-/// How the child ended, or `null` while the wait is still running.
-///
-/// Never blocks. A `null` is a snapshot and may be stale by the time the caller
-/// acts on it; a term or error is final.
-pub fn exit(reaper: *const Reaper) ExitError!?Term {
-    const state = reaper.state.load(.acquire);
-    if (state == running) return null;
-    return @as(?Term, try decode(state));
-}
-
-/// How the child ended, once it has: blocks until the task has the answer.
-///
-/// This waits on the answer rather than on the child, so any number of tasks
-/// may call it at once, and none of them asks the operating system anything.
-/// It is a cancelation point. A `Reaper` that was never started never
-/// answers.
-pub fn wait(reaper: *Reaper, io: std.Io) ExitError!Term {
-    try reaper.answered.wait(io);
-    return (try reaper.exit()).?;
-}
-
-pub const WaitTimeoutError = ExitError;
-
-/// `wait`, for at most `timeout_ms`: `null` if the child has not ended by
-/// then.
-pub fn waitTimeout(reaper: *Reaper, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
-    const deadline: std.Io.Clock.Timestamp = .fromNow(io, .{
-        .raw = .fromMilliseconds(timeout_ms),
-        .clock = .awake,
-    });
-    while (true) {
-        reaper.answered.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
-            // A wakeup before the deadline is spurious; one after it is the
-            // answer that there is none yet.
-            error.Timeout => if (deadline.durationFromNow(io).raw.nanoseconds > 0) continue else return reaper.exit(),
-            error.Canceled => return error.Canceled,
-        };
-        return reaper.exit();
+    fn inner(reaper: *Reaper) *Implementation {
+        return @ptrCast(@alignCast(reaper)); // safe: init writes this inline state; enum size and alignment hold the implementation.
     }
-}
 
-/// Asks the child to end, and makes it if it has not within `grace_ms`.
-///
-/// `.terminate` now and `.kill` once the grace has passed, each of them
-/// `Child.kill`'s and reaching what `Child.kill` reaches. A `grace_ms` of zero
-/// is `.kill` now. It never blocks: the grace is waited out on this
-/// `Reaper`'s task, and ends early the moment the child does.
-///
-/// Only the first request with a grace counts. A second one would either
-/// wait longer than the first, which it cannot, or less, which is a request
-/// with a grace of zero — and that one is always sent. A signal that cannot
-/// be delivered is not reported: the child has ended, or is ending, and the
-/// term says how.
-pub fn stop(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
-    if (grace_ms == 0) {
-        reaper.child.kill(.kill) catch {};
-        return;
+    fn innerConst(reaper: *const Reaper) *const Implementation {
+        return @ptrCast(@alignCast(reaper)); // safe: borrows the same initialized inline state without copying it.
     }
-    if (reaper.stopping.swap(true, .acq_rel)) return;
-    reaper.child.kill(.terminate) catch {};
-    reaper.group.concurrent(io, insist, .{ reaper, io, grace_ms }) catch {
-        // No task to wait out the grace on: insisting now is the one answer
-        // that still ends the child.
-        reaper.child.kill(.kill) catch {};
-    };
-}
 
-fn insist(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
-    const term = reaper.waitTimeout(io, grace_ms) catch |err| switch (err) {
-        // `deinit`: the owner is done with this child.
-        error.Canceled => return,
-        // An answer, if an unhappy one: the child is no longer waited for.
-        else => return,
+    pub const Options = struct {
+        /// End what the child leaves running when it ends, and reap the child only
+        /// once that is done.
+        ///
+        /// **Linux, for a child in a cgroup of its own** (detached
+        /// or not): once the child has ended, and before it is reaped, whatever
+        /// is still running in the cgroup is asked to end with `SIGTERM`, given
+        /// `tree_grace_ms`, and ended with `cgroup.kill` if it has not — however
+        /// it had changed its group or session, and orphaned or not.
+        ///
+        /// **POSIX otherwise**, for a child spawned with `detach`: once the child has
+        /// ended, and before it is reaped, what is left in its process group is
+        /// asked to end with `SIGTERM`, given `tree_grace_ms` to do so, and sent
+        /// `SIGKILL` if it has not. The child, ended but not reaped, still holds
+        /// the group's id, so the signal cannot reach a group that has since been
+        /// given the same number. A descendant that left the group before the
+        /// child ended is related to nothing any more and is not reached, which is
+        /// the limit `Child.kill` states too; Linux and Darwin are asked whether
+        /// the group is empty, and elsewhere what is left is sent `SIGKILL` at
+        /// once. A child that was not detached has no group of its own, and
+        /// nothing is signalled for it. The wait needs a handle on the child's
+        /// end (`waitTimeout` says which), and without one the child is reaped
+        /// as it would have been and nothing is signalled.
+        ///
+        /// **Windows**: the job the child was put in is ended as soon as the
+        /// child is reaped. There is no request there a process outside the
+        /// child's console group can catch, so there is no grace to give.
+        ///
+        /// The term published is the child's own, however long its tree took.
+        end_tree: bool = false,
+        /// With `end_tree`, how long what the child left gets between being asked
+        /// to end and being made to.
+        tree_grace_ms: u32 = 1000,
     };
-    if (term == null) reaper.child.kill(.kill) catch {};
-}
 
-/// Stops waiting and releases the task.
-///
-/// If the child has already ended this returns as soon as the task notices. If
-/// it has not, the task is told to go — and any insisting `stop` had yet to
-/// do goes with it — so a program that wants the child gone should see it
-/// gone first, with `stop` and `wait`.
-///
-/// Idempotent.
-pub fn deinit(reaper: *Reaper, io: std.Io) void {
-    if (!is_windows) if (reaper.wake) |ends| {
-        _ = c.write(ends[1], "x", 1);
-    };
-    reaper.group.cancel(io);
-    if (!is_windows) if (reaper.wake) |ends| {
-        _ = c.close(ends[0]);
-        _ = c.close(ends[1]);
-        reaper.wake = null;
-    };
-}
-
-fn run(reaper: *Reaper, io: std.Io) void {
-    const result = reaper.reap(io);
-    reaper.state.store(if (result) |term| encode(term) else |err| encodeError(err), .release);
-    reaper.answered.set(io);
-}
-
-fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
-    if (is_windows) {
-        const term = try reaper.child.wait(io);
-        if (reaper.options.end_tree) if (reaper.child.job) |job| {
-            _ = win32.TerminateJobObject(job, 1);
+    /// A `Reaper` that is not waiting for anything yet. Call `start` to put the
+    /// wait in flight.
+    pub fn init(child: *Child, options: Options) Reaper {
+        var reaper: Reaper = undefined;
+        reaper.inner().* = .{
+            .child = child,
+            .options = options,
+            .group = .init,
+            .state = .init(running),
+            .answered = .unset,
+            .stop = .{},
+            .wake = if (is_windows) {} else null,
+            .lifetime = .init(.ready),
         };
-        return term;
+        return reaper;
     }
-    const wake = reaper.wake orelse return reaper.child.wait(io);
-    // Held from here to the reap, as any wait in flight holds it: so the child
-    // ended is still the child's, unreaped, while its group is ended below.
-    const held = reaper.child.holdReap() orelse return reaper.child.wait(io);
-    defer held.release();
-    if (wait_for.Watch.open(reaper.child.id)) |watch| {
-        defer watch.close();
-        while (true) switch (watch.endedOrWoken(wake[0], null)) {
-            .ended => break,
-            .woken => return error.Canceled,
-            // a signal, not the end: ask again
-            .timed_out => {},
-        };
-    } else {
-        // No watch. Darwin refuses one on a child that has already ended --
-        // one that ended before this task first ran -- and some systems have
-        // none at all. Either way the end is asked for without reaping, so
-        // that what the child left in its group can still be ended by the id
-        // the child holds. Where even that cannot be asked, the wait is the
-        // standard library's, and the group is left as it is.
-        while (true) switch (wait_for.endedUnreaped(reaper.child.id)) {
-            .ended => break,
-            .running => if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled,
-            .unknown => return held.wait(io),
-        };
+
+    pub const StartError = std.Io.ConcurrentError || error{AlreadyStarted};
+
+    /// Puts the wait in flight.
+    ///
+    /// The task must be able to run alongside the caller, so an `std.Io`
+    /// implementation with no concurrency to offer fails here rather than
+    /// deadlocking later. A successful start consumes this lifetime: another start,
+    /// including after deinit, returns AlreadyStarted. A failed concurrency
+    /// attempt releases its resources and may be retried before deinit.
+    pub fn start(reaper: *Reaper, io: std.Io) StartError!void {
+        if (reaper.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null)
+            return error.AlreadyStarted;
+        errdefer reaper.inner().lifetime.store(.ready, .release);
+        // Without a pipe the wait falls back to Child.wait, which is
+        // a cancelation point of its own: the wake is how a better wait is ended,
+        // not a condition of waiting at all.
+        if (!is_windows) reaper.inner().wake = handles.pipe() catch null;
+        errdefer reaper.closeWake();
+        return reaper.inner().group.concurrent(io, run, .{ reaper, io });
     }
-    // Ended, and not yet reaped: the group's id is still the child's, and
-    // what is left in the group can be addressed by it. A child in a cgroup
-    // of its own has what it left in there, wherever its group went.
-    if (reaper.options.end_tree) {
-        if (reaper.child.cgroup.active()) {
-            if (!reaper.endContained(wake[0])) return error.Canceled;
-        } else if (reaper.child.pgid) |pgid| {
-            if (!reaper.endGroup(pgid, wake[0])) return error.Canceled;
+
+    pub const ExitError = Child.WaitError;
+
+    /// How the child ended, or `null` while the wait is still running.
+    ///
+    /// Never blocks. A `null` is a snapshot and may be stale by the time the caller
+    /// acts on it; a term or error is final.
+    pub fn exit(reaper: *const Reaper) ExitError!?Term {
+        const state = reaper.innerConst().state.load(.acquire);
+        if (state == running) return null;
+        return @as(?Term, try decode(state));
+    }
+
+    /// How the child ended, once it has: blocks until the task has the answer.
+    ///
+    /// This waits on the answer rather than on the child, so any number of tasks
+    /// may call it at once, and none of them asks the operating system anything.
+    /// It is a cancelation point. A `Reaper` that was never started never
+    /// answers.
+    pub fn wait(reaper: *Reaper, io: std.Io) ExitError!Term {
+        try reaper.inner().answered.wait(io);
+        return (try reaper.exit()).?;
+    }
+
+    pub const WaitTimeoutError = ExitError;
+
+    /// `wait`, for at most `timeout_ms`: `null` if the child has not ended by
+    /// then.
+    pub fn waitTimeout(reaper: *Reaper, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
+        const deadline: std.Io.Clock.Timestamp = .fromNow(io, .{
+            .raw = .fromMilliseconds(timeout_ms),
+            .clock = .awake,
+        });
+        while (true) {
+            reaper.inner().answered.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
+                // A wakeup before the deadline is spurious; one after it is the
+                // answer that there is none yet.
+                error.Timeout => if (deadline.durationFromNow(io).raw.nanoseconds > 0) continue else return reaper.exit(),
+                error.Canceled => return error.Canceled,
+            };
+            return reaper.exit();
         }
     }
-    return held.wait(io);
-}
 
-/// What the child left in its cgroup: asked, given the grace, then made.
-/// The child itself, ended and unreaped, is not counted as running there.
-/// False when the wake came first.
-fn endContained(reaper: *Reaper, wake: posix.fd_t) bool {
-    const contained = &reaper.child.cgroup;
-    switch (contained.populated()) {
-        .none => return true,
-        .others => {
-            _ = contained.signalMembers(.TERM, reaper.child.id, null) catch {};
-            var waited_ms: u32 = 0;
-            var slice_ms: u32 = 1;
-            while (waited_ms < reaper.options.tree_grace_ms) {
-                if (!pause(wake, slice_ms)) return false;
-                waited_ms += slice_ms;
-                slice_ms = @min(slice_ms * 2, tree_slice_ms);
-                if (contained.populated() == .none) return true;
+    /// Asks the child to end, and makes it if it has not within `grace_ms`.
+    ///
+    /// `.terminate` now and `.kill` once the grace has passed, each of them
+    /// `Child.kill`'s and reaching what `Child.kill` reaches. A held reap also
+    /// ends anything left in the owned group or cgroup before releasing its
+    /// identity, using the remainder of the same grace. A `grace_ms` of zero
+    /// is `.kill` now. It never blocks: the grace is waited out on this
+    /// `Reaper`'s task, and ends early once the child and its owned tree end.
+    ///
+    /// Only the first request with a grace counts. A second one would either
+    /// wait longer than the first, which it cannot, or less, which is a request
+    /// with a grace of zero — and that one is always sent. A signal that cannot
+    /// be delivered is not reported: the child has ended, or is ending, and the
+    /// term says how.
+    pub fn stop(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
+        if (!reaper.inner().stop.request(io, grace_ms)) return;
+        if (grace_ms == 0) {
+            reaper.inner().child.kill(.kill) catch {};
+            return;
+        }
+        reaper.inner().child.kill(.terminate) catch {};
+        reaper.inner().group.concurrent(io, insist, .{ reaper, io, grace_ms }) catch {
+            // No task to wait out the grace on: insisting now is the one answer
+            // that still ends the child.
+            reaper.stop(io, 0);
+        };
+    }
+
+    fn insist(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
+        const term = reaper.waitTimeout(io, reaper.inner().stop.remaining(io) orelse grace_ms) catch |err| switch (err) {
+            // `deinit`: the owner is done with this child.
+            error.Canceled => return,
+            // An answer, if an unhappy one: the child is no longer waited for.
+            else => return,
+        };
+        if (term == null) reaper.stop(io, 0);
+    }
+
+    /// Stops waiting and releases the task.
+    ///
+    /// If the child has already ended this returns as soon as the task notices. If
+    /// it has not, the task is told to go — and any insisting `stop` had yet to
+    /// do goes with it — so a program that wants the child gone should see it
+    /// gone first, with `stop` and `wait`.
+    ///
+    /// Idempotent.
+    pub fn deinit(reaper: *Reaper, io: std.Io) void {
+        if (reaper.inner().lifetime.swap(.closed, .acq_rel) == .closed) return;
+        if (!is_windows) if (reaper.inner().wake) |ends| {
+            _ = c.write(ends[1], "x", 1);
+        };
+        reaper.inner().group.cancel(io);
+        reaper.closeWake();
+    }
+
+    /// A rejected start and a joined task release the same owned wake handles.
+    fn closeWake(reaper: *Reaper) void {
+        if (!is_windows) if (reaper.inner().wake) |ends| {
+            reaper.inner().wake = null;
+            _ = c.close(ends[0]);
+            _ = c.close(ends[1]);
+        };
+    }
+
+    fn run(reaper: *Reaper, io: std.Io) void {
+        const result = reaper.reap(io);
+        reaper.inner().state.store(if (result) |term| encode(term) else |err| encodeError(err), .release);
+        reaper.inner().answered.set(io);
+    }
+
+    fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
+        if (is_windows) {
+            const term = try reaper.inner().child.wait(io);
+            if (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null) if (State.get(reaper.inner().child).job) |job| {
+                _ = win32.TerminateJobObject(job, 1);
+            };
+            return term;
+        }
+        const wake = reaper.inner().wake orelse return reaper.inner().child.wait(io);
+        // Held from here to the reap, as any wait in flight holds it: so the child
+        // ended is still the child's, unreaped, while its group is ended below.
+        const held = reaper.inner().child.holdReap() orelse return reaper.inner().child.wait(io);
+        defer held.release();
+        // Read the published answer, including status loss, before watching an
+        // identity that has been retired. Holding the reap does not conceal the
+        // result: result reads it without asking the operating system to reap.
+        if (try reaper.inner().child.result()) |term| return term;
+        if (wait_for.Watch.open(State.get(reaper.inner().child).id)) |watch| {
+            defer watch.close();
+            while (true) switch (watch.endedOrWoken(wake[0], null)) {
+                .ended => break,
+                .woken => return error.Canceled,
+                // a signal, not the end: ask again
+                .timed_out => {},
+            };
+        } else {
+            // No watch. Darwin refuses one on a child that has already ended --
+            // one that ended before this task first ran -- and some systems have
+            // none at all. Either way the end is asked for without reaping, so
+            // that what the child left in its group can still be ended by the id
+            // the child holds. Where even that cannot be asked, the wait is the
+            // Child.wait, and the group is left as it is.
+            while (true) switch (wait_for.endedUnreaped(State.get(reaper.inner().child).id)) {
+                .ended => break,
+                .running => if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled,
+                .unknown => return held.wait(io),
+            };
+        }
+        // Ended, and not yet reaped: the group's id is still the child's, and
+        // what is left in the group can be addressed by it. A child in a cgroup
+        // of its own has what it left in there, wherever its group went.
+        if (reaper.inner().options.end_tree or reaper.inner().stop.remaining(io) != null) {
+            if (State.get(reaper.inner().child).cgroup.active()) {
+                if (!reaper.endContained(io, wake[0])) return error.Canceled;
+            } else if (State.get(reaper.inner().child).pgid) |pgid| {
+                if (!reaper.endGroup(io, pgid, wake[0])) return error.Canceled;
             }
-        },
-        .unknown => {},
+        }
+        return held.wait(io);
     }
-    // One write, and safe against a fork while it is delivered. A cgroup the
-    // kernel will not end leaves the group to be ended as before.
-    if (contained.kill()) return true;
-    if (reaper.child.pgid) |pgid| return reaper.endGroup(pgid, wake);
-    return true;
-}
 
-/// What the child left in its group: asked, given the grace, then made.
-/// False when the wake came first.
-fn endGroup(reaper: *Reaper, pgid: posix.pid_t, wake: posix.fd_t) bool {
-    const leader = reaper.child.id;
-    // A group holding nothing but the child is the usual case, and is the
-    // one that sends nothing.
-    switch (tree.members(pgid, leader)) {
-        .none => return true,
-        .others => {
-            _ = c.kill(-pgid, .TERM);
-            var waited_ms: u32 = 0;
-            var slice_ms: u32 = 1;
-            while (waited_ms < reaper.options.tree_grace_ms) {
-                if (!pause(wake, slice_ms)) return false;
-                waited_ms += slice_ms;
-                slice_ms = @min(slice_ms * 2, tree_slice_ms);
-                if (tree.members(pgid, leader) == .none) return true;
-            }
-        },
-        .unknown => {},
+    /// What the child left in its cgroup: asked, given the grace, then made.
+    /// The child itself, ended and unreaped, is not counted as running there.
+    /// False when the wake came first.
+    fn endContained(reaper: *Reaper, io: std.Io, wake: posix.fd_t) bool {
+        const contained = &State.get(reaper.inner().child).cgroup;
+        switch (contained.populated()) {
+            .none => return true,
+            .others => {
+                _ = contained.signalMembers(.TERM, State.get(reaper.inner().child).id, null) catch {};
+                switch (reaper.treeGrace(io, wake, .{ .contained = contained })) {
+                    .empty => return true,
+                    .woken => return false,
+                    .elapsed => {},
+                }
+            },
+            .unknown => {},
+        }
+        // One write, and safe against a fork while it is delivered. A cgroup the
+        // kernel will not end leaves the group to be ended as before.
+        if (contained.kill()) return true;
+        if (State.get(reaper.inner().child).pgid) |pgid| return reaper.endGroup(io, pgid, wake);
+        return true;
     }
-    // `kill(-pgid)` is not atomic against a `fork` inside the group, so it is
-    // sent again while the group still answers, as `Child.kill` does.
-    var pass: u8 = 0;
-    while (pass < kill_passes) : (pass += 1) {
-        _ = c.kill(-pgid, .KILL);
-        if (tree.members(pgid, leader) == .none) break;
+
+    /// What the child left in its group: asked, given the grace, then made.
+    /// False when the wake came first.
+    fn endGroup(reaper: *Reaper, io: std.Io, pgid: posix.pid_t, wake: posix.fd_t) bool {
+        const leader = State.get(reaper.inner().child).id;
+        // A group holding nothing but the child is the usual case, and is the
+        // one that sends nothing.
+        switch (tree.members(pgid, leader)) {
+            .none => return true,
+            .others => {
+                _ = c.kill(-pgid, .TERM);
+                switch (reaper.treeGrace(io, wake, .{ .group = pgid })) {
+                    .empty => return true,
+                    .woken => return false,
+                    .elapsed => {},
+                }
+            },
+            .unknown => {},
+        }
+        // `kill(-pgid)` is not atomic against a `fork` inside the group, so it is
+        // sent again while the group still answers, as `Child.kill` does.
+        tree.forceHeldGroup(pgid, leader);
+        return true;
     }
-    return true;
-}
 
-/// The longest the group is left between two looks while its grace runs.
-/// Only a group with something left in it is looked at at all.
-const tree_slice_ms: u32 = 20;
-/// As `Child.kill`'s own count of passes for `.kill`.
-const kill_passes: u8 = 3;
+    const TreeReach = union(enum) {
+        group: posix.pid_t,
+        contained: *const @import("cgroup.zig").Cgroup,
 
-/// Sleeps `ms` unless the wake comes first. False when it did.
-fn pause(wake: posix.fd_t, ms: u32) bool {
-    var fds = [_]c.pollfd{.{ .fd = wake, .events = c.POLL.IN, .revents = 0 }};
-    return c.poll(&fds, 1, @intCast(ms)) <= 0 or fds[0].revents == 0;
-}
-
-/// No term can encode to this: the tag byte is out of range.
-const running: u64 = std.math.maxInt(u64);
-
-fn encode(term: Term) u64 {
-    const tag: u64, const payload: u32 = switch (term) {
-        .exited => |code| .{ 0, code },
-        .signal => |signal| .{ 1, @intCast(@intFromEnum(signal)) },
-        .stopped => |signal| .{ 2, @intCast(@intFromEnum(signal)) },
-        .unknown => |value| .{ 3, value },
+        fn empty(reach: TreeReach, leader: posix.pid_t) bool {
+            return switch (reach) {
+                .group => |pgid| tree.members(pgid, leader) == .none,
+                .contained => |contained| contained.populated() == .none,
+            };
+        }
     };
-    return (tag << 32) | payload;
-}
 
-fn encodeError(err: ExitError) u64 {
-    return (@as(u64, 4) << 32) | @intFromError(err);
-}
+    /// One grace for either tree reach, measured by the caller's clock. An
+    /// interrupted poll spends only the time it actually took, and a delayed
+    /// wake spends all of it. Neither changes the deadline.
+    fn treeGrace(reaper: *Reaper, io: std.Io, wake: posix.fd_t, reach: TreeReach) enum { empty, elapsed, woken } {
+        const deadline: @import("deadline.zig").Deadline = .in(io, reaper.inner().options.tree_grace_ms);
+        var slice_ms: u32 = 1;
+        while (true) {
+            // A stop owns one grace, including cleanup after the root exits.
+            // Re-read it each pass so a force request supersedes that grace.
+            const left = reaper.inner().stop.remaining(io) orelse deadline.remainingMs(io);
+            if (left == 0) return .elapsed;
+            if (!pause(wake, @min(left, slice_ms))) return .woken;
+            if (reach.empty(State.get(reaper.inner().child).id)) return .empty;
+            slice_ms = @min(slice_ms * 2, tree_slice_ms);
+        }
+    }
 
-fn decode(state: u64) ExitError!Term {
-    const payload: u32 = @truncate(state);
-    return switch (state >> 32) {
-        0 => .{ .exited = @intCast(payload) },
-        1 => .{ .signal = @enumFromInt(payload) },
-        2 => .{ .stopped = @enumFromInt(payload) },
-        3 => .{ .unknown = payload },
-        4 => @as(ExitError, @errorCast(@errorFromInt(@as(u16, @truncate(payload))))),
-        else => unreachable,
+    /// The longest the group is left between two looks while its grace runs.
+    /// Only a group with something left in it is looked at at all.
+    const tree_slice_ms: u32 = 20;
+
+    /// Sleeps `ms` unless the wake comes first. False when it did.
+    fn pause(wake: posix.fd_t, ms: u32) bool {
+        if (builtin.is_test) if (pause_elapsed) |elapsed| {
+            // A poll interrupted after two milliseconds, before its requested
+            // slice elapsed. The test's clock advances by the time actually spent.
+            elapsed.* += 2;
+            return true;
+        };
+        var fds = [_]c.pollfd{.{ .fd = wake, .events = c.POLL.IN, .revents = 0 }};
+        return c.poll(&fds, 1, @intCast(ms)) <= 0 or fds[0].revents == 0;
+    }
+
+    /// No term can encode to this: the tag byte is out of range.
+    const running: u64 = std.math.maxInt(u64);
+
+    fn encode(term: Term) u64 {
+        const tag: u64, const payload: u32 = switch (term) {
+            .exited => |code| .{ 0, code },
+            .signal => |signal| .{ 1, @intCast(@intFromEnum(signal)) },
+            .stopped => |signal| .{ 2, @intCast(@intFromEnum(signal)) },
+            .unknown => |value| .{ 3, value },
+        };
+        return (tag << 32) | payload;
+    }
+
+    fn encodeError(err: ExitError) u64 {
+        return (@as(u64, 4) << 32) | @intFromError(err);
+    }
+
+    fn decode(state: u64) ExitError!Term {
+        const payload: u32 = @truncate(state);
+        return switch (state >> 32) {
+            0 => .{ .exited = @intCast(payload) },
+            1 => .{ .signal = @enumFromInt(payload) },
+            2 => .{ .stopped = @enumFromInt(payload) },
+            3 => .{ .unknown = payload },
+            4 => @as(ExitError, @errorCast(@errorFromInt(@as(u16, @truncate(payload))))),
+            else => unreachable,
+        };
+    }
+};
+
+var pause_elapsed: if (builtin.is_test) ?*u32 else void = if (builtin.is_test) null else {};
+
+test "a Reaper tree grace counts elapsed time when polls are interrupted" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 30 & echo ready; read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var buffer: [32]u8 = undefined;
+    var reader = child.stdoutFile().?.reader(io, &buffer);
+    try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
+
+    const Clock = struct {
+        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const elapsed: *u32 = @ptrCast(@alignCast(userdata.?));
+            return .{ .nanoseconds = @as(i96, elapsed.*) * std.time.ns_per_ms };
+        }
     };
+    var elapsed: u32 = 0;
+    var vtable = io.vtable.*;
+    vtable.now = Clock.now;
+    const clock_io: std.Io = .{ .vtable = &vtable, .userdata = &elapsed };
+    var reaper: Reaper = .init(&child, .{ .tree_grace_ms = 100 });
+    pause_elapsed = &elapsed;
+    defer pause_elapsed = null;
+    try testing.expect(reaper.endGroup(clock_io, State.get(&child).pgid.?, -1));
+    try testing.expect(elapsed >= 100);
 }
 
 test "every term survives the round trip through the atomic" {
     const cases = [_]Term{
         .{ .exited = 0 },
         .{ .exited = 255 },
+        .{ .exited = 0xc000013a },
+        .{ .exited = 0xffffffff },
         .{ .signal = .TERM },
         .{ .stopped = .INT },
         .{ .unknown = 0xdeadbeef },
     };
     for (cases) |term| {
-        try std.testing.expectEqual(term, try decode(encode(term)));
-        try std.testing.expect(encode(term) != running);
+        try std.testing.expectEqual(term, try Reaper.decode(Reaper.encode(term)));
+        try std.testing.expect(Reaper.encode(term) != Reaper.running);
     }
 }
 
 test "every wait error survives the round trip through the atomic" {
-    const cases = [_]ExitError{
+    const cases = [_]Reaper.ExitError{
         error.AccessDenied,
         error.Canceled,
         error.Unexpected,
+        error.ReapedElsewhere,
     };
     for (cases) |err| {
-        try std.testing.expectError(err, decode(encodeError(err)));
-        try std.testing.expect(encodeError(err) != running);
+        try std.testing.expectError(err, Reaper.decode(Reaper.encodeError(err)));
+        try std.testing.expect(Reaper.encodeError(err) != Reaper.running);
     }
+}
+
+test "a rejected Reaper start releases its wake pipe before returning" {
+    if (is_windows) return error.SkipZigTest;
+    const io = std.testing.io;
+    var child = try Child.spawn(io, std.testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var reaper: Reaper = .init(&child, .{});
+    defer reaper.deinit(io);
+    const Reject = struct {
+        reaper: *Reaper,
+        ends: ?[2]posix.fd_t = null,
+
+        fn concurrent(userdata: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
+            const reject: *@This() = @ptrCast(@alignCast(userdata.?));
+            reject.ends = reject.reaper.inner().wake;
+            return error.ConcurrencyUnavailable;
+        }
+    };
+    var reject: Reject = .{ .reaper = &reaper };
+    var vtable = io.vtable.*;
+    vtable.groupConcurrent = Reject.concurrent;
+    const rejected_io: std.Io = .{ .userdata = &reject, .vtable = &vtable };
+    try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(rejected_io));
+    for (reject.ends.?) |fd| {
+        try std.testing.expectEqual(@as(c_int, -1), c.fcntl(fd, c.F.GETFD));
+        try std.testing.expectEqual(std.c.E.BADF, c.errno(@as(c_int, -1)));
+    }
+    try std.testing.expectEqual(@as(?[2]posix.fd_t, null), reaper.inner().wake);
+    try reaper.start(io);
+    reaper.stop(io, 0);
+    _ = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+}
+
+test "Reaper deadlines keep spurious wakes on one answer event and spend the stop grace there" {
+    if (is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    var reaper: Reaper = .init(&child, .{});
+    defer reaper.deinit(io);
+    const Clock = struct {
+        ms: u32 = 0,
+        waits: usize = 0,
+        sleeps: usize = 0,
+        event: ?*const u32 = null,
+        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
+        }
+        fn futexWait(userdata: ?*anyopaque, ptr: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            if (clock.event) |event| std.debug.assert(event == ptr) else clock.event = ptr;
+            clock.waits += 1;
+            clock.ms += 10;
+        }
+        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            clock.sleeps += 1;
+            return error.Canceled;
+        }
+    };
+    var clock: Clock = .{};
+    var vtable = io.vtable.*;
+    vtable.now = Clock.now;
+    vtable.futexWait = Clock.futexWait;
+    vtable.sleep = Clock.sleep;
+    const clock_io: std.Io = .{ .userdata = &clock, .vtable = &vtable };
+    try testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(clock_io, 30));
+    try testing.expectEqual(@as(usize, 3), clock.waits);
+    try testing.expectEqual(@as(usize, 0), clock.sleeps);
+    try testing.expectEqual(@as(u32, 30), clock.ms);
+    try testing.expectEqual(@as(?Term, null), try child.tryWait());
+    clock = .{};
+    reaper.insist(clock_io, 40);
+    try testing.expectEqual(@as(usize, 4), clock.waits);
+    try testing.expectEqual(@as(usize, 0), clock.sleeps);
+    try testing.expectEqual(@as(u32, 40), clock.ms);
+    try testing.expectEqual(Term{ .signal = .KILL }, try child.wait(io));
+}
+
+test "a stop keeps its first deadline and a force expires the same grace" {
+    const Clock = struct {
+        var milliseconds: u32 = 100;
+        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            return .{ .nanoseconds = @as(i96, milliseconds) * std.time.ns_per_ms };
+        }
+    };
+    var vtable = std.testing.io.vtable.*;
+    vtable.now = Clock.now;
+    const io: std.Io = .{ .vtable = &vtable, .userdata = std.testing.io.userdata };
+    var stop: Stop = .{};
+    Clock.milliseconds = 100;
+    try std.testing.expect(stop.request(io, 100));
+    Clock.milliseconds = 150;
+    try std.testing.expect(!stop.request(io, 100));
+    try std.testing.expectEqual(@as(?u32, 50), stop.remaining(io));
+    try std.testing.expect(stop.request(io, 0));
+    try std.testing.expectEqual(@as(?u32, 0), stop.remaining(io));
+    Clock.milliseconds = 200;
+    try std.testing.expect(!stop.request(io, 100));
+    try std.testing.expectEqual(@as(?u32, 0), stop.remaining(io));
 }

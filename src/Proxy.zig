@@ -48,7 +48,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Pty = @import("Pty.zig");
+const Pty = @import("Pty.zig").Pty;
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
@@ -61,7 +61,7 @@ const is_windows = builtin.os.tag == .windows;
 /// smaller than a terminal's line is merely slower, not wrong.
 pub const Options = struct {
     /// The master end of the pair the child is running on. `Pty.master` or
-    /// `Child.pty` is where this comes from.
+    /// `Child.terminalMaster()` is where this comes from.
     master: Pty.Master,
     /// Where the child's input comes from, usually the program's own standard
     /// input in raw mode.
@@ -96,8 +96,10 @@ pub const Resize = struct {
     /// `null` polls, which is correct and costs one call per interval.
     ticket: ?*const std.atomic.Value(u32) = null,
     /// How often the size is re-read when nothing has bumped `ticket`.
+    /// Zero uses one millisecond, so an idle forwarder still yields.
     interval_ms: u32 = 50,
     /// How often `ticket` is looked at. Only meaningful when there is one.
+    /// Zero uses one millisecond.
     tick_ms: u32 = 5,
 };
 
@@ -214,7 +216,7 @@ fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!v
             error.Canceled => return error.Canceled,
             else => if (handles.finished(err)) return else return error.ReadFailed,
         };
-        to.writeStreamingAll(io, buffer[0..n]) catch |err| switch (err) {
+        handles.writeStreamingAll(to, io, buffer[0..n]) catch |err| switch (err) {
             error.BrokenPipe => return,
             error.Canceled => return error.Canceled,
             else => return error.WriteFailed,
@@ -241,25 +243,26 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
             // and nothing a caller of `run` could do about it.
         }
 
-        const ticket = resize.ticket orelse {
-            try std.Io.sleep(io, .fromMilliseconds(resize.interval_ms), .awake);
-            continue;
-        };
+        try waitResize(io, resize, &seen_ticket);
+    }
+}
 
-        // With a ticket the wait is broken into slices, so a program that
-        // already knows a resize happened does not have to wait out the
-        // interval to have it forwarded.
-        var waited_ms: u32 = 0;
-        while (waited_ms < resize.interval_ms) {
-            const now = ticket.load(.acquire);
-            if (now != seen_ticket) {
-                seen_ticket = now;
-                break;
-            }
-            const step = @max(1, @min(resize.tick_ms, resize.interval_ms - waited_ms));
-            try std.Io.sleep(io, .fromMilliseconds(step), .awake);
-            waited_ms += step;
+/// One cancelable interval, even when tickets change continuously. The
+/// deadline owns the budget; a delayed tick never spends it a second time.
+fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!void {
+    try std.Io.checkCancel(io);
+    const interval_ms = @max(1, resize.interval_ms);
+    const ticket = resize.ticket orelse return std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
+    const deadline: @import("deadline.zig").Deadline = .in(io, interval_ms);
+    while (true) {
+        const now = ticket.load(.acquire);
+        if (now != seen_ticket.*) {
+            seen_ticket.* = now;
+            return;
         }
+        const left = deadline.remainingMs(io);
+        if (left == 0) return;
+        try std.Io.sleep(io, .fromMilliseconds(@min(@max(1, resize.tick_ms), left)), .awake);
     }
 }
 
@@ -268,7 +271,7 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
 //======================================================================
 
 const testing = std.testing;
-const Child = @import("Child.zig");
+const Child = @import("Child.zig").Child;
 const Watchdog = @import("test_support.zig").Watchdog;
 
 test "empty transfer buffers are rejected before either direction starts" {
@@ -299,7 +302,7 @@ test "an input error interrupts a silent output pump" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var terminal = try Pty.open(.{});
+    var terminal = try Pty.open(std.testing.allocator, .{});
     defer terminal.close(io);
     var input_buffer: [32]u8 = undefined;
     var output_buffer: [32]u8 = undefined;
@@ -354,15 +357,15 @@ test "bytes written to one terminal reach the program on the other, and back" {
 
     // The terminal the "user" is at. Raw, so nothing it is sent is echoed
     // back and confused with the child's output.
-    var user = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
-    _ = try tty.rawMode(user.slave.?);
+    _ = try tty.rawMode(user.slaveHandle().?);
 
     // The terminal the child runs on, also raw: `cat` is doing the echoing
     // here, and the terminal doing it too would double every line.
-    var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
-    _ = try tty.rawMode(terminal.slave.?);
+    _ = try tty.rawMode(terminal.slaveHandle().?);
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "/bin/sh", "-c", "cat" },
@@ -405,11 +408,11 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
 
     // The user's terminal, raw: that is what turns Ctrl-C into a byte instead
     // of a signal for this process, which is the whole claim being tested.
-    var user = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
-    _ = try tty.rawMode(user.slave.?);
+    _ = try tty.rawMode(user.slaveHandle().?);
 
-    var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
     var child = try Child.spawn(io, gpa, .{
@@ -455,10 +458,10 @@ test "the window size is forwarded onto the pair" {
 
     // Two pairs again: one stands in for the program's own terminal, whose
     // size the forwarder reads, and one is the child's.
-    var user = try Pty.open(.{ .rows = 11, .cols = 37 });
+    var user = try Pty.open(std.testing.allocator, .{ .rows = 11, .cols = 37 });
     defer user.close(io);
 
-    var terminal = try Pty.open(.{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
     var input_buffer: [64]u8 = undefined;
@@ -473,7 +476,7 @@ test "the window size is forwarded onto the pair" {
         .output_buffer = &output_buffer,
         .resize = .{
             .pty = &terminal,
-            .source = user.slave.?,
+            .source = user.slaveHandle().?,
             .ticket = &ticket,
             .interval_ms = 1000,
             .tick_ms = 1,
@@ -499,4 +502,70 @@ fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
     return error.TestSizeWasNotForwarded;
+}
+
+test "Proxy resize waits remain cancelable with a zero interval or a changing ticket" {
+    const io = testing.io;
+    const Backend = struct {
+        sleeps: usize = 0,
+        checks: usize = 0,
+        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            return .{ .nanoseconds = 0 };
+        }
+        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?));
+            backend.sleeps += 1;
+            return error.Canceled;
+        }
+        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
+            const backend: *@This() = @ptrCast(@alignCast(userdata.?));
+            backend.checks += 1;
+            return if (backend.checks > 1) error.Canceled else {};
+        }
+    };
+    var backend: Backend = .{};
+    var vtable = io.vtable.*;
+    vtable.now = Backend.now;
+    vtable.sleep = Backend.sleep;
+    vtable.checkCancel = Backend.checkCancel;
+    const controlled_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    var ticket: std.atomic.Value(u32) = .init(0);
+    var seen: u32 = 0;
+    var pair: Pty = undefined; // The wait borrows but never accesses the pair.
+    const resize: Resize = .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval_ms = 0 };
+    try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
+    try testing.expectEqual(@as(usize, 1), backend.sleeps);
+    ticket.store(1, .release);
+    try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
+    try testing.expectEqual(@as(usize, 2), backend.checks);
+}
+
+test "Proxy resize intervals count delayed sleeps once" {
+    const io = testing.io;
+    const Clock = struct {
+        ms: u32 = 0,
+        sleeps: usize = 0,
+        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
+        }
+        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            clock.ms += 30;
+            clock.sleeps += 1;
+        }
+        fn checkCancel(_: ?*anyopaque) std.Io.Cancelable!void {}
+    };
+    var clock: Clock = .{};
+    var vtable = io.vtable.*;
+    vtable.now = Clock.now;
+    vtable.sleep = Clock.sleep;
+    vtable.checkCancel = Clock.checkCancel;
+    const clock_io: std.Io = .{ .userdata = &clock, .vtable = &vtable };
+    var ticket: std.atomic.Value(u32) = .init(0);
+    var seen: u32 = 0;
+    var pair: Pty = undefined;
+    try waitResize(clock_io, .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval_ms = 50, .tick_ms = 5 }, &seen);
+    try testing.expectEqual(@as(usize, 2), clock.sleeps);
+    try testing.expectEqual(@as(u32, 60), clock.ms);
 }

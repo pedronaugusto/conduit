@@ -23,6 +23,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
 
@@ -156,22 +157,40 @@ pub fn endedUnreaped(pid: posix.pid_t) Ended {
     }
 }
 
-/// `P_PID`, which is 1 on both systems `waitid_flags` is set for.
-const p_pid: c_uint = 1;
+/// P_PID and id_t are ABI choices, independent of the wait option bits.
+/// FreeBSD and DragonFly use Solaris's selector and a 64-bit id_t; NetBSD
+/// keeps P_PID=1, and OpenBSD puts it after P_ALL and P_PGID.
+const p_pid: c_uint = switch (builtin.os.tag) {
+    .freebsd, .dragonfly, .illumos => 0,
+    .openbsd => 2,
+    else => 1,
+};
+const WaitId = switch (builtin.os.tag) {
+    .freebsd, .dragonfly => i64,
+    .illumos => i32,
+    else => c_uint,
+};
 
 /// `WEXITED | WNOHANG | WNOWAIT`, spelled per system, where it is known to
 /// be right; `null` elsewhere.
 const waitid_flags: ?c_int = switch (builtin.os.tag) {
     .linux => 0x4 | 0x1 | 0x1000000,
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => 0x4 | 0x1 | 0x20,
+    // sys/sys/wait.h in the BSD sources; sys/wait.h in illumos. The
+    // standard library names these bits except on Darwin and OpenBSD.
+    .freebsd, .netbsd, .dragonfly, .illumos => c.W.EXITED | c.W.NOHANG | c.W.NOWAIT,
+    .openbsd => 0x4 | 0x1 | 0x10,
     else => null,
 };
 
-extern "c" fn waitid(idtype: c_uint, id: c_uint, info: *c.siginfo_t, options: c_int) c_int;
+extern "c" fn waitid(idtype: c_uint, id: WaitId, info: *c.siginfo_t, options: c_int) c_int;
 
 fn infoPid(info: *const c.siginfo_t) posix.pid_t {
     return switch (builtin.os.tag) {
         .linux => info.fields.common.first.piduid.pid,
+        .netbsd => info.info.reason.child.pid,
+        .illumos => info.reason.proc.pid,
+        .openbsd => info.data.proc.pid,
         else => info.pid,
     };
 }
@@ -275,7 +294,7 @@ fn endedOrWokenKqueue(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcom
 
 test "a watch on a child ends when the child does" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.io, testing.allocator, .{
@@ -288,7 +307,7 @@ test "a watch on a child ends when the child does" {
     // Every system this package is tested on has one; a system that has not is
     // one where the caller asks again instead, and there is nothing here to
     // assert about it.
-    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    const watch = Watch.open(State.get(&child).id) orelse return error.SkipZigTest;
     defer watch.close();
 
     try testing.expect(watch.ended(5000));
@@ -296,7 +315,7 @@ test "a watch on a child ends when the child does" {
 
 test "a watch with a wake ends on the wake, then on the child" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     const handles = @import("handles.zig");
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
@@ -307,7 +326,7 @@ test "a watch with a wake ends on the wake, then on the child" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
 
-    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    const watch = Watch.open(State.get(&child).id) orelse return error.SkipZigTest;
     defer watch.close();
     const wake = try handles.pipe();
     defer _ = c.close(wake[0]);
@@ -328,7 +347,7 @@ test "a watch with a wake ends on the wake, then on the child" {
 
 test "a watch on a child that is still running says so" {
     const testing = std.testing;
-    const Child = @import("Child.zig");
+    const Child = @import("Child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.io, testing.allocator, .{
@@ -338,8 +357,35 @@ test "a watch on a child that is still running says so" {
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
 
-    const watch = Watch.open(child.id) orelse return error.SkipZigTest;
+    const watch = Watch.open(State.get(&child).id) orelse return error.SkipZigTest;
     defer watch.close();
 
     try testing.expect(!watch.ended(20));
+}
+
+test "exit observation keeps the child's identity until its owner reaps it" {
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const Child = @import("Child.zig").Child;
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ "/bin/sh", "-c", "read x; exit 0" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+        .descendants = .contain,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    const pid = child.processId().?;
+    try testing.expectEqual(Ended.running, endedUnreaped(pid));
+    child.closeStdin(io);
+    const deadline: Deadline = .in(io, 5000);
+    while (endedUnreaped(pid) == .running and deadline.remainingMs(io) > 0)
+        try io.sleep(.fromMilliseconds(1), .awake);
+    try testing.expectEqual(Ended.ended, endedUnreaped(pid));
+    // Observation left the zombie and the private group id owned by us.
+    try testing.expectEqual(pid, child.processId().?);
+    try testing.expectEqual(@as(c_int, 0), c.kill(pid, @enumFromInt(0)));
+    try testing.expect(Child.succeeded((try child.waitTimeout(io, 5000)).?));
 }

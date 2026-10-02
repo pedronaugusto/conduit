@@ -11,15 +11,15 @@ const posix = std.posix;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig");
-const Pty = @import("Pty.zig");
+const Child = @import("Child.zig").Child;
+const State = @import("child_state.zig");
 const handles = @import("handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
 const cgroup = @import("cgroup.zig");
-const Orphans = @import("Orphans.zig");
+const Orphans = @import("Orphans.zig").Orphans;
 
 const file = handles.file;
 
@@ -42,7 +42,7 @@ const Plan = stdio_plan.Plan(struct {
 });
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
+pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!Child {
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.
@@ -77,7 +77,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
     // The descriptors the child will have as 0, 1 and 2, and the ones the
     // parent keeps. `plan` opens nothing the caller owns.
     var plan: Plan = try .init(io, options, switch (options.stdio) {
-        .pty => |pty| pty.slave.?,
+        .pty => |pty| pty.slaveHandle().?,
         else => null,
     });
     errdefer plan.closeAll(io);
@@ -97,8 +97,8 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     // Nothing has to happen between a fork and an exec for this one, so it
     // need not be a fork at all. `posix_spawn` describes the child with file
-    // actions instead, and on the systems that have it that is a third less
-    // work per spawn. It answers `null` for a set of descriptors it cannot
+    // actions instead, without copying the parent's page tables. It answers
+    // `null` for a set of descriptors it cannot
     // describe, and then this falls through to the fork below. A contained
     // child is always forked: joining its cgroup is a write, and there is no
     // file action for one.
@@ -117,31 +117,32 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
             };
             adoption.finish();
             plan.closeChildSide(io);
-            return started(child.pid, child.forks, .none, &plan, options);
+            return started(state, child.pid, child.forks, .none, &plan, options);
         }
     }
 
     // How the fork child reports a failure that happens after the fork. The
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
-    const report = try makePipe();
+    const report = try controlPipe();
     // Where there is a watch on the child's forks (`tree.Forks`), the fork
     // child waits on this before its `execve` until the parent has registered
     // it, so the program the child becomes cannot fork before the watch is
     // in. Without a pipe there is no watch, and `kill` walks as it always
     // did.
-    const go: ?[2]posix.fd_t = if (tree.Forks.supported) makePipe() catch null else null;
+    const go: ?[2]posix.fd_t = if (tree.Forks.supported) controlPipe() catch null else null;
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
     const parent = c.getpid();
 
     handles.ForkGap.startingAChild();
+    if (builtin.is_test) @import("test_support.zig").SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
-        const join: posix.fd_t = if (contained) |pending| pending.procs else -1;
+        const join: posix.fd_t = if (contained) |pending| pending.joinDescriptor() else -1;
         childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], parent, go, join);
     }
     handles.ForkGap.release();
@@ -212,7 +213,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError
 
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
     contained = null;
-    return started(pid, forks, kept, &plan, options);
+    return started(state, pid, forks, kept, &plan, options);
 }
 
 /// Ends and reaps a child that has just been started and will not be handed
@@ -225,13 +226,17 @@ fn discard(pid: posix.pid_t) void {
 
 /// The `Child` a started process is, whichever path started it.
 fn started(
+    state: *State,
     pid: posix.pid_t,
     forks: tree.Forks,
     contained: cgroup.Cgroup,
     plan: *const Plan,
     options: SpawnOptions,
 ) Child {
-    return .{
+    state.* = .{
+        .allocator = state.allocator,
+        .descendants = options.descendants,
+        .process_id = pid,
         .id = pid,
         .thread = {},
         .handles_open = {},
@@ -241,6 +246,7 @@ fn started(
         .pgid = if (options.detach) pid else null,
         .forks = forks,
         .cgroup = contained,
+        .term = null,
         .stdin = plan.parent[0],
         .stdout = plan.parent[1],
         .stderr = plan.parent[2],
@@ -248,8 +254,8 @@ fn started(
             .pty => |pty| pty.master(),
             else => null,
         },
-        .term = null,
     };
+    return State.owner(state);
 }
 
 /// Where between the fork and the exec something went wrong, and with what
@@ -348,7 +354,7 @@ fn childMain(
         switch (options.stdio) {
             .pty => |pty| {
                 if (c.setsid() < 0) bail(report, .detach);
-                if (c.ioctl(pty.slave.?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
+                if (c.ioctl(pty.slaveHandle().?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
                     bail(report, .controlling_terminal);
                 }
             },
@@ -373,10 +379,13 @@ fn childMain(
         // it stays open there, the parent closing its own copy does not hang
         // up the child's terminal, and a grandchild would inherit it too. The
         // spare copy of the slave goes the same way; the child's terminal is
-        // on 0, 1 and 2 now.
+        // on 0, 1 and 2 now. Those slots belong to the placed streams: a pair
+        // originally opened there has already been replaced, and its old
+        // number can no longer authorize closing the new descriptor.
         .pty => |pty| {
-            _ = c.close(pty.read.?);
-            if (pty.slave.? > 2) _ = c.close(pty.slave.?);
+            for ([_]posix.fd_t{ pty.readHandle().?, pty.slaveHandle().? }) |fd| {
+                if (fd > 2) _ = c.close(fd);
+            }
         },
         else => {},
     }
@@ -440,22 +449,30 @@ fn clearSignals() void {
     // one thing a pseudo-terminal exists to deliver. Every ignored signal goes
     // back to its default action here, which is what a shell does when it puts
     // a job in the foreground.
-    // Up to 32, which is where the named signals end. Above it are the
-    // real-time signals, and on Linux the threading implementation owns the
-    // first two of those and sets them up before `main` runs: resetting them
-    // in a fork child would be taking them from it. Nothing a program is meant
-    // to ignore lives up there.
-    var number: u6 = 1;
-    while (number < 32) : (number += 1) {
-        const signal: posix.SIG = @enumFromInt(number);
+    clearDispositions(SpawnSignals);
+}
+
+const SpawnSignals = struct {
+    const SIG = posix.SIG;
+    const Sigaction = posix.Sigaction;
+    const sigaction = c.sigaction;
+    const limit = if (@hasDecl(c.SIG, "RTMAX")) @max(c.NSIG, c.SIG.RTMAX + 1) else c.NSIG;
+};
+
+fn clearDispositions(comptime system: type) void {
+    var number: u32 = 1;
+    while (number < system.limit) : (number += 1) {
+        const signal: system.SIG = @enumFromInt(number);
         // The two that cannot be caught cannot be reset either.
         if (signal == .KILL or signal == .STOP) continue;
-        var current: posix.Sigaction = undefined;
-        posix.sigaction(signal, null, &current);
-        if (current.handler.handler != posix.SIG.IGN) continue;
-        current.handler = .{ .handler = posix.SIG.DFL };
+        var current: system.Sigaction = undefined;
+        // Reserved numbers cannot carry a caller's disposition. In
+        // particular, libc refuses its threading signals on Linux.
+        if (system.sigaction(signal, null, &current) != 0) continue;
+        if (current.handler.handler != system.SIG.IGN) continue;
+        current.handler = .{ .handler = system.SIG.DFL };
         current.flags = 0;
-        posix.sigaction(signal, &current, null);
+        _ = system.sigaction(signal, &current, null);
     }
 }
 
@@ -656,6 +673,29 @@ fn makePipe() SpawnError![2]posix.fd_t {
     return handles.pipe();
 }
 
+/// The fork handshake is owned by spawn, outside the slots the stdio plan
+/// replaces. A parent with closed standard descriptors can otherwise get
+/// the exec report on descriptor 2 and overwrite it while placing stderr.
+fn controlPipe() SpawnError![2]posix.fd_t {
+    var ends = try makePipe();
+    errdefer {
+        for (ends) |fd| _ = c.close(fd);
+    }
+    for (&ends) |*fd| {
+        if (fd.* > 2) continue;
+        const moved = c.fcntl(fd.*, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
+        if (moved < 0) return switch (c.errno(@as(c_int, -1))) {
+            .MFILE => error.ProcessFdQuotaExceeded,
+            .NFILE => error.SystemFdQuotaExceeded,
+            .NOMEM => error.SystemResources,
+            else => |err| posix.unexpectedErrno(err),
+        };
+        _ = c.close(fd.*);
+        fd.* = @intCast(moved);
+    }
+    return ends;
+}
+
 /// Reads until the buffer is full or the writer is gone. Used on the report
 /// pipe, where the answer is always either nothing or the whole record.
 fn readAll(fd: posix.fd_t, buffer: []u8) usize {
@@ -671,6 +711,47 @@ fn readAll(fd: posix.fd_t, buffer: []u8) usize {
         return filled;
     }
     return filled;
+}
+
+test "fork signal defaults include ignored real-time signals and leave reserved numbers alone" {
+    const System = struct {
+        const Handler = enum { default, ignored, caught };
+        const SIG = enum(u32) {
+            KILL = 9,
+            STOP = 19,
+            _,
+            const IGN: Handler = .ignored;
+            const DFL: Handler = .default;
+        };
+        const Sigaction = struct {
+            handler: union(enum) { handler: Handler },
+            flags: u32 = 0,
+        };
+        const limit = 65;
+        var actions: [limit]Sigaction = undefined;
+        var reserved_writes: usize = 0;
+
+        fn sigaction(signal: SIG, action: ?*const Sigaction, previous: ?*Sigaction) c_int {
+            const number = @intFromEnum(signal);
+            if (number == 32 or number == 33) {
+                if (action != null) reserved_writes += 1;
+                return -1;
+            }
+            if (previous) |old| old.* = actions[number];
+            if (action) |new| actions[number] = new.*;
+            return 0;
+        }
+    };
+    System.actions = @splat(.{ .handler = .{ .handler = .default } });
+    System.reserved_writes = 0;
+    System.actions[2].handler = .{ .handler = .ignored };
+    System.actions[64].handler = .{ .handler = .ignored };
+    System.actions[32].handler = .{ .handler = .caught };
+    clearDispositions(System);
+    try std.testing.expectEqual(System.Handler.default, System.actions[2].handler.handler);
+    try std.testing.expectEqual(System.Handler.default, System.actions[64].handler.handler);
+    try std.testing.expectEqual(System.Handler.caught, System.actions[32].handler.handler);
+    try std.testing.expectEqual(@as(usize, 0), System.reserved_writes);
 }
 
 test "searchPath returns the program itself when it is a path" {
