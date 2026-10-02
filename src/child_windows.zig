@@ -9,7 +9,7 @@ const std = @import("std");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("Child.zig").Child;
+const Child = @import("child_types.zig");
 const State = @import("child_state.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
@@ -22,7 +22,7 @@ const SpawnOptions = Child.SpawnOptions;
 const file = @import("handles.zig").file;
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!Child {
+pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -144,7 +144,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
             else => null,
         },
     };
-    return State.owner(state);
+    return state;
 }
 
 /// Says what the child is attached to or handed, in the two records

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, layers]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -88,11 +88,13 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
       - name: Formatting
-        run: zig fmt --check src examples build.zig
+        run: zig fmt --check src examples build.zig ci
       - name: Containment documentation states the observation boundary
         run: python3 ci/containment_docs.py
       - name: Casts out of the type system carry their reason
         run: python3 ci/casts.py
+      - name: Source import boundaries
+        run: zig build check-imports
 
   # Turning posix_spawn off reaches the second implementation of the same child contract.
   fork:

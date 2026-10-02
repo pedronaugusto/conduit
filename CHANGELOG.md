@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep child contracts below lifecycle storage and assemble owner tests above their implementations.
+
+- Check named source layers, cycles, entry files and dependency owners during source CI.
+
 - Bound local Zig build caches before builds, retaining downloaded packages and tools.
 - The former Windows Job-close fixture now requires the grandchild to have ended before lifecycle release.
 
