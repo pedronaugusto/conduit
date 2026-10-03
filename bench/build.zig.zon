@@ -6,8 +6,8 @@
     .dependencies = .{
         .conduit = .{ .path = ".." },
         .after = .{
-            .url = "https://github.com/pedronaugusto/conduit/archive/73c0ef79d59934cd154aea227eb0243af8405186.tar.gz",
-            .hash = "conduit-0.5.1-4rIA7wUkEgAzUIb8D-_-fSsW8hBtI2E2cUyZnszBtjHM",
+            .url = "https://github.com/pedronaugusto/conduit/archive/c7ffe5aa60b753ca194159418ddc02af56b5c3df.tar.gz",
+            .hash = "conduit-0.5.1-4rIA76e9EgDfWIkgdmDOf_mzyKgjegxw6utbsjAL2Lxw",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "orphans-cost-2026-09-28.zig" },
