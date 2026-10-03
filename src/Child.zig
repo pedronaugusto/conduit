@@ -2042,14 +2042,19 @@ pub const Child = enum(usize) {
 
     fn checkStatus(status: u32) !void {
         const term = statusToTerm(status);
-        const low = status & 0x7f;
-        if (low == 0) {
-            try std.testing.expectEqual(@as(u32, (status >> 8) & 0xff), term.exited);
-            try std.testing.expectEqual(@as(u8, @truncate(status >> 8)), shellStatus(term));
-        } else if (low != 0x7f) {
-            try std.testing.expectEqual(low, @intFromEnum(term.signal));
-            try std.testing.expectEqual(@as(u8, @intCast(128 + low)), shellStatus(term));
+        // The two shapes every system's kernel writes, in the low sixteen
+        // bits: an exit with its status in the second byte, and a signal's
+        // number alone in the low seven. Any other word decodes to whatever
+        // that system's macros make of it, and never to a panic.
+        const word = status & 0xffff;
+        if (word & 0xff == 0) {
+            try std.testing.expectEqual(word >> 8, term.exited);
+            try std.testing.expectEqual(@as(u8, @intCast(word >> 8)), shellStatus(term));
+        } else if (word >> 8 == 0 and word & 0x7f != 0x7f) {
+            try std.testing.expectEqual(word & 0x7f, @intFromEnum(term.signal));
+            try std.testing.expectEqual(@as(u8, @intCast(128 + (word & 0x7f))), shellStatus(term));
         }
+        _ = shellStatus(term);
         _ = signalName(term);
         _ = signalNumber(term);
     }
