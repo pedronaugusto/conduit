@@ -678,7 +678,11 @@ pub const KillError = error{
 
 pub const KillWaitError = KillError || WaitError || TryWaitError || std.Io.Cancelable;
 
-pub const WaitTreeError = std.Io.Cancelable || std.Io.UnexpectedError;
+pub const WaitTreeError = error{
+    /// Linux: the child was given no cgroup of its own, so there is no
+    /// container to ask.
+    Unsupported,
+} || std.Io.Cancelable || std.Io.UnexpectedError;
 
 pub const OutputOptions = struct {
     /// The most that will be kept from each stream. Bytes past it are read and

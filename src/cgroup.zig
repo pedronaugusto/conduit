@@ -1012,18 +1012,18 @@ const MemberOps = struct {
         var text: [256]u8 = undefined;
         const n = c.read(fd, &text, text.len);
         if (n <= 0) return .unknown;
-        var lines = std.mem.splitScalar(u8, text[0..@intCast(n)], '\n');
-        while (lines.next()) |line| {
-            if (std.mem.eql(u8, line, "populated 0")) return .none;
-            if (std.mem.eql(u8, line, "populated 1")) return .others;
-        }
-        return .unknown;
+        return parsePopulated(text[0..@intCast(n)]);
     }
 
     /// Wait for `cgroup.events` to say the cgroup is empty. The event file
-    /// wakes a poll when `populated` changes. If it cannot be opened or
-    /// polled, only then use bounded 1–4 ms clock-based checks. True means
-    /// empty; false means the deadline passed or the state could not be read.
+    /// wakes a poll when `populated` changes, and is read through the
+    /// descriptor the poll waits on: kernfs wakes it for a change after that
+    /// descriptor's last read, so a change between the read and the poll is
+    /// not lost, and nothing is read again until one comes. The poll lasts at
+    /// most a five millisecond slice, between which cancelation is asked
+    /// about. If the file cannot be opened, read or polled, only then use
+    /// bounded 1–4 ms clock-based checks. True means empty; false means the
+    /// deadline passed or the state could not be read.
     pub fn waitEmpty(cgroup: *const MemberOps, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
         if (!cgroup.active()) return true;
         const deadline: Deadline = .in(io, timeout_ms);
@@ -1031,32 +1031,55 @@ const MemberOps = struct {
         defer {
             if (events >= 0) _ = c.close(events);
         }
-        var watching = events >= 0;
-        var text: [256]u8 = undefined;
-        if (watching) _ = c.read(events, &text, text.len);
+        if (events >= 0) watched: while (true) {
+            switch (populatedAt(events)) {
+                .none => return true,
+                .unknown => break :watched,
+                .others => {},
+            }
+            while (true) {
+                const left = deadline.remainingMs(io);
+                if (left == 0) return false;
+                var fds = [_]posix.pollfd{.{ .fd = events, .events = posix.POLL.PRI, .revents = 0 }};
+                const rc = std.os.linux.poll(&fds, 1, @intCast(@min(left, 5)));
+                switch (std.os.linux.errno(rc)) {
+                    .SUCCESS => {},
+                    .INTR => continue,
+                    else => break :watched,
+                }
+                try std.Io.checkCancel(io);
+                if (rc > 0) continue :watched;
+            }
+        };
         var interval_ms: u32 = 1;
         while (true) {
             if (cgroup.populated() == .none) return true;
             const left = deadline.remainingMs(io);
             if (left == 0) return false;
-            if (watching) {
-                var fds = [_]posix.pollfd{.{ .fd = events, .events = posix.POLL.PRI, .revents = 0 }};
-                const rc = std.os.linux.poll(&fds, 1, @intCast(@min(left, 5)));
-                if (std.os.linux.errno(rc) == .SUCCESS) {
-                    if (rc > 0) {
-                        _ = std.os.linux.lseek(events, 0, std.os.linux.SEEK.SET);
-                        _ = c.read(events, &text, text.len);
-                    }
-                    try std.Io.checkCancel(io);
-                    continue;
-                }
-                watching = false;
-            }
             try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
             interval_ms = @min(interval_ms * 2, 4);
         }
     }
 };
+
+/// The `populated` line of the `cgroup.events` open at `fd`, read from its
+/// start.
+fn populatedAt(fd: posix.fd_t) Populated {
+    if (std.os.linux.errno(std.os.linux.lseek(fd, 0, std.os.linux.SEEK.SET)) != .SUCCESS) return .unknown;
+    var text: [256]u8 = undefined;
+    const n = c.read(fd, &text, text.len);
+    if (n <= 0) return .unknown;
+    return parsePopulated(text[0..@intCast(n)]);
+}
+
+fn parsePopulated(text: []const u8) Populated {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.eql(u8, line, "populated 0")) return .none;
+        if (std.mem.eql(u8, line, "populated 1")) return .others;
+    }
+    return .unknown;
+}
 
 /// A cgroup made for a child not yet started, and the descriptor the fork
 /// child writes itself into it through.

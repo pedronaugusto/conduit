@@ -2345,9 +2345,9 @@ test "waitTree says the tree has ended, and does not say it early" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    // Windows only, and `Child.waitTree` says why at length: a job object is a
-    // container the system accounts for, and a process group is an address to
-    // send signals to.
+    // The job object; the Linux cgroup has the test below. `Child.waitTree`
+    // says why the other systems have nothing: a process group is an address
+    // to send signals to, not a container the system accounts for.
     if (!is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(io, gpa, .{
@@ -2406,6 +2406,56 @@ test "waitTree says the tree has ended, and does not say it early" {
     try testing.expect(try child.waitTree(io, 0));
 
     _ = try waitWithin(&child);
+}
+
+test "waitTree on Linux says the child's cgroup has emptied, and does not say it early" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Linux with a cgroup this process may make: the container is the cgroup.
+    if (builtin.os.tag != .linux or !try cgroupsHere()) return error.SkipZigTest;
+
+    // The child leaves an orphan in a session of its own and ends normally,
+    // and the survival policy leaves the orphan running: nothing but the
+    // cgroup still relates it to the child.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", orphan_in_own_session ++ "; exit 0" },
+        .stdio = .{ .streams = .{ .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdoutFile().?);
+    const orphan = try readPid(&sink);
+    defer if (alive(orphan)) {
+        _ = c.kill(orphan, .KILL);
+    };
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+
+    // The child is gone and the tree is not.
+    try testing.expect(alive(orphan));
+    try testing.expect(!try child.waitTree(io, 200));
+    try testing.expect(!try child.waitTree(io, 0));
+
+    _ = c.kill(orphan, .KILL);
+    try testing.expect(try child.waitTree(io, budget_ms));
+    try testing.expect(try child.waitTree(io, 0));
+}
+
+test "waitTree on Linux refuses a child with no cgroup of its own" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    cgroup.testing_hook.off = true;
+    defer cgroup.testing_hook.off = false;
+
+    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    try testing.expectError(error.Unsupported, child.waitTree(io, 0));
 }
 
 test "a contained wait ends a grandchild before lifecycle release" {

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Child.waitTree` works on Linux for a child in a cgroup of its own: it waits for `cgroup.events` to say the cgroup has emptied, woken by the change, and is `Unsupported` for a child given no cgroup. A recorded cgroup's `waitEmpty` reads the file only when the change wakes it.
+
 - `SpawnOptions.extra_fds` gives a child files at descriptor 3 and up, in order, placed correctly whatever numbers they have here; `.close_all` closes what is above them. On Windows they are inherited through the handle list and listed in the C runtime's table in the startup record, so a child on that runtime has them at 3 and up; with `.pty` there it is `Unsupported`.
 
 - `Child.kill` sends any POSIX signal to the child and what it started, aimed as the three requests to end are: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"` and `.window_change` by name, any other by number with `.{ .posix = … }`. Only `.interrupt`, `.terminate` and `.kill` end the tree with the child. Windows refuses the others with `Unsupported`. `Child.Signal` is a tagged union now; `.interrupt`, `.terminate` and `.kill` are spelled as before.

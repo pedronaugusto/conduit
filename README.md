@@ -98,7 +98,7 @@ to read while a wait or Reaper runs.
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. On POSIX any other signal goes the same way: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"`, `.window_change`, or `.{ .posix = .ALRM }` for one by number. Only the first three end the tree with the child; the rest leave it to `descendants`. Windows refuses each of the others with `error.Unsupported`, as POSIX does a number it does not define. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
-| `child.waitTree(io, ms)` | Windows only: waits for the job the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. A compile error on POSIX, which has nothing to ask. |
+| `child.waitTree(io, ms)` | Waits for the container the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. Windows: the job object. Linux: the child's own cgroup, woken by `cgroup.events` rather than asking again; a child given none is `error.Unsupported`. A compile error on the other POSIX systems, which have nothing to ask. |
 | `child.deinit(io)` | Closes owned resources after confirmed containment completion. Use `release` for an unfinished contained child. Supplied streams stay open. |
 
 `Child.Output` owns the collected bytes until `deinit(allocator)`. `stdout()`
@@ -592,16 +592,16 @@ whose tree `kill` would miss.
 
 A container the system keeps can also be asked about, which is `waitTree`: the
 job reports to a completion port from before the child is assigned to it, and
-the wait ends when the job says it holds nothing. So a program can watch the
-whole tree go rather than only the child — and it has to ask before `deinit`,
-which is what closes the job and the port. POSIX, for a child with no cgroup
-of its own (below), has nothing to ask. A process group is an address to send
+the wait ends when the job says it holds nothing; on Linux the child's cgroup
+(below) says the same in `cgroup.events`, whose change wakes a `poll`. So a
+program can watch the whole tree go rather than only the child — and it has
+to ask before `deinit`, which is what closes the job and the port and removes
+the cgroup. POSIX, for a child with no cgroup of its own, has nothing to ask. A process group is an address to send
 signals to and the system accounts nothing to it, and the walk `kill` uses goes
 down from the child, where a grandchild whose parent has exited belongs to
 `init` and is related to the child by nothing that can be looked up; a walk
 that named nothing would mean "ended" and "orphaned" in the same breath. `waitTree` is a compile error there, with a message that
-says so, and on Linux too: a child's cgroup could answer it, and is not yet
-asked.
+says so, and `error.Unsupported` for a Linux child that was given no cgroup.
 
 **On Linux a child gets a cgroup of its own, where the system allows one.**
 A cgroup v2 is a set the kernel keeps: a process is born into its parent's

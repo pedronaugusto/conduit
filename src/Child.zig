@@ -1139,44 +1139,66 @@ pub const Child = enum(usize) {
     pub const WaitTreeError = @import("child_types.zig").WaitTreeError;
 
     /// Waits up to `timeout_ms` for everything the child started to end, and says
-    /// whether it did. **Windows only.**
+    /// whether it did. **Windows, and Linux for a child in a cgroup of its own.**
     ///
-    /// `true` means the job object the child was put in holds no process any more:
-    /// not the child, and not a grandchild the child started and left behind. That
-    /// is also confirmed by a contained `wait`. With the survival policy it
-    /// is the question a program that is about to take down a subsystem has: a
-    /// child that exits having started a server is a tree that is still running.
-    /// `false` means the time ran out with something still in the job.
+    /// `true` means the container the child was put in holds no process any
+    /// more: not the child, and not a grandchild the child started and left
+    /// behind, whatever that grandchild did with its group, its session or its
+    /// parent. That is also confirmed by a contained `wait`. With the survival
+    /// policy it is the question a program that is about to take down a
+    /// subsystem has: a child that exits having started a server is a tree that
+    /// is still running. `false` means the time ran out with something still in
+    /// it.
     ///
-    /// Ask it before `deinit`. The job and the port it reports on are closed
-    /// there, under the chosen descendant policy. After `deinit` there is
-    /// nothing to hear the answer on and this reports what
-    /// it heard while there was.
+    /// On Windows the container is the job object, which reports to a
+    /// completion port; on Linux it is the child's cgroup, whose `cgroup.events`
+    /// wakes a `poll` when its `populated` line changes, so the wait is woken by
+    /// the change rather than by asking again. A process that has ended and not
+    /// been reaped is not in it. Either way the deadline is spent in five
+    /// millisecond slices, between which cancelation is asked about, as every
+    /// wait here is.
     ///
-    /// A zero `timeout_ms` asks and does not wait, which is how to poll. The
-    /// message the job posts is posted once and taking it off the port consumes
-    /// it, so this remembers: once it has answered `true` it answers `true`
-    /// thereafter.
+    /// Ask it before `deinit`. The job and its port, or the cgroup, are released
+    /// there, under the chosen descendant policy. A Windows answer after `deinit`
+    /// is what it heard while there was something to hear on.
     ///
-    /// **There is no POSIX counterpart, and naming one would be a lie.** A job
-    /// object is a container the operating system keeps and can report on; a
-    /// process group is an address to send signals to and nothing is accounted to
-    /// it. The nearest thing there — the descendant walk `kill` uses — cannot
-    /// answer this question: it walks down from the child, and a grandchild whose
-    /// parent has exited belongs to `init` and is related to the child by nothing
-    /// the system will tell you. A walk that named nothing would mean "the tree
-    /// has ended" and "the tree has been orphaned" indistinguishably, and on the
-    /// BSDs and illumos, which name a process's children only through the whole
-    /// process table, it would mean neither. So this is a compile error there
-    /// rather than an answer that is right on one system and wrong on three.
+    /// A zero `timeout_ms` asks and does not wait, which is how to poll. On
+    /// Windows the job's message is posted once and taking it off the port
+    /// consumes it, so this remembers: once it has answered `true` it answers
+    /// `true` thereafter. A Linux cgroup is asked again each time.
+    ///
+    /// A Linux child that was given no cgroup — this process may not make one
+    /// below its own, which `kill` describes — is `error.Unsupported`: what
+    /// remains is a walk down from the child, which cannot tell a tree that has
+    /// ended from one that has been orphaned.
+    ///
+    /// **Elsewhere on POSIX there is no counterpart, and naming one would be a
+    /// lie.** A process group is an address to send signals to and nothing is
+    /// accounted to it. The nearest thing there — the descendant walk `kill` uses
+    /// — cannot answer this question: it walks down from the child, and a
+    /// grandchild whose parent has exited belongs to `init` and is related to the
+    /// child by nothing the system will tell you. A walk that named nothing would
+    /// mean "the tree has ended" and "the tree has been orphaned"
+    /// indistinguishably, and on the BSDs and illumos, which name a process's
+    /// children only through the whole process table, it would mean neither. So
+    /// this is a compile error there rather than an answer that is right on one
+    /// system and wrong on three.
     pub const waitTree = if (is_windows)
         waitTreeWindows
+    else if (builtin.os.tag == .linux)
+        waitTreeLinux
     else
         @compileError(
-            "Child.waitTree is Windows-only: a job object is a container the " ++
-                "system accounts for, and POSIX has no such thing to ask. See " ++
-                "Child.kill for what a signal reaches there.",
+            "Child.waitTree is Windows and Linux only: a job object and a cgroup " ++
+                "are containers the system accounts for, and this system has no " ++
+                "such thing to ask. See Child.kill for what a signal reaches there.",
         );
+
+    fn waitTreeLinux(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
+        const contained = &State.get(child).cgroup;
+        if (!contained.active()) return error.Unsupported;
+        return contained.waitEmpty(io, timeout_ms);
+    }
 
     /// How long one wait on the completion port lasts before the caller is given a
     /// chance to notice it has been cancelled.
