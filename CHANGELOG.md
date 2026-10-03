@@ -23,7 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Retain Darwin exit events from before spawn so a killed tree does not fall back to a sleeping wait.
 
 - Keep the quiet benchmark worktree outside Zig’s disposable cache.
-- Re-point the benchmark checkout and its current revision at main after per-child containment.
+- Re-point the benchmark after revision at the final main.
 - Reject undeclared dependencies, duplicate layer membership and imports of source executables.
 
 - Keep Darwin captures distinct from the platform-selected process fixture.
