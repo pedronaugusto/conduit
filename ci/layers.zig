@@ -34,6 +34,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/child_types.zig",
     } },
     .{ .name = "process policy", .patterns = &.{
+        "src/process_exists.zig",
         "src/stdio_plan.zig",
         "src/tree.zig",
         "src/windows_completion.zig",

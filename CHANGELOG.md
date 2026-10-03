@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `processExists` says whether a process has an id now, on POSIX and Windows, for a caller that wrote a pid down; pair it with `startTime` to tell a successor apart.
+
 - `shellStatus` says how a child ended as a shell's `$?` does, and `signalNumber` gives the number of any ending signal, named or not.
 
 - `bootIdentity` and `parseBootIdentity` are public: the checked identity of this boot, and the same check for one read back from a record, so a consumer compares boots without reading `boot_id` itself.

@@ -41,6 +41,7 @@ const foregroundGroup = conduit.foregroundGroup;
 const ForegroundGroupError = conduit.ForegroundGroupError;
 const ttyName = conduit.ttyName;
 const TtyNameError = conduit.TtyNameError;
+const processExists = conduit.processExists;
 const bootIdentity = conduit.bootIdentity;
 const parseBootIdentity = conduit.parseBootIdentity;
 const startTime = conduit.startTime;

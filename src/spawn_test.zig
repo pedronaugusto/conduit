@@ -1156,6 +1156,32 @@ test "shellStatus says an end as a shell's $? does, and signalNumber names every
     try testing.expectEqual(@as(u8, if (is_windows) 1 else 128 + 9), conduit.shellStatus(killed_term));
 }
 
+test "processExists says whether a process has an id, until it is reaped" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const own: Child.Id = if (is_windows) std.os.windows.GetCurrentProcessId() else std.c.getpid();
+    try testing.expectEqual(@as(?bool, true), conduit.processExists(own));
+    if (!is_windows) {
+        // Zero and below address groups, not a process.
+        try testing.expectEqual(@as(?bool, false), conduit.processExists(0));
+        try testing.expectEqual(@as(?bool, false), conduit.processExists(-1));
+    }
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+    });
+    defer child.release(io) catch unreachable;
+    const pid = child.processId().?;
+    try testing.expectEqual(@as(?bool, true), conduit.processExists(pid));
+    _ = try child.killWait(io, 0);
+    // Reaped on POSIX: the id is given back, and a pid is taken again only
+    // once the counter wraps. A Windows id stays the ended process's while
+    // the Child still holds its handle.
+    try testing.expectEqual(@as(?bool, is_windows), conduit.processExists(pid));
+}
+
 //======================================================================
 // Killing, waiting, groups.
 //======================================================================

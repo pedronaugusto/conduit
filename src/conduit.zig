@@ -213,6 +213,12 @@ else
     tty.ttyName;
 pub const TtyNameError = tty.TtyNameError;
 
+/// Whether a process has an id now: `true`, `false`, or `null` where the
+/// system will not say. One that has ended but is not yet reaped still has
+/// it. Ids are reused: pair the id with `startTime` (Linux and Darwin) to
+/// tell a process from a successor given its number.
+pub const processExists = @import("process_exists.zig").processExists;
+
 /// When a running process started, as a number no later process given the
 /// same pid shares: a pid written down with it can be told, later, from a
 /// stranger given the number since. `null` when there is no such process or
