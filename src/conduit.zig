@@ -114,6 +114,15 @@ pub const Orphans = @import("Orphans.zig").Orphans;
 /// `Cgroup.Recorded` handle for a cgroup saved by an earlier run. On other
 /// systems the handles are empty.
 pub const Cgroup = @import("cgroup.zig").Cgroup;
+/// This boot's identity, the UUID text of `/proc/sys/kernel/random/boot_id`,
+/// read whole and checked; `null` where it cannot be had, and on every system
+/// but Linux. A process's start time and a cgroup's directory inode name
+/// something only within the boot they were read in: a record of either is
+/// written down with this and believed only while this is the same.
+pub const bootIdentity = @import("cgroup.zig").bootIdentity;
+/// `bytes` as a boot identity: exactly a UUID's 36-character text, or `null`.
+/// For a boot read back from a record: anything else proves no boot.
+pub const parseBootIdentity = @import("cgroup.zig").parseBootIdentity;
 /// Windows console input records and bounded waits on a console input handle.
 pub const console = tty.console;
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master
@@ -133,6 +142,12 @@ pub const exitCode = Child.exitCode;
 /// The name of the signal that ended a child, without the `SIG`. POSIX in
 /// practice: a terminated Windows process reports an exit code, not a signal.
 pub const signalName = Child.signalName;
+/// The number of the signal that ended a child, named or not; `null` if a
+/// signal did not end it.
+pub const signalNumber = Child.signalNumber;
+/// How a child ended as a shell's `$?` says it: the exit status's low byte, or
+/// 128 and the signal's number.
+pub const shellStatus = Child.shellStatus;
 /// The dimensions of a terminal.
 pub const Size = tty.Size;
 /// The terminal attributes `rawMode` captured, to give back to `restore`.
@@ -197,6 +212,12 @@ pub const ttyName = if (is_windows)
 else
     tty.ttyName;
 pub const TtyNameError = tty.TtyNameError;
+
+/// Whether a process has an id now: `true`, `false`, or `null` where the
+/// system will not say. One that has ended but is not yet reaped still has
+/// it. Ids are reused: pair the id with `startTime` (Linux and Darwin) to
+/// tell a process from a successor given its number.
+pub const processExists = @import("process_exists.zig").processExists;
 
 /// When a running process started, as a number no later process given the
 /// same pid shares: a pid written down with it can be told, later, from a

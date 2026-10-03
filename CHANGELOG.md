@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `tty.openControlling` opens the process's own terminal, `/dev/tty` or the console's `CONIN$` and `CONOUT$`, and `tty.console` declares `CreateFileW` and `WriteFile`, which conduit's own Windows code now takes from there.
+
+- `Child.exchange` runs a child to its end with borrowed input written while its output is collected, under one deadline over input, run, reap and drain, with its allocator's calls serialized.
+
+- `processExists` says whether a process has an id now, on POSIX and Windows, for a caller that wrote a pid down; pair it with `startTime` to tell a successor apart.
+
+- `shellStatus` says how a child ended as a shell's `$?` does, and `signalNumber` gives the number of any ending signal, named or not.
+
+- `bootIdentity` and `parseBootIdentity` are public: the checked identity of this boot, and the same check for one read back from a record, so a consumer compares boots without reading `boot_id` itself.
+
+- Collect Darwin output with the retained exit watcher, including when the child exited before collection began.
+
+- Skip the final Darwin group enumeration when the held root exited without ever forking.
+
+- Retain Darwin exit events from before spawn so a killed tree does not fall back to a sleeping wait.
+
 - Keep the quiet benchmark worktree outside Zig’s disposable cache.
 - Re-point the benchmark checkout and its current revision at main after per-child containment.
 - Reject undeclared dependencies, duplicate layer membership and imports of source executables.

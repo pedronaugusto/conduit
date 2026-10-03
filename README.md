@@ -87,6 +87,7 @@ to read while a wait or Reaper runs.
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
+| `child.exchange(io, allocator, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
@@ -113,11 +114,16 @@ fixed buffer; it allocates nothing. `recorded.remove()` checks the name's
 inode through that parent and removes an empty cgroup with `unlinkat`;
 `recorded.release()` tries removal and closes both descriptors. A replacement
 between the inode check and `unlinkat` can still change the final entry.
-The caller must also compare the boot id saved with the inode. On systems
-without cgroups, `openRecorded` returns `null`.
+The caller must also compare the boot id saved with the inode:
+`conduit.bootIdentity()` is this boot's, read whole and checked, and
+`conduit.parseBootIdentity(bytes)` checks one read back from a record; a record
+whose boot is not exactly a UUID proves no boot. On systems without cgroups,
+`openRecorded` returns `null`, and `bootIdentity` is `null` everywhere but Linux.
 
-`conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
-`Term` holds without matching on it. `Term` belongs to conduit: `exited` is
+`conduit.succeeded(term)`, `exitCode(term)`, `signalName(term)` and
+`signalNumber(term)` say what a `Term` holds without matching on it;
+`shellStatus(term)` says it as a shell's `$?` does, the exit status's low byte
+or 128 and the signal's number. `Term` belongs to conduit: `exited` is
 `u32`, preserving the full Windows exit code and the POSIX exit byte.
 `signalName` is `null` on Windows, where a process reports an exit code however
 it ended: 1 when `killWait` had to terminate it, and otherwise whatever the
@@ -379,6 +385,9 @@ that process. A recorded cgroup reaches the complete Linux tree.
 and a stable unique process id on Darwin, taken before the start time is checked (Linux)
 or with it in one lookup (Darwin), so the signal it sends reaches that
 process or nothing; it is `null` for a start time that does not match.
+`conduit.processExists(pid)` says whether any process has an id now, on POSIX
+and Windows; one that has ended but is not yet reaped still has it, and a
+reused id is told apart only by the start time written down beside it.
 `CapturedPid` exposes no token or handle. `captured.processId()` reads its
 number for reports. Release it exactly once with `deinit`; do not copy an
 owning capture. Darwin checks the stable unique id on every lookup, so exec
@@ -488,6 +497,12 @@ whether anything is running *on* it. They take a handle rather than a
 console is two handles with two unrelated sets of mode flags, so `rawMode` is
 called once for each and works out which it was given, and `winSize` wants the
 output one.
+
+`openControlling(io)` opens the process's own terminal rather than its standard
+streams: `/dev/tty` on POSIX, `CONIN$` and `CONOUT$` on Windows, as one
+`Controlling` with an `input` and an `output` file. `conduit.console` also
+carries `CreateFileW` and `WriteFile` for Windows code that writes to the
+console with no `std.Io` to hand, a panic handler among it.
 
 `rawMode` and `restore` take effect at once and throw away input nobody read;
 neither waits for the output to drain, so a terminal that has stopped reading
@@ -655,7 +670,7 @@ is asked, a child that has never forked is not walked at all: `spawn` watches
 its forks with a kqueue registered before the child runs anything — a
 `posix_spawn` child starts suspended until then, a fork child waits before its
 `execve` — so its stop is the signal alone, and one fork, however early, puts
-it back on the walk. The watch is one descriptor per child, closed by `deinit`.
+it back on the walk. After exit, that same proof skips the final group enumeration for a leaf; a forked tree still pays the held exit check and repeated group force to catch a late fork. The watch is one descriptor per child, closed by `deinit`.
 On Linux the pass reads every process's `/proc` record, and before it `kill`
 reads the child's own `/proc/<pid>/task/<tid>/children`, one small file per
 thread: a child with no child of its own is signalled alone. Either way a
@@ -703,6 +718,8 @@ argument, environment and search-path arrays exist only for the spawn call.
 `InputWriter` keeps its state and queue until `deinit`. `Child.output` allocates
 the bytes
 it collects and `environ` the map it returns; both say whose they are.
+`Child.exchange` allocates what `output` does, one call at a time, and copies
+none of its input.
 Process snapshots for POSIX signalling and `endRecorded` use bounded stack
 buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
@@ -725,6 +742,8 @@ the `Reaper` exists for. A separate identity claim covers the whole descendant
 walk and signal delivery, and the final reap and Windows handle closure. A
 wait observes the exit without holding that claim, so it can still be stopped;
 once reaped, its process or group id is never used for signalling again.
+Darwin waits retain exit notes on the fork watcher registered before the child runs, avoiding a sleeping retry when a later registration would be refused.
+Output collection borrows that watcher too; it keeps the identity check and owned bytes while avoiding another registration or reader tasks for an already-exited child.
 
 ## Scope
 

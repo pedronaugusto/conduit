@@ -107,6 +107,29 @@ pub const Child = enum(usize) {
         };
     }
 
+    /// The number of the signal that ended or stopped the child, or `null` if
+    /// none did. Unlike `signalName`, a signal with no name has one: a
+    /// real-time signal is its number. Never set by a Windows wait.
+    pub fn signalNumber(term: Term) ?u8 {
+        return switch (term) {
+            .signal, .stopped => |signal| std.math.cast(u8, @intFromEnum(signal)),
+            else => null,
+        };
+    }
+
+    /// The child's end as a POSIX shell reports it in `$?`: the exit status
+    /// in its low byte, or 128 and the number of the signal that ended or
+    /// stopped it. An end that is neither is 255. A Windows exit code is
+    /// truncated to its low byte, as a POSIX shell there reports one;
+    /// `exitCode` keeps all 32 bits.
+    pub fn shellStatus(term: Term) u8 {
+        return switch (term) {
+            .exited => |code| @truncate(code),
+            .signal, .stopped => if (signalNumber(term)) |number| 128 +| number else 255,
+            .unknown => 255,
+        };
+    }
+
     /// Which of the child's three standard streams get pipes.
     ///
     /// A stream that is not piped is inherited from the parent, on both systems.
@@ -575,6 +598,16 @@ pub const Child = enum(usize) {
         }
 
         if (!is_windows) {
+            if (builtin.is_test) if (before_exit_watch) |hook| hook(child);
+            if (comptime tree.Forks.supported) {
+                while (true) {
+                    const left = deadline.remainingMs(io);
+                    if (left == 0) return child.tryWaitClaimed();
+                    const ended = State.get(child).forks.ended(@min(left, wait_for.slice_ms)) orelse break;
+                    if (ended) return child.reapEnded(io, deadline);
+                    try std.Io.checkCancel(io);
+                }
+            }
             if (wait_for.Watch.open(State.get(child).id)) |watch| {
                 defer watch.close();
                 while (true) {
@@ -590,6 +623,11 @@ pub const Child = enum(usize) {
             }
         }
 
+        // Darwin refuses a watch once exit has begun. The child may have
+        // ended between the first reap attempt and registration; ask again
+        // before treating a missing watch as a reason to sleep.
+        if (try child.tryWaitClaimed()) |term| return term;
+
         // Nothing to wait on: ask again, on an interval that grows to a few
         // milliseconds so a child that ends promptly is noticed promptly and one
         // that does not is not asked about a thousand times a second.
@@ -601,6 +639,64 @@ pub const Child = enum(usize) {
             if (try child.tryWaitClaimed()) |term| return term;
             interval_ms = @min(interval_ms * 2, 4);
         }
+    }
+
+    var before_exit_watch: if (builtin.is_test) ?*const fn (*Child) void else void = if (builtin.is_test) null else {};
+
+    test "an exit before watch registration is reaped without a fallback sleep" {
+        if (is_windows) return error.SkipZigTest;
+        if (!tree.Forks.supported) return error.SkipZigTest;
+        const testing = std.testing;
+        const io = testing.io;
+        var child = try Child.spawn(io, testing.allocator, .{
+            .argv = &.{ "/bin/sh", "-c", "read x" },
+            .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const Exit = struct {
+            fn beforeWatch(owner: *Child) void {
+                owner.closeStdin(testing.io);
+                const until: Deadline = .in(testing.io, 5000);
+                while (wait_for.endedUnreaped(State.get(owner).id) == .running) {
+                    if (until.remainingMs(testing.io) == 0) @panic("fixture did not exit");
+                    std.Thread.yield() catch {};
+                }
+                // A fork check may consume NOTE_EXIT before the waiter runs.
+                _ = State.get(owner).forks.any();
+            }
+            fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+                return error.Canceled;
+            }
+        };
+        var vtable = io.vtable.*;
+        vtable.sleep = Exit.sleep;
+        const no_sleep: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+        before_exit_watch = Exit.beforeWatch;
+        defer before_exit_watch = null;
+        // A termination request still owns the final group force before reap.
+        State.get(&child).end_descendants = true;
+        _ = try child.wait(no_sleep);
+        try testing.expect(State.get(&child).scope_complete);
+    }
+
+    test "a child that never forked needs no final group enumeration" {
+        if (is_windows) return error.SkipZigTest;
+        if (!tree.Forks.supported) return error.SkipZigTest;
+        const io = std.testing.io;
+        var child = try Child.spawn(io, std.testing.allocator, .{
+            .argv = &.{ "/bin/sleep", "30" },
+            .stdio = .ignore,
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const before = tree.testing_hook.group_forces.load(.acquire);
+        try child.kill(.kill);
+        _ = try child.wait(io);
+        try std.testing.expectEqual(before, tree.testing_hook.group_forces.load(.acquire));
+        try std.testing.expect(State.get(&child).scope_complete);
     }
 
     /// Waits for whoever holds the reap to publish a term, until `deadline`.
@@ -676,8 +772,12 @@ pub const Child = enum(usize) {
                 .ended => {
                     if (State.get(child).lineage) |tracker| if (!tracker.finish()) return null;
                     const contained = &State.get(child).cgroup;
-                    if (!contained.active() or !contained.kill())
-                        if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
+                    if (!contained.active() or !contained.kill()) {
+                        // Once this root has ended, a watch that saw no fork
+                        // proves its private session never had another member.
+                        const could_have_members = if (tree.Forks.supported) State.get(child).forks.any() else true;
+                        if (could_have_members) if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
+                    }
                     State.get(child).force_tree = false;
                 },
                 .unknown => {},
@@ -1319,6 +1419,18 @@ pub const Child = enum(usize) {
         allocator: Allocator,
         options: OutputOptions,
     ) OutputError!Output {
+        return child.outputUntil(io, allocator, options, null);
+    }
+
+    /// `output`, with `until` a deadline over the whole of it: the run's own
+    /// timeout and every drain end by it at the latest.
+    fn outputUntil(
+        child: *Child,
+        io: std.Io,
+        allocator: Allocator,
+        options: OutputOptions,
+        until: ?Deadline,
+    ) OutputError!Output {
         errdefer child.abandon(io);
         // On a system with a handle that becomes readable when the child ends,
         // the two pipes and that handle are watched together from this task, so
@@ -1328,11 +1440,94 @@ pub const Child = enum(usize) {
         if (!is_windows) {
             // A published term needs only stream draining. Never register an OS
             // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(io, allocator, options, null, published);
-            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, watch, null);
+            if (published != null) return child.outputPolled(io, allocator, options, until, null, published, false);
+            if (comptime tree.Forks.supported) {
+                if (State.get(child).forks.queue) |queue|
+                    return child.outputPolled(io, allocator, options, until, .{ .handle = queue }, null, true);
+            }
+            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, until, watch, null, false);
         }
-        return child.outputOnTasks(io, allocator, options);
+        return child.outputOnTasks(io, allocator, options, until);
     }
+
+    pub const ExchangeOptions = @import("child_types.zig").ExchangeOptions;
+
+    pub const ExchangeError = @import("child_types.zig").ExchangeError;
+
+    /// Runs the child to the end with `input` on its standard input, which
+    /// then closes, and collects what it wrote: `output` with the input
+    /// written alongside, so neither side waits on a full pipe, under one
+    /// deadline.
+    ///
+    /// `input` is borrowed for the call and written from one task as it is,
+    /// never copied. Input the child does not read is not an error: a program
+    /// may end, or close its input, without taking all of it. Any other write
+    /// failure is returned once the child has ended. With no input, standard
+    /// input is closed at once; input for a child whose standard input is not
+    /// a pipe this `Child` holds is `error.NoStdinPipe`.
+    ///
+    /// `ExchangeOptions.timeout_ms` bounds the whole call: the input, the run,
+    /// the reap and the drain after it. A child still running then is killed
+    /// with no grace and `Output.timedOut` is true; a write still blocked —
+    /// on something the child started that holds its input and never reads —
+    /// is interrupted. The call returns by the deadline, give or take the
+    /// moment a kill takes.
+    ///
+    /// `allocator` need not be safe to use from several threads: every
+    /// allocation of the call is serialized, and grows only the two collected
+    /// streams, each bounded by `max_bytes`. The returned `Output` is freed
+    /// with `allocator`. As with `output`, the child is reaped when this
+    /// returns, an error included.
+    pub fn exchange(
+        child: *Child,
+        io: std.Io,
+        allocator: Allocator,
+        input: []const u8,
+        options: ExchangeOptions,
+    ) ExchangeError!Output {
+        errdefer child.abandon(io);
+        const until: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+        var feed: Feed = .{};
+        var group: std.Io.Group = .init;
+        defer group.cancel(io);
+        if (input.len == 0) {
+            child.closeStdin(io);
+        } else {
+            const state = State.optional(child) orelse return error.NoStdinPipe;
+            const stdin = state.stdin orelse return error.NoStdinPipe;
+            try group.concurrent(io, Feed.run, .{ &feed, io, stdin, input });
+            // The task closes it once written.
+            state.stdin = null;
+        }
+        var serial: @import("serial_allocator.zig").SerialAllocator = .{ .parent = allocator, .io = io };
+        var collected = try child.outputUntil(io, serial.allocator(), .{
+            .max_bytes = options.max_bytes,
+            .grace_ms = 0,
+            .drain_ms = options.drain_ms,
+        }, until);
+        errdefer collected.deinit(allocator);
+        // The child has ended. What still holds its input is not the child,
+        // and a write to it is not waited for.
+        group.cancel(io);
+        if (feed.failure) |err| return err;
+        return collected;
+    }
+
+    /// The input of an `exchange`, written on a task of its own.
+    const Feed = struct {
+        failure: ?std.Io.File.Writer.Error = null,
+
+        fn run(feed: *Feed, io: std.Io, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {
+            // Only this task uses or closes the pipe once it has started.
+            defer file.close(io);
+            handles.writeStreamingAll(file, io, bytes) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                // The child ended, or closed its input, before taking all of it.
+                error.BrokenPipe => {},
+                else => feed.failure = err,
+            };
+        }
+    };
 
     /// The end of a run nobody will finish: `.kill` and the reap, with
     /// cancelation held off, since the cancelation is usually why.
@@ -1355,6 +1550,7 @@ pub const Child = enum(usize) {
         io: std.Io,
         allocator: Allocator,
         options: OutputOptions,
+        until: ?Deadline,
     ) OutputError!Output {
         var out: Collector = .init;
         var err: Collector = .init;
@@ -1379,7 +1575,7 @@ pub const Child = enum(usize) {
         } else err.done.store(true, .release);
 
         var timed_out = false;
-        const deadline: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+        const deadline = runDeadline(io, options, until);
         const term = term: while (true) {
             // A reader that cannot continue leaves a pipe the child may fill and
             // block on. Notice it while the child is still running, end the child,
@@ -1388,8 +1584,8 @@ pub const Child = enum(usize) {
                 break :term try child.killWait(io, 0);
             }
 
-            const slice_ms = if (deadline) |until| slice: {
-                const left = until.remainingMs(io);
+            const slice_ms = if (deadline) |run_end| slice: {
+                const left = run_end.remainingMs(io);
                 if (left == 0) {
                     timed_out = true;
                     break :term try child.killWait(io, options.grace_ms);
@@ -1402,7 +1598,7 @@ pub const Child = enum(usize) {
         // The child is gone, so its ends of the pipes are closed and the readers
         // are finishing. Anything still holding a stream open is not the child,
         // and is not what this call promised to wait for.
-        const drain: Deadline = .in(io, options.drain_ms);
+        const drain = drainDeadline(io, options, until);
         while (true) {
             if (out.done.load(.acquire) and err.done.load(.acquire)) break;
             const left = drain.remainingMs(io);
@@ -1451,6 +1647,25 @@ pub const Child = enum(usize) {
             return collector.failure.load(.acquire) == .read_failed;
         }
     };
+
+    /// When a run collecting output is ended: its own timeout, or `until`,
+    /// whichever comes first.
+    fn runDeadline(io: std.Io, options: OutputOptions, until: ?Deadline) ?Deadline {
+        const own: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+        return earlier(io, own, until);
+    }
+
+    /// When reading stops after the child has ended: `drain_ms` from now, or
+    /// `until`, whichever comes first.
+    fn drainDeadline(io: std.Io, options: OutputOptions, until: ?Deadline) Deadline {
+        return earlier(io, Deadline.in(io, options.drain_ms), until).?;
+    }
+
+    fn earlier(io: std.Io, a: ?Deadline, b: ?Deadline) ?Deadline {
+        const first = a orelse return b;
+        const second = b orelse return first;
+        return if (second.remainingMs(io) < first.remainingMs(io)) second else first;
+    }
 
     /// How often an unbounded `output` wait gives its readers a chance to report
     /// that one of them cannot keep draining. Each bounded wait still uses the
@@ -1530,10 +1745,12 @@ pub const Child = enum(usize) {
         io: std.Io,
         allocator: Allocator,
         options: OutputOptions,
+        until: ?Deadline,
         watch: ?wait_for.Watch,
         published: ?Term,
+        borrowed_exit: bool,
     ) OutputError!Output {
-        defer if (watch) |opened| opened.close();
+        defer if (!borrowed_exit) if (watch) |opened| opened.close();
         var out: Collector = .init;
         var err: Collector = .init;
         errdefer out.list.deinit(allocator);
@@ -1547,12 +1764,16 @@ pub const Child = enum(usize) {
         }
 
         var timed_out = false;
-        const deadline: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+        const deadline = runDeadline(io, options, until);
         var term = published;
-        var drain: ?Deadline = if (published != null) .in(io, options.drain_ms) else null;
+        var drain: ?Deadline = if (published != null) drainDeadline(io, options, until) else null;
         var ended = false;
         while (true) {
             try std.Io.checkCancel(io);
+            // A fork check or waiter may have consumed the shared exit note.
+            if (comptime tree.Forks.supported) if (borrowed_exit and State.get(child).forks.exited.load(.acquire)) {
+                ended = true;
+            };
             const out_done = out.done.load(.acquire);
             const err_done = err.done.load(.acquire);
             if (term == null) {
@@ -1567,7 +1788,7 @@ pub const Child = enum(usize) {
                 } else if (ended) {
                     term = try child.tryWaitClaimed();
                 }
-                if (term != null) drain = .in(io, options.drain_ms);
+                if (term != null) drain = drainDeadline(io, options, until);
             }
             if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
 
@@ -1593,14 +1814,14 @@ pub const Child = enum(usize) {
             }
             var slice: u32 = output_wait_slice_ms;
             if (term == null) {
-                if (deadline) |until| slice = @min(slice, until.remainingMs(io));
+                if (deadline) |run_end| slice = @min(slice, run_end.remainingMs(io));
             } else slice = @min(slice, drain.?.remainingMs(io));
             if (count == 0) {
                 // The streams are finished and the child has been told to end;
                 // it is only its own exit that is waited for now.
                 if (try child.waitTimeout(io, slice)) |finished| {
                     term = finished;
-                    drain = .in(io, options.drain_ms);
+                    drain = drainDeadline(io, options, until);
                 }
                 continue;
             }
@@ -1613,6 +1834,12 @@ pub const Child = enum(usize) {
                     // The child has ended, or is a moment from being waitable:
                     // the reap is asked for on the next round, and again until
                     // it answers.
+                    if (comptime tree.Forks.supported) {
+                        if (borrowed_exit) {
+                            ended = State.get(child).forks.ended(0) orelse false;
+                            continue;
+                        }
+                    }
                     ended = true;
                     continue;
                 }
@@ -1806,6 +2033,41 @@ pub const Child = enum(usize) {
         }
     } else struct {};
 
+    test "output of an exited Darwin child needs no reader task" {
+        if (is_windows) return error.SkipZigTest;
+        if (!tree.Forks.supported) return error.SkipZigTest;
+        const testing = std.testing;
+        const io = testing.io;
+        var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        var child = try Child.spawn(io, testing.allocator, .{
+            .argv = &.{ "/bin/echo", "retained" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const until: Deadline = .in(io, 5000);
+        while (wait_for.endedUnreaped(State.get(&child).id) == .running) {
+            if (until.remainingMs(io) == 0) return error.TestChildDidNotExit;
+            try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+        }
+        // Another fork check can consume the queued exit without reaping.
+        _ = State.get(&child).forks.any();
+        const Refuse = struct {
+            fn concurrent(_: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
+                return error.ConcurrencyUnavailable;
+            }
+        };
+        var vtable = io.vtable.*;
+        vtable.groupConcurrent = Refuse.concurrent;
+        const no_tasks: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+        var collected = try child.output(no_tasks, testing.allocator, .{});
+        defer collected.deinit(testing.allocator);
+        try testing.expectEqualStrings("retained\n", collected.stdout());
+        try testing.expect(succeeded(collected.term()));
+    }
+
     test "output on tasks bounds draining by elapsed time after a delayed sleep" {
         const testing = std.testing;
         const io = testing.io;
@@ -1852,7 +2114,7 @@ pub const Child = enum(usize) {
         vtable.now = Clock.now;
         vtable.sleep = Clock.sleep;
         const delayed_io: std.Io = .{ .vtable = &vtable, .userdata = io.userdata };
-        var collected = try child.outputOnTasks(delayed_io, testing.allocator, .{ .drain_ms = 20 });
+        var collected = try child.outputOnTasks(delayed_io, testing.allocator, .{ .drain_ms = 20 }, null);
         defer collected.deinit(testing.allocator);
         try testing.expect(collected.stdoutTruncated());
         try testing.expectEqual(@as(u32, 20), Clock.elapsed.load(.acquire));

@@ -1125,6 +1125,63 @@ test "succeeded, exitCode and signalName say how a child ended" {
     }
 }
 
+test "shellStatus says an end as a shell's $? does, and signalNumber names every signal" {
+    try testing.expectEqual(@as(u8, 0), conduit.shellStatus(.{ .exited = 0 }));
+    try testing.expectEqual(@as(u8, 7), conduit.shellStatus(.{ .exited = 7 }));
+    // A Windows code past a byte keeps its low byte, as a POSIX shell there says it.
+    try testing.expectEqual(@as(u8, 0x01), conduit.shellStatus(.{ .exited = 0xC000_0101 }));
+    try testing.expectEqual(@as(u8, 255), conduit.shellStatus(.{ .unknown = 3 }));
+    try testing.expectEqual(@as(?u8, null), conduit.signalNumber(.{ .exited = 9 }));
+    if (!is_windows) {
+        try testing.expectEqual(@as(u8, 128 + 9), conduit.shellStatus(.{ .signal = .KILL }));
+        try testing.expectEqual(@as(u8, 128 + 15), conduit.shellStatus(.{ .signal = .TERM }));
+        try testing.expectEqual(@as(?u8, 9), conduit.signalNumber(.{ .signal = .KILL }));
+        // A signal with no name still has a number, and a status.
+        const unnamed: std.posix.SIG = @enumFromInt(40);
+        try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(.{ .signal = unnamed }));
+        try testing.expectEqual(@as(?u8, 40), conduit.signalNumber(.{ .signal = unnamed }));
+        try testing.expectEqual(@as(u8, 168), conduit.shellStatus(.{ .signal = unnamed }));
+    }
+
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var killed = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+        .detach = true,
+    });
+    defer killed.release(io) catch unreachable;
+    const killed_term = try killed.killWait(io, 0);
+    try testing.expectEqual(@as(u8, if (is_windows) 1 else 128 + 9), conduit.shellStatus(killed_term));
+}
+
+test "processExists says whether a process has an id, until it is reaped" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const own: Child.Id = if (is_windows) std.os.windows.GetCurrentProcessId() else std.c.getpid();
+    try testing.expectEqual(@as(?bool, true), conduit.processExists(own));
+    if (!is_windows) {
+        // Zero and below address groups, not a process.
+        try testing.expectEqual(@as(?bool, false), conduit.processExists(0));
+        try testing.expectEqual(@as(?bool, false), conduit.processExists(-1));
+    }
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+    });
+    defer child.release(io) catch unreachable;
+    const pid = child.processId().?;
+    try testing.expectEqual(@as(?bool, true), conduit.processExists(pid));
+    _ = try child.killWait(io, 0);
+    // Reaped on POSIX: the id is given back, and a pid is taken again only
+    // once the counter wraps. A Windows id stays the ended process's while
+    // the Child still holds its handle.
+    try testing.expectEqual(@as(?bool, is_windows), conduit.processExists(pid));
+}
+
 //======================================================================
 // Killing, waiting, groups.
 //======================================================================
