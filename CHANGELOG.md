@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `spawn` refuses an argument holding a NUL with `InvalidArgv`. It ended the argument where it stood, and on Windows ended the command line there, so the child received fewer arguments than it was given.
+
 - A wait status is decoded from its sixteen bits, so a word with higher bits set cannot panic in Darwin's `EXITSTATUS`.
 
 - A `/proc/self/cgroup` line the read stopped in the middle of is no longer taken as this process's cgroup.

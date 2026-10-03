@@ -12,7 +12,8 @@ const Allocator = std.mem.Allocator;
 
 /// The three ways serialising can fail, each of them also a `Child.SpawnError`.
 pub const Error = error{
-    /// `argv[0]` holds a double quote. See `serialise`.
+    /// `argv[0]` holds a double quote, or an argument holds a NUL. See
+    /// `serialise`.
     InvalidArgv,
     /// A name in `argv` is not valid WTF-8, so it has no UTF-16 spelling.
     InvalidWtf8,
@@ -25,10 +26,13 @@ pub const Error = error{
 /// The first argument is quoted differently from the rest: a backslash in it
 /// has no special meaning, which makes a double quote in it impossible to
 /// escape without letting characters leak into the arguments after it. Such an
-/// `argv[0]` is refused rather than mangled. Every later argument is quoted
+/// `argv[0]` is refused rather than mangled, as is an argument holding a NUL:
+/// the command line is read as a string that ends at its first one, so every
+/// argument from there on would be lost. Every later argument is quoted
 /// whenever it is empty or holds a space, a control character or a quote, with
 /// backslashes doubled where they precede a quote.
 pub fn serialise(arena: Allocator, argv: []const []const u8) Error![:0]u16 {
+    for (argv) |argument| if (std.mem.indexOfScalar(u8, argument, 0) != null) return error.InvalidArgv;
     var buffer: std.ArrayList(u8) = .empty;
 
     const program = argv[0];
@@ -179,6 +183,60 @@ fn argvSurvivesTheRoundTrip(_: void, smith: *std.testing.Smith) !void {
 
     try testing.expectEqual(wanted.len, parsed.len);
     for (wanted, parsed) |expected, actual| try testing.expectEqualStrings(expected, actual);
+}
+
+test "an argument list of any text survives the command line it is written into" {
+    try testing.fuzz({}, anyTextSurvivesTheRoundTrip, .{});
+}
+
+/// The same property over arguments of any text: characters of every UTF-8
+/// length, a surrogate half spelled in WTF-8, a NUL, and the bytes the
+/// quoting rules turn on. What `serialise` writes is the arguments it was
+/// given, or a refusal -- never fewer or other arguments.
+fn anyTextSurvivesTheRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    const pieces = [_][]const u8{ "a", "\"", "\\", " ", "\t", "\x00", "\u{e9}", "\u{20ac}", "\u{1f600}", "\xed\xa0\x80", "\n", "^", "%" };
+    var storage: [5][32]u8 = undefined;
+    var argv: [5][]const u8 = undefined;
+    const count = smith.valueRangeAtMost(u8, 1, argv.len);
+    for (argv[0..count], storage[0..count]) |*argument, *bytes| {
+        var len: usize = 0;
+        while (!smith.eosWeightedSimple(2, 1)) {
+            const piece = pieces[smith.index(pieces.len)];
+            if (len + piece.len > bytes.len) break;
+            @memcpy(bytes[len..][0..piece.len], piece);
+            len += piece.len;
+        }
+        argument.* = bytes[0..len];
+    }
+    try checkRoundTrip(argv[0..count]);
+}
+
+fn checkRoundTrip(wanted: []const []const u8) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const line = serialise(arena, wanted) catch |err| switch (err) {
+        error.InvalidArgv => {
+            const quote = std.mem.indexOfScalar(u8, wanted[0], '"') != null;
+            const nul = for (wanted) |argument| {
+                if (std.mem.indexOfScalar(u8, argument, 0) != null) break true;
+            } else false;
+            try testing.expect(quote or nul);
+            return;
+        },
+        else => |e| return e,
+    };
+    // `CreateProcessW` reads the line as a string that ends at its first NUL.
+    const read = line[0 .. std.mem.indexOfScalar(u16, line, 0) orelse line.len];
+    const parsed = try parse(arena, try std.unicode.wtf16LeToWtf8Alloc(arena, read));
+    try testing.expectEqual(wanted.len, parsed.len);
+    for (wanted, parsed) |expected, actual| try testing.expectEqualStrings(expected, actual);
+}
+
+test "an argument holding a NUL is refused, not cut short" {
+    try checkRoundTrip(&.{ "x.exe", "a\x00b", "c" });
+    try checkRoundTrip(&.{ "x\x00.exe", "c" });
 }
 
 /// The rules `CommandLineToArgvW` splits a command line by, as a program that

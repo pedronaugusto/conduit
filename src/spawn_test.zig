@@ -3135,6 +3135,11 @@ test "a program that is not there is an error, not a child that exits 127" {
         .argv = &.{},
         .stdio = .ignore,
     }));
+    // A NUL would end the argument where it stands, on either system.
+    try testing.expectError(error.InvalidArgv, Child.spawn(io, gpa, .{
+        .argv = &.{ "conduit-no-such-program-anywhere", "a\x00b" },
+        .stdio = .ignore,
+    }));
     if (!is_windows) {
         try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
             .argv = &.{"conduit-no-such-program-anywhere"},

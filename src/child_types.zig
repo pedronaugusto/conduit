@@ -408,9 +408,10 @@ pub const PathSearch = enum {
 
 pub const SpawnError = error{
     OutOfMemory,
-    /// `argv` was empty, or — on Windows — its first element contains a
-    /// double quote, which cannot be serialised into a command line without
-    /// letting characters leak into the arguments after it.
+    /// `argv` was empty, or one of its elements holds a NUL, which would end
+    /// it early — or, on Windows, its first element contains a double quote,
+    /// which cannot be serialised into a command line without letting
+    /// characters leak into the arguments after it.
     InvalidArgv,
     /// Windows only: a name in `argv` or in the environment is not valid
     /// WTF-8, so it has no UTF-16 spelling to pass on.
