@@ -725,6 +725,7 @@ the `Reaper` exists for. A separate identity claim covers the whole descendant
 walk and signal delivery, and the final reap and Windows handle closure. A
 wait observes the exit without holding that claim, so it can still be stopped;
 once reaped, its process or group id is never used for signalling again.
+Darwin waits retain exit notes on the fork watcher registered before the child runs, avoiding a sleeping retry when a later registration would be refused.
 
 ## Scope
 

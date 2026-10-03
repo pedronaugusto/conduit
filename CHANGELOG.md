@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Retain Darwin exit events from before spawn so a killed tree does not fall back to a sleeping wait.
+
 - Reject undeclared dependencies, duplicate layer membership and imports of source executables.
 
 - Keep Darwin captures distinct from the platform-selected process fixture.

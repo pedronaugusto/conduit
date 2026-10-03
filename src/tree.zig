@@ -1230,6 +1230,7 @@ const DarwinForks = struct {
     /// (the kernel makes every `EVFILT_PROC` one `EV_CLEAR`), so what one
     /// question learned is kept here for the next.
     seen: std.atomic.Value(bool) = .init(false),
+    exited: std.atomic.Value(bool) = .init(false),
     /// Held by the task reading the queue. A second task that asks meanwhile
     /// could otherwise find the queue emptied by the first and the note not
     /// yet kept, so it answers `true` instead, which is the walk.
@@ -1250,7 +1251,7 @@ const DarwinForks = struct {
             .ident = @intCast(pid),
             .filter = c.EVFILT.PROC,
             .flags = c.EV.ADD | c.EV.ENABLE,
-            .fflags = c.NOTE.FORK,
+            .fflags = c.NOTE.FORK | c.NOTE.EXIT,
             .data = 0,
             .udata = 0,
             .ext = .{ 0, 0 },
@@ -1282,8 +1283,32 @@ const DarwinForks = struct {
         if (ready < 0) return true;
         for (events[0..@intCast(ready)]) |event| {
             if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
+            if (event.fflags & c.NOTE.EXIT != 0) forks.exited.store(true, .release);
         }
         return forks.seen.load(.acquire);
+    }
+
+    /// The exit registered before the child ran, including a note consumed
+    /// by a concurrent fork check. Null means no queue could be registered.
+    pub fn ended(forks: *DarwinForks, milliseconds: u32) ?bool {
+        if (forks.exited.load(.acquire)) return true;
+        const queue = forks.queue orelse return null;
+        if (forks.reading.swap(true, .acquire)) return false;
+        defer forks.reading.store(false, .release);
+        if (forks.exited.load(.acquire)) return true;
+        var events: [2]c.kevent64_s = undefined;
+        var nothing: [0]c.kevent64_s = undefined;
+        const timeout: c.timespec = .{
+            .sec = @intCast(milliseconds / 1000),
+            .nsec = @intCast((milliseconds % 1000) * std.time.ns_per_ms),
+        };
+        const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{}, &timeout);
+        if (ready < 0) return null;
+        for (events[0..@intCast(ready)]) |event| {
+            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
+            if (event.fflags & c.NOTE.EXIT != 0) forks.exited.store(true, .release);
+        }
+        return forks.exited.load(.acquire);
     }
 
     pub fn close(forks: *DarwinForks) void {

@@ -575,6 +575,16 @@ pub const Child = enum(usize) {
         }
 
         if (!is_windows) {
+            if (builtin.is_test) if (before_exit_watch) |hook| hook(child);
+            if (comptime tree.Forks.supported) {
+                while (true) {
+                    const left = deadline.remainingMs(io);
+                    if (left == 0) return child.tryWaitClaimed();
+                    const ended = State.get(child).forks.ended(@min(left, wait_for.slice_ms)) orelse break;
+                    if (ended) return child.reapEnded(io, deadline);
+                    try std.Io.checkCancel(io);
+                }
+            }
             if (wait_for.Watch.open(State.get(child).id)) |watch| {
                 defer watch.close();
                 while (true) {
@@ -590,6 +600,11 @@ pub const Child = enum(usize) {
             }
         }
 
+        // Darwin refuses a watch once exit has begun. The child may have
+        // ended between the first reap attempt and registration; ask again
+        // before treating a missing watch as a reason to sleep.
+        if (try child.tryWaitClaimed()) |term| return term;
+
         // Nothing to wait on: ask again, on an interval that grows to a few
         // milliseconds so a child that ends promptly is noticed promptly and one
         // that does not is not asked about a thousand times a second.
@@ -601,6 +616,46 @@ pub const Child = enum(usize) {
             if (try child.tryWaitClaimed()) |term| return term;
             interval_ms = @min(interval_ms * 2, 4);
         }
+    }
+
+    var before_exit_watch: if (builtin.is_test) ?*const fn (*Child) void else void = if (builtin.is_test) null else {};
+
+    test "an exit before watch registration is reaped without a fallback sleep" {
+        if (is_windows) return error.SkipZigTest;
+        if (!tree.Forks.supported) return error.SkipZigTest;
+        const testing = std.testing;
+        const io = testing.io;
+        var child = try Child.spawn(io, testing.allocator, .{
+            .argv = &.{ "/bin/sh", "-c", "read x" },
+            .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const Exit = struct {
+            fn beforeWatch(owner: *Child) void {
+                owner.closeStdin(testing.io);
+                const until: Deadline = .in(testing.io, 5000);
+                while (wait_for.endedUnreaped(State.get(owner).id) == .running) {
+                    if (until.remainingMs(testing.io) == 0) @panic("fixture did not exit");
+                    std.Thread.yield() catch {};
+                }
+                // A fork check may consume NOTE_EXIT before the waiter runs.
+                _ = State.get(owner).forks.any();
+            }
+            fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
+                return error.Canceled;
+            }
+        };
+        var vtable = io.vtable.*;
+        vtable.sleep = Exit.sleep;
+        const no_sleep: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+        before_exit_watch = Exit.beforeWatch;
+        defer before_exit_watch = null;
+        // A termination request still owns the final group force before reap.
+        State.get(&child).end_descendants = true;
+        _ = try child.wait(no_sleep);
+        try testing.expect(State.get(&child).scope_complete);
     }
 
     /// Waits for whoever holds the reap to publish a term, until `deadline`.
