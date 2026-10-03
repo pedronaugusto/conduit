@@ -193,6 +193,8 @@ fn main() {
         "pty_open" => pty_open(n),
         "tty_ops" => tty_ops(n),
         "environ" => environ(n),
+        "signal" => signal_round_trip(n),
+        "extra_fds" => extra_fds(n),
         _ => panic!("unknown workload"),
     }
 }
@@ -470,4 +472,91 @@ fn environ(n: usize) {
         if timed { report("rust-std", "ENVIRON", "only", start.elapsed().as_secs_f64() * 1e6 / n as f64, "us"); }
     }
     agree("rust-std", "ENVIRON", "inherited_vars", inherited, "count");
+}
+
+// ------------------------------------------------------------------------
+// Signals and descriptors beyond the standard three.
+
+/// The child every side signals: `c-bench signal_child`; see coverage.c.
+fn signal_child() -> String {
+    std::env::var("BENCH_SIGNAL_CHILD").expect("BENCH_SIGNAL_CHILD unset")
+}
+
+fn read_exact(from: &mut dyn Read, expected: &[u8]) {
+    let mut buffer = vec![0u8; expected.len()];
+    from.read_exact(&mut buffer).unwrap();
+    assert_eq!(buffer, expected);
+}
+
+/// std has only `Child::kill` (SIGKILL), so any other signal is `kill(2)`
+/// through libc, to the one pid, in a group of its own so the teardown
+/// reaches the descendant.
+fn signal_round_trip(n: usize) {
+    let mut child = Command::new(signal_child())
+        .arg("signal_child")
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .process_group(0)
+        .spawn().unwrap();
+    let pid = child.id() as i32;
+    let mut out = child.stdout.take().unwrap();
+    read_exact(&mut out, b"r\n");
+    let mut one = || {
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGUSR1) }, 0);
+        read_exact(&mut out, b"x\n");
+    };
+    for _ in 0..warm(n, 20) {
+        one();
+    }
+    let start = BenchmarkInstant::now();
+    for _ in 0..n {
+        one();
+    }
+    report("rust-libc-kill", "SIGNAL", "round_trip", start.elapsed().as_secs_f64() * 1e6 / n as f64, "us");
+    agree("rust-libc-kill", "SIGNAL", "acks", n, "count");
+    unsafe { libc::kill(-pid, libc::SIGKILL) };
+    child.wait().unwrap();
+}
+
+/// std has no descriptor mapping; `pre_exec` with `dup2` is what the
+/// command-fds crate does, and it sends std to its fork path.
+fn one_extra_fds() -> f64 {
+    let start = BenchmarkInstant::now();
+    let mut ends = [0i32; 2];
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    for fd in ends {
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    let write_end = ends[1];
+    let mut cmd = null_command(&program("SH", "sh"));
+    cmd.args(["-c", "echo x >&3"]);
+    unsafe {
+        cmd.pre_exec(move || {
+            if write_end == 3 {
+                if libc::fcntl(3, libc::F_SETFD, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(write_end, 3) != 3 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().unwrap();
+    unsafe { libc::close(write_end) };
+    let mut reader = unsafe { <fs::File as std::os::fd::FromRawFd>::from_raw_fd(ends[0]) };
+    let mut got = Vec::new();
+    reader.read_to_end(&mut got).unwrap();
+    assert!(child.wait().unwrap().success());
+    let elapsed = start.elapsed().as_secs_f64();
+    assert_eq!(got, b"x\n");
+    elapsed
+}
+
+fn extra_fds(n: usize) {
+    for _ in 0..warm(n, 5) {
+        one_extra_fds();
+    }
+    let total: f64 = (0..n).map(|_| one_extra_fds()).sum();
+    report("rust-std-pre-exec", "EXTRA FDS", "latency", total * 1e6 / n as f64, "us");
+    agree("rust-std-pre-exec", "EXTRA FDS", "bytes_out", 2, "bytes");
 }

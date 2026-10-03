@@ -516,3 +516,91 @@ func processIdentity(n int) {
 	cmd.Process.Kill()
 	cmd.Wait()
 }
+
+// The child every side signals: `c-bench signal_child`; see coverage.c.
+func signalChild() string {
+	if path := os.Getenv("BENCH_SIGNAL_CHILD"); path != "" {
+		return path
+	}
+	panic("BENCH_SIGNAL_CHILD unset")
+}
+
+func readExact(from io.Reader, expected string) {
+	buffer := make([]byte, len(expected))
+	if _, err := io.ReadFull(from, buffer); err != nil || string(buffer) != expected {
+		panic(fmt.Sprintf("read %q, %v", buffer, err))
+	}
+}
+
+// Process.Signal to the one pid, in a group of its own so the teardown
+// reaches the descendant.
+func signalRoundTrip(n int) {
+	cmd := exec.Command(signalChild(), "signal_child")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		panic(err)
+	}
+	if err := cmd.Start(); err != nil {
+		panic(err)
+	}
+	readExact(out, "r\n")
+	one := func() {
+		if err := cmd.Process.Signal(syscall.SIGUSR1); err != nil {
+			panic(err)
+		}
+		readExact(out, "x\n")
+	}
+	for i := 0; i < warm(n, 20); i++ {
+		one()
+	}
+	start := benchmarkNow()
+	for i := 0; i < n; i++ {
+		one()
+	}
+	report("go-os", "SIGNAL", "round_trip", float64(benchmarkSince(start).Nanoseconds())/float64(n)/1e3, "us")
+	agree("go-os", "SIGNAL", "acks", n, "count")
+	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	cmd.Wait()
+}
+
+// ExtraFiles: the pipe's write end becomes the child's descriptor 3.
+func oneExtraFds() float64 {
+	start := benchmarkNow()
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	cmd := exec.Command(program("SH", "sh"), "-c", "echo x >&3")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	cmd.ExtraFiles = []*os.File{w}
+	if err := cmd.Start(); err != nil {
+		panic(err)
+	}
+	w.Close()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		panic(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		panic(err)
+	}
+	ns := float64(benchmarkSince(start).Nanoseconds())
+	r.Close()
+	if string(got) != "x\n" {
+		panic("bad output")
+	}
+	return ns
+}
+
+func extraFds(n int) {
+	for i := 0; i < warm(n, 5); i++ {
+		oneExtraFds()
+	}
+	total := 0.0
+	for i := 0; i < n; i++ {
+		total += oneExtraFds()
+	}
+	report("go-os-exec", "EXTRA FDS", "latency", total/float64(n)/1e3, "us")
+	agree("go-os-exec", "EXTRA FDS", "bytes_out", 2, "bytes")
+}

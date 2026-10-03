@@ -43,6 +43,9 @@ pub fn run(x: Ctx, workload: []const u8) !bool {
         .{ "find_program", findProgram },
         .{ "environ", environ },
         .{ "process_identity", processIdentity },
+        .{ "signal", signal },
+        .{ "extra_fds", extraFds },
+        .{ "wait_tree", waitTree },
     };
     inline for (table) |entry| {
         if (std.mem.eql(u8, workload, entry[0])) {
@@ -619,4 +622,130 @@ fn processIdentity(x: Ctx) !void {
         }
         if (timed) try report(x, "PROCESS IDENTITY", "capture", since(start, io) / count, "ns");
     }
+}
+
+// ------------------------------------------------------------------ signal
+
+/// Every side signals `c-bench signal_child` (`BENCH_SIGNAL_CHILD`): it says
+/// `x` for each `SIGUSR1`, taken with `sigwait` so that none is lost between
+/// two answers, and its one descendant ignores the signal and says `r` once
+/// both are set.
+fn signal(x: Ctx) !void {
+    if (comptime @typeInfo(conduit.Child.Signal) != .@"union")
+        return unavailable(x, "SIGNAL", &.{"round_trip"}, "us");
+    const io = x.io();
+    const signal_child = x.init.environ_map.get("BENCH_SIGNAL_CHILD") orelse return error.NoSignalChild;
+    var child = try conduit.Child.spawn(io, x.gpa(), .{
+        .argv = &.{ signal_child, "signal_child" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.deinit(io);
+    defer _ = child.killWait(io, 0) catch {};
+    const out = api.stdout(child).handle;
+    try readExact(out, "r\n");
+    for (0..warmups(x, 20)) |_| {
+        try child.kill(.user1);
+        try readExact(out, "x\n");
+    }
+    const start = now(io);
+    for (0..x.n) |_| {
+        try child.kill(.user1);
+        try readExact(out, "x\n");
+    }
+    try report(x, "SIGNAL", "round_trip", since(start, io) / @as(f64, @floatFromInt(x.n)) / 1000.0, "us");
+    try agree(x, "SIGNAL", "acks", x.n, "count");
+}
+
+/// Reads exactly `expected` from `fd`, or fails.
+fn readExact(fd: std.posix.fd_t, expected: []const u8) !void {
+    var buffer: [16]u8 = undefined;
+    var got: usize = 0;
+    while (got < expected.len) {
+        const n = c.read(fd, buffer[got..expected.len].ptr, expected.len - got);
+        if (n <= 0) return error.ShortRead;
+        got += @intCast(n);
+    }
+    if (!std.mem.eql(u8, buffer[0..got], expected)) return error.BadOutput;
+}
+
+// --------------------------------------------------------------- extra fds
+
+/// What every side runs with its pipe at descriptor 3.
+pub const extra_fds_script = "echo x >&3";
+
+fn extraFds(x: Ctx) !void {
+    if (comptime !@hasField(conduit.Child.SpawnOptions, "extra_fds"))
+        return unavailable(x, "EXTRA FDS", &.{"latency"}, "us");
+    for (0..warmups(x, 5)) |_| _ = try oneExtraFds(x);
+    var total: f64 = 0;
+    for (0..x.n) |_| total += try oneExtraFds(x);
+    try report(x, "EXTRA FDS", "latency", total / @as(f64, @floatFromInt(x.n)) / 1000.0, "us");
+    try agree(x, "EXTRA FDS", "bytes_out", 2, "bytes");
+}
+
+/// A pipe made, `sh` started with its write end at descriptor 3, what it
+/// wrote there read to the end, and the child reaped.
+fn oneExtraFds(x: Ctx) !f64 {
+    const io = x.io();
+    const start = now(io);
+    var ends: [2]c_int = undefined;
+    if (c.pipe(&ends) != 0) return error.Pipe;
+    defer _ = c.close(ends[0]);
+    for (ends) |fd| _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
+    var child = try conduit.Child.spawn(io, x.gpa(), .{
+        .argv = &.{ x.sh, "-c", extra_fds_script },
+        .stdio = .ignore,
+        .extra_fds = &.{.{ .handle = ends[1], .flags = .{ .nonblocking = false } }},
+    });
+    defer child.deinit(io);
+    _ = c.close(ends[1]);
+    var buffer: [8]u8 = undefined;
+    var got: usize = 0;
+    while (true) {
+        const n = c.read(ends[0], buffer[got..].ptr, buffer.len - got);
+        if (n < 0) return error.ReadFailed;
+        if (n == 0) break;
+        got += @intCast(n);
+    }
+    if (!conduit.succeeded(try child.wait(io))) return error.ChildFailed;
+    const ns = since(start, io);
+    if (!std.mem.eql(u8, buffer[0..got], "x\n")) return error.BadOutput;
+    return ns;
+}
+
+// --------------------------------------------------------------- wait tree
+
+/// `waitTree` on a Linux child's cgroup once the child has ended: the
+/// answer is there at once, and what is timed is asking for it. Windows has
+/// the job object instead, and nothing else here has the operation.
+fn waitTree(x: Ctx) !void {
+    if (comptime @import("builtin").os.tag != .linux or !hasWaitTreeOnLinux())
+        return unavailable(x, "WAIT TREE", &.{"latency"}, "us");
+    const io = x.io();
+    var total: f64 = 0;
+    for (0..warmups(x, 5) + x.n) |i| {
+        var child = try conduit.Child.spawn(io, x.gpa(), .{ .argv = &.{x.true_}, .stdio = .ignore });
+        defer child.deinit(io);
+        if (!conduit.succeeded(try child.wait(io))) return error.ChildFailed;
+        const start = now(io);
+        const empty = child.waitTree(io, 1000) catch |err| switch (err) {
+            // No cgroup this process may make: nothing to time here.
+            error.Unsupported => return unavailable(x, "WAIT TREE", &.{"latency"}, "us"),
+            else => return err,
+        };
+        const ns = since(start, io);
+        if (!empty) return error.TreeRemained;
+        if (i >= warmups(x, 5)) total += ns;
+    }
+    try report(x, "WAIT TREE", "latency", total / @as(f64, @floatFromInt(x.n)) / 1000.0, "us");
+}
+
+/// A revision whose `waitTree` answers on Linux refuses a child without a
+/// cgroup by name.
+fn hasWaitTreeOnLinux() bool {
+    for (@typeInfo(conduit.Child.WaitTreeError).error_set.?) |e| {
+        if (std.mem.eql(u8, e.name, "Unsupported")) return true;
+    }
+    return false;
 }

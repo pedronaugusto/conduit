@@ -66,6 +66,9 @@ the pass fails.
 | `environ.inherit`, `environ.only` | environ ×20,000 | Rust `vars_os` into a `HashMap`, Go `os.Environ` into a map, Python `os.environ.copy` |
 | `processExists`, `startTime`, `captureStarted` | process_identity ×20,000 | exists: C `kill(pid, 0)`, Go `Signal(0)`, Python `os.kill(pid, 0)`; start time: C `proc_pidinfo` |
 | `endRecorded` | end_recorded ×200, the tree_kill tree | none (tree_kill holds the killpg comparisons) |
+| `Child.kill` with a signal that is not an end (`.user1`) | signal ×2,000 round trips: SIGUSR1 sent, `x` read back | C `kill`, Go `Process.Signal`, Rust `libc::kill` (std has only SIGKILL), Python `Popen.send_signal` |
+| `SpawnOptions.extra_fds` | extra_fds ×500: pipe, `sh -c 'echo x >&3'` with its write end at 3, read to the end, reap | C `posix_spawn` + `adddup2`, Go `ExtraFiles`, Rust `pre_exec` + `dup2` (what command-fds does), Python `os.posix_spawn` + `POSIX_SPAWN_DUP2` |
+| `Child.waitTree` (Linux) | wait_tree ×200: the answer once a contained child has ended | none; unavailable on the Mac and without a writable cgroup |
 
 Unavailable comparisons, with the reason: Rust has no non-blocking pipe read,
 expect, program search, or process-existence call in std or portable-pty; Go
@@ -77,6 +80,18 @@ gopsutil, sysinfo and the expect crates are not pinned here; adding one is the
 owner's dependency call). `exchange`, `InputWriter`, `readAvailable` and
 `processExists` are newer than the before pin, which reports them unavailable.
 
+The signalled child is `c-bench signal_child` on every side (`BENCH_SIGNAL_CHILD`):
+it answers each SIGUSR1 from `sigwait`, so none is lost between two answers, as a
+shell's trap around `wait` loses them; its one descendant ignores the signal.
+Each side's child is in a group of its own, and the teardown ends the group.
+What each side does differs, by design: conduit aims the signal as `kill` aims
+an end, at the child's group and every descendant the system names (on macOS a
+`proc_listchildpids` walk with audit-token proofs, since the child has forked);
+the others signal the one pid. That walk is the cost conduit's row pays over
+theirs, and the guarantee it buys: a descendant that left the group is still
+reached. Python's `subprocess` keeps a passed descriptor at its own number, so
+its extra_fds side places the pipe at 3 with `os.posix_spawn`.
+
 Not timed, with the reason: `Term` helpers (`succeeded`, `exitCode`,
 `signalName`, `signalNumber`, `shellStatus`), borrowed getters (`processId`,
 `stdinFile`/`stdoutFile`/`stderrFile`, `take*`, `terminalMaster`, `result`,
@@ -85,9 +100,11 @@ Not timed, with the reason: `Term` helpers (`succeeded`, `exitCode`,
 (`stdinWriter`, `stdoutReader`, `child.expect`): no measurable cost of their
 own. `holdReap` and `release` are timed inside `Reaper` and `deinit`.
 `openControlling` needs a controlling terminal, which an idle quiet run lacks.
-Windows-only (`console`, `waitTree`, `Pty.consoleOptions`) and Linux-only
+Windows-only (`console`, `waitTree` on a job, `Pty.consoleOptions`) and Linux-only
 (`Orphans`, `Cgroup`, `bootIdentity`, `CapturedPid.wait` on a cgroup) operations
-cannot run on the Mac; Orphans keeps its Linux workload above.
+cannot run on the Mac; Orphans and `waitTree` on a cgroup keep their Linux
+workloads above. `signal`, `extra_fds` and `waitTree` on Linux are newer than
+both pins, which report them unavailable until the after pin moves.
 
 Same-job tools retained: Rust std/portable-pty 0.9.0, Go os/exec/creack/pty
 1.1.24, C posix_spawn/fork/openpty, Python subprocess/ptyprocess 0.7.0
@@ -113,7 +130,7 @@ bytes transferred, grace settings and workload boundaries are unchanged.
 Tiny runs have no timing assertions. Failure to build or complete a workload
 fails the entry point rather than silently dropping a side.
 
-Quiet-only planning estimate: **11–25 minutes**. See [QUIET-PREP.md](QUIET-PREP.md) for preparation, counts, sizes and assumptions. `run.sh`, `alternate.sh` and
+Quiet-only planning estimate: **12–26 minutes**. See [QUIET-PREP.md](QUIET-PREP.md) for preparation, counts, sizes and assumptions. `run.sh`, `alternate.sh` and
 `per-commit.sh` remain low-level helpers; use `quiet.sh` for the complete pass.
 
 Standalone `zig build -Doptimize=Debug` compiles the pinned after harness

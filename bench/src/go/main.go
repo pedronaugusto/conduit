@@ -301,6 +301,10 @@ func main() {
 		environ(n)
 	case "process_identity":
 		processIdentity(n)
+	case "signal":
+		signalRoundTrip(n)
+	case "extra_fds":
+		extraFds(n)
 	default:
 		panic("unknown workload")
 	}

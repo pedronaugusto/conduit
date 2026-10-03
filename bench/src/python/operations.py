@@ -377,6 +377,73 @@ def process_identity(n):
     child.wait()
 
 
+# The child every side signals: `c-bench signal_child`; see coverage.c.
+SIGNAL_CHILD = os.environ.get("BENCH_SIGNAL_CHILD")
+
+
+def read_exact(fd, expected):
+    got = b""
+    while len(got) < len(expected):
+        chunk = os.read(fd, len(expected) - len(got))
+        assert chunk
+        got += chunk
+    assert got == expected, got
+
+
+def signal_round_trip(n):
+    """`Popen.send_signal` to the one pid, in a group of its own so the
+    teardown reaches the descendant."""
+    child = subprocess.Popen([SIGNAL_CHILD, "signal_child"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, process_group=0)
+    out = child.stdout.fileno()
+    read_exact(out, b"r\n")
+
+    def one():
+        child.send_signal(signal.SIGUSR1)
+        read_exact(out, b"x\n")
+
+    for _ in range(warm(n, 20)):
+        one()
+    start = benchmark_clock_ns()
+    for _ in range(n):
+        one()
+    report("python-subprocess", "SIGNAL", "round_trip", (benchmark_clock_ns() - start) / n / 1e3, "us")
+    agree("python-subprocess", "SIGNAL", "acks", n, "count")
+    os.killpg(child.pid, signal.SIGKILL)
+    child.wait()
+    child.stdout.close()
+
+
+def one_extra_fds():
+    """`os.posix_spawn` with the pipe's write end dup'd to 3: `subprocess`
+    keeps a passed descriptor at its own number, so the standard library's
+    way to put one at 3 is a spawn file action."""
+    start = benchmark_clock_ns()
+    r, w = os.pipe()
+    devnull = os.open(os.devnull, os.O_RDWR)
+    pid = os.posix_spawnp(SH, [SH, "-c", "echo x >&3"], os.environ, file_actions=[
+        (os.POSIX_SPAWN_DUP2, devnull, 0), (os.POSIX_SPAWN_DUP2, devnull, 1),
+        (os.POSIX_SPAWN_DUP2, devnull, 2), (os.POSIX_SPAWN_DUP2, w, 3)])
+    os.close(w)
+    os.close(devnull)
+    got = b""
+    while True:
+        chunk = os.read(r, 8)
+        if not chunk:
+            break
+        got += chunk
+    _, status = os.waitpid(pid, 0)
+    elapsed = benchmark_clock_ns() - start
+    os.close(r)
+    assert os.waitstatus_to_exitcode(status) == 0 and got == b"x\n", got
+    return elapsed
+
+
+def extra_fds(n):
+    report("python-os-posix_spawn", "EXTRA FDS", "latency", repeat(n, 5, one_extra_fds) / n / 1e3, "us")
+    agree("python-os-posix_spawn", "EXTRA FDS", "bytes_out", 2, "bytes")
+
+
 WORKLOADS = {
     "exchange": lambda n, path, data: exchange(n, data),
     "collect": lambda n, path, data: collect(n, path, data),
@@ -392,4 +459,6 @@ WORKLOADS = {
     "find_program": lambda n, path, data: find_program(n),
     "environ": lambda n, path, data: environ(n),
     "process_identity": lambda n, path, data: process_identity(n),
+    "signal": lambda n, path, data: signal_round_trip(n),
+    "extra_fds": lambda n, path, data: extra_fds(n),
 }

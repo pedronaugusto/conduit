@@ -423,3 +423,119 @@ static void process_identity(int n) {
     int status;
     assert(waitpid(pid, &status, 0) == pid);
 }
+
+/* The child every side signals, `c-bench signal_child`: it says `x` for each
+ * SIGUSR1, taken with sigwait so none arriving between two answers is lost
+ * (a shell's trap around `wait` loses those), and its one descendant ignores
+ * the signal and says `r` once both are set. */
+static void signal_child(void) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    assert(sigprocmask(SIG_BLOCK, &set, NULL) == 0);
+    pid_t descendant = fork();
+    assert(descendant >= 0);
+    if (descendant == 0) {
+        signal(SIGUSR1, SIG_IGN);
+        sigprocmask(SIG_UNBLOCK, &set, NULL);
+        if (write(STDOUT_FILENO, "r\n", 2) != 2) _exit(1);
+        execlp("sleep", "sleep", "1000", (char *)NULL);
+        _exit(127);
+    }
+    for (;;) {
+        int sig;
+        if (sigwait(&set, &sig) == 0 && write(STDOUT_FILENO, "x\n", 2) != 2) _exit(1);
+    }
+}
+
+static char *signal_child_path(void) {
+    char *path = getenv("BENCH_SIGNAL_CHILD");
+    assert(path);
+    return path;
+}
+
+static void read_exact(int fd, const char *expected) {
+    size_t want = strlen(expected), got = 0;
+    char buffer[16];
+    while (got < want) {
+        ssize_t n = read(fd, buffer + got, want - got);
+        assert(n > 0);
+        got += (size_t)n;
+    }
+    assert(memcmp(buffer, expected, want) == 0);
+}
+
+/* kill(2) to the one pid, in a group of its own so the teardown reaches the
+ * descendant: the ordinary C spelling. */
+static void signal_round_trip(int n) {
+    int out[2];
+    assert(pipe(out) == 0);
+    posix_spawn_file_actions_t actions;
+    assert(posix_spawn_file_actions_init(&actions) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, null_fd, STDIN_FILENO) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, out[1], STDOUT_FILENO) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, null_fd, STDERR_FILENO) == 0);
+    assert(posix_spawn_file_actions_addclose(&actions, out[0]) == 0);
+    posix_spawnattr_t attr;
+    assert(posix_spawnattr_init(&attr) == 0);
+    assert(posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP) == 0);
+    assert(posix_spawnattr_setpgroup(&attr, 0) == 0);
+    char *argv[] = {signal_child_path(), "signal_child", NULL};
+    pid_t pid;
+    assert(posix_spawnp(&pid, argv[0], &actions, &attr, argv, environ) == 0);
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attr);
+    close(out[1]);
+    read_exact(out[0], "r\n");
+    for (int i = 0; i < warm(n, 20); i++) { assert(kill(pid, SIGUSR1) == 0); read_exact(out[0], "x\n"); }
+    uint64_t start = now_ns();
+    for (int i = 0; i < n; i++) { assert(kill(pid, SIGUSR1) == 0); read_exact(out[0], "x\n"); }
+    report("c-kill", "SIGNAL", "round_trip", (double)(now_ns() - start) / n / 1e3, "us");
+    agree("c-kill", "SIGNAL", "acks", (size_t)n, "count");
+    assert(killpg(pid, SIGKILL) == 0);
+    int status;
+    assert(waitpid(pid, &status, 0) == pid);
+    close(out[0]);
+}
+
+/* posix_spawn with the pipe's write end dup'd to 3: the C library's way. */
+static double one_extra_fds(void) {
+    uint64_t start = now_ns();
+    int ends[2];
+    assert(pipe(ends) == 0);
+    fcntl(ends[0], F_SETFD, FD_CLOEXEC);
+    fcntl(ends[1], F_SETFD, FD_CLOEXEC);
+    posix_spawn_file_actions_t actions;
+    assert(posix_spawn_file_actions_init(&actions) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, null_fd, STDIN_FILENO) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, null_fd, STDOUT_FILENO) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, null_fd, STDERR_FILENO) == 0);
+    assert(posix_spawn_file_actions_adddup2(&actions, ends[1], 3) == 0);
+    char *argv[] = {program("BENCH_SH", "sh"), "-c", "echo x >&3", NULL};
+    pid_t pid;
+    assert(posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ) == 0);
+    posix_spawn_file_actions_destroy(&actions);
+    close(ends[1]);
+    char buffer[8];
+    size_t got = 0;
+    for (;;) {
+        ssize_t r = read(ends[0], buffer + got, sizeof(buffer) - got);
+        assert(r >= 0);
+        if (r == 0) break;
+        got += (size_t)r;
+    }
+    int status;
+    assert(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    double ns = (double)(now_ns() - start);
+    close(ends[0]);
+    assert(got == 2 && memcmp(buffer, "x\n", 2) == 0);
+    return ns;
+}
+
+static void extra_fds(int n) {
+    for (int i = 0; i < warm(n, 5); i++) (void)one_extra_fds();
+    double total = 0;
+    for (int i = 0; i < n; i++) total += one_extra_fds();
+    report("c-posix-spawn", "EXTRA FDS", "latency", total / n / 1e3, "us");
+    agree("c-posix-spawn", "EXTRA FDS", "bytes_out", 2, "bytes");
+}

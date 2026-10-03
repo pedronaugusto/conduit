@@ -30,6 +30,7 @@ def main():
         for asset in ('cargo/release/conduit-rust-bench','go-bench','c-bench','venv/bin/python','data'):
             p.prepared.require(tools/asset)
         if p.smoke: p.env['SMOKE']='1'
+        p.env['BENCH_SIGNAL_CHILD']=str(tools/'c-bench')
         d = tools/'data'
         commands = {'rust':[tools/'cargo/release/conduit-rust-bench'], 'go':[tools/'go-bench'],
                     'c':[tools/'c-bench'], 'python':[tools/'venv/bin/python',p.here/'src/python/bench.py']}
@@ -72,6 +73,9 @@ def main():
             ('environ','environ','arg-1k.txt',20000,('rust','go','python'),{}),
             ('process_identity','process_identity','arg-1k.txt',20000,('go','c','python'),{}),
             ('end_recorded','end_recorded','arg-1k.txt',200,(),{}),
+            ('signal','signal','arg-1k.txt',2000,every,{}),
+            ('extra_fds','extra_fds','arg-1k.txt',500,every,{}),
+            ('wait_tree','wait_tree','arg-1k.txt',200,(),{}),
         ):
             if p.smoke: fixture = 'arg-1k.txt' if fixture=='arg-1k.txt' else 'pty-1k.bin'
             points=[(s,[binary[s]/'conduit-bench',workload,1 if p.smoke else full,d/fixture]) for s in source]

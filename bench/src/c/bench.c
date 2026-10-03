@@ -287,6 +287,7 @@ static unsigned char *read_file(const char *path, size_t *len) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "signal_child")) signal_child();
     assert(argc == 4);
     int n = atoi(argv[2]); assert(n > 0);
     size_t len; unsigned char *input = read_file(argv[3], &len);
@@ -310,6 +311,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "pty_open")) pty_open(n);
     else if (!strcmp(argv[1], "tty_ops")) tty_ops(n);
     else if (!strcmp(argv[1], "process_identity")) process_identity(n);
+    else if (!strcmp(argv[1], "signal")) signal_round_trip(n);
+    else if (!strcmp(argv[1], "extra_fds")) extra_fds(n);
     else abort();
     close(null_fd); free(input); return 0;
 }
