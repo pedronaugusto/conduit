@@ -3,8 +3,8 @@
 Keep the `bench` worktree in the workspace’s `.bench/conduit`, outside `.zig-cache`; `bench/quiet.sh` resolves its files from its own directory.
 
 Pinned before: `8adf8af91329333c2deb7db5e2b14fdbae9520d8`.
-Pinned current main: `4a8cb70b061ceedb02ad7ccfb995a85d380bceeb`.
-The current pin includes per-child containment on main.
+Pinned perf head: `dd949c4f457f4f2f859b1be0155c1add0bee17a5`.
+The current pin retains per-child containment and the Darwin wait, leaf reap and capture changes on `perf`.
 
 `bench/quiet.sh` is the complete pass. `bench/quiet.sh --smoke` exercises
 all available workloads once on tiny fixtures, without warmups or saved timing
