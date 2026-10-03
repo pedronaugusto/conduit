@@ -110,6 +110,7 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
 /// Forks of that leader have completed by now; repeated passes cover forks
 /// of surviving members. The caller must retain reap ownership throughout.
 pub fn forceHeldGroup(pgid: posix.pid_t, leader: posix.pid_t) void {
+    if (builtin.is_test) _ = testing_hook.group_forces.fetchAdd(1, .monotonic);
     for (0..3) |_| {
         _ = c.kill(-pgid, .KILL);
         if (members(pgid, leader) == .none) break;
@@ -1319,6 +1320,7 @@ const DarwinForks = struct {
 
 /// Test builds only: what a test needs to show the watch has no window.
 pub const testing_hook = struct {
+    pub var group_forces: std.atomic.Value(usize) = .init(0);
     /// How long `Forks.watch` waits before it registers: time in which a
     /// child that was not being held would run its program, and fork.
     pub var hold_ms: u32 = 0;

@@ -658,6 +658,24 @@ pub const Child = enum(usize) {
         try testing.expect(State.get(&child).scope_complete);
     }
 
+    test "a child that never forked needs no final group enumeration" {
+        if (is_windows) return error.SkipZigTest;
+        if (!tree.Forks.supported) return error.SkipZigTest;
+        const io = std.testing.io;
+        var child = try Child.spawn(io, std.testing.allocator, .{
+            .argv = &.{ "/bin/sleep", "30" },
+            .stdio = .ignore,
+            .detach = true,
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const before = tree.testing_hook.group_forces.load(.acquire);
+        try child.kill(.kill);
+        _ = try child.wait(io);
+        try std.testing.expectEqual(before, tree.testing_hook.group_forces.load(.acquire));
+        try std.testing.expect(State.get(&child).scope_complete);
+    }
+
     /// Waits for whoever holds the reap to publish a term, until `deadline`.
     ///
     /// The rare path, and the reason it asks again rather than waiting on a
@@ -731,8 +749,12 @@ pub const Child = enum(usize) {
                 .ended => {
                     if (State.get(child).lineage) |tracker| if (!tracker.finish()) return null;
                     const contained = &State.get(child).cgroup;
-                    if (!contained.active() or !contained.kill())
-                        if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
+                    if (!contained.active() or !contained.kill()) {
+                        // Once this root has ended, a watch that saw no fork
+                        // proves its private session never had another member.
+                        const could_have_members = if (tree.Forks.supported) State.get(child).forks.any() else true;
+                        if (could_have_members) if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
+                    }
                     State.get(child).force_tree = false;
                 },
                 .unknown => {},

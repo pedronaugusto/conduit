@@ -655,7 +655,7 @@ is asked, a child that has never forked is not walked at all: `spawn` watches
 its forks with a kqueue registered before the child runs anything — a
 `posix_spawn` child starts suspended until then, a fork child waits before its
 `execve` — so its stop is the signal alone, and one fork, however early, puts
-it back on the walk. The watch is one descriptor per child, closed by `deinit`.
+it back on the walk. After exit, that same proof skips the final group enumeration for a leaf; a forked tree still pays the held exit check and repeated group force to catch a late fork. The watch is one descriptor per child, closed by `deinit`.
 On Linux the pass reads every process's `/proc` record, and before it `kill`
 reads the child's own `/proc/<pid>/task/<tid>/children`, one small file per
 thread: a child with no child of its own is signalled alone. Either way a
