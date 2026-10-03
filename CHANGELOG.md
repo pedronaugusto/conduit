@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Child.exchange` runs a child to its end with borrowed input written while its output is collected, under one deadline over input, run, reap and drain, with its allocator's calls serialized.
+
 - `processExists` says whether a process has an id now, on POSIX and Windows, for a caller that wrote a pid down; pair it with `startTime` to tell a successor apart.
 
 - `shellStatus` says how a child ended as a shell's `$?` does, and `signalNumber` gives the number of any ending signal, named or not.

@@ -51,6 +51,7 @@ const endRecorded = conduit.endRecorded;
 test {
     _ = @import("test_support.zig");
     _ = @import("input_writer_test.zig");
+    _ = @import("exchange_test.zig");
     _ = Pty;
     _ = Child;
     _ = Reaper;

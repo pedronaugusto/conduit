@@ -87,6 +87,7 @@ to read while a wait or Reaper runs.
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
+| `child.exchange(io, allocator, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
@@ -711,6 +712,8 @@ argument, environment and search-path arrays exist only for the spawn call.
 `InputWriter` keeps its state and queue until `deinit`. `Child.output` allocates
 the bytes
 it collects and `environ` the map it returns; both say whose they are.
+`Child.exchange` allocates what `output` does, one call at a time, and copies
+none of its input.
 Process snapshots for POSIX signalling and `endRecorded` use bounded stack
 buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its

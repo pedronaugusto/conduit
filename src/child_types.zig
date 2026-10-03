@@ -612,6 +612,28 @@ pub const OutputError = error{
     ConcurrencyUnavailable,
 } || WaitError || TryWaitError || WaitTimeoutError || KillError || std.Io.Cancelable;
 
+/// What `Child.exchange` takes: `output`'s bounds, with one deadline over
+/// everything.
+pub const ExchangeOptions = struct {
+    /// The most kept from each stream, as `OutputOptions.max_bytes`: bytes
+    /// past it are read and dropped, and the stream is reported truncated.
+    max_bytes: usize = 10 * 1024 * 1024,
+    /// One budget for the whole exchange: writing the input, the child's run,
+    /// its end and the reading after it. When it runs out the child is killed
+    /// at once, with no grace, and `Output.timedOut` says so. `null` waits as
+    /// long as it takes.
+    timeout_ms: ?u32 = null,
+    /// How long to keep reading after the child has ended, as
+    /// `OutputOptions.drain_ms`, and never past the timeout.
+    drain_ms: u32 = 1000,
+};
+
+pub const ExchangeError = OutputError || error{
+    /// There is input to give and the child's standard input is not a pipe
+    /// this `Child` holds.
+    NoStdinPipe,
+} || std.Io.File.Writer.Error;
+
 /// What an `execve` that failed means, as one of `SpawnError`.
 ///
 /// Both spawn paths on POSIX end here: the fork child reports the number it

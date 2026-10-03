@@ -9,6 +9,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/deadline.zig",
         "src/environ.zig",
         "src/handles.zig",
+        "src/serial_allocator.zig",
         "src/test_input_process.zig",
         "src/test_process.zig",
         "src/test_runner.zig",
@@ -74,6 +75,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/descendants_test.zig",
     } },
     .{ .name = "public scenarios", .patterns = &.{
+        "src/exchange_test.zig",
         "src/input_writer_test.zig",
         "src/spawn_test.zig",
     } },
