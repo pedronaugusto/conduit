@@ -1405,8 +1405,12 @@ pub const Child = enum(usize) {
         if (!is_windows) {
             // A published term needs only stream draining. Never register an OS
             // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(io, allocator, options, null, published);
-            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, watch, null);
+            if (published != null) return child.outputPolled(io, allocator, options, null, published, false);
+            if (comptime tree.Forks.supported) {
+                if (State.get(child).forks.queue) |queue|
+                    return child.outputPolled(io, allocator, options, .{ .handle = queue }, null, true);
+            }
+            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, watch, null, false);
         }
         return child.outputOnTasks(io, allocator, options);
     }
@@ -1609,8 +1613,9 @@ pub const Child = enum(usize) {
         options: OutputOptions,
         watch: ?wait_for.Watch,
         published: ?Term,
+        borrowed_exit: bool,
     ) OutputError!Output {
-        defer if (watch) |opened| opened.close();
+        defer if (!borrowed_exit) if (watch) |opened| opened.close();
         var out: Collector = .init;
         var err: Collector = .init;
         errdefer out.list.deinit(allocator);
@@ -1630,6 +1635,10 @@ pub const Child = enum(usize) {
         var ended = false;
         while (true) {
             try std.Io.checkCancel(io);
+            // A fork check or waiter may have consumed the shared exit note.
+            if (comptime tree.Forks.supported) if (borrowed_exit and State.get(child).forks.exited.load(.acquire)) {
+                ended = true;
+            };
             const out_done = out.done.load(.acquire);
             const err_done = err.done.load(.acquire);
             if (term == null) {
@@ -1690,6 +1699,12 @@ pub const Child = enum(usize) {
                     // The child has ended, or is a moment from being waitable:
                     // the reap is asked for on the next round, and again until
                     // it answers.
+                    if (comptime tree.Forks.supported) {
+                        if (borrowed_exit) {
+                            ended = State.get(child).forks.ended(0) orelse false;
+                            continue;
+                        }
+                    }
                     ended = true;
                     continue;
                 }
@@ -1882,6 +1897,41 @@ pub const Child = enum(usize) {
             probe.observe(probe.context, child);
         }
     } else struct {};
+
+    test "output of an exited Darwin child needs no reader task" {
+        if (is_windows) return error.SkipZigTest;
+        if (!tree.Forks.supported) return error.SkipZigTest;
+        const testing = std.testing;
+        const io = testing.io;
+        var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+        try watchdog.start(io);
+        defer watchdog.deinit(io);
+        var child = try Child.spawn(io, testing.allocator, .{
+            .argv = &.{ "/bin/echo", "retained" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        });
+        defer child.deinit(io);
+        defer _ = child.killWait(io, 0) catch {};
+        const until: Deadline = .in(io, 5000);
+        while (wait_for.endedUnreaped(State.get(&child).id) == .running) {
+            if (until.remainingMs(io) == 0) return error.TestChildDidNotExit;
+            try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+        }
+        // Another fork check can consume the queued exit without reaping.
+        _ = State.get(&child).forks.any();
+        const Refuse = struct {
+            fn concurrent(_: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
+                return error.ConcurrencyUnavailable;
+            }
+        };
+        var vtable = io.vtable.*;
+        vtable.groupConcurrent = Refuse.concurrent;
+        const no_tasks: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+        var collected = try child.output(no_tasks, testing.allocator, .{});
+        defer collected.deinit(testing.allocator);
+        try testing.expectEqualStrings("retained\n", collected.stdout());
+        try testing.expect(succeeded(collected.term()));
+    }
 
     test "output on tasks bounds draining by elapsed time after a delayed sleep" {
         const testing = std.testing;

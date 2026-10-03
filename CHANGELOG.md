@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Collect Darwin output with the retained exit watcher, including when the child exited before collection began.
+
 - Skip the final Darwin group enumeration when the held root exited without ever forking.
 
 - Retain Darwin exit events from before spawn so a killed tree does not fall back to a sleeping wait.

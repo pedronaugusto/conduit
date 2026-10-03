@@ -726,6 +726,7 @@ walk and signal delivery, and the final reap and Windows handle closure. A
 wait observes the exit without holding that claim, so it can still be stopped;
 once reaped, its process or group id is never used for signalling again.
 Darwin waits retain exit notes on the fork watcher registered before the child runs, avoiding a sleeping retry when a later registration would be refused.
+Output collection borrows that watcher too; it keeps the identity check and owned bytes while avoiding another registration or reader tasks for an already-exited child.
 
 ## Scope
 
