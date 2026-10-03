@@ -33,7 +33,7 @@ def main():
                         points.extend([(label,[*argv,verb,n,fixture]) for label,verb in [('c-posix-spawn','posix_'+workload),('c-fork','fork_'+workload.removeprefix('spawn_'))]])
                     else:
                         count = n
-                        if workload=='pty_spawn' and not p.smoke:count={'rust':50,'python':20}.get(tool,n)
+                        if workload=='pty_spawn' and not p.smoke:count={'python':20}.get(tool,n)
                         points.append((tool,[*argv,workload,count,fixture]))
             p.interleave(workload,points,check=tsv)
         def claims(output):

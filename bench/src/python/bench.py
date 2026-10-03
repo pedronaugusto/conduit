@@ -93,8 +93,16 @@ def drain_exact(child, wanted):
 
 def open_cat():
     child = PtyProcess.spawn([os.fsencode(os.environ.get("BENCH_CAT", "cat"))], dimensions=(24, 80))
+    no_close_delay(child)
     tty.setraw(child.fd)
     return child
+
+
+def no_close_delay(child):
+    # close() sleeps delayafterclose (0.1 s) before asking whether the child
+    # lives; every side here has reaped it already, so that sleep is no work.
+    child.delayafterclose = 0
+    child.delayafterterminate = 0
 
 
 def one_pty(data):

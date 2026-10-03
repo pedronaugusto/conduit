@@ -94,7 +94,16 @@ fn one_pty(input: &[u8]) {
     let mut writer = master.take_writer().unwrap();
     writer.write_all(input).unwrap();
     assert_ne!(drain_exact(&mut *reader, expected_pty_bytes(input)), 0);
-    child.kill().unwrap();
+    kill_and_wait(&mut *child);
+}
+
+/// SIGKILL to the child and a reap, as the C and Go sides end it.
+/// portable-pty's own `kill` sends SIGHUP and, as the child is never gone at
+/// its first look, sleeps 50 ms before looking again: a wait no other side
+/// pays, so the round trip does not use it.
+fn kill_and_wait(child: &mut (dyn portable_pty::Child + Send)) {
+    let pid = child.process_id().expect("child pid") as i32;
+    assert_eq!(unsafe { kill(pid, 9) }, 0);
     child.wait().unwrap();
 }
 
@@ -117,8 +126,7 @@ fn pty_throughput(input: &[u8]) {
         tx.join().unwrap();
     });
     let elapsed = start.elapsed().as_secs_f64();
-    child.kill().unwrap();
-    child.wait().unwrap();
+    kill_and_wait(&mut *child);
     report("rust-portable-pty", "PTY THROUGHPUT", "throughput", input.len() as f64 / elapsed / 1e6, "MB/s");
 }
 

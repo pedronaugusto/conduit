@@ -14,9 +14,9 @@
 # conduit-childkill (the same lifecycle ended with one kill to the child's pid,
 # as the rivals end it).
 #
-# Iteration counts are run.sh's, except the two PTY SPAWN sides that are two
-# orders of magnitude behind (portable-pty, ptyprocess), which run fewer
-# iterations of the same mean-per-cycle measure so a trial stays minutes long.
+# Iteration counts are run.sh's, except the ptyprocess PTY SPAWN side, which
+# runs 20 iterations of the same mean-per-cycle measure: its spawn closes
+# every descriptor number below the soft RLIMIT_NOFILE in the child.
 #
 # BENCH_NO_BUILD=1 measures the binaries already built. BENCH_VARIANTS=
 # "label=binary ..." adds other builds of conduit-bench as sides
@@ -66,7 +66,7 @@ sides_for() {
             printf 'conduit\t%s pty_spawn 500 %s/pty-1k.bin\n' "$zig" "$d"
             printf 'conduit-childkill\t%s pty_spawn_child_kill 500 %s/pty-1k.bin\n' "$zig" "$d"
             for v in $variants; do printf 'conduit-%s\t%s pty_spawn 500 %s/pty-1k.bin\n' "${v%%=*}" "${v#*=}" "$d"; done
-            printf 'rust\t%s pty_spawn 50 %s/pty-1k.bin\n' "$rust" "$d"
+            printf 'rust\t%s pty_spawn 500 %s/pty-1k.bin\n' "$rust" "$d"
             printf 'go\t%s pty_spawn 500 %s/pty-1k.bin\n' "$go" "$d"
             printf 'c\t%s pty_spawn 500 %s/pty-1k.bin\n' "$cb" "$d"
             printf 'python\t%s pty_spawn 20 %s/pty-1k.bin\n' "$py" "$d" ;;
@@ -106,7 +106,7 @@ for w in "${workloads[@]}"; do
     n=${#lines[@]}
     # untimed warm-up of each side (run the cheap rows once; skip the slow PTY sides)
     for l in "${lines[@]}"; do
-        case "$w:${l%%$'\t'*}" in pty_spawn:rust|pty_spawn:python) continue ;; esac
+        case "$w:${l%%$'\t'*}" in pty_spawn:python) continue ;; esac
         ${l#*$'\t'} >/dev/null
     done
     for (( t = 0; t < trials; t++ )); do
