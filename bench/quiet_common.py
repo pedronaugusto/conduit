@@ -150,6 +150,9 @@ class Pass:
         for round in range(self.runs):
             for side, argv in commands: self.point(workload,side,argv,round,**kwargs)
     def save(self, failure=None):
+        # Preparation and its check measure nothing; writing report.json there
+        # replaced the day's real pass with an empty one.
+        if getattr(self, 'plan_only', False): return
         report = self.clean({'mode':'smoke' if self.smoke else 'benchmark', 'revisions':self.revisions,
                  'baseline_note':self.metadata.get('baseline_note','Last first-parent main commit before the midnight cutoff.'),
                  'machine':self.machine, 'harness_commit':self.git('rev-parse','HEAD'),
@@ -177,7 +180,8 @@ class Pass:
         if self.smoke: Prepared(self.here, self.args.build_dir.resolve()/'full').certify()
         self.complete = True
         self.save()
-        print(f"{'Smoke passed; no timings recorded' if self.smoke else 'Pass complete'}: {self.out}",flush=True)
+        if self.plan_only: print('Preparation complete; nothing measured or written to results',flush=True)
+        else: print(f"{'Smoke passed; no timings recorded' if self.smoke else 'Pass complete'}: {self.out}",flush=True)
 
 def tsv(output):
     rows = [line.split('\t') for line in output.splitlines() if '\t' in line]
