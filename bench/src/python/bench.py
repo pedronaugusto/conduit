@@ -219,6 +219,9 @@ def main():
     n = int(n_text)
     with open(path, "rb") as f:
         data = f.read()
+    import operations
+    if workload in operations.WORKLOADS:
+        return operations.WORKLOADS[workload](n, path, data)
     {
         "spawn_wait": lambda: spawn_wait(n),
         "spawn_collect": lambda: spawn_collect(n, data),

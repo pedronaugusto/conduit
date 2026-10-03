@@ -1,6 +1,7 @@
 const std = @import("std");
 const conduit = @import("conduit");
 const api = @import("api.zig");
+const coverage = @import("coverage.zig");
 const smoke = @import("bench_options").smoke;
 const c = std.c;
 
@@ -30,6 +31,18 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, args[1], "wait_timeout")) return waitTimeout(init, n);
     if (std.mem.eql(u8, args[1], "tree_kill")) return treeKill(init, n);
     if (std.mem.eql(u8, args[1], "leaf_kill")) return leafKill(init, n);
+    if (std.mem.eql(u8, args[1], "end_recorded")) return endRecorded(init, n);
+    if (try coverage.run(.{
+        .init = init,
+        .n = n,
+        .input = input,
+        .path = args[3],
+        .cat = cat_program,
+        .echo = echo_program,
+        .sleep = sleep_program,
+        .sh = shell_program,
+        .true_ = true_program,
+    }, args[1])) return;
     return error.UnknownWorkload;
 }
 
@@ -264,6 +277,33 @@ fn oneTreeKill(init: std.process.Init) !f64 {
     const descendants = try waitForTwoChildren(init.io, api.pid(&child), &storage);
     const start = now(init.io);
     try child.kill(.kill);
+    _ = try child.wait(init.io);
+    const ns = elapsedNs(start, init.io);
+    try confirmGone(init.io, descendants);
+    return ns;
+}
+
+/// `endRecorded` on the same fixed tree, as a later run of a program ends
+/// what an earlier one recorded: the pid and its start time, no group, no
+/// grace. The call and the reap of the root are timed; every descendant is
+/// then confirmed gone.
+fn endRecorded(init: std.process.Init, n: usize) !void {
+    for (0..if (smoke) @as(usize, 0) else @min(n, 2)) |_| _ = try oneEndRecorded(init);
+    var total_ns: f64 = 0;
+    for (0..n) |_| total_ns += try oneEndRecorded(init);
+    try report(init, "END RECORDED", "latency", total_ns / @as(f64, @floatFromInt(n)) / 1_000_000.0, "ms");
+}
+
+fn oneEndRecorded(init: std.process.Init) !f64 {
+    var child = try conduit.Child.spawn(init.io, init.gpa, .{ .argv = &.{ shell_program, "-c", "sleep 30 & sleep 30 & wait" }, .stdio = .ignore, .detach = true });
+    defer child.deinit(init.io);
+    errdefer _ = child.killWait(init.io, 0) catch {};
+    var storage: [8]std.posix.pid_t = undefined;
+    const descendants = try waitForTwoChildren(init.io, api.pid(&child), &storage);
+    const root = api.pid(&child);
+    const started = (try conduit.startTime(root)) orelse return error.NoStartTime;
+    const start = now(init.io);
+    if (!try conduit.endRecorded(init.io, .{ .pid = root, .start = started, .grace_ms = 0 })) return error.NothingEnded;
     _ = try child.wait(init.io);
     const ns = elapsedNs(start, init.io);
     try confirmGone(init.io, descendants);

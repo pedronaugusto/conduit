@@ -12,6 +12,8 @@ if os.environ.get("SMOKE") == "1":
 with (out / "pty-64m.bin").open("wb") as f:
     for _ in range((64 * 1024 * 1024) // len(line)):
         f.write(line)
+for name, size in (("lines-1m.bin", 1024 * 1024), ("lines-16m.bin", 16 * 1024 * 1024)):
+    (out / name).write_bytes(line * (size // len(line)))
 with (out / "pty-smoke-4m.bin").open("wb") as f:
     for _ in range((4 * 1024 * 1024) // len(line)):
         f.write(line)

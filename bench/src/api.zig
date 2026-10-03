@@ -33,3 +33,14 @@ pub fn deinitReaper(reaper: *conduit.Reaper, io: std.Io) void {
         reaper.deinit(io) catch @panic("reaper cleanup failed");
     } else reaper.deinit(io);
 }
+
+// The shell's pair and child: fields before, borrowing methods after.
+pub fn shellChild(shell: *conduit.Shell) *conduit.Child {
+    return if (@hasDecl(conduit.Shell, "child")) shell.child() else &shell.child;
+}
+pub fn shellPty(shell: *conduit.Shell) *conduit.Pty {
+    return if (@hasDecl(conduit.Shell, "pty")) shell.pty() else &shell.pty;
+}
+pub fn slaveHandle(pty: conduit.Pty) conduit.Pty.Slave {
+    return if (@hasDecl(conduit.Pty, "slaveHandle")) pty.slaveHandle().? else pty.slave.?;
+}

@@ -274,6 +274,8 @@ static void tree_kill(int n) {
     report("c-fork+killpg", "TREE KILL", "latency", total / n / 1e6, "ms");
 }
 
+#include "coverage.c"
+
 static unsigned char *read_file(const char *path, size_t *len) {
     FILE *f = fopen(path, "rb"); assert(f);
     assert(fseek(f, 0, SEEK_END) == 0);
@@ -297,6 +299,17 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "pty_throughput")) pty_throughput(input, len);
     else if (!strcmp(argv[1], "wait_timeout")) wait_timeout(n);
     else if (!strcmp(argv[1], "tree_kill")) tree_kill(n);
+    else if (!strcmp(argv[1], "exchange")) exchange(n, input, len);
+    else if (!strcmp(argv[1], "collect")) collect_file(n, argv[3], input, len);
+    else if (!strcmp(argv[1], "input_writer")) input_writer(n, input, len);
+    else if (!strcmp(argv[1], "read_available")) read_available(n, input, len);
+    else if (!strcmp(argv[1], "try_wait")) try_wait(n);
+    else if (!strcmp(argv[1], "reaper_wait")) reaper_wait(n);
+    else if (!strcmp(argv[1], "proxy")) proxy(n, argv[3], input, len);
+    else if (!strcmp(argv[1], "shell_spawn")) shell_spawn(n);
+    else if (!strcmp(argv[1], "pty_open")) pty_open(n);
+    else if (!strcmp(argv[1], "tty_ops")) tty_ops(n);
+    else if (!strcmp(argv[1], "process_identity")) process_identity(n);
     else abort();
     close(null_fd); free(input); return 0;
 }

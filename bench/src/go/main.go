@@ -277,6 +277,30 @@ func main() {
 		waitTimeout(n)
 	case "tree_kill":
 		treeKill(n)
+	case "exchange":
+		exchange(n, input)
+	case "collect":
+		collect(n, os.Args[3], input)
+	case "input_writer":
+		inputWriter(n, input)
+	case "read_available":
+		readAvailable(n, input)
+	case "reaper_wait":
+		reaperWait(n)
+	case "proxy":
+		proxy(n, os.Args[3], input)
+	case "shell_spawn":
+		shellSpawn(n)
+	case "pty_open":
+		ptyOpen(n)
+	case "tty_ops":
+		ttyOps(n)
+	case "find_program":
+		findProgram(n)
+	case "environ":
+		environ(n)
+	case "process_identity":
+		processIdentity(n)
 	default:
 		panic("unknown workload")
 	}

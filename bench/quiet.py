@@ -4,6 +4,18 @@ import os
 import sys
 from quiet_common import Pass, tsv
 
+def agreeing(row):
+    """`tsv`, and every side's count and byte rows equal to the first side's."""
+    first = {}
+    def check(output):
+        evidence = tsv(output)
+        if evidence['counts']:
+            if first and evidence['counts'] != first:
+                raise ValueError(f'{row}: sides disagree: {first} != {evidence["counts"]}')
+            first.update(evidence['counts'])
+        return evidence
+    return check
+
 def main():
     p = Pass(__file__)
     try:
@@ -36,6 +48,35 @@ def main():
                         if workload=='pty_spawn' and not p.smoke:count={'python':20}.get(tool,n)
                         points.append((tool,[*argv,workload,count,fixture]))
             p.interleave(workload,points,check=tsv)
+        # The rest of the public API: (row, workload, fixture, full count, sides
+        # that have the operation, per-side counts). Each side checks its own
+        # result; rows in count/bytes units must agree across sides.
+        every = ('rust','go','c','python')
+        for row, workload, fixture, full, tools_with, counts in (
+            ('exchange-1k','exchange','pty-1k.bin',500,every,{}),
+            ('exchange-1m','exchange','lines-1m.bin',50,every,{}),
+            ('exchange-64m','exchange','pty-64m.bin',3,every,{}),
+            ('collect-1m','collect','lines-1m.bin',50,every,{}),
+            ('collect-64m','collect','pty-64m.bin',3,every,{}),
+            ('input_writer-1m','input_writer','lines-1m.bin',10,every,{}),
+            ('read_available','read_available','arg-1k.txt',500,('go','c','python'),{}),
+            ('try_wait','try_wait','arg-1k.txt',100000,('rust','c','python'),{}),
+            ('reaper_wait','reaper_wait','arg-1k.txt',500,every,{}),
+            ('expect','expect','pty-1k.bin',2000,('python',),{}),
+            ('proxy-1m','proxy','lines-1m.bin',10,every,{}),
+            ('proxy-16m','proxy','lines-16m.bin',1,every,{}),
+            ('shell_spawn','shell_spawn','arg-1k.txt',200,every,{'python':20}),
+            ('pty_open','pty_open','arg-1k.txt',2000,every,{}),
+            ('tty_ops','tty_ops','arg-1k.txt',2000,every,{}),
+            ('find_program','find_program','arg-1k.txt',5000,('go','python'),{}),
+            ('environ','environ','arg-1k.txt',20000,('rust','go','python'),{}),
+            ('process_identity','process_identity','arg-1k.txt',20000,('go','c','python'),{}),
+            ('end_recorded','end_recorded','arg-1k.txt',200,(),{}),
+        ):
+            if p.smoke: fixture = 'arg-1k.txt' if fixture=='arg-1k.txt' else 'pty-1k.bin'
+            points=[(s,[binary[s]/'conduit-bench',workload,1 if p.smoke else full,d/fixture]) for s in source]
+            points+=[(tool,[*commands[tool],workload,1 if p.smoke else counts.get(tool,full),d/fixture]) for tool in tools_with]
+            p.interleave(row,points,check=agreeing(row))
         def claims(output):
             rows=[x.split('\t') for x in output.splitlines() if '\t' in x]
             if len(rows)<7 or any(len(x)!=4 for x in rows): raise ValueError('missing lifecycle claim rows')
