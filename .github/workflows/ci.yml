@@ -42,6 +42,31 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p' | sed 's,\\\\,/,g')
+          test -n "$cache_dir"
+          mkdir -p "$cache_dir/p"
+          echo "path=$cache_dir/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --fetch=all; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       # The probe checks the watchdog's report, which an ordinary passing suite cannot check.
       - name: A stuck backend names its test and source
         if: runner.os != 'Windows' && matrix.optimize == 'Debug'
@@ -60,6 +85,31 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p' | sed 's,\\\\,/,g')
+          test -n "$cache_dir"
+          mkdir -p "$cache_dir/p"
+          echo "path=$cache_dir/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --fetch=all; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       - run: zig build check -Doptimize=ReleaseSmall
 
   # Reaper and Child share a child across tasks; ThreadSanitizer checks those accesses.
@@ -74,6 +124,31 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p' | sed 's,\\\\,/,g')
+          test -n "$cache_dir"
+          mkdir -p "$cache_dir/p"
+          echo "path=$cache_dir/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --fetch=all; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       - run: zig build unit -Dthread-sanitizer -Doptimize=Debug --test-timeout 120s
 
   # Formatting and source-policy checks read the same files on every host; once is enough.
@@ -87,6 +162,31 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p' | sed 's,\\\\,/,g')
+          test -n "$cache_dir"
+          mkdir -p "$cache_dir/p"
+          echo "path=$cache_dir/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --fetch=all; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       - name: Formatting
         run: zig fmt --check src examples build.zig ci
       - name: Containment documentation states the observation boundary
@@ -113,6 +213,31 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p' | sed 's,\\\\,/,g')
+          test -n "$cache_dir"
+          mkdir -p "$cache_dir/p"
+          echo "path=$cache_dir/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --fetch=all; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       - run: zig build test -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
 
   # musl's ptsname_r reports errors differently from glibc; both safety modes run that libc.
@@ -135,10 +260,35 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build the musl image
         run: docker build --quiet --file ci/linux.alpine.Dockerfile --build-arg ZIG=${{ env.ZIG_VERSION }} --tag conduit-musl ci
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(docker run --rm --env ZIG_GLOBAL_CACHE_DIR=/tmp/zg conduit-musl zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p')
+          test "$cache_dir" = /tmp/zg
+          mkdir -p "${{ runner.temp }}/zig-global/p"
+          echo "path=${{ runner.temp }}/zig-global/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-musl-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-musl-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if docker run --rm --volume "$PWD:/src" --volume "${{ runner.temp }}/zig-global:/tmp/zg" --workdir /src conduit-musl zig build --fetch=all --global-cache-dir /tmp/zg; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       - name: Test
         run: >-
           docker run --rm --init ${{ matrix.cgroup && '--privileged' || '' }}
-          --volume "$PWD:/src" --workdir /src conduit-musl
+          --volume "$PWD:/src" --volume "${{ runner.temp }}/zig-global:/tmp/zg"
+          --workdir /src conduit-musl
           zig build test -Doptimize=${{ matrix.optimize }} --test-timeout 45s
           --cache-dir /tmp/zc --global-cache-dir /tmp/zg --summary all
 
@@ -184,4 +334,29 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Locate Zig package cache
+        id: zig-cache-dir
+        shell: bash
+        run: |
+          cache_dir=$(zig env | sed -n 's/^    \.global_cache_dir = "\(.*\)",$/\1/p' | sed 's,\\\\,/,g')
+          test -n "$cache_dir"
+          mkdir -p "$cache_dir/p"
+          echo "path=$cache_dir/p" >> "$GITHUB_OUTPUT"
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.zig-cache-dir.outputs.path }}
+          key: zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-packages-${{ runner.os }}-${{ env.ZIG_VERSION }}-
+      - name: Fetch all Zig dependencies (three attempts)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if zig build --fetch=all; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            echo "Dependency fetch failed ($attempt/3); retrying after backoff"
+            sleep "$((5 << (attempt - 1)))"
+          done
       - run: zig build check -Dtarget=${{ matrix.target }}
