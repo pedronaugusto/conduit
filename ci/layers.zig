@@ -114,3 +114,16 @@ pub const required = blk: {
     };
     break :blk paths;
 };
+
+/// Tokens only their owners may spell: Windows declarations, the terminal's
+/// modes, pseudoterminals, exec and cgroups each have their files.
+pub const owned: []const gantry.rules.TokenRule = &.{
+    .{ .name = "windows declarations", .kind = .string, .token = "kernel32", .owners = &.{ "src/win32.zig", "src/console.zig", "src/test_process.zig" } },
+    .{ .name = "terminal mode owner", .token = "tcgetattr", .owners = &.{ "src/tty.zig", "src/Pty.zig" } },
+    .{ .name = "terminal mode owner", .token = "tcsetattr", .owners = &.{ "src/tty.zig", "src/Pty.zig" } },
+    .{ .name = "pseudoterminal owner", .token = "posix_openpt", .owners = &.{"src/Pty.zig"} },
+    .{ .name = "pseudoterminal owner", .token = "CreatePseudoConsole", .owners = &.{ "src/Pty.zig", "src/win32.zig" } },
+    .{ .name = "exec owner", .token = "execve", .owners = &.{"src/child_posix.zig"} },
+    .{ .name = "exec owner", .token = "posix_spawn", .owners = &.{ "src/child_posix.zig", "src/posix_spawn.zig" } },
+    .{ .name = "cgroup owner", .kind = .string, .token = "/sys/fs/cgroup*", .owners = &.{"src/cgroup.zig"} },
+};
