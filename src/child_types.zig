@@ -520,13 +520,24 @@ pub const TryWaitError = error{
     ReapedElsewhere,
 } || std.Io.UnexpectedError;
 
-/// The ways this package can ask a child to stop, on either system.
+/// A signal for `Child.kill`: the three requests to end that mean the same
+/// thing on both systems, the POSIX signals programs are commonly sent for
+/// other reasons, by name, and any other POSIX signal by its number.
 ///
-/// POSIX has more signals than these and a program that wants one can send it
-/// itself while holding its own process identity. What is here is the subset
-/// that means the same thing on Windows, which is the only thing a portable
-/// API can promise.
-pub const Signal = enum {
+/// Only `.interrupt`, `.terminate` and `.kill` ask the child to end, and only
+/// they make the descendants part of that ending: a child that catches one
+/// and exits normally still has its tree ended at the reap. Every other
+/// signal is delivered to the same processes and changes nothing about how
+/// the child's tree is treated afterwards, whatever its default action does
+/// to the processes it reaches.
+///
+/// **Windows** has an equivalent for the first three only. Every other member
+/// is `error.Unsupported` there, by name: no call sends a hang-up, a quit, a
+/// user signal or a window change to a process, a pseudoconsole's window
+/// change is `Pty.resize`, and the only way to stop and continue a process is
+/// an undocumented call, or suspending its threads one at a time while it may
+/// be starting another.
+pub const Signal = union(enum) {
     /// The interrupt a terminal generates. POSIX: `SIGINT`. Windows:
     /// `CTRL_C_EVENT` to the child's process group, which exists only for a
     /// child spawned with `detach`; without one this is `error.Unsupported`.
@@ -549,6 +560,30 @@ pub const Signal = enum {
     /// End the child now. POSIX: `SIGKILL`. Windows: `TerminateProcess`.
     /// Neither can be caught.
     kill,
+    /// `SIGHUP`: the terminal went away, or — for a daemon, which has none —
+    /// read the configuration again. POSIX only.
+    hangup,
+    /// `SIGQUIT`: what Ctrl-\ sends; ends with a core dump by default, and
+    /// some runtimes print their threads instead. POSIX only.
+    quit,
+    /// `SIGUSR1`, whatever the program says it means. POSIX only.
+    user1,
+    /// `SIGUSR2`, whatever the program says it means. POSIX only.
+    user2,
+    /// `SIGSTOP`: suspend, which cannot be caught or ignored. The child does
+    /// not end, so no wait here returns for it; `.@"continue"` resumes it.
+    /// POSIX only.
+    stop,
+    /// `SIGCONT`: resume a stopped child. POSIX only.
+    @"continue",
+    /// `SIGWINCH`: the window size changed. A child on a pair is sent this by
+    /// the terminal itself when `Pty.resize` changes the size; this is for a
+    /// child that should look again without one. POSIX only.
+    window_change,
+    /// Any other POSIX signal, by the system's own number: `.{ .posix = .ALRM }`.
+    /// One the system does not have is `error.Unsupported`, as is this member
+    /// on Windows, where nothing has a number to give it.
+    posix: posix.SIG,
 
     /// The POSIX signal number this stands for. POSIX only: Windows has no
     /// `SIGKILL` to name.
@@ -562,8 +597,43 @@ pub const Signal = enum {
             .interrupt => .INT,
             .terminate => .TERM,
             .kill => .KILL,
+            .hangup => .HUP,
+            .quit => .QUIT,
+            .user1 => .USR1,
+            .user2 => .USR2,
+            .stop => .STOP,
+            .@"continue" => .CONT,
+            .window_change => .WINCH,
+            .posix => |number| number,
         };
     }
+
+    /// Whether this asks the child to end — `.interrupt`, `.terminate` or
+    /// `.kill`, or the same three spelled by number — which is what makes
+    /// the descendants part of the ending.
+    pub fn ends(signal: Signal) bool {
+        return switch (signal) {
+            .interrupt, .terminate, .kill => true,
+            .posix => |number| if (is_windows) false else switch (number) {
+                .INT, .TERM, .KILL => true,
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    /// Whether this system has the signal at all: a number between one and
+    /// the last signal it defines. Always true for the named members.
+    pub fn valid(signal: Signal) bool {
+        if (is_windows) return switch (signal) {
+            .interrupt, .terminate, .kill => true,
+            else => false,
+        };
+        const number = @intFromEnum(signal.toPosix());
+        return number > 0 and number < signal_limit;
+    }
+
+    const signal_limit = if (is_windows) 0 else if (@hasDecl(c.SIG, "RTMAX")) @max(c.NSIG, c.SIG.RTMAX + 1) else c.NSIG;
 };
 
 pub const KillError = error{
@@ -572,9 +642,11 @@ pub const KillError = error{
     OutOfMemory,
     /// This process may not signal the child.
     PermissionDenied,
-    /// Windows: `.interrupt` was asked for and the child has no process group
-    /// of its own, so there is nothing a console control event can be
-    /// addressed to. Spawn with `detach` to get one.
+    /// The signal has no meaning here. Windows: `.interrupt` was asked for and
+    /// the child has no process group of its own, so there is nothing a
+    /// console control event can be addressed to (spawn with `detach` to get
+    /// one), or a signal other than the three it has an equivalent for. POSIX:
+    /// a `.posix` number this system does not define.
     Unsupported,
 } || std.Io.UnexpectedError;
 

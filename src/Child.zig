@@ -840,17 +840,19 @@ pub const Child = enum(usize) {
         }
     }
 
-    /// The ways this package can ask a child to stop, on either system.
-    ///
-    /// POSIX has more signals than these and a program that wants one can send it
-    /// itself while holding its own process identity. What is here is the subset
-    /// that means the same thing on Windows, which is the only thing a portable
-    /// API can promise.
+    /// What `kill` sends: the three requests to end that mean the same thing on
+    /// both systems, the common POSIX signals by name, and any POSIX signal by
+    /// number. `child_types.zig` says what each is on each system.
     pub const Signal = @import("child_types.zig").Signal;
 
     pub const KillError = @import("child_types.zig").KillError;
 
-    /// Asks the child to stop, with `signal`.
+    /// Sends `signal` to the child and what it started: asks it to stop, or —
+    /// with a signal that is not one of the three requests to end — to reload,
+    /// pause, resume or whatever else the program makes of it. Every signal is
+    /// aimed the same way; only `.kill` is sent more than once, and only
+    /// `.interrupt`, `.terminate` and `.kill` make the tree part of the child's
+    /// ending (`Signal.ends`).
     ///
     /// **What it reaches.** On Windows every child is in a job object of its own,
     /// and `.kill` ends the job, so it reaches the whole tree whether or not the
@@ -926,18 +928,19 @@ pub const Child = enum(usize) {
         while (!State.get(child).identity.tryLock()) std.Thread.yield() catch {};
         defer State.get(child).identity.unlock();
         if (child.settled() != null or State.get(child).identity_retired) return;
-        State.get(child).end_descendants = true;
+        if (!signal.valid()) return error.Unsupported;
+        if (signal.ends()) State.get(child).end_descendants = true;
         if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
         if (is_windows) return child.killWindows(signal);
+        const sig = signal.toPosix();
 
         if (comptime builtin.os.tag == .linux) if (State.get(child).supervisor) |owner| {
-            if (signal == .kill and State.get(child).cgroup.active()) _ = State.get(child).cgroup.kill();
+            if (sig == .KILL and State.get(child).cgroup.active()) _ = State.get(child).cgroup.kill();
             var cgroup_signalled = false;
-            if (signal != .kill and State.get(child).cgroup.active())
-                cgroup_signalled = (try State.get(child).cgroup.signalMembers(signal.toPosix(), State.get(child).process_id, State.get(child).pgid)) != null;
-            return owner.request(signal, cgroup_signalled);
+            if (sig != .KILL and State.get(child).cgroup.active())
+                cgroup_signalled = (try State.get(child).cgroup.signalMembers(sig, State.get(child).process_id, State.get(child).pgid)) != null;
+            return owner.request(sig, cgroup_signalled);
         };
-        const sig = signal.toPosix();
         if (sig == .KILL) State.get(child).force_tree = true;
         const target: posix.pid_t = if (State.get(child).pgid) |pgid| -pgid else State.get(child).id;
 
@@ -1051,8 +1054,9 @@ pub const Child = enum(usize) {
             },
             // No such process: the child ended between the check above and here.
             .SRCH => return,
-            // The signal number comes from an enum of valid ones.
-            .INVAL => unreachable,
+            // `kill` checked the number against the system's range; a number
+            // inside it the system still refuses is one it does not have.
+            .INVAL => return error.Unsupported,
             else => |err| return posix.unexpectedErrno(err),
         }
     }
@@ -1968,6 +1972,8 @@ pub const Child = enum(usize) {
             .interrupt => win32.CTRL_C_EVENT,
             .terminate => win32.CTRL_BREAK_EVENT,
             .kill => return child.terminateWindows(),
+            // `Signal` names each of these and why Windows has nothing for it.
+            else => return error.Unsupported,
         };
         const group = State.get(child).pgid orelse switch (signal) {
             // There is no console control event that reaches a process outside a

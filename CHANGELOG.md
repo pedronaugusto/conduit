@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `Child.kill` sends any POSIX signal to the child and what it started, aimed as the three requests to end are: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"` and `.window_change` by name, any other by number with `.{ .posix = … }`. Only `.interrupt`, `.terminate` and `.kill` end the tree with the child. Windows refuses the others with `Unsupported`. `Child.Signal` is a tagged union now; `.interrupt`, `.terminate` and `.kill` are spelled as before.
+
 - `tty.openControlling` on macOS opens the terminal under the device name a standard stream has open on it, when one has, so `poll` can wait on it (`/dev/tty` answers `POLLNVAL` there).
 
 - `readAvailable` reads what a pipe holds now without waiting for more, POSIX and Windows: once a child has ended, the rest of what it wrote, even while something it started still holds the pipe open.

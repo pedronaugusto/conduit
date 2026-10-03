@@ -15,9 +15,10 @@ pub const Supervisor = struct {
     channel: posix.fd_t,
     record: Child.SupervisorRecord,
 
-    pub fn request(self: Supervisor, signal: Child.Signal, cgroup_signalled: bool) Child.KillError!void {
+    /// Any signal Linux has fits the low seven bits: it numbers them below 65.
+    pub fn request(self: Supervisor, sig: posix.SIG, cgroup_signalled: bool) Child.KillError!void {
         if (@import("builtin").is_test and testing_hook.fail_request) return error.Unexpected;
-        const byte: u8 = @as(u8, @intCast(@intFromEnum(signal.toPosix()))) | (if (cgroup_signalled) @as(u8, 128) else 0);
+        const byte: u8 = @as(u8, @intCast(@intFromEnum(sig))) | (if (cgroup_signalled) @as(u8, 128) else 0);
         while (true) {
             const rc = linux.sendto(self.channel, std.mem.asBytes(&byte).ptr, 1, linux.MSG.NOSIGNAL | linux.MSG.DONTWAIT, null, 0);
             switch (linux.errno(rc)) {

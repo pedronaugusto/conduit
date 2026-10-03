@@ -1436,6 +1436,220 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
 }
 
 //======================================================================
+// Signals other than the three requests to end.
+//======================================================================
+
+/// A detached shell and a grandchild shell, each with a trap that says its
+/// own name and the signal's for every signal these tests send, and each
+/// waiting without end once it has said it is ready. The grandchild is
+/// started with `&`, so it is in the child's group and reached as `kill`
+/// reaches any descendant there.
+const trapping_tree =
+    \\for s in HUP USR1 USR2 WINCH ALRM CONT; do trap "echo parent-$s" $s; done
+    \\sh -c 'for s in HUP USR1 USR2 WINCH ALRM CONT; do trap "echo child-$s" $s; done; echo child-ready; while :; do sleep 1; done' &
+    \\printf 'pid %d.' "$!"
+    \\echo parent-ready
+    \\while :; do wait; done
+;
+
+/// Standard output to read, and the shell's own reports of a `sleep` a
+/// signal ended kept out of the test's output.
+const shell_reports: Child.Stdio = .{ .streams = .{ .stdout = .pipe, .stderr = .ignore } };
+
+test "a signal other than the three reaches a detached child and what it started" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // Windows has none of these, and refuses them: the test below.
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", trapping_tree },
+        .stdio = shell_reports,
+        .detach = true,
+    });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdoutFile().?);
+    const grandchild = try readPid(&sink);
+    defer if (alive(grandchild)) {
+        _ = c.kill(grandchild, .KILL);
+    };
+    try sink.expect("parent-ready");
+    try sink.expect("child-ready");
+
+    const sent = [_]struct { Child.Signal, []const u8 }{
+        .{ .hangup, "HUP" },
+        .{ .user1, "USR1" },
+        .{ .user2, "USR2" },
+        .{ .window_change, "WINCH" },
+        .{ .{ .posix = .ALRM }, "ALRM" },
+    };
+    for (sent) |entry| {
+        try child.kill(entry[0]);
+        var said: [32]u8 = undefined;
+        try sink.expect(try std.fmt.bufPrint(&said, "parent-{s}", .{entry[1]}));
+        try sink.expect(try std.fmt.bufPrint(&said, "child-{s}", .{entry[1]}));
+        // Caught, so delivered and not an end.
+        try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    }
+}
+
+test "stop suspends a child and what it started, and continue resumes them" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "/bin/sh", "-c", trapping_tree },
+        .stdio = shell_reports,
+        .detach = true,
+    });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdoutFile().?);
+    const grandchild = try readPid(&sink);
+    defer if (alive(grandchild)) {
+        _ = c.kill(grandchild, .KILL);
+    };
+    try sink.expect("parent-ready");
+    try sink.expect("child-ready");
+
+    try child.kill(.stop);
+    try expectStopped(child.processId().?, true);
+    try expectStopped(grandchild, true);
+    // A stopped child has not ended, and no wait here says it has.
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+
+    try child.kill(.@"continue");
+    try expectStopped(child.processId().?, false);
+    try expectStopped(grandchild, false);
+    try sink.expect("parent-CONT");
+    try sink.expect("child-CONT");
+}
+
+test "a signal that is not a request to end leaves what the child started to its policy" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+
+    // The child catches the signal and exits normally; the grandchild
+    // ignores it. After `.terminate` the reap ends the grandchild: the
+    // request was to end, and a child that cleaned up and exited still
+    // takes its tree with it. After `.user1` the survival policy holds, as
+    // it would for a child that had exited on its own.
+    for ([_]struct { Child.Signal, []const u8, bool }{
+        .{ .terminate, "TERM", false },
+        .{ .user1, "USR1", true },
+    }) |entry| {
+        var line: [512]u8 = undefined;
+        const text = try std.fmt.bufPrint(&line,
+            \\trap 'exit 0' {0s}
+            \\sh -c "trap '' {0s}; echo child-ready; while :; do sleep 1; done" &
+            \\printf 'pid %d.' "$!"
+            \\while :; do wait; done
+        , .{entry[1]});
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ "/bin/sh", "-c", text },
+            .stdio = shell_reports,
+            .detach = true,
+        });
+        defer child.release(io) catch unreachable;
+        defer _ = child.killWait(io, 0) catch {};
+        var sink: Sink = .{};
+        defer sink.deinit();
+        try sink.start(child.stdoutFile().?);
+        const grandchild = try readPid(&sink);
+        defer if (alive(grandchild)) {
+            _ = c.kill(grandchild, .KILL);
+        };
+        try sink.expect("child-ready");
+
+        try child.kill(entry[0]);
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+        if (entry[2]) {
+            try testing.expect(alive(grandchild));
+        } else {
+            try expectGone(grandchild);
+        }
+    }
+}
+
+test "a signal with no meaning on this system is refused by name" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &script.sleep_forever,
+        .stdio = .ignore,
+    });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+
+    if (is_windows) {
+        inline for (.{ .hangup, .quit, .user1, .user2, .stop, .@"continue", .window_change }) |signal| {
+            try testing.expectError(error.Unsupported, child.kill(signal));
+        }
+        try testing.expectError(error.Unsupported, child.kill(.{ .posix = .TERM }));
+    } else {
+        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @enumFromInt(0) }));
+        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @enumFromInt(200) }));
+    }
+    // Refused before anything was sent: the child is still running.
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+}
+
+/// Waits for `pid` to be stopped, or to be running again, by the state the
+/// system reports for it: the `/proc` state letter on Linux, `SSTOP` from
+/// `proc_pidinfo` on Darwin. Skips where neither can be asked.
+fn expectStopped(pid: posix.pid_t, stopped: bool) !void {
+    const deadline: Deadline = .in(io, budget_ms);
+    while (true) {
+        const now = isStopped(pid) orelse return error.SkipZigTest;
+        if (now == stopped) return;
+        if (deadline.remainingMs(io) == 0) return error.TestStopNotObserved;
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
+fn isStopped(pid: posix.pid_t) ?bool {
+    if (builtin.os.tag == .linux) {
+        const state = stateOf(pid);
+        if (state == 0) return null;
+        return state == 'T' or state == 't';
+    }
+    if (builtin.os.tag == .macos) {
+        var info: DarwinBsdInfo = undefined;
+        if (darwin_proc_pidinfo(pid, 3, 0, &info, @sizeOf(DarwinBsdInfo)) != @sizeOf(DarwinBsdInfo)) return null;
+        // `SSTOP` from `<sys/proc.h>`.
+        return info.status == 4;
+    }
+    return null;
+}
+
+/// `struct proc_bsdinfo` from `<sys/proc_info.h>`, which `proc_pidinfo`
+/// fills only whole.
+const DarwinBsdInfo = extern struct {
+    flags: u32,
+    status: u32,
+    rest: [128]u8,
+};
+
+extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: ?*anyopaque, size: c_int) c_int;
+const darwin_proc_pidinfo = if (builtin.os.tag == .macos) proc_pidinfo else struct {
+    fn unavailable(_: c_int, _: c_int, _: u64, _: ?*anyopaque, _: c_int) c_int {
+        return 0;
+    }
+}.unavailable;
+
+//======================================================================
 // A cgroup of the child's own (Linux, where one may be made).
 //======================================================================
 
