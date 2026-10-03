@@ -113,11 +113,16 @@ fixed buffer; it allocates nothing. `recorded.remove()` checks the name's
 inode through that parent and removes an empty cgroup with `unlinkat`;
 `recorded.release()` tries removal and closes both descriptors. A replacement
 between the inode check and `unlinkat` can still change the final entry.
-The caller must also compare the boot id saved with the inode. On systems
-without cgroups, `openRecorded` returns `null`.
+The caller must also compare the boot id saved with the inode:
+`conduit.bootIdentity()` is this boot's, read whole and checked, and
+`conduit.parseBootIdentity(bytes)` checks one read back from a record; a record
+whose boot is not exactly a UUID proves no boot. On systems without cgroups,
+`openRecorded` returns `null`, and `bootIdentity` is `null` everywhere but Linux.
 
-`conduit.succeeded(term)`, `exitCode(term)` and `signalName(term)` say what a
-`Term` holds without matching on it. `Term` belongs to conduit: `exited` is
+`conduit.succeeded(term)`, `exitCode(term)`, `signalName(term)` and
+`signalNumber(term)` say what a `Term` holds without matching on it;
+`shellStatus(term)` says it as a shell's `$?` does, the exit status's low byte
+or 128 and the signal's number. `Term` belongs to conduit: `exited` is
 `u32`, preserving the full Windows exit code and the POSIX exit byte.
 `signalName` is `null` on Windows, where a process reports an exit code however
 it ended: 1 when `killWait` had to terminate it, and otherwise whatever the
@@ -379,6 +384,9 @@ that process. A recorded cgroup reaches the complete Linux tree.
 and a stable unique process id on Darwin, taken before the start time is checked (Linux)
 or with it in one lookup (Darwin), so the signal it sends reaches that
 process or nothing; it is `null` for a start time that does not match.
+`conduit.processExists(pid)` says whether any process has an id now, on POSIX
+and Windows; one that has ended but is not yet reaped still has it, and a
+reused id is told apart only by the start time written down beside it.
 `CapturedPid` exposes no token or handle. `captured.processId()` reads its
 number for reports. Release it exactly once with `deinit`; do not copy an
 owning capture. Darwin checks the stable unique id on every lookup, so exec
