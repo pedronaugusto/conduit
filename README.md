@@ -80,6 +80,7 @@ to read while a wait or Reaper runs.
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
 | `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Borrowed `std.Io.File`s; the created pipes remain owned by the `Child`. |
 | `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller, who closes it. A pair has no pipe to transfer. |
+| `conduit.readAvailable(file, io, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
 | `child.inputWriter(io, allocator, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
 | `child.terminalMaster()` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |

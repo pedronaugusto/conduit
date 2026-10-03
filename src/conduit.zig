@@ -213,6 +213,12 @@ else
     tty.ttyName;
 pub const TtyNameError = tty.TtyNameError;
 
+/// Reads what a pipe holds now, without waiting for more: 0 once nothing is
+/// left at this moment. For the rest of what a child wrote, once it has
+/// ended, when something it started may still hold the pipe open.
+pub const readAvailable = @import("handles.zig").readAvailable;
+pub const ReadAvailableError = @import("handles.zig").ReadAvailableError;
+
 /// Whether a process has an id now: `true`, `false`, or `null` where the
 /// system will not say. One that has ended but is not yet reaped still has
 /// it. Ids are reused: pair the id with `startTime` (Linux and Darwin) to

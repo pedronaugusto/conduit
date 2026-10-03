@@ -77,6 +77,70 @@ pub fn readStreaming(
     }
 }
 
+pub const ReadAvailableError = std.Io.File.ReadStreamingError || error{
+    /// No read can make progress because the destination is empty.
+    EmptyBuffer,
+};
+
+/// Reads what a pipe holds now into `buffer`, without waiting for more: 0
+/// once nothing is left to read at this moment, whether or not anything
+/// still holds the pipe's other end, and at the end of the stream.
+///
+/// This is how the rest of what a child wrote is read once it has ended.
+/// Its writes are all in the pipe by then, so reading until this returns 0
+/// takes every one of them, and none of what comes after: a read that waits
+/// for the end of the stream would wait for whatever the child started that
+/// inherited the other end, an ssh ControlMaster or a credential daemon,
+/// for as long as that runs. `f` is a pipe this process reads, as `Child`
+/// hands out; on Windows one opened for synchronous reads, as `Child`'s are.
+pub fn readAvailable(f: std.Io.File, io: std.Io, buffer: []u8) ReadAvailableError!usize {
+    if (buffer.len == 0) return error.EmptyBuffer;
+    const ready = if (is_windows) windowsPipeAvailable(f) else posixReadable(f.handle);
+    if (ready == 0) return 0;
+    const n = f.readStreaming(io, &.{buffer[0..@min(buffer.len, ready)]}) catch |err| switch (err) {
+        error.EndOfStream => return 0,
+        else => |e| return e,
+    };
+    return n;
+}
+
+/// Bytes a read of `fd` returns now without waiting: `maxInt` when it is
+/// readable, with bytes or at its end, and 0 when a read would wait.
+fn posixReadable(fd: posix.fd_t) usize {
+    var fds = [1]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+    // A failed poll reads nothing rather than risk a read that waits.
+    const ready = posix.poll(&fds, 0) catch return 0;
+    if (ready == 0) return 0;
+    return std.math.maxInt(usize);
+}
+
+/// How many bytes the Windows pipe `f` holds, or `maxInt` when its writers
+/// are gone, which a read then reports as the end.
+fn windowsPipeAvailable(f: std.Io.File) usize {
+    if (!is_windows) unreachable;
+    // As in `windowsPipeClosed`: only a synchronous handle is asked.
+    if (f.flags.nonblocking) return 0;
+    const windows = std.os.windows;
+    var status: windows.IO_STATUS_BLOCK = undefined;
+    var info: windows.FILE.PIPE.LOCAL_INFORMATION = undefined;
+    return switch (windows.ntdll.NtQueryInformationFile(
+        f.handle,
+        &status,
+        &info,
+        @sizeOf(@TypeOf(info)),
+        .PipeLocal,
+    )) {
+        .SUCCESS => if (info.ReadDataAvailable != 0)
+            info.ReadDataAvailable
+        else if (info.NamedPipeState == .CLOSING or info.NamedPipeState == .DISCONNECTED)
+            std.math.maxInt(usize)
+        else
+            0,
+        .PIPE_CLOSING, .PIPE_BROKEN, .PIPE_DISCONNECTED => std.math.maxInt(usize),
+        else => 0,
+    };
+}
+
 /// Writes the whole slice, retaining short writes and checking cancellation
 /// when a backend reports zero progress. File.writeStreamingAll retries that
 /// zero without a cancellation point, so a task could otherwise spin past a
