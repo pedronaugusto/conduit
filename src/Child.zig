@@ -2010,15 +2010,55 @@ pub const Child = enum(usize) {
 
     /// The `wait` status word, as `Term`. The same mapping the standard library
     /// uses, needed here because `tryWait` calls `waitpid` directly.
+    ///
+    /// The word is sixteen bits wide, and those are what is decoded. Nothing
+    /// `waitpid` returns here sets the bits above them, and Darwin's
+    /// `EXITSTATUS` in the standard library narrows everything above the low
+    /// byte into a `u8` -- a panic, not an answer, for a word that did.
     fn statusToTerm(status: u32) Term {
-        return if (c.W.IFEXITED(status))
-            .{ .exited = c.W.EXITSTATUS(status) }
-        else if (c.W.IFSIGNALED(status))
-            .{ .signal = c.W.TERMSIG(status) }
-        else if (c.W.IFSTOPPED(status))
-            .{ .stopped = c.W.STOPSIG(status) }
+        const word = status & 0xffff;
+        return if (c.W.IFEXITED(word))
+            .{ .exited = c.W.EXITSTATUS(word) }
+        else if (c.W.IFSIGNALED(word))
+            .{ .signal = c.W.TERMSIG(word) }
+        else if (c.W.IFSTOPPED(word))
+            .{ .stopped = c.W.STOPSIG(word) }
         else
             .{ .unknown = status };
+    }
+
+    /// Any status word decodes to a `Term`, and the `$?` a shell would give it
+    /// is the one its bits say: the exit status in the second byte, or 128 and
+    /// a signal's number -- whatever the bits above them hold.
+    fn statusDecodes(_: void, smith: *std.testing.Smith) anyerror!void {
+        @disableInstrumentation();
+        if (is_windows) return error.SkipZigTest;
+        try checkStatus(smith.value(u32));
+    }
+
+    fn checkStatus(status: u32) !void {
+        const term = statusToTerm(status);
+        const low = status & 0x7f;
+        if (low == 0) {
+            try std.testing.expectEqual(@as(u32, (status >> 8) & 0xff), term.exited);
+            try std.testing.expectEqual(@as(u8, @truncate(status >> 8)), shellStatus(term));
+        } else if (low != 0x7f) {
+            try std.testing.expectEqual(low, @intFromEnum(term.signal));
+            try std.testing.expectEqual(@as(u8, @intCast(128 + low)), shellStatus(term));
+        }
+        _ = signalName(term);
+        _ = signalNumber(term);
+    }
+
+    test "a wait status word decodes to the end a shell reports" {
+        try std.testing.fuzz({}, statusDecodes, .{});
+    }
+
+    test "a wait status word decodes whatever its upper bits hold" {
+        if (is_windows) return error.SkipZigTest;
+        for ([_]u32{ 0, 0x0100, 0xff00, 0x10000, 0x1ff00, 0xffff_0000, 0xffff_ffff, 0x0109, 0x1_0009, 0x137f, 0x1_137f }) |status| {
+            try checkStatus(status);
+        }
     }
 
     // A test can stop delivery at the boundary between taking the child's name

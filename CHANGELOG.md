@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A wait status is decoded from its sixteen bits, so a word with higher bits set cannot panic in Darwin's `EXITSTATUS`.
+
 - A `/proc/self/cgroup` line the read stopped in the middle of is no longer taken as this process's cgroup.
 
 - `environ.inherit` reads this process's environment as `getenv` does: an entry with no `=` or no name is left out instead of crashing the map, and a name given twice keeps its first value.
