@@ -388,6 +388,10 @@ test "a mountinfo line reads back the paths it escapes" {
 fn mountinfoReadsThroughItsWindow(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    // The test runner sets `std.testing.io` up around each test of an
+    // ordinary run, and leaves it uninitialised around a fuzzing input.
+    if (builtin.fuzz) std.testing.io_instance = .init(std.testing.allocator, .{});
+    defer if (builtin.fuzz) std.testing.io_instance.deinit();
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var file: std.ArrayList(u8) = .empty;
