@@ -4119,6 +4119,212 @@ test "two streams whose files are each other's descriptors are not crossed" {
 /// file is put in its place, and `restore` undoes both. `restore` is
 /// idempotent, so a test may put a descriptor back before it starts printing
 /// and still leave the `defer` in place.
+//======================================================================
+// Files beyond the standard three.
+//======================================================================
+
+const inherited_fixture = @import("conduit_test_options").input_fixture;
+
+/// What the fixture wrote into the file at `name`: `fd <n>` for each
+/// descriptor it was given that file at.
+fn expectSaid(dir: std.Io.Dir, name: []const u8, expected: []const u8) !void {
+    var contents: [4096]u8 = undefined;
+    try testing.expectEqualStrings(expected, try dir.readFile(io, name, &contents));
+}
+
+test "extra files arrive at descriptor 3 and up, in order" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // About the spawn path, so not in a cgroup, which always forks.
+    if (comptime !is_windows) cgroup.testing_hook.off = true;
+    defer if (comptime !is_windows) {
+        cgroup.testing_hook.off = false;
+    };
+
+    // The default policy, which takes posix_spawn where it can, and
+    // `.close_all`, which forks and closes everything above the extras.
+    for ([_]Child.FdPolicy{ .close_on_exec, .close_all }) |policy| {
+        const names = [_][]const u8{ "three", "four", "five" };
+        var files: [names.len]std.Io.File = undefined;
+        for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
+        defer for (files) |f| f.close(io);
+
+        const calls = @import("test_support.zig").SpawnCalls;
+        calls.file_actions = 0;
+        var child = try Child.spawn(io, gpa, .{
+            .argv = &.{ inherited_fixture, "inherited", "3" },
+            .stdio = .ignore,
+            .fd_policy = policy,
+            .extra_fds = &files,
+        });
+        defer child.release(io) catch unreachable;
+        errdefer _ = child.killWait(io, 0) catch {};
+        try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+
+        try expectSaid(tmp.dir, "three", "fd 3\n");
+        try expectSaid(tmp.dir, "four", "fd 4\n");
+        try expectSaid(tmp.dir, "five", "fd 5\n");
+        // Every source above the slots: file actions say it, unless the
+        // policy or the build asks for the fork.
+        if (!is_windows and fast_path and policy == .close_on_exec) {
+            const all_above = for (files) |f| {
+                if (f.handle < 6) break false;
+            } else true;
+            if (all_above) try testing.expectEqual(@as(usize, 1), calls.file_actions);
+        }
+    }
+}
+
+test "extra files cross over correctly, however their numbers fall" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // The numbering is POSIX's; Windows lists handles by value.
+    if (is_windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Eight files, given sixty-four times between them in reverse order of
+    // their numbers, so most sources lie inside the range the extras are
+    // placed at, some below their slot and some above, and each file whose
+    // number is a slot also given at that very slot. The report pipe the
+    // fork child keeps lies inside the range too. Then once more with the
+    // last of them at descriptor 0, which the standard streams are placed
+    // over first.
+    const count = 64;
+    const names = [_][]const u8{ "file0", "file1", "file2", "file3", "file4", "file5", "file6", "file7" };
+    for ([_]bool{ false, true }) |at_zero| {
+        for ([_]Child.FdPolicy{ .close_on_exec, .close_all }) |policy| {
+            var files: [names.len]std.Io.File = undefined;
+            for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
+            defer for (files) |f| f.close(io);
+            var extras: [count]std.Io.File = undefined;
+            for (&extras, 0..) |*extra, i| extra.* = files[files.len - 1 - i % files.len];
+            for (files) |f| if (f.handle >= 3 and f.handle < 3 + count) {
+                extras[@intCast(f.handle - 3)] = f;
+            };
+            var borrowed: ?BorrowedDescriptor = if (at_zero) try .take(0, files[0]) else null;
+            defer if (borrowed) |*b| b.restore();
+            if (at_zero) extras[count - 1] = .{ .handle = 0, .flags = .{ .nonblocking = false } };
+
+            var child = try Child.spawn(io, gpa, .{
+                .argv = &.{ inherited_fixture, "inherited", std.fmt.comptimePrint("{d}", .{count}) },
+                .stdio = .ignore,
+                .fd_policy = policy,
+                .extra_fds = &extras,
+            });
+            defer child.release(io) catch unreachable;
+            errdefer _ = child.killWait(io, 0) catch {};
+            try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+
+            for (files, names) |f, name| {
+                var expected: std.ArrayList(u8) = .empty;
+                defer expected.deinit(gpa);
+                for (extras, 3..) |extra, slot| {
+                    const given = if (extra.handle == 0) files[0].handle else extra.handle;
+                    if (given == f.handle) try expected.print(gpa, "fd {d}\n", .{slot});
+                }
+                try expectSaid(tmp.dir, name, expected.items);
+            }
+        }
+    }
+}
+
+test "a program that cannot run is still reported when extra files cover the report pipe" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    if (is_windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var f = try tmp.dir.createFile(io, "out", .{});
+    defer f.close(io);
+
+    // The fork child reports a failed exec over a pipe whose number lies
+    // among these slots. Placed over, the report would go into the file and
+    // the spawn would come back as a child exiting 127.
+    const extras: [64]std.Io.File = @splat(f);
+    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+        .argv = &.{"/nonexistent/conduit-no-such-program"},
+        .stdio = .ignore,
+        .fd_policy = .close_all,
+        .extra_fds = &extras,
+    }));
+    try expectSaid(tmp.dir, "out", "");
+}
+
+test "a child on a terminal gets its extra files above the terminal's three" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var f = try tmp.dir.createFile(io, "out", .{});
+    defer f.close(io);
+
+    // Windows names no handles beside a pseudoconsole: refused by name.
+    if (is_windows) {
+        try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+            .argv = &.{ inherited_fixture, "inherited", "1" },
+            .stdio = .{ .pty = &pty },
+            .extra_fds = &.{f},
+        }));
+        return;
+    }
+
+    // Enough of them that the pair's own descriptors lie among the slots:
+    // closing those after placement would close an extra file instead.
+    const count = 32;
+    const extras: [count]std.Io.File = @splat(f);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ inherited_fixture, "inherited", std.fmt.comptimePrint("{d}", .{count}) },
+        .stdio = .{ .pty = &pty },
+        .detach = true,
+        .extra_fds = &extras,
+    });
+    defer child.release(io) catch unreachable;
+    errdefer _ = child.killWait(io, 0) catch {};
+    pty.closeSlave(io);
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(pty.readFile());
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+
+    var expected: std.ArrayList(u8) = .empty;
+    defer expected.deinit(gpa);
+    for (3..3 + count) |slot| try expected.print(gpa, "fd {d}\n", .{slot});
+    try expectSaid(tmp.dir, "out", expected.items);
+}
+
+test "a child on the C runtime finds extra handles at descriptor 3" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    // The other systems number descriptors themselves; the tests above.
+    if (!is_windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var f = try tmp.dir.createFile(io, "out", .{});
+    defer f.close(io);
+
+    // `cmd.exe` redirects to a descriptor through its C runtime, which read
+    // the table in the startup record when it started.
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{ "cmd.exe", "/c", "echo through the runtime>&3" },
+        .stdio = .ignore,
+        .extra_fds = &.{f},
+    });
+    defer child.release(io) catch unreachable;
+    errdefer _ = child.killWait(io, 0) catch {};
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    try expectSaid(tmp.dir, "out", "through the runtime\r\n");
+}
+
 const BorrowedDescriptor = struct {
     number: posix.fd_t,
     saved: ?posix.fd_t,

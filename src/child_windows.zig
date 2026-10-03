@@ -48,6 +48,24 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     var child_handles = try ChildHandles.init(childHandles(&plan));
     defer child_handles.deinit();
     const given = child_handles.given;
+    // `extra_fds` as private inheritable copies, but for a console handle,
+    // which the child reaches through the console it shares and which no
+    // handle list may name.
+    const extras = try arena.alloc(windows.HANDLE, options.extra_fds.len);
+    var extras_made: usize = 0;
+    var extra_duplicates: usize = 0;
+    defer for (options.extra_fds[0..extras_made], extras[0..extras_made]) |extra, handle| {
+        if (handle != extra.handle) windows.CloseHandle(handle);
+    };
+    for (options.extra_fds, extras) |extra, *slot| {
+        if (isConsole(extra.handle)) {
+            slot.* = extra.handle;
+        } else {
+            slot.* = try inheritableCopy(extra.handle);
+            extra_duplicates += 1;
+        }
+        extras_made += 1;
+    }
 
     var startup: win32.STARTUPINFOEXW = std.mem.zeroes(win32.STARTUPINFOEXW);
     var flags: windows.CreateProcessFlags = .{
@@ -60,7 +78,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // handles and a list of what may be inherited.
     var attributes: ?AttributeList = null;
     defer if (attributes) |*list| list.deinit();
-    try describeChild(arena, options, given, &startup, &flags, &attributes);
+    try describeChild(arena, options, given, extras, &startup, &flags, &attributes);
 
     // A console handle is already meaningful to a child sharing this
     // process's console and is not inherited through the handle table. Every
@@ -74,6 +92,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
                 const handle = slot orelse continue;
                 if (!isConsole(handle)) break :inherit .TRUE;
             }
+            if (extra_duplicates != 0) break :inherit .TRUE;
             break :inherit .FALSE;
         },
     };
@@ -159,6 +178,7 @@ fn describeChild(
     arena: Allocator,
     options: SpawnOptions,
     given: [3]?windows.HANDLE,
+    extras: []const windows.HANDLE,
     startup: *win32.STARTUPINFOEXW,
     flags: *windows.CreateProcessFlags,
     attributes: *?AttributeList,
@@ -209,13 +229,21 @@ fn describeChild(
             // means the child, and anything the child starts, keeps those pipes
             // open for as long as it lives. A handle list says exactly which
             // three the child is being given.
-            if (try inheritList(given, arena)) |inheritable| {
+            if (try inheritList(given, extras, arena)) |inheritable| {
                 var list = try AttributeList.init(arena, 1);
                 try list.setHandleList(inheritable);
                 attributes.* = list;
                 startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
                 startup.lpAttributeList = list.raw;
                 flags.extended_startupinfo_present = true;
+            }
+
+            // What the child holds above its standard three is said where its C
+            // runtime looks for inherited descriptors.
+            if (extras.len != 0) {
+                const table = try runtimeTable(arena, extras);
+                startup.StartupInfo.cbReserved2 = @intCast(table.len);
+                startup.StartupInfo.lpReserved2 = &table[0];
             }
         },
     }
@@ -330,6 +358,10 @@ fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
     // is nowhere to put the caller's file. Refusing beats accepting the option
     // and quietly dropping it.
     if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
+    // The same for the C runtime's table, which names handles in the startup
+    // record a pseudoconsole child is given none in.
+    if (options.stdio == .pty and options.extra_fds.len != 0) return error.Unsupported;
+    if (options.extra_fds.len > runtime_table_limit - 3) return error.Unsupported;
 
     // A Windows process runs as the token it was created with. Changing the
     // user, the group or the file-creation mask are not steps between a fork
@@ -549,17 +581,7 @@ const ChildHandles = struct {
                 }
             }
             if (duplicate == null) {
-                const process = windows.GetCurrentProcess();
-                var made: windows.HANDLE = undefined;
-                if (win32.DuplicateHandle(
-                    process,
-                    original,
-                    process,
-                    &made,
-                    0,
-                    .TRUE,
-                    win32.DUPLICATE_SAME_ACCESS,
-                ) == .FALSE) return createError();
+                const made = try inheritableCopy(original);
                 result.duplicates[result.count] = made;
                 result.count += 1;
                 duplicate = made;
@@ -589,7 +611,7 @@ const ChildHandles = struct {
 ///
 /// Every handle in the list is a private inheritable duplicate made for this
 /// spawn and closed once `CreateProcessW` returns.
-fn inheritList(given: [3]?windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
+fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
     var list: std.ArrayList(windows.HANDLE) = .empty;
     for (given) |slot| {
         const handle = slot orelse continue;
@@ -597,8 +619,62 @@ fn inheritList(given: [3]?windows.HANDLE, arena: Allocator) Allocator.Error!?[]w
         if (std.mem.indexOfScalar(windows.HANDLE, list.items, handle) != null) continue;
         try list.append(arena, handle);
     }
+    for (extras) |handle| {
+        if (isConsole(handle)) continue;
+        if (std.mem.indexOfScalar(windows.HANDLE, list.items, handle) != null) continue;
+        try list.append(arena, handle);
+    }
     if (list.items.len == 0) return null;
     return list.items;
+}
+
+/// The most descriptors the C runtime's table can describe: its size is the
+/// startup record's 16-bit `cbReserved2`, and each descriptor takes a flag
+/// byte and a handle after the count.
+pub const runtime_table_limit = (std.math.maxInt(u16) - @sizeOf(i32)) / (1 + @sizeOf(usize));
+
+/// The table of inherited descriptors the Microsoft C runtime reads from the
+/// startup record at its start, the layout libuv writes for Node's extra
+/// stdio: the count as an `int`, a flag byte for each descriptor, then each
+/// descriptor's handle, packed with no alignment.
+///
+/// The standard three are left unopened, with no flag and no handle, so the
+/// runtime takes them from the standard handles as it does with no table:
+/// those are already what `STARTF_USESTDHANDLES` says. Each extra handle is
+/// `FOPEN`, with `FPIPE` or `FDEV` for a pipe or a character device, since
+/// the runtime reads and seeks differently on those.
+fn runtimeTable(arena: Allocator, extras: []const windows.HANDLE) Allocator.Error![]u8 {
+    const count = 3 + extras.len;
+    const table = try arena.alloc(u8, @sizeOf(i32) + count + count * @sizeOf(usize));
+    std.mem.writeInt(i32, table[0..4], @intCast(count), .little);
+    const flags = table[4..][0..count];
+    const values = table[4 + count ..];
+    const invalid = std.math.maxInt(usize);
+    for (0..count) |fd| {
+        const value: usize = if (fd < 3) invalid else @intFromPtr(extras[fd - 3]); // safe: the handle's value, written into the record the child reads, never dereferenced
+        std.mem.writeInt(usize, values[fd * @sizeOf(usize) ..][0..@sizeOf(usize)], value, .little);
+        flags[fd] = if (fd < 3) 0 else switch (win32.GetFileType(extras[fd - 3])) {
+            win32.FILE_TYPE_PIPE => runtime_open | runtime_pipe,
+            win32.FILE_TYPE_CHAR => runtime_open | runtime_device,
+            else => runtime_open,
+        };
+    }
+    return table;
+}
+
+/// The C runtime's descriptor flags: `FOPEN`, `FPIPE` and `FDEV`.
+const runtime_open: u8 = 0x01;
+const runtime_pipe: u8 = 0x08;
+const runtime_device: u8 = 0x40;
+
+/// An inheritable duplicate of one of the caller's handles, which is left as
+/// it was.
+fn inheritableCopy(original: windows.HANDLE) SpawnError!windows.HANDLE {
+    const process = windows.GetCurrentProcess();
+    var made: windows.HANDLE = undefined;
+    if (win32.DuplicateHandle(process, original, process, &made, 0, .TRUE, win32.DUPLICATE_SAME_ACCESS) == .FALSE)
+        return createError();
+    return made;
 }
 
 /// Whether a handle is one of this process's console handles.

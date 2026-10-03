@@ -372,6 +372,12 @@ pub const STARTUPINFOEXW = extern struct {
 
 pub const STARTF_USESTDHANDLES: DWORD = 0x00000100;
 
+/// What kind of object a handle is, for the C runtime's flags on an
+/// inherited descriptor.
+pub const FILE_TYPE_CHAR: DWORD = 0x0002;
+pub const FILE_TYPE_PIPE: DWORD = 0x0003;
+pub extern "kernel32" fn GetFileType(hFile: HANDLE) callconv(.winapi) DWORD;
+
 //======================================================================
 // Processes.
 //======================================================================

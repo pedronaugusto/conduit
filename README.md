@@ -132,7 +132,7 @@ child itself exited with, including the system's control-exit status.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`, `fd_policy`, `job_limits`, `parent_death_signal`, `descendants`.
+`resource_limits`, `fd_policy`, `extra_fds`, `job_limits`, `parent_death_signal`, `descendants`.
 
 `descendants = .survive` is the default on every platform. Once the child
 exits normally and is reaped, `deinit` leaves what it started alone. This
@@ -275,6 +275,20 @@ given the handles named in an attribute list and nothing else, so both values
 mean the same thing there. Console handles are supplied through the shared
 console rather than named in the list; ordinary handles beside them remain
 restricted to the ones the child was given.
+
+`extra_fds` gives the child more files than its standard three, in order:
+the first at descriptor 3, the next at 4, as Go's `ExtraFiles` does — a
+listening socket handed over the way a service manager hands one, or a pipe
+for a status protocol. They are borrowed, given whatever their close-on-exec
+flag, and placed correctly whatever numbers they already have, including the
+numbers they are placed at. `.close_all` closes what is above them. Windows
+numbers no descriptors: each file goes to the child as an inheritable
+duplicate named in the handle list, and in the table of inherited
+descriptors the Microsoft C runtime reads from the startup record
+(`lpReserved2`), so a child on that runtime — `cmd.exe`, Python, Node — has
+them at 3 and up, as libuv arranges for Node's extra stdio. A child on no C
+runtime finds them with `GetStartupInfoW`. With `.pty` it is
+`error.Unsupported` there, as `stderr_to` is.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
 `std.posix.rlimit_resource` and `std.posix.rlimit` pairs. Both are set in the
@@ -683,7 +697,8 @@ that needs nothing done between the fork and the exec is handed to
 `posix_spawn`, which does not copy the parent's page tables.
 Everything that can only be done in a fork child sends the spawn back to the
 fork — `credentials` and `resource_limits`, which a process sets on itself;
-`cwd`, `Stream.close`, a caller's file at descriptor 0, 1 or 2, and `fd_policy =
+`cwd`, `Stream.close`, a caller's file at descriptor 0, 1 or 2, an
+`extra_fds` file at a number one of them is placed at, and `fd_policy =
 .close_all`. A detached child on a pseudo-terminal takes `posix_spawn` on
 Linux: `POSIX_SPAWN_SETSID` makes the session, and the terminal's name opened
 without `O_NOCTTY` in that session makes it the controlling one, as a session

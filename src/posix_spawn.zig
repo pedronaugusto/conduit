@@ -28,7 +28,11 @@
 //!   and this package promises the second;
 //! * a caller's file at descriptor 0, 1 or 2, because `adddup2` of a
 //!   descriptor onto itself is specified to clear close-on-exec and is not
-//!   implemented that way everywhere.
+//!   implemented that way everywhere;
+//! * an `extra_fds` file whose number is below the last one the extras are
+//!   placed at: the same `adddup2` onto itself, or a file the actions before
+//!   it would already have written over, which the fork child moves out of
+//!   the way first and a file action cannot.
 //!
 //! Everything else — pipes, the null device, inherited streams, `stderr_to`,
 //! an environment, a search path, `detach` — is expressible, and the child
@@ -118,6 +122,7 @@ pub const Started = struct {
 /// `SIGCHLD`.
 pub fn spawn(
     plan: [3]PlanTarget,
+    extras: []const posix.fd_t,
     candidates: []const [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
@@ -160,6 +165,13 @@ pub fn spawn(
             }
         },
     };
+    // After the standard three, which read their sources before anything
+    // here is written: a source above every extra slot is still itself when
+    // its turn comes.
+    for (extras, 3..) |fd, slot| {
+        if (fd < 3 + extras.len) return null;
+        if (posix_spawn_file_actions_adddup2(&actions, fd, @intCast(slot)) != 0) return error.SystemResources;
+    }
 
     var attr: Attr = undefined;
     if (posix_spawnattr_init(&attr) != 0) return error.SystemResources;

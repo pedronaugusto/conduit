@@ -75,6 +75,11 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
 
     const cwd_z: ?[*:0]const u8 = if (options.cwd) |dir| (try arena.dupeZ(u8, dir)).ptr else null;
 
+    // The descriptors the child gets from 3 upward, as numbers the fork
+    // child may rewrite while it moves one out of another's way.
+    const extras = try arena.alloc(posix.fd_t, options.extra_fds.len);
+    for (options.extra_fds, extras) |extra, *fd| fd.* = extra.handle;
+
     // The descriptors the child will have as 0, 1 and 2, and the ones the
     // parent keeps. `plan` opens nothing the caller owns.
     var plan: Plan = try .init(io, options, switch (options.stdio) {
@@ -107,7 +112,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
         const started_child = child: {
             handles.ForkGap.startingAChild();
             defer handles.ForkGap.release();
-            break :child try posix_spawn.spawn(plan.child, candidates, argv.ptr, envp, options);
+            break :child try posix_spawn.spawn(plan.child, extras, candidates, argv.ptr, envp, options);
         };
         if (started_child) |child| {
             adoption.started(child.pid) catch |err| {
@@ -186,7 +191,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
         const join: posix.fd_t = if (contained) |pending| pending.joinDescriptor() else -1;
-        childMain(options, plan, candidates, argv.ptr, envp, cwd_z, report[1], root_parent, go, join);
+        childMain(options, plan, extras, candidates, argv.ptr, envp, cwd_z, report[1], root_parent, go, join);
     }
     handles.ForkGap.release();
 
@@ -420,15 +425,27 @@ const Failure = extern struct {
 fn childMain(
     options: SpawnOptions,
     plan: Plan,
+    extras: []posix.fd_t,
     candidates: []const [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
     cwd: ?[*:0]const u8,
-    report: posix.fd_t,
+    report_pipe: posix.fd_t,
     parent: posix.pid_t,
     go: ?[2]posix.fd_t,
     join: posix.fd_t,
 ) noreturn {
+    // The first number nothing is placed at. The report pipe goes there or
+    // above when it is below, so placing an extra descriptor over it cannot
+    // close it before a failure has been reported; the copy is close-on-exec
+    // like the original, which a placement or the exec closes.
+    const first_free: posix.fd_t = @intCast(3 + extras.len);
+    var report = report_pipe;
+    if (report < first_free) {
+        report = c.fcntl(report_pipe, c.F.DUPFD_CLOEXEC, first_free);
+        if (report < 0) bail(report_pipe, .descriptors);
+    }
+
     // Only the parent writes the word to go on. With this copy of the writing
     // end closed, a parent that has gone reads as end of file rather than as
     // a wait with no end.
@@ -476,25 +493,26 @@ fn childMain(
         _ = c.close(ends[0]);
     }
 
-    if (!placeDescriptors(plan)) bail(report, .descriptors);
+    if (!placeDescriptors(plan, extras)) bail(report, .descriptors);
 
     switch (options.stdio) {
         // The master end has no business in the child. While a descriptor for
         // it stays open there, the parent closing its own copy does not hang
         // up the child's terminal, and a grandchild would inherit it too. The
         // spare copy of the slave goes the same way; the child's terminal is
-        // on 0, 1 and 2 now. Those slots belong to the placed streams: a pair
-        // originally opened there has already been replaced, and its old
-        // number can no longer authorize closing the new descriptor.
+        // on 0, 1 and 2 now. Those slots belong to the placed streams, and the
+        // ones above them to `extra_fds`: a pair originally opened there has
+        // already been replaced, and its old number can no longer authorize
+        // closing the new descriptor.
         .pty => |pty| {
             for ([_]posix.fd_t{ pty.readHandle().?, pty.slaveHandle().? }) |fd| {
-                if (fd > 2) _ = c.close(fd);
+                if (fd >= first_free) _ = c.close(fd);
             }
         },
         else => {},
     }
 
-    if (options.fd_policy == .close_all) closeFromThreeExcept(report);
+    if (options.fd_policy == .close_all) closeFromExcept(first_free, report);
 
     // Before the credentials below: a privileged parent can still raise a hard
     // limit for a child it is about to hand to somebody else, and after
@@ -580,28 +598,29 @@ fn clearDispositions(comptime system: type) void {
     }
 }
 
-/// Puts the descriptors the child was given at 0, 1 and 2, and returns false if
-/// the system refused one.
-fn placeDescriptors(plan: Plan) bool {
-    // A descriptor the caller handed over may itself be one of the three
-    // numbers about to be written. Placing 0, 1 and 2 in order would then read
-    // a number an earlier `dup2` had already overwritten -- `.stdout` given
-    // the file this process holds at 1 and `.stderr` given the one at 2, say,
-    // crossed over -- and the child would silently get one of them twice. Any
-    // source below the slot it serves is therefore copied out of the way
-    // first, above 2, before a single placement happens. A source at or above
-    // its own slot needs no copy: the placements run in increasing order, so
-    // nothing has touched it yet.
+/// Puts the descriptors the child was given at 0, 1 and 2, and `extras` at 3
+/// and up, and returns false if the system refused one.
+fn placeDescriptors(plan: Plan, extras: []posix.fd_t) bool {
+    // A descriptor the caller handed over may itself be one of the numbers
+    // about to be written. Placing them in order would then read a number an
+    // earlier `dup2` had already overwritten -- `.stdout` given the file this
+    // process holds at 1 and `.stderr` given the one at 2, say, crossed over,
+    // or the file at 4 given first among `extras` and the one at 3 second --
+    // and the child would silently get one of them twice. Any source below
+    // the slot it serves is therefore copied out of the way first, above every
+    // slot, before a single placement happens. A source at or above its own
+    // slot needs no copy: the placements run in increasing order, so nothing
+    // has touched it yet.
+    const first_free: c_int = @intCast(3 + extras.len);
     var placement = plan.child;
     for (&placement, 0..) |*target, slot| switch (target.*) {
         .place => |fd| if (fd < @as(posix.fd_t, @intCast(slot))) {
-            // Close-on-exec: the copy exists only to be `dup2`'d from, and
-            // `dup2` clears the flag on the descriptor it writes.
-            const moved = c.fcntl(fd, c.F.DUPFD_CLOEXEC, @as(c_int, 3));
-            if (moved < 0) return false;
-            target.* = .{ .place = @intCast(moved) };
+            target.* = .{ .place = moveAbove(fd, first_free) orelse return false };
         },
         else => {},
+    };
+    for (extras, 3..) |*fd, slot| if (fd.* < @as(posix.fd_t, @intCast(slot))) {
+        fd.* = moveAbove(fd.*, first_free) orelse return false;
     };
 
     for (placement, 0..) |target, slot| switch (target) {
@@ -612,15 +631,26 @@ fn placeDescriptors(plan: Plan) bool {
         // not.
         .close => _ = c.close(@intCast(slot)),
     };
+    for (extras, 3..) |fd, slot| if (!place(fd, @intCast(slot))) return false;
 
-    // Everything above the child's own three, if that was asked for. After
-    // the placements, so the descriptors being placed are still there to place
-    // -- and after the master and spare slave of a pair are closed below, for
-    // the same reason, which is why this is not simply first.
+    // Everything above the child's own, if that was asked for, is closed
+    // after the placements, so the descriptors being placed are still there to
+    // place -- and after the master and spare slave of a pair are closed
+    // below, for the same reason.
     return true;
 }
 
-/// Closes every descriptor from 3 upwards except `kept`, in the fork child.
+/// A close-on-exec copy of `fd` at `lowest` or above, or `null` when the
+/// system refuses one. The copy exists only to be `dup2`'d from, and `dup2`
+/// clears the flag on the descriptor it writes.
+fn moveAbove(fd: posix.fd_t, lowest: c_int) ?posix.fd_t {
+    const moved = c.fcntl(fd, c.F.DUPFD_CLOEXEC, lowest);
+    if (moved < 0) return null;
+    return @intCast(moved);
+}
+
+/// Closes every descriptor from `first` upwards except `kept`, in the fork
+/// child.
 ///
 /// `kept` is the close-on-exec report pipe. It has to survive long enough to
 /// report a failure below, while a successful exec still closes it and gives
@@ -632,13 +662,13 @@ fn placeDescriptors(plan: Plan) bool {
 /// which is what the fork child needs; neither can fail in a way that means
 /// anything here, because a descriptor that was not there is a descriptor the
 /// child does not have.
-fn closeFromThreeExcept(kept: posix.fd_t) void {
+fn closeFromExcept(first: posix.fd_t, kept: posix.fd_t) void {
     if (builtin.os.tag == .linux) {
-        const before = if (kept > 3)
-            std.os.linux.close_range(3, @intCast(kept - 1), .{ .UNSHARE = false, .CLOEXEC = false })
+        const before = if (kept > first)
+            std.os.linux.close_range(first, @intCast(kept - 1), .{ .UNSHARE = false, .CLOEXEC = false })
         else
             0;
-        const after = std.os.linux.close_range(@intCast(@max(kept + 1, 3)), std.math.maxInt(i32), .{
+        const after = std.os.linux.close_range(@intCast(@max(kept + 1, first)), std.math.maxInt(i32), .{
             .UNSHARE = false,
             .CLOEXEC = false,
         });
@@ -649,7 +679,7 @@ fn closeFromThreeExcept(kept: posix.fd_t) void {
         std.math.lossyCast(posix.fd_t, limit.cur)
     else
         4096;
-    var fd: posix.fd_t = 3;
+    var fd: posix.fd_t = first;
     while (fd < ceiling) : (fd += 1) {
         if (fd != kept) _ = c.close(fd);
     }

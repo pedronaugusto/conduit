@@ -208,6 +208,32 @@ pub const SpawnOptions = struct {
     /// What the child does with the descriptors above 2 that this process
     /// holds.
     fd_policy: FdPolicy = .close_on_exec,
+    /// Files the child is given beyond its standard three, in order: the
+    /// first is its descriptor 3, the next 4, and so on. A listening socket
+    /// handed over the way a service manager hands one (`LISTEN_FDS`), or a
+    /// pipe for a protocol of the caller's own (`--status-fd=3`), has no other
+    /// way in. Go's `ExtraFiles`.
+    ///
+    /// Borrowed: `spawn` closes none of them, and they must stay open until it
+    /// returns. The child gets each whatever its close-on-exec flag says here,
+    /// and whatever number it has here, including one of the numbers it is
+    /// placed at: a file at 4 given first and a file at 3 given second cross
+    /// over correctly. `fd_policy = .close_all` closes what is above them.
+    ///
+    /// **Windows** numbers no descriptors; a child that inherits a handle has
+    /// it at the same value. Each file goes to the child as a private
+    /// inheritable duplicate named in the handle list, as the standard
+    /// streams do, and in the table of inherited descriptors the Microsoft C
+    /// runtime reads from the startup record (`lpReserved2`): a child on that
+    /// runtime — `cmd.exe`, Python, Node, any C program — has them as its
+    /// descriptors 3 and up, which is how libuv gives a Node child extra
+    /// stdio. A child on no C runtime finds them with `GetStartupInfoW`.
+    /// Together with `.pty` this is `error.Unsupported`: a pseudoconsole is
+    /// attached through the attribute list, which Windows documents as
+    /// incompatible with naming a child's handles, the reason `stderr_to` is
+    /// refused there too. So is a list too long for the startup record's
+    /// 16-bit size, more than 7,000 files.
+    extra_fds: []const std.Io.File = &.{},
     /// What the child and everything it starts may use. Windows only:
     /// anything set here is `error.Unsupported` elsewhere.
     job_limits: JobLimits = .{},
@@ -316,8 +342,8 @@ pub const FdPolicy = enum {
     /// without an opinion.
     close_on_exec,
     /// Close every descriptor above 2 in the child before the program starts,
-    /// whatever its flags say. The child gets its three standard streams and
-    /// nothing else.
+    /// whatever its flags say. The child gets its three standard streams,
+    /// what `extra_fds` gives it, and nothing else.
     ///
     /// `close_range` on Linux, which is one call; elsewhere a loop up to the
     /// descriptor limit, which is thousands of calls that fail and is
@@ -471,7 +497,7 @@ pub const SpawnError = error{
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
     /// The combination asked for has no meaning on this system: `stderr_to`
-    /// together with `.pty` on Windows, a `path_search` other than
+    /// or `extra_fds` together with `.pty` on Windows, a `path_search` other than
     /// `.child_environ` there, `credentials` or `resource_limits` anywhere on
     /// Windows, `job_limits` anywhere else, or `parent_death_signal` anywhere
     /// but Linux. The option that cannot be honoured says so.
