@@ -120,7 +120,7 @@ pub const required = blk: {
 /// Tokens only their owners may spell: Windows declarations, the terminal's
 /// modes, pseudoterminals, exec and cgroups each have their files.
 pub const owned: []const gantry.rules.TokenRule = &.{
-    .{ .name = "windows declarations", .kind = .string, .token = "kernel32", .owners = &.{ "src/win32.zig", "src/console.zig", "src/test_process.zig" } },
+    .{ .name = "windows declarations", .kind = .string, .token = "kernel32", .owners = &.{ "src/win32.zig", "src/console.zig", "src/test_process.zig", "src/test_input_process.zig" } },
     .{ .name = "terminal mode owner", .token = "tcgetattr", .owners = &.{ "src/tty.zig", "src/Pty.zig" } },
     .{ .name = "terminal mode owner", .token = "tcsetattr", .owners = &.{ "src/tty.zig", "src/Pty.zig" } },
     .{ .name = "pseudoterminal owner", .token = "posix_openpt", .owners = &.{"src/Pty.zig"} },
