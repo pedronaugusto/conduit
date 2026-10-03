@@ -48,6 +48,35 @@ pub const ENABLE_WRAP_AT_EOL_OUTPUT: DWORD = 0x0002;
 pub const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
 pub const DISABLE_NEWLINE_AUTO_RETURN: DWORD = 0x0008;
 
+pub const GENERIC_READ: DWORD = 0x80000000;
+pub const GENERIC_WRITE: DWORD = 0x40000000;
+pub const FILE_SHARE_READ: DWORD = 0x00000001;
+pub const FILE_SHARE_WRITE: DWORD = 0x00000002;
+pub const OPEN_EXISTING: DWORD = 3;
+
+/// Opens a file or a device by name: here, `CONIN$` and `CONOUT$`, the
+/// console's input buffer and screen buffer, whatever the standard handles
+/// were redirected to.
+pub extern "kernel32" fn CreateFileW(
+    lpFileName: windows.LPCWSTR,
+    dwDesiredAccess: DWORD,
+    dwShareMode: DWORD,
+    lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
+    dwCreationDisposition: DWORD,
+    dwFlagsAndAttributes: DWORD,
+    hTemplateFile: ?HANDLE,
+) callconv(.winapi) HANDLE;
+
+/// Writes to a handle with no `std.Io` in between, which is what a panic
+/// handler putting a console back has to hand.
+pub extern "kernel32" fn WriteFile(
+    hFile: HANDLE,
+    lpBuffer: [*]const u8,
+    nNumberOfBytesToWrite: DWORD,
+    lpNumberOfBytesWritten: ?*DWORD,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) BOOL;
+
 pub extern "kernel32" fn GetConsoleMode(
     hConsoleHandle: HANDLE,
     lpMode: *DWORD,

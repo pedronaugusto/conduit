@@ -315,21 +315,12 @@ pub extern "kernel32" fn DuplicateHandle(
     dwOptions: DWORD,
 ) callconv(.winapi) BOOL;
 
-pub const GENERIC_READ: DWORD = 0x80000000;
-pub const GENERIC_WRITE: DWORD = 0x40000000;
-pub const FILE_SHARE_READ: DWORD = 0x00000001;
-pub const FILE_SHARE_WRITE: DWORD = 0x00000002;
-pub const OPEN_EXISTING: DWORD = 3;
-
-pub extern "kernel32" fn CreateFileW(
-    lpFileName: LPCWSTR,
-    dwDesiredAccess: DWORD,
-    dwShareMode: DWORD,
-    lpSecurityAttributes: ?*SECURITY_ATTRIBUTES,
-    dwCreationDisposition: DWORD,
-    dwFlagsAndAttributes: DWORD,
-    hTemplateFile: ?HANDLE,
-) callconv(.winapi) HANDLE;
+pub const GENERIC_READ = console.GENERIC_READ;
+pub const GENERIC_WRITE = console.GENERIC_WRITE;
+pub const FILE_SHARE_READ = console.FILE_SHARE_READ;
+pub const FILE_SHARE_WRITE = console.FILE_SHARE_WRITE;
+pub const OPEN_EXISTING = console.OPEN_EXISTING;
+pub const CreateFileW = console.CreateFileW;
 
 //======================================================================
 // Process and thread attribute lists.

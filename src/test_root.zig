@@ -1,3 +1,4 @@
+const std = @import("std");
 const conduit = @import("conduit.zig");
 const builtin = @import("builtin");
 const tty = @import("conduit.tty");
@@ -62,7 +63,7 @@ test {
     _ = Expect;
     // A module of its own, so its declarations are named here to be
     // compiled for every target the check builds.
-    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty }) |decl| _ = decl;
+    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty, tty.openControlling, tty.Controlling }) |decl| _ = decl;
     _ = environ_impl;
     _ = shell;
     _ = @import("find.zig");
@@ -81,4 +82,17 @@ test {
     _ = @import("handles_test.zig");
     _ = @import("lineage_test.zig");
     _ = @import("expect_test.zig");
+}
+
+test "the process's own terminal opens as a terminal, or says there is none" {
+    const io = std.testing.io;
+    const own = tty.openControlling(io) catch |err| switch (err) {
+        // A test run with no terminal of its own: a CI runner, a service.
+        error.NotATerminal, error.NoDevice, error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    defer own.close(io);
+    try std.testing.expect(tty.isTty(own.input.handle));
+    try std.testing.expect(tty.isTty(own.output.handle));
+    if (!is_windows) try std.testing.expectEqual(own.input.handle, own.output.handle);
 }

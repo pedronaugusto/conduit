@@ -301,6 +301,67 @@ pub fn isTty(handle: Handle) bool {
     return true;
 }
 
+/// The process's own terminal, opened by `openControlling`.
+pub const Controlling = struct {
+    /// Where keys arrive. On POSIX the same file as `output`; on Windows the
+    /// console's input buffer.
+    input: std.Io.File,
+    /// Where output goes, and the handle `winSize` wants. On Windows the
+    /// console's screen buffer.
+    output: std.Io.File,
+
+    /// Closes it: the one file on POSIX, both on Windows.
+    pub fn close(c: Controlling, io: std.Io) void {
+        c.output.close(io);
+        if (c.input.handle != c.output.handle) c.input.close(io);
+    }
+};
+
+pub const OpenControllingError = std.Io.File.OpenError || error{
+    /// Windows only: the process has no console to open.
+    NotATerminal,
+};
+
+/// Opens the process's own terminal: `/dev/tty` on POSIX, and on Windows the
+/// console's two halves, `CONIN$` and `CONOUT$`.
+///
+/// Not the standard streams. A program whose output is a pipe still has a
+/// terminal, and a program drawing a screen wants that terminal rather than
+/// whatever its streams were redirected to. A process with no terminal --
+/// started by a service, or detached from its session -- has none to open,
+/// and the error says so: on POSIX the one the system gives for `/dev/tty`,
+/// on Windows `error.NotATerminal`.
+///
+/// The files are the caller's; `Controlling.close` closes them.
+pub fn openControlling(io: std.Io) OpenControllingError!Controlling {
+    if (is_windows) {
+        const input = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONIN$"));
+        errdefer windows.CloseHandle(input);
+        const output = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONOUT$"));
+        return .{
+            .input = .{ .handle = input, .flags = .{ .nonblocking = false } },
+            .output = .{ .handle = output, .flags = .{ .nonblocking = false } },
+        };
+    }
+    const file = try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write });
+    return .{ .input = file, .output = file };
+}
+
+/// One half of the console, by its device name.
+fn openConsole(name: [*:0]const u16) error{NotATerminal}!windows.HANDLE {
+    const handle = win32.CreateFileW(
+        name,
+        win32.GENERIC_READ | win32.GENERIC_WRITE,
+        win32.FILE_SHARE_READ | win32.FILE_SHARE_WRITE,
+        null,
+        win32.OPEN_EXISTING,
+        0,
+        null,
+    );
+    if (handle == windows.INVALID_HANDLE_VALUE) return error.NotATerminal;
+    return handle;
+}
+
 pub const TtyNameError = error{
     /// The handle is not a terminal.
     NotATerminal,

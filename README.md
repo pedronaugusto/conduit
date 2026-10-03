@@ -498,6 +498,12 @@ console is two handles with two unrelated sets of mode flags, so `rawMode` is
 called once for each and works out which it was given, and `winSize` wants the
 output one.
 
+`openControlling(io)` opens the process's own terminal rather than its standard
+streams: `/dev/tty` on POSIX, `CONIN$` and `CONOUT$` on Windows, as one
+`Controlling` with an `input` and an `output` file. `conduit.console` also
+carries `CreateFileW` and `WriteFile` for Windows code that writes to the
+console with no `std.Io` to hand, a panic handler among it.
+
 `rawMode` and `restore` take effect at once and throw away input nobody read;
 neither waits for the output to drain, so a terminal that has stopped reading
 cannot hold a program there, on its way out or in a panic.
