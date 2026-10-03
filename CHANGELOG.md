@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `environ.inherit` reads this process's environment as `getenv` does: an entry with no `=` or no name is left out instead of crashing the map, and a name given twice keeps its first value.
+
 - `tty.openControlling` opens the process's own terminal, `/dev/tty` or the console's `CONIN$` and `CONOUT$`, and `tty.console` declares `CreateFileW` and `WriteFile`, which conduit's own Windows code now takes from there.
 
 - `Child.exchange` runs a child to its end with borrowed input written while its output is collected, under one deadline over input, run, reap and drain, with its allocator's calls serialized.
