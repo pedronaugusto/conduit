@@ -107,6 +107,29 @@ pub const Child = enum(usize) {
         };
     }
 
+    /// The number of the signal that ended or stopped the child, or `null` if
+    /// none did. Unlike `signalName`, a signal with no name has one: a
+    /// real-time signal is its number. Never set by a Windows wait.
+    pub fn signalNumber(term: Term) ?u8 {
+        return switch (term) {
+            .signal, .stopped => |signal| std.math.cast(u8, @intFromEnum(signal)),
+            else => null,
+        };
+    }
+
+    /// The child's end as a POSIX shell reports it in `$?`: the exit status
+    /// in its low byte, or 128 and the number of the signal that ended or
+    /// stopped it. An end that is neither is 255. A Windows exit code is
+    /// truncated to its low byte, as a POSIX shell there reports one;
+    /// `exitCode` keeps all 32 bits.
+    pub fn shellStatus(term: Term) u8 {
+        return switch (term) {
+            .exited => |code| @truncate(code),
+            .signal, .stopped => if (signalNumber(term)) |number| 128 +| number else 255,
+            .unknown => 255,
+        };
+    }
+
     /// Which of the child's three standard streams get pipes.
     ///
     /// A stream that is not piped is inherited from the parent, on both systems.

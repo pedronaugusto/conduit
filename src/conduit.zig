@@ -142,6 +142,12 @@ pub const exitCode = Child.exitCode;
 /// The name of the signal that ended a child, without the `SIG`. POSIX in
 /// practice: a terminated Windows process reports an exit code, not a signal.
 pub const signalName = Child.signalName;
+/// The number of the signal that ended a child, named or not; `null` if a
+/// signal did not end it.
+pub const signalNumber = Child.signalNumber;
+/// How a child ended as a shell's `$?` says it: the exit status's low byte, or
+/// 128 and the signal's number.
+pub const shellStatus = Child.shellStatus;
 /// The dimensions of a terminal.
 pub const Size = tty.Size;
 /// The terminal attributes `rawMode` captured, to give back to `restore`.
