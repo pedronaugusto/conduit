@@ -332,6 +332,12 @@ pub const OpenControllingError = std.Io.File.OpenError || error{
 /// and the error says so: on POSIX the one the system gives for `/dev/tty`,
 /// on Windows `error.NotATerminal`.
 ///
+/// On macOS the kernel's `poll` cannot wait on `/dev/tty` -- it answers
+/// `POLLNVAL` at once -- so when a standard stream is open on the same
+/// terminal (the same foreground process group, which belongs to one
+/// session and so to one terminal), the terminal is opened under that
+/// stream's device name instead, which `poll` does work on.
+///
 /// The files are the caller's; `Controlling.close` closes them.
 pub fn openControlling(io: std.Io) OpenControllingError!Controlling {
     if (is_windows) {
@@ -344,7 +350,30 @@ pub fn openControlling(io: std.Io) OpenControllingError!Controlling {
         };
     }
     const file = try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write });
+    if (builtin.os.tag == .macos) {
+        var path: [std.fs.max_path_bytes]u8 = undefined;
+        if (deviceOf(file.handle, &path)) |device| {
+            if (std.Io.Dir.openFileAbsolute(io, device, .{ .mode = .read_write })) |pollable| {
+                file.close(io);
+                return .{ .input = pollable, .output = pollable };
+            } else |_| {}
+        }
+    }
     return .{ .input = file, .output = file };
+}
+
+/// The device behind `/dev/tty`: the one a standard stream is open on when
+/// it is the same terminal. Null when no standard stream is on it.
+fn deviceOf(ctty: Handle, buf: []u8) ?[]const u8 {
+    const group = foregroundGroupPosix(ctty) catch return null;
+    for ([_]Handle{ 0, 1, 2 }) |fd| {
+        const theirs = foregroundGroupPosix(fd) catch continue;
+        if (theirs != group) continue;
+        const path = ttyNamePosix(fd, buf) catch continue;
+        if (!std.mem.startsWith(u8, path, "/dev/") or std.mem.eql(u8, path, "/dev/tty")) continue;
+        return path;
+    }
+    return null;
 }
 
 /// One half of the console, by its device name.

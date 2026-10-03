@@ -1332,6 +1332,44 @@ test "a child that has never forked is stopped by its signal alone, without the 
     };
 }
 
+test "a child on a terminal opens it as one poll can wait on" {
+    if (is_windows) return error.SkipZigTest;
+    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+    var child = try Child.spawn(io, gpa, .{
+        .argv = &.{@import("conduit_test_options").tty_fixture},
+        .stdio = .{ .pty = &pty },
+        .detach = true,
+    });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+    pty.closeSlave(io);
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(pty.readFile());
+    const deadline: Deadline = .in(io, budget_ms);
+    while (true) {
+        const said = said: {
+            sink.mutex.lockUncancelable(io);
+            defer sink.mutex.unlock(io);
+            const at = std.mem.indexOf(u8, sink.bytes.items, "terminal ") orelse break :said null;
+            const rest = sink.bytes.items[at + "terminal ".len ..];
+            const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :said null;
+            break :said try gpa.dupe(u8, rest[0..end]);
+        };
+        if (said) |word| {
+            defer gpa.free(word);
+            return std.testing.expectEqualStrings("pollable", word);
+        }
+        if (sink.ended() or deadline.remainingMs(io) == 0) {
+            sink.report("terminal <word>.");
+            return error.TestChildSaidNothing;
+        }
+        try std.Io.sleep(io, .fromMilliseconds(2), .awake);
+    }
+}
+
 test "a grandchild started at once, out of reach of the signal, still ends with the child" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);

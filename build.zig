@@ -125,6 +125,17 @@ pub fn build(b: *std.Build) void {
             }),
         });
         test_options.addOptionPath("input_fixture", input_fixture.getEmittedBin());
+        const tty_fixture = b.addExecutable(.{
+            .name = "conduit-tty-fixture",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/test_tty_process.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = link_libc,
+                .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
+            }),
+        });
+        test_options.addOptionPath("tty_fixture", tty_fixture.getEmittedBin());
         test_module.addOptions("conduit_test_options", test_options);
     }
 

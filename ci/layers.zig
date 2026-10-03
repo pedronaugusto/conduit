@@ -81,12 +81,14 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "tests", .patterns = &.{
         "src/test_root.zig",
+        "src/test_tty_process.zig",
     } },
 };
 
 pub const entries: []const []const u8 = &.{
     "src/test_input_process.zig",
     "src/test_process.zig",
+    "src/test_tty_process.zig",
     "src/test_runner.zig",
 };
 

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `tty.openControlling` on macOS opens the terminal under the device name a standard stream has open on it, when one has, so `poll` can wait on it (`/dev/tty` answers `POLLNVAL` there).
+
 - `readAvailable` reads what a pipe holds now without waiting for more, POSIX and Windows: once a child has ended, the rest of what it wrote, even while something it started still holds the pipe open.
 
 - `spawn` refuses an argument holding a NUL with `InvalidArgv`. It ended the argument where it stood, and on Windows ended the command line there, so the child received fewer arguments than it was given.
