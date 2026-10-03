@@ -1177,9 +1177,11 @@ test "processExists says whether a process has an id, until it is reaped" {
     try testing.expectEqual(@as(?bool, true), conduit.processExists(pid));
     _ = try child.killWait(io, 0);
     // Reaped on POSIX: the id is given back, and a pid is taken again only
-    // once the counter wraps. A Windows id stays the ended process's while
-    // the Child still holds its handle.
-    try testing.expectEqual(@as(?bool, is_windows), conduit.processExists(pid));
+    // once the counter wraps. On Windows the reap closes the Child's handle,
+    // and the id goes back whenever the system lets the ended process go,
+    // which it does not promise to do by any moment, so there is nothing to
+    // ask there.
+    if (!is_windows) try testing.expectEqual(@as(?bool, false), conduit.processExists(pid));
 }
 
 //======================================================================
