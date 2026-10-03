@@ -1,8 +1,11 @@
 //! A child that opens its own terminal and says whether poll can wait on it.
 const std = @import("std");
+const builtin = @import("builtin");
 const tty = @import("conduit.tty");
 
 pub fn main(init: std.process.Init) !void {
+    // POSIX only: a console is waited on through its handle, not poll
+    if (comptime builtin.os.tag == .windows) return;
     const out = std.Io.File.stdout();
     const own = tty.openControlling(init.io) catch {
         try out.writeStreamingAll(init.io, "terminal none.");
