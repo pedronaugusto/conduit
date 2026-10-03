@@ -199,7 +199,16 @@ fn ownCgroup(buffer: []u8) ?[]const u8 {
         if (n <= 0) break;
         filled += @intCast(n);
     }
-    var lines = std.mem.splitScalar(u8, buffer[0..filled], '\n');
+    return ownCgroupIn(buffer[0..filled]);
+}
+
+/// The path on the `0::` line of what `/proc/self/cgroup` held. Only a
+/// line that ends counts: the kernel ends every one, and a line that does
+/// not is the one a full buffer stopped in, whose path is the start of a
+/// longer one.
+fn ownCgroupIn(text: []const u8) ?[]const u8 {
+    const whole = text[0..if (std.mem.lastIndexOfScalar(u8, text, '\n')) |last| last + 1 else 0];
+    var lines = std.mem.splitScalar(u8, whole, '\n');
     while (lines.next()) |line| {
         if (!std.mem.startsWith(u8, line, "0::")) continue;
         const path = line["0::".len..];
@@ -207,6 +216,14 @@ fn ownCgroup(buffer: []u8) ?[]const u8 {
         return path;
     }
     return null;
+}
+
+test "a line the read cut short names no cgroup" {
+    // The kernel ends every line; one that does not end is one the buffer
+    // filled in the middle of, and its path is part of a path.
+    try std.testing.expectEqualStrings("/a/b", ownCgroupIn("1:cpu:/x\n0::/a/b\n").?);
+    try std.testing.expect(ownCgroupIn("1:cpu:/x\n0::/a/very/long/pa") == null);
+    try std.testing.expect(ownCgroupIn("0::/a/b (deleted)\n") == null);
 }
 
 const Mount = struct { point: []const u8, root: []const u8 };

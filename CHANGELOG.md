@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- A `/proc/self/cgroup` line the read stopped in the middle of is no longer taken as this process's cgroup.
+
 - `environ.inherit` reads this process's environment as `getenv` does: an entry with no `=` or no name is left out instead of crashing the map, and a name given twice keeps its first value.
 
 - `tty.openControlling` opens the process's own terminal, `/dev/tty` or the console's `CONIN$` and `CONOUT$`, and `tty.console` declares `CreateFileW` and `WriteFile`, which conduit's own Windows code now takes from there.
