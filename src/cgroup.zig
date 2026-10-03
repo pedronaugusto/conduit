@@ -76,12 +76,35 @@ pub fn bootIdentity() ?[36]u8 {
         if (n <= 0) return null;
         filled += @intCast(n);
     }
-    for (boot, 0..) |byte, i| {
+    return parseBootIdentity(&boot);
+}
+
+/// `bytes` as a boot identity: exactly a UUID in its 36-character text form,
+/// or `null`. Anything else — shorter, longer, a missing dash, a byte that is
+/// not hexadecimal — names no boot, and a record carrying it proves nothing.
+pub fn parseBootIdentity(bytes: []const u8) ?[36]u8 {
+    if (bytes.len != 36) return null;
+    for (bytes, 0..) |byte, i| {
         if (i == 8 or i == 13 or i == 18 or i == 23) {
             if (byte != '-') return null;
         } else if (!std.ascii.isHex(byte)) return null;
     }
-    return boot;
+    return bytes[0..36].*;
+}
+
+test "a boot identity is a whole UUID and nothing else" {
+    const good = "0f6c1c1e-8a3b-4d2e-9f10-2b7a5c4d3e21";
+    try std.testing.expectEqualStrings(good, &parseBootIdentity(good).?);
+    try std.testing.expect(parseBootIdentity("") == null);
+    try std.testing.expect(parseBootIdentity(good[0..35]) == null);
+    try std.testing.expect(parseBootIdentity(good ++ "\n") == null);
+    // Thirty-six bytes, the length of one, and still not one.
+    try std.testing.expect(parseBootIdentity("b" ** 36) == null);
+    try std.testing.expect(parseBootIdentity("0f6c1c1e_8a3b-4d2e-9f10-2b7a5c4d3e21") == null);
+    try std.testing.expect(parseBootIdentity("0f6c1c1e-8a3b-4d2e-9f10-2b7a5c4d3e2g") == null);
+    if (comptime supported) {
+        if (bootIdentity()) |boot| try std.testing.expect(parseBootIdentity(&boot) != null);
+    } else try std.testing.expect(bootIdentity() == null);
 }
 
 /// Test builds only: what lets a test run a child on the walk where a cgroup

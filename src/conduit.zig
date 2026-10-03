@@ -114,6 +114,15 @@ pub const Orphans = @import("Orphans.zig").Orphans;
 /// `Cgroup.Recorded` handle for a cgroup saved by an earlier run. On other
 /// systems the handles are empty.
 pub const Cgroup = @import("cgroup.zig").Cgroup;
+/// This boot's identity, the UUID text of `/proc/sys/kernel/random/boot_id`,
+/// read whole and checked; `null` where it cannot be had, and on every system
+/// but Linux. A process's start time and a cgroup's directory inode name
+/// something only within the boot they were read in: a record of either is
+/// written down with this and believed only while this is the same.
+pub const bootIdentity = @import("cgroup.zig").bootIdentity;
+/// `bytes` as a boot identity: exactly a UUID's 36-character text, or `null`.
+/// For a boot read back from a record: anything else proves no boot.
+pub const parseBootIdentity = @import("cgroup.zig").parseBootIdentity;
 /// Windows console input records and bounded waits on a console input handle.
 pub const console = tty.console;
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master

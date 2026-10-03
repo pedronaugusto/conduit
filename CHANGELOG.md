@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `bootIdentity` and `parseBootIdentity` are public: the checked identity of this boot, and the same check for one read back from a record, so a consumer compares boots without reading `boot_id` itself.
+
 - Collect Darwin output with the retained exit watcher, including when the child exited before collection began.
 
 - Skip the final Darwin group enumeration when the held root exited without ever forking.
