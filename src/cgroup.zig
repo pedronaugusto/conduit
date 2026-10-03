@@ -235,8 +235,15 @@ fn cgroup2Mount(point_buffer: []u8, root_buffer: []u8) ?Mount {
     const fd = c.open("/proc/self/mountinfo", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return null;
     defer _ = c.close(fd);
+    return cgroup2MountIn(fd, point_buffer, root_buffer);
+}
 
-    var window: [8192]u8 = undefined;
+/// The longest `mountinfo` line read whole; a longer one is read past.
+const mountinfo_window = 8192;
+
+/// `cgroup2Mount`, over the `mountinfo` open at `fd`.
+fn cgroup2MountIn(fd: c.fd_t, point_buffer: []u8, root_buffer: []u8) ?Mount {
+    var window: [mountinfo_window]u8 = undefined;
     var held: usize = 0;
     var at_end = false;
     // Inside a line longer than the window: an overlay mount with many
@@ -295,6 +302,227 @@ fn unescape(text: []const u8, into: []u8) ?[]const u8 {
         }
     }
     return into[0..out];
+}
+
+//======================================================================
+// What the kernel's files say, over generated input.
+//======================================================================
+
+/// A path as a mount table can hold one: the bytes `mountinfo` escapes,
+/// bytes that are not UTF-8, and ordinary names.
+fn generateMountPath(smith: *std.testing.Smith, buf: []u8) []u8 {
+    @disableInstrumentation();
+    const pieces = [_][]const u8{ "/", "sys", "fs", "cgroup", " ", "\t", "\n", "\\", "\\040", " - ", "#", "\xff", "\u{e9}", "-" };
+    buf[0] = '/';
+    var end: usize = 1;
+    while (!smith.eosWeightedSimple(3, 1)) {
+        const piece = pieces[smith.index(pieces.len)];
+        if (end + piece.len > buf.len) break;
+        @memcpy(buf[end..][0..piece.len], piece);
+        end += piece.len;
+    }
+    return buf[0..end];
+}
+
+/// `path` as the kernel writes it into `mountinfo`: a space, a tab, a
+/// newline and a backslash as a backslash and three octal digits.
+fn escapeMountPath(path: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+    for (path) |byte| switch (byte) {
+        ' ', '\t', '\n', '\\' => try out.print(gpa, "\\{o:0>3}", .{byte}),
+        else => try out.append(gpa, byte),
+    };
+}
+
+/// One `mountinfo` line for a mount of `fs_type` at `point` from `root`, with
+/// optional fields between them and the separator.
+fn mountLine(smith: *std.testing.Smith, gpa: std.mem.Allocator, out: *std.ArrayList(u8), root: []const u8, point: []const u8, fs_type: []const u8) !void {
+    @disableInstrumentation();
+    try out.print(gpa, "{d} {d} 0:{d} ", .{ smith.value(u16), smith.value(u16), smith.value(u8) });
+    try escapeMountPath(root, out, gpa);
+    try out.append(gpa, ' ');
+    try escapeMountPath(point, out, gpa);
+    try out.appendSlice(gpa, " rw,nosuid");
+    const optional = [_][]const u8{ " shared:4", " master:1", " propagate_from:2", " unbindable" };
+    while (!smith.eosWeightedSimple(2, 1)) try out.appendSlice(gpa, optional[smith.index(optional.len)]);
+    try out.print(gpa, " - {s} cgroup2 rw,nsdelegate", .{fs_type});
+}
+
+fn mountLinesReadBack(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    const gpa = std.testing.allocator;
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(gpa);
+    var root_storage: [64]u8 = undefined;
+    var point_storage: [64]u8 = undefined;
+    const root = generateMountPath(smith, &root_storage);
+    const point = generateMountPath(smith, &point_storage);
+    const cgroup2 = smith.boolWeighted(1, 3);
+    try mountLine(smith, gpa, &line, root, point, if (cgroup2) "cgroup2" else "tmpfs");
+
+    var point_buffer: [128]u8 = undefined;
+    var root_buffer: [128]u8 = undefined;
+    const found = parseMountLine(line.items, &point_buffer, &root_buffer);
+    if (!cgroup2) return std.testing.expect(found == null);
+    // The paths the kernel escaped, back as they were.
+    try std.testing.expectEqualStrings(root, found.?.root);
+    try std.testing.expectEqualStrings(point, found.?.point);
+
+    // And a line of arbitrary bytes is a mount or not, and never more than
+    // its buffers hold.
+    var junk: [96]u8 = undefined;
+    const bytes = junk[0..smith.slice(&junk)];
+    var small_point: [8]u8 = undefined;
+    var small_root: [8]u8 = undefined;
+    if (parseMountLine(bytes, &small_point, &small_root)) |mount| {
+        try std.testing.expect(mount.point.len <= small_point.len and mount.root.len <= small_root.len);
+    }
+}
+
+test "a mountinfo line reads back the paths it escapes" {
+    try std.testing.fuzz({}, mountLinesReadBack, .{});
+}
+
+/// A `mountinfo` file of lines short and too long, `cgroup2` and not, read
+/// through the window: the mount is the first `cgroup2` line that ends and
+/// fits it.
+fn mountinfoReadsThroughItsWindow(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var file: std.ArrayList(u8) = .empty;
+    defer file.deinit(gpa);
+    var expected: ?struct { root: []const u8, point: []const u8 } = null;
+    var roots: [6][64]u8 = undefined;
+    var points: [6][64]u8 = undefined;
+    var lines: usize = 0;
+    while (lines < roots.len and !smith.eosWeightedSimple(3, 1)) : (lines += 1) {
+        const start = file.items.len;
+        const root = generateMountPath(smith, &roots[lines]);
+        const point = generateMountPath(smith, &points[lines]);
+        const cgroup2 = smith.boolWeighted(1, 1);
+        try mountLine(smith, gpa, &file, root, point, if (cgroup2) "cgroup2" else "overlay");
+        // Long enough to cross the window, or to end exactly at its edge.
+        switch (smith.valueRangeAtMost(u8, 0, 3)) {
+            0 => try file.appendNTimes(gpa, 'o', mountinfo_window),
+            1 => {
+                const len = file.items.len - start;
+                if (len < mountinfo_window - 1) try file.appendNTimes(gpa, 'o', mountinfo_window - 1 - len);
+            },
+            else => {},
+        }
+        const fits = file.items.len - start < mountinfo_window;
+        const ends = lines + 1 < roots.len and smith.boolWeighted(1, 7);
+        if (!ends) try file.append(gpa, '\n');
+        if (cgroup2 and fits and !ends and expected == null) expected = .{ .root = root, .point = point };
+        if (ends) {
+            lines += 1;
+            break;
+        }
+    }
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "mountinfo", .data = file.items });
+    const handle = try tmp.dir.openFile(io, "mountinfo", .{});
+    defer handle.close(io);
+    var point_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const found = cgroup2MountIn(handle.handle, &point_buffer, &root_buffer);
+    if (expected) |want| {
+        try std.testing.expectEqualStrings(want.root, found.?.root);
+        try std.testing.expectEqualStrings(want.point, found.?.point);
+    } else try std.testing.expect(found == null);
+}
+
+test "the mountinfo reader finds the first cgroup2 line however long the others are" {
+    try std.testing.fuzz({}, mountinfoReadsThroughItsWindow, .{});
+}
+
+/// `/proc/self/cgroup` with lines in any order, cut anywhere.
+fn ownCgroupLines(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var text: [256]u8 = undefined;
+    var end: usize = 0;
+    const pieces = [_][]const u8{ "0::/user.slice/a", "0::", "1:cpu,cpuacct:/x", "0::/a (deleted)", "0:/b", "\n", "0::/c\n", "::/d\n" };
+    while (!smith.eosWeightedSimple(4, 1)) {
+        const piece = pieces[smith.index(pieces.len)];
+        if (end + piece.len > text.len) break;
+        @memcpy(text[end..][0..piece.len], piece);
+        end += piece.len;
+    }
+    // A cut anywhere, as a full buffer makes one.
+    const bytes = text[0..smith.index(end + 1)];
+    const found = ownCgroupIn(bytes);
+    // The reference: the first ended line that starts `0::`, and its path
+    // only when it is one.
+    var expected: ?[]const u8 = null;
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, bytes, at, '\n')) |newline| : (at = newline + 1) {
+        const line = bytes[at..newline];
+        if (!std.mem.startsWith(u8, line, "0::")) continue;
+        const path = line[3..];
+        if (path.len != 0 and path[0] == '/' and !std.mem.endsWith(u8, path, " (deleted)")) expected = path;
+        break;
+    }
+    if (expected) |path| try std.testing.expectEqualStrings(path, found.?) else try std.testing.expect(found == null);
+}
+
+test "this process's cgroup is the 0:: line that ends" {
+    try std.testing.fuzz({}, ownCgroupLines, .{});
+}
+
+/// Thirty-six bytes, or about that many, near a UUID's text.
+fn bootIdentityIsAUuid(_: void, smith: *std.testing.Smith) anyerror!void {
+    @disableInstrumentation();
+    var text: [40]u8 = "0f6c1c1e-8a3b-4d2e-9f10-2b7a5c4d3e21xxxx".*;
+    const len = smith.valueRangeAtMost(u8, 34, 38);
+    while (!smith.eosWeightedSimple(2, 1)) text[smith.index(text.len)] = smith.value(u8);
+    const bytes = text[0..len];
+    const found = parseBootIdentity(bytes);
+    // The reference: five groups of hexadecimal digits, eight, four, four,
+    // four and twelve long, joined by dashes.
+    var ok = bytes.len == 36;
+    if (ok) {
+        var groups = std.mem.splitScalar(u8, bytes, '-');
+        for ([_]usize{ 8, 4, 4, 4, 12 }) |want| {
+            const group = groups.next() orelse {
+                ok = false;
+                break;
+            };
+            var decoded: [6]u8 = undefined;
+            if (group.len != want or (std.fmt.hexToBytes(decoded[0 .. want / 2], group) catch null) == null) ok = false;
+        }
+        if (groups.next() != null) ok = false;
+    }
+    try std.testing.expectEqual(ok, found != null);
+    if (found) |id| try std.testing.expectEqualStrings(bytes, &id);
+}
+
+test "a boot identity is a UUID's text and nothing else" {
+    try std.testing.fuzz({}, bootIdentityIsAUuid, .{});
+}
+
+test "the kernel files' properties hold over seeded rounds" {
+    var prng: std.Random.DefaultPrng = .init(0xc9);
+    var bytes: [256]u8 = undefined;
+    for (0..64) |i| {
+        for (&bytes) |*byte| byte.* = switch (prng.random().uintLessThan(u8, 10)) {
+            0...6 => 0,
+            7, 8 => prng.random().uintLessThan(u8, 16),
+            else => prng.random().int(u8),
+        };
+        inline for (.{ mountLinesReadBack, mountinfoReadsThroughItsWindow, ownCgroupLines, bootIdentityIsAUuid }) |property| {
+            var smith: std.testing.Smith = .{ .in = &bytes };
+            property({}, &smith) catch |err| switch (err) {
+                error.SkipZigTest => {},
+                else => {
+                    std.debug.print("seeded round {d}: {t}\n", .{ i, err });
+                    return err;
+                },
+            };
+        }
+    }
 }
 
 //======================================================================
