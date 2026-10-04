@@ -87,6 +87,6 @@ test "runner teardown probe" {
         }
     };
     // Intentionally leave a backend task alive after the test body returns.
-    // Only ci/runner.py enables this probe, in its own disposable process.
+    // Only zig build check-runner enables this probe, in its own disposable process.
     try teardown_probe_group.concurrent(std.testing.io, Task.run, .{});
 }

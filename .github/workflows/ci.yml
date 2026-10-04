@@ -1,126 +1,48 @@
 name: CI
-
 on:
   push:
-    branches: [main, layers]
-  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
-      windows_only:
-        description: Retry the Windows matrix after a Windows-only failure
+      full:
+        description: Run the full merge gate
         type: boolean
         default: false
-
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: '17 4 * * 1'
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+  group: ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
-
-env:
-  ZIG_VERSION: 0.16.0
-
+  actions: read
 jobs:
-  # Debug catches safety faults; ReleaseSafe checks optimized code and timing on each host.
-  # ReleaseSafe exercises optimized fork/exec code; there is no separate ReleaseSmall assertion.
-  # The full test target already builds and runs the examples.
-  # The watchdog names stuck tests and teardown, so Windows no longer needs filtered rebuilds.
-  test:
-    name: test (${{ matrix.os }}, ${{ matrix.optimize }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ inputs.windows_only && fromJSON('["windows-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
-        optimize: [Debug, ReleaseSafe]
-        # One unchecked Linux run catches optimizer-dependent behaviour.
-        include: ${{ inputs.windows_only && fromJSON('[]') || fromJSON('[{"os":"ubuntu-latest","optimize":"ReleaseFast"}]') }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      # The probe checks the watchdog's report, which an ordinary passing suite cannot check.
-      - name: A stuck backend names its test and source
-        if: runner.os != 'Windows' && matrix.optimize == 'Debug'
-        run: python3 ci/runner.py
-      - name: Test — ${{ matrix.optimize }}
-        run: zig build test -Doptimize=${{ matrix.optimize }} --test-timeout 45s
-
-  # ReleaseSmall must build; its unchecked tests add no distinct assertion to ReleaseFast.
-  small:
-    if: ${{ !inputs.windows_only }}
-    name: compile (ReleaseSmall)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: zig build check -Doptimize=ReleaseSmall
-
-  # Reaper and Child share a child across tasks; ThreadSanitizer checks those accesses.
-  # Linux has a working runtime here; Debug is the detector's most complete instrumentation.
-  sanitizer:
-    if: ${{ !inputs.windows_only }}
-    name: ThreadSanitizer (Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: zig build unit -Dthread-sanitizer -Doptimize=Debug --test-timeout 120s
-
-  # Formatting and source-policy checks read the same files on every host; once is enough.
-  source:
-    if: ${{ !inputs.windows_only }}
-    name: source checks
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-      - name: Formatting
-        run: zig fmt --check src examples build.zig ci
-      - name: Containment documentation states the observation boundary
-        run: python3 ci/containment_docs.py
-      - name: Casts out of the type system carry their reason
-        run: python3 ci/casts.py
-      - name: Source import boundaries
-        run: zig build check-imports
-      - name: Import gate regression checks
-        run: python3 ci/test_imports.py
-
-  # Turning posix_spawn off reaches the second implementation of the same child contract.
+  gate:
+    uses: pedronaugusto/preflight/.github/workflows/zig.yml@9cdff538384c14e7f268cbb4942c5075caf0ed42
+    with:
+      preflight-ref: 9cdff538384c14e7f268cbb4942c5075caf0ed42
+      full: ${{ github.event_name != 'workflow_dispatch' || inputs.full }}
+      attest: ${{ github.event_name == 'push' }}
   fork:
-    if: ${{ !inputs.windows_only }}
-    name: fork (${{ matrix.os }})
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.full)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - uses: actions/checkout@v4
         with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: zig build test -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
-
-  # musl's ptsname_r reports errors differently from glibc; both safety modes run that libc.
-  # A writable cgroup runs containment tests that skip in the ordinary container.
-  # The old script repeated formatting and both unchecked modes; neither adds a musl contract.
+          repository: pedronaugusto/preflight
+          ref: 9cdff538384c14e7f268cbb4942c5075caf0ed42
+          path: .preflight
+      - uses: ./.preflight/.github/actions/setup
+      - run: zig build ci -Dci-lint=false -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
   linux-musl:
-    if: ${{ !inputs.windows_only }}
-    name: musl (${{ matrix.optimize }}, cgroup=${{ matrix.cgroup }})
+    if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.full)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -133,55 +55,10 @@ jobs:
             cgroup: true
     steps:
       - uses: actions/checkout@v4
-      - name: Build the musl image
-        run: docker build --quiet --file ci/linux.alpine.Dockerfile --build-arg ZIG=${{ env.ZIG_VERSION }} --tag conduit-musl ci
-      - name: Test
-        run: >-
-          docker run --rm --init ${{ matrix.cgroup && '--privileged' || '' }}
-          --volume "$PWD:/src" --workdir /src conduit-musl
-          zig build test -Doptimize=${{ matrix.optimize }} --test-timeout 45s
-          --cache-dir /tmp/zc --global-cache-dir /tmp/zg --summary all
-
-  # README.md's Usage block is a region of examples/usage.zig, which the test
-  # job builds and runs. This is what keeps the snippet a reader copies the
-  # same text as the code CI executes.
-  docs:
-    if: ${{ !inputs.windows_only }}
-    name: documented usage
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
       - uses: actions/checkout@v4
-      - run: ci/readme_usage.sh --check
-
-  # Compile-only coverage of the targets the suite cannot execute on. These
-  # prove the sources are portable across the systems the package claims; the
-  # `test` job above is what proves behaviour. `check` compiles the library,
-  # the test binary and the examples for the target and runs none of them —
-  # the test binary because most of what is Windows-only here is reached from
-  # a test and from nowhere else.
-  cross-compile:
-    if: ${{ !inputs.windows_only }}
-    name: cross (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - x86_64-linux-gnu
-          - aarch64-linux-gnu
-          - x86_64-linux-musl
-          - x86_64-macos
-          - aarch64-macos
-          - x86_64-windows-gnu
-          - x86_64-windows-msvc
-          - aarch64-windows-gnu
-          - x86_64-freebsd
-          - x86_64-netbsd
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
         with:
-          version: ${{ env.ZIG_VERSION }}
-      - run: zig build check -Dtarget=${{ matrix.target }}
+          repository: pedronaugusto/preflight
+          ref: 9cdff538384c14e7f268cbb4942c5075caf0ed42
+          path: .preflight
+      - uses: ./.preflight/.github/actions/setup
+      - run: zig build ci-linux -- --musl --no-lint --optimize ${{ matrix.optimize }} --cgroup ${{ matrix.cgroup }}

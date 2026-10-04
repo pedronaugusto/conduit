@@ -13,7 +13,7 @@ it.
 The block below is a region of [`examples/usage.zig`](examples/usage.zig),
 which `zig build examples` builds and runs; CI compares the two.
 
-<!-- BEGIN GENERATED ci/readme_usage.sh -->
+<!-- BEGIN GENERATED zig build docs -- usage -->
 ```zig
 const conduit = @import("conduit");
 
@@ -32,7 +32,7 @@ defer shell.deinit(io);
 var result = try shell.child().output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
 defer result.deinit(gpa);
 ```
-<!-- END GENERATED ci/readme_usage.sh -->
+<!-- END GENERATED zig build docs -- usage -->
 
 On POSIX, with `shell_arguments` asking for `stty size` and `test -t 0`, that
 prints `24 80` and `is this a terminal? yes`, and ends `.{ .exited = 0 }`.
@@ -774,8 +774,8 @@ Output collection borrows that watcher too; it keeps the identity check and owne
 
 | | Mechanism | Suite |
 |---|---|---|
-| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 where writable and a private supervisor per contained child; opt-in process subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and in Docker with `ci/linux.sh` |
-| Linux (musl) | the same | Alpine, in CI and with `ci/linux.sh --musl` |
+| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 where writable and a private supervisor per contained child; opt-in process subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and in Docker with `zig build ci-linux --` |
+| Linux (musl) | the same | Alpine, in CI and with `zig build ci-linux -- --musl` |
 | macOS | the same | `macos-latest` |
 | Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |
 | FreeBSD, NetBSD | as Linux | cross-compiled only |
@@ -810,7 +810,7 @@ before `CreateProcessW`; otherwise Windows resolves it.
 
 ## Testing
 
-Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap in `ci/cache.sh`; run `sh ci/cache.sh` before direct Zig builds (only a rebuild is lost).
+Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap through preflight; run `zig build cache` before direct Zig builds (only a rebuild is lost).
 
 ```sh
 zig build test                   # the suite, and the examples, which are run
@@ -819,7 +819,7 @@ zig build test --fuzz            # the three properties, under the fuzzer
 zig build unit -Dthread-sanitizer   # the suite under ThreadSanitizer
 zig build examples               # the examples alone
 zig fmt --check src examples build.zig
-ci/linux.sh --both               # the suite on glibc and musl Linux, in Docker,
+zig build ci-linux -- --both               # the suite on glibc and musl Linux, in Docker,
                                  # then once more with a writable cgroup
 ```
 

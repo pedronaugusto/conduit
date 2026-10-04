@@ -1,0 +1,3285 @@
+[
+  {
+    "rule": "Z013",
+    "path": "src/lineage_test.zig",
+    "source": "const State = @import(\"Child/child_state.zig\");",
+    "detail": "unused import 'State'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/lineage_test.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/lineage_test.zig",
+    "source": "var child = try @import(\"Child.zig\").Child.spawn(std.testing.io, std.testing.allocator, .{",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/supervisor.zig",
+    "source": "if (@import(\"builtin\").is_test and testing_hook.fail_request) return error.Unexpected;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/wait_test.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z013",
+    "path": "src/handles_test.zig",
+    "source": "const State = @import(\"Child/child_state.zig\");",
+    "detail": "unused import 'State'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/handles_test.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/handles_test.zig",
+    "source": "var child = try @import(\"Child.zig\").Child.spawn(io, testing.allocator, .{",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/handles_test.zig",
+    "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, \"exit\" },",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/handles.zig",
+    "source": "pub const setCloseOnExec = if (is_windows)",
+    "detail": "variable 'setCloseOnExec' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/handles.zig",
+    "source": "pub fn readStreaming(",
+    "detail": "public function exposes private error set 'ReadStreamingError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/handles.zig",
+    "source": "io: std.Io,",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/handles.zig",
+    "source": "pub fn readAvailable(f: std.Io.File, io: std.Io, buffer: []u8) ReadAvailableError!usize {",
+    "detail": "public function exposes private error set 'ReadAvailableError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/handles.zig",
+    "source": "pub fn readAvailable(f: std.Io.File, io: std.Io, buffer: []u8) ReadAvailableError!usize {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/handles.zig",
+    "source": "pub fn writeStreamingAll(f: std.Io.File, io: std.Io, bytes: []const u8) std.Io.File.Writer.Error!void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/handles.zig",
+    "source": "pub const setCloseOnExecPosix = fixture_setCloseOnExecPosix;",
+    "detail": "variable 'setCloseOnExecPosix' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/handles.zig",
+    "source": "pub const windowsPipeClosed = fixture_windowsPipeClosed;",
+    "detail": "variable 'windowsPipeClosed' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/handles.zig",
+    "source": "pub const pipePosix = fixture_pipePosix;",
+    "detail": "variable 'pipePosix' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/handles.zig",
+    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/handles.zig",
+    "source": "pub const test_access = if (@import(\"builtin\").is_test) struct {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/handles.zig",
+    "source": "std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/shell.zig",
+    "source": "pub fn deinit(shell: *Shell, io: std.Io) void {",
+    "detail": "deinit should set shell.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/shell.zig",
+    "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
+    "detail": "public function exposes private error set 'SpawnShellError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/shell.zig",
+    "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/shell.zig",
+    "source": "return try allocator.dupe(u8, buffer[0..len]);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, buffer[0..len; return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/shell.zig",
+    "source": "return try allocator.dupe(u8, value);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, value); return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/shell.zig",
+    "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/InputWriter/input_writer_test.zig",
+    "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, mode },",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/InputWriter/input_writer_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/InputWriter/input_writer_impl.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/InputWriter/input_writer_impl.zig",
+    "source": "const std = @import(\"std\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/InputWriter/input_writer_impl.zig",
+    "source": "const handles = @import(\"../handles.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/InputWriter/input_writer_impl.zig",
+    "source": "const child_state = @import(\"../Child/child_state.zig\").optional(child) orelse return error.NoStdinPipe;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/InputWriter/input_writer_impl.zig",
+    "source": "@import(\"../Child/child_state.zig\").get(child).stdin = null;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/cgroup.zig",
+    "source": "const joined = std.fmt.bufPrintZ(&path_buffer, \"{s}{s}\", .{",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/cgroup.zig",
+    "source": "const kill_path = std.fmt.bufPrintZ(&kill_buffer, \"{s}/cgroup.kill\", .{joined}) catch return false;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/cgroup.zig",
+    "source": "std.mem.copyForwards(u8, window[0 .. held - newline - 1], window[newline + 1 .. held]);",
+    "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/cgroup.zig",
+    "source": "fn escapeMountPath(path: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/cgroup.zig",
+    "source": "fn mountLine(smith: *std.testing.Smith, gpa: std.mem.Allocator, out: *std.ArrayList(u8), root: []const u8, point: []const u8, fs_type: []const u8) !void {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/cgroup.zig",
+    "source": "while (std.mem.indexOfScalarPos(u8, bytes, at, '\\n')) |newline| : (at = newline + 1) {",
+    "detail": "'indexOfScalarPos' is deprecated: Deprecated in favor of `findScalarPos`.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/cgroup.zig",
+    "source": "allocator: std.mem.Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/cgroup.zig",
+    "source": "const last = std.mem.lastIndexOfScalar(u8, window[0..held], '\\n');",
+    "detail": "'lastIndexOfScalar' is deprecated: Deprecated in favor of `findScalarLast`.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/cgroup.zig",
+    "source": "std.mem.copyForwards(u8, window[0 .. held - complete], window[complete..held]);",
+    "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/cgroup.zig",
+    "source": "const ends = try @import(\"handles.zig\").pipe();",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/cgroup.zig",
+    "source": ".finding => std.Thread.yield() catch {},",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/cgroup.zig",
+    "source": "while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Expect.zig",
+    "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",
+    "detail": "deinit should set expect.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/Expect.zig",
+    "source": "std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);",
+    "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Expect.zig",
+    "source": "pub fn compact(value: anytype, io: std.Io) void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/testing/test_support.zig",
+    "source": "pub fn deinit(watchdog: *Watchdog, io: std.Io) void {",
+    "detail": "deinit should set watchdog.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/testing/test_support.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, watchdog.limit_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/testing/test_support.zig",
+    "source": "while (true) std.Io.sleep(std.testing.io, .fromSeconds(1), .awake) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/testing/test_runner.zig",
+    "source": "pub fn fuzz(context: anytype, comptime testOne: fn (@TypeOf(context), *testing.Smith) anyerror!void, input: testing.FuzzInputOptions) anyerror!void {",
+    "detail": "'comptime' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/conduit.zig",
+    "source": "pub const setWinSize = if (is_windows)",
+    "detail": "variable 'setWinSize' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/conduit.zig",
+    "source": "pub const foregroundGroup = if (is_windows)",
+    "detail": "variable 'foregroundGroup' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/conduit.zig",
+    "source": "pub const ttyName = if (is_windows)",
+    "detail": "variable 'ttyName' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/conduit.zig",
+    "source": "pub const startTime = if (is_windows)",
+    "detail": "variable 'startTime' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/conduit.zig",
+    "source": "pub const captureStarted = if (is_windows)",
+    "detail": "variable 'captureStarted' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/conduit.zig",
+    "source": "pub const endRecorded = if (is_windows)",
+    "detail": "variable 'endRecorded' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/conduit.zig",
+    "source": "@import(\"tree.zig\").startTime;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/conduit.zig",
+    "source": "@import(\"tree.zig\").CapturedPid;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/conduit.zig",
+    "source": "@import(\"tree.zig\").captureStarted;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/conduit.zig",
+    "source": "@import(\"tree.zig\").endRecorded;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const WaitId = fixture_WaitId;",
+    "detail": "variable 'WaitId' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const infoPid = fixture_infoPid;",
+    "detail": "variable 'infoPid' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const openPidfd = fixture_openPidfd;",
+    "detail": "variable 'openPidfd' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const endedPidfd = fixture_endedPidfd;",
+    "detail": "variable 'endedPidfd' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const endedOrWokenPidfd = fixture_endedOrWokenPidfd;",
+    "detail": "variable 'endedOrWokenPidfd' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const openKqueue = fixture_openKqueue;",
+    "detail": "variable 'openKqueue' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const endedKqueue = fixture_endedKqueue;",
+    "detail": "variable 'endedKqueue' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/wait.zig",
+    "source": "pub const endedOrWokenKqueue = fixture_endedOrWokenKqueue;",
+    "detail": "variable 'endedOrWokenKqueue' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/wait.zig",
+    "source": "pub const test_access = if (@import(\"builtin\").is_test) struct {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Child.zig",
+    "source": "pub fn deinit(child: *Child, io: std.Io) void {",
+    "detail": "deinit should set child.* = undefined (has early return before invalidation)",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "pub fn inputWriter(child: *Child, io: std.Io, allocator: Allocator, options: InputWriter.Options) InputWriter.StartError!InputWriter {",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Child.zig",
+    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
+    "detail": "public function exposes private error set 'WaitError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Child.zig",
+    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
+    "detail": "public function exposes private type 'Term'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Child.zig",
+    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
+    "detail": "public function exposes private type 'HeldReap'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Child.zig",
+    "source": "pub fn release(held: HeldReap) void {",
+    "detail": "public function exposes private type 'HeldReap'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Child.zig",
+    "source": "pub const waitTree = if (is_windows)",
+    "detail": "variable 'waitTree' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Child.zig",
+    "source": "pub fn term(collected: *const Output) Term {",
+    "detail": "public function exposes private type 'Term'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "pub fn deinit(collected: *Output, allocator: Allocator) void {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Child.zig",
+    "source": "pub fn deinit(collected: *Output, allocator: Allocator) void {",
+    "detail": "deinit should set collected.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "fn run(feed: *Feed, io: std.Io, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Child.zig",
+    "source": "pub fn releaseSurvivors(child: *Child) TryWaitError!void {",
+    "detail": "public function exposes private error set 'TryWaitError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Child.zig",
+    "source": "pub fn end(child: *Child) TryWaitError!void {",
+    "detail": "public function exposes private error set 'TryWaitError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Child.zig",
+    "source": "pub fn empty(child: *Child) TryWaitError!bool {",
+    "detail": "public function exposes private error set 'TryWaitError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Child.zig",
+    "source": "pub fn ended(child: *Child) TryWaitError!bool {",
+    "detail": "public function exposes private error set 'TryWaitError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child.zig",
+    "source": "fn beforeSignal(probe: *@This(), child: *Child) void {",
+    "detail": "inline @This() in named struct; use 'Child' instead",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const InputWriter = @import(\"InputWriter/input_writer_impl.zig\").Writer(Child).InputWriter;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "const tree = if (is_windows) struct {} else @import(\"tree.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "const cgroups = if (is_windows) struct {} else @import(\"cgroup.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "const wait_for = if (is_windows) struct {} else @import(\"wait.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Id = @import(\"Child/child_types.zig\").Id;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const ProcessGroupId = @import(\"Child/child_types.zig\").ProcessGroupId;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Term = @import(\"Child/child_types.zig\").Term;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const PipeOptions = @import(\"Child/child_types.zig\").PipeOptions;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Stream = @import(\"Child/child_types.zig\").Stream;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Streams = @import(\"Child/child_types.zig\").Streams;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Stdio = @import(\"Child/child_types.zig\").Stdio;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const SpawnOptions = @import(\"Child/child_types.zig\").SpawnOptions;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Descendants = @import(\"Child/child_types.zig\").Descendants;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const JobLimits = @import(\"Child/child_types.zig\").JobLimits;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const FdPolicy = @import(\"Child/child_types.zig\").FdPolicy;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Credentials = @import(\"Child/child_types.zig\").Credentials;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const ResourceLimit = @import(\"Child/child_types.zig\").ResourceLimit;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const PathSearch = @import(\"Child/child_types.zig\").PathSearch;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const SpawnError = @import(\"Child/child_types.zig\").SpawnError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const execError = @import(\"Child/child_types.zig\").execError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "if (is_windows) return State.owner(Child, try @import(\"Child/child_windows.zig\").spawn(io, allocator, configured, state));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "return State.owner(Child, try @import(\"Child/child_posix.zig\").spawn(io, allocator, configured, state));",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const ReleaseError = @import(\"Child/child_types.zig\").ReleaseError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const SupervisorRecord = @import(\"Child/child_types.zig\").SupervisorRecord;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Containment = @import(\"Child/child_types.zig\").Containment;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const ContainmentError = @import(\"Child/child_types.zig\").ContainmentError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const WaitError = @import(\"Child/child_types.zig\").WaitError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const WaitTimeoutError = @import(\"Child/child_types.zig\").WaitTimeoutError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "const Deadline = @import(\"deadline.zig\").Deadline;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const TryWaitError = @import(\"Child/child_types.zig\").TryWaitError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const Signal = @import(\"Child/child_types.zig\").Signal;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const KillError = @import(\"Child/child_types.zig\").KillError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const KillWaitError = @import(\"Child/child_types.zig\").KillWaitError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const WaitTreeError = @import(\"Child/child_types.zig\").WaitTreeError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const OutputOptions = @import(\"Child/child_types.zig\").OutputOptions;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const OutputError = @import(\"Child/child_types.zig\").OutputError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const ExchangeOptions = @import(\"Child/child_types.zig\").ExchangeOptions;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "pub const ExchangeError = @import(\"Child/child_types.zig\").ExchangeError;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "var serial: @import(\"serial_allocator.zig\").SerialAllocator = .{ .parent = allocator, .io = io };",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "const completed = try @import(\"Child/windows_completion.zig\").poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "while (!state.identity.tryLock()) std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "while (!state.identity.tryLock()) std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "if (tries < 8) std.Thread.yield() catch {} else try std.Io.sleep(io, .fromMilliseconds(1), .awake);",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "while (!State.get(child).identity.tryLock()) std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "child.kill(.terminate) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/lineage.zig",
+    "source": "pub fn deinit(_: *@This()) void {}",
+    "detail": "deinit should set _.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/lineage.zig",
+    "source": "pub fn deinit(tracker: *Darwin) void {",
+    "detail": "deinit should set tracker.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/lineage.zig",
+    "source": "pub const Darwin = fixture_Darwin;",
+    "detail": "variable 'Darwin' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/lineage.zig",
+    "source": "pub fn start(_: posix.pid_t) error{SystemResources}!*@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/lineage.zig",
+    "source": "pub fn finish(_: *@This()) bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/lineage.zig",
+    "source": "pub fn failedTracking(_: *const @This()) bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/lineage.zig",
+    "source": "pub fn deinit(_: *@This()) void {}",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/lineage.zig",
+    "source": "const tree = if (builtin.os.tag == .windows) struct {} else @import(\"tree.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/lineage.zig",
+    "source": "const wake = @import(\"handles.zig\").pipe() catch return error.SystemResources;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/lineage.zig",
+    "source": "pub const test_access = if (@import(\"builtin\").is_test) struct {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Reaper.zig",
+    "source": "pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {",
+    "detail": "deinit should set reaper.* = undefined (has early return before invalidation)",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Reaper.zig",
+    "source": "const reject: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Reaper.zig",
+    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Reaper.zig",
+    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Reaper.zig",
+    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "const tree = if (is_windows) struct {} else @import(\"tree.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "const wait_for = if (is_windows) struct {} else @import(\"wait.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "contained: *const @import(\"cgroup.zig\").Cgroup,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, reaper.inner().options.tree_grace_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Reaper.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Reaper.zig",
+    "source": "while (!stop.mutex.tryLock()) std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Reaper.zig",
+    "source": "reaper.inner().child.kill(.kill) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Reaper.zig",
+    "source": "reaper.inner().child.kill(.terminate) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Reaper.zig",
+    "source": "_ = contained.signalMembers(.TERM, State.get(reaper.inner().child).id, null) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/expect_test.zig",
+    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/expect_test.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/expect_test.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/expect_test.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/expect_test.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/expect_test.zig",
+    "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/expect_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Proxy.zig",
+    "source": "pub fn run(io: std.Io, options: Options) RunError!void {",
+    "detail": "public function exposes private error set 'RunError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Proxy.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Proxy.zig",
+    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Proxy.zig",
+    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Proxy.zig",
+    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Proxy.zig",
+    "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, interval_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Proxy.zig",
+    "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, 5000);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Proxy.zig",
+    "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, 5000);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Proxy.zig",
+    "source": "resize.pty.resize(now) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Pty.zig",
+    "source": "pub fn resize(pty: *Pty, new_size: Size) ResizeError!void {",
+    "detail": "public function exposes private type 'Size'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Pty.zig",
+    "source": "pub fn size(pty: *const Pty) SizeError!Size {",
+    "detail": "public function exposes private type 'Size'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Pty.zig",
+    "source": "pub const slaveFile = if (is_windows)",
+    "detail": "variable 'slaveFile' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Pty.zig",
+    "source": "fn start(drain: *Drain, io: std.Io, f: std.Io.File) !void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Pty.zig",
+    "source": "fn deinit(drain: *Drain, io: std.Io) void {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Pty.zig",
+    "source": "fn deinit(drain: *Drain, io: std.Io) void {",
+    "detail": "deinit should set drain.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Pty.zig",
+    "source": "const FD_CLOEXEC: c_int = c.FD_CLOEXEC;",
+    "detail": "variable 'FD_CLOEXEC' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Pty.zig",
+    "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Pty.zig",
+    "source": "const Watchdog = @import(\"testing/test_support.zig\").Watchdog;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Pty.zig",
+    "source": "while (!geometry.mutex.tryLock()) std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {",
+    "detail": "'Io' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "fn provenBelow(root: *const Process, candidate: *const Process, allocator: std.mem.Allocator) std.mem.Allocator.Error!bool {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "allocator: std.mem.Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "allocator: std.mem.Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/tree.zig",
+    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return null;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "allocator: std.mem.Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/tree.zig",
+    "source": "pub fn deinit(process: *LinuxProcess) void {",
+    "detail": "deinit should set process.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/tree.zig",
+    "source": "pub fn deinit(process: *DarwinProcess) void {",
+    "detail": "deinit should set process.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/tree.zig",
+    "source": "pub fn deinit(process: *NoProcess) void {",
+    "detail": "deinit should set process.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "const childrenOf = switch (builtin.os.tag) {",
+    "detail": "variable 'childrenOf' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "allocator: std.mem.Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "fn childrenOfDarwin(pid: posix.pid_t, into: *std.ArrayList(posix.pid_t), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/tree.zig",
+    "source": "allocator: std.mem.Allocator,",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/tree.zig",
+    "source": "const main_path = std.fmt.bufPrintZ(&main_buffer, \"/proc/{d}/task/{d}/children\", .{ pid, pid }) catch return true;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/tree.zig",
+    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/task\", .{pid}) catch return true;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/tree.zig",
+    "source": "const file = std.fmt.bufPrintZ(&file_buffer, \"{s}/children\", .{name}) catch return true;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/tree.zig",
+    "source": "pub fn watch(pid: posix.pid_t) DarwinForks {",
+    "detail": "public function exposes private type 'DarwinForks'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/tree.zig",
+    "source": "pub fn watch(pid: posix.pid_t) NoForks {",
+    "detail": "public function exposes private type 'NoForks'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const Deadline = fixture_Deadline;",
+    "detail": "variable 'Deadline' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const signalDescendantsGuarded = fixture_signalDescendantsGuarded;",
+    "detail": "variable 'signalDescendantsGuarded' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const waitCaptured = fixture_waitCaptured;",
+    "detail": "variable 'waitCaptured' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const provenBelow = fixture_provenBelow;",
+    "detail": "variable 'provenBelow' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const parentOf = fixture_parentOf;",
+    "detail": "variable 'parentOf' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const collectLinux = fixture_collectLinux;",
+    "detail": "variable 'collectLinux' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const LinuxRelation = fixture_LinuxRelation;",
+    "detail": "variable 'LinuxRelation' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const processRelationLinux = fixture_processRelationLinux;",
+    "detail": "variable 'processRelationLinux' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const parseLinuxStat = fixture_parseLinuxStat;",
+    "detail": "variable 'parseLinuxStat' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const captureStartedProcess = fixture_captureStartedProcess;",
+    "detail": "variable 'captureStartedProcess' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const killHeld = fixture_killHeld;",
+    "detail": "variable 'killHeld' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const Started = fixture_Started;",
+    "detail": "variable 'Started' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const signalGroupSinceImpl = fixture_signalGroupSinceImpl;",
+    "detail": "variable 'signalGroupSinceImpl' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const ProcBsdInfo = fixture_ProcBsdInfo;",
+    "detail": "variable 'ProcBsdInfo' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const captureChildren = fixture_captureChildren;",
+    "detail": "variable 'captureChildren' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const Process = fixture_Process;",
+    "detail": "variable 'Process' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const LinuxProcess = fixture_LinuxProcess;",
+    "detail": "variable 'LinuxProcess' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const AuditToken = fixture_AuditToken;",
+    "detail": "variable 'AuditToken' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const BsdInfoWithUniqueId = fixture_BsdInfoWithUniqueId;",
+    "detail": "variable 'BsdInfoWithUniqueId' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const ProcUniqueInfo = fixture_ProcUniqueInfo;",
+    "detail": "variable 'ProcUniqueInfo' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const NoProcess = fixture_NoProcess;",
+    "detail": "variable 'NoProcess' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const childrenOf = fixture_childrenOf;",
+    "detail": "variable 'childrenOf' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const childrenOfNobody = fixture_childrenOfNobody;",
+    "detail": "variable 'childrenOfNobody' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const childrenOfDarwin = fixture_childrenOfDarwin;",
+    "detail": "variable 'childrenOfDarwin' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const DarwinForks = fixture_DarwinForks;",
+    "detail": "variable 'DarwinForks' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const NoForks = fixture_NoForks;",
+    "detail": "variable 'NoForks' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const membersLinux = fixture_membersLinux;",
+    "detail": "variable 'membersLinux' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tree.zig",
+    "source": "pub const membersDarwin = fixture_membersDarwin;",
+    "detail": "variable 'membersDarwin' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/tree.zig",
+    "source": "fn alive(self: *const @This()) bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/tree.zig",
+    "source": "fn signal(self: *const @This(), sig: posix.SIG) bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree.zig",
+    "source": "pub fn adoptionRecord(pid: posix.pid_t) ?@import(\"Orphans/adoption_record.zig\").Record {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree.zig",
+    "source": "cgroup: ?*@import(\"cgroup.zig\").Cgroup.Recorded = null,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree.zig",
+    "source": "supervisor: ?@import(\"Child/child_types.zig\").SupervisorRecord = null,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree.zig",
+    "source": "const boot = @import(\"cgroup.zig\").bootIdentity() orelse return error.Unproven;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree.zig",
+    "source": "pub const test_access = if (@import(\"builtin\").is_test) struct {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree_test.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree_test.zig",
+    "source": ".argv = &.{@import(\"conduit_test_options\").tree_fixture},",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree_test.zig",
+    "source": ".argv = &.{ @import(\"conduit_test_options\").tree_fixture, \"--fail-report\" },",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree_test.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/tree_test.zig",
+    "source": "var watchdog: @import(\"testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const BOOL = windows.BOOL;",
+    "detail": "acronym in 'BOOL' should use standard casing: 'Bool'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const DWORD = windows.DWORD;",
+    "detail": "acronym in 'DWORD' should use standard casing: 'Dword'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const HANDLE = windows.HANDLE;",
+    "detail": "acronym in 'HANDLE' should use standard casing: 'Handle'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const HRESULT = windows.LONG;",
+    "detail": "acronym in 'HRESULT' should use standard casing: 'Hresult'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const LPCWSTR = windows.LPCWSTR;",
+    "detail": "acronym in 'LPCWSTR' should use standard casing: 'Lpcwstr'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const LPWSTR = windows.LPWSTR;",
+    "detail": "acronym in 'LPWSTR' should use standard casing: 'Lpwstr'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const SHORT = windows.SHORT;",
+    "detail": "acronym in 'SHORT' should use standard casing: 'Short'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const SIZE_T = windows.SIZE_T;",
+    "detail": "variable 'SIZE_T' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const UINT = windows.UINT;",
+    "detail": "acronym in 'UINT' should use standard casing: 'Uint'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const WORD = windows.WORD;",
+    "detail": "acronym in 'WORD' should use standard casing: 'Word'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const COORD = windows.COORD;",
+    "detail": "acronym in 'COORD' should use standard casing: 'Coord'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const SECURITY_ATTRIBUTES = windows.SECURITY_ATTRIBUTES;",
+    "detail": "variable 'SECURITY_ATTRIBUTES' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const STARTUPINFOW = windows.STARTUPINFOW;",
+    "detail": "acronym in 'STARTUPINFOW' should use standard casing: 'Startupinfow'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const HPCON = *anyopaque;",
+    "detail": "acronym in 'HPCON' should use standard casing: 'Hpcon'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x00000002;",
+    "detail": "variable 'PSEUDOCONSOLE_RESIZE_QUIRK' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x00000004;",
+    "detail": "variable 'PSEUDOCONSOLE_WIN32_INPUT_MODE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x00000008;",
+    "detail": "variable 'PSEUDOCONSOLE_PASSTHROUGH_MODE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JobObjectBasicAccountingInformation: c_int = 1;",
+    "detail": "variable 'JobObjectBasicAccountingInformation' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = extern struct {",
+    "detail": "acronym in 'JOBOBJECT_BASIC_ACCOUNTING_INFORMATION' should use standard casing: 'Jobobject_Basic_Accounting_Information'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JobObjectExtendedLimitInformation: c_int = 9;",
+    "detail": "variable 'JobObjectExtendedLimitInformation' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;",
+    "detail": "variable 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: DWORD = 0x00000008;",
+    "detail": "variable 'JOB_OBJECT_LIMIT_ACTIVE_PROCESS' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_LIMIT_PROCESS_MEMORY: DWORD = 0x00000100;",
+    "detail": "variable 'JOB_OBJECT_LIMIT_PROCESS_MEMORY' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_LIMIT_JOB_MEMORY: DWORD = 0x00000200;",
+    "detail": "variable 'JOB_OBJECT_LIMIT_JOB_MEMORY' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JobObjectAssociateCompletionPortInformation: c_int = 7;",
+    "detail": "variable 'JobObjectAssociateCompletionPortInformation' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const JOBOBJECT_ASSOCIATE_COMPLETION_PORT = extern struct {",
+    "detail": "acronym in 'JOBOBJECT_ASSOCIATE_COMPLETION_PORT' should use standard casing: 'Jobobject_Associate_Completion_Port'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO: DWORD = 4;",
+    "detail": "variable 'JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JobObjectCpuRateControlInformation: c_int = 15;",
+    "detail": "variable 'JobObjectCpuRateControlInformation' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE: DWORD = 0x00000001;",
+    "detail": "variable 'JOB_OBJECT_CPU_RATE_CONTROL_ENABLE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP: DWORD = 0x00000004;",
+    "detail": "variable 'JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = extern struct {",
+    "detail": "acronym in 'JOBOBJECT_CPU_RATE_CONTROL_INFORMATION' should use standard casing: 'Jobobject_Cpu_Rate_Control_Information'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {",
+    "detail": "acronym in 'JOBOBJECT_BASIC_LIMIT_INFORMATION' should use standard casing: 'Jobobject_Basic_Limit_Information'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const IO_COUNTERS = extern struct {",
+    "detail": "acronym in 'IO_COUNTERS' should use standard casing: 'Io_Counters'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {",
+    "detail": "acronym in 'JOBOBJECT_EXTENDED_LIMIT_INFORMATION' should use standard casing: 'Jobobject_Extended_Limit_Information'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;",
+    "detail": "variable 'HANDLE_FLAG_INHERIT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;",
+    "detail": "variable 'INVALID_FILE_ATTRIBUTES' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x00000010;",
+    "detail": "variable 'FILE_ATTRIBUTE_DIRECTORY' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const DUPLICATE_SAME_ACCESS: DWORD = 0x00000002;",
+    "detail": "variable 'DUPLICATE_SAME_ACCESS' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const GENERIC_READ = console.GENERIC_READ;",
+    "detail": "variable 'GENERIC_READ' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const GENERIC_WRITE = console.GENERIC_WRITE;",
+    "detail": "variable 'GENERIC_WRITE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const FILE_SHARE_READ = console.FILE_SHARE_READ;",
+    "detail": "variable 'FILE_SHARE_READ' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const FILE_SHARE_WRITE = console.FILE_SHARE_WRITE;",
+    "detail": "variable 'FILE_SHARE_WRITE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const OPEN_EXISTING = console.OPEN_EXISTING;",
+    "detail": "variable 'OPEN_EXISTING' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const PROC_THREAD_ATTRIBUTE_LIST = opaque {};",
+    "detail": "acronym in 'PROC_THREAD_ATTRIBUTE_LIST' should use standard casing: 'Proc_Thread_Attribute_List'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;",
+    "detail": "variable 'PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x00020002;",
+    "detail": "variable 'PROC_THREAD_ATTRIBUTE_HANDLE_LIST' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/win32.zig",
+    "source": "pub const STARTUPINFOEXW = extern struct {",
+    "detail": "acronym in 'STARTUPINFOEXW' should use standard casing: 'Startupinfoexw'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const STARTF_USESTDHANDLES: DWORD = 0x00000100;",
+    "detail": "variable 'STARTF_USESTDHANDLES' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const FILE_TYPE_CHAR: DWORD = 0x0002;",
+    "detail": "variable 'FILE_TYPE_CHAR' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const FILE_TYPE_PIPE: DWORD = 0x0003;",
+    "detail": "variable 'FILE_TYPE_PIPE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const SYNCHRONIZE: DWORD = 0x00100000;",
+    "detail": "variable 'SYNCHRONIZE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PROCESS_TERMINATE: DWORD = 0x00000001;",
+    "detail": "variable 'PROCESS_TERMINATE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x00001000;",
+    "detail": "variable 'PROCESS_QUERY_LIMITED_INFORMATION' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const WAIT_OBJECT_0: DWORD = 0;",
+    "detail": "variable 'WAIT_OBJECT_0' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const WAIT_TIMEOUT: DWORD = 258;",
+    "detail": "variable 'WAIT_TIMEOUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const CTRL_C_EVENT: DWORD = 0;",
+    "detail": "variable 'CTRL_C_EVENT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/win32.zig",
+    "source": "pub const CTRL_BREAK_EVENT: DWORD = 1;",
+    "detail": "variable 'CTRL_BREAK_EVENT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Orphans.zig",
+    "source": "pub fn deinit(orphans: *Orphans) DeinitError!void {",
+    "detail": "deinit should set orphans.* = undefined (has early return before invalidation)",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Orphans.zig",
+    "source": "pub fn begin() Spawn {",
+    "detail": "public function exposes private type 'Spawn'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/Orphans.zig",
+    "source": "pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {",
+    "detail": "public function exposes private error set 'OwnError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Orphans.zig",
+    "source": "fn openAdoptedWith(pid: posix.pid_t, comptime System: type) OpenError!Held {",
+    "detail": "'type' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Orphans.zig",
+    "source": "fn isChildWith(held: Held, comptime System: type) LookError!bool {",
+    "detail": "'type' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/Orphans.zig",
+    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/self/task/{d}/children\", .{linux.gettid()}) catch return error.Unsupported;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/Orphans.zig",
+    "source": "const file = std.fmt.bufPrintZ(&file_buffer, \"{s}/children\", .{name}) catch continue;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Orphans.zig",
+    "source": "comptime each: fn (*Orphans, posix.pid_t) LookError!void,",
+    "detail": "'comptime' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Orphans.zig",
+    "source": "const tree = if (Orphans.supported) @import(\"tree.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Orphans.zig",
+    "source": "const wait_for = if (Orphans.supported) @import(\"wait.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Orphans.zig",
+    "source": "pub const Record = @import(\"Orphans/adoption_record.zig\").Record;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Orphans.zig",
+    "source": "orphans.look() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Orphans.zig",
+    "source": "std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Orphans.zig",
+    "source": "std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Orphans.zig",
+    "source": "std.Thread.yield() catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/trace.zig",
+    "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/find.zig",
+    "source": "allocator: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/find.zig",
+    "source": "return try allocator.dupe(u8, found);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, found); return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/find.zig",
+    "source": "if (runnable(io, candidate)) return try allocator.dupe(u8, candidate);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, candidate); return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/find.zig",
+    "source": "fn directWindowsProgram(io: std.Io, allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/find.zig",
+    "source": "return try allocator.dupe(u8, name);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, name); return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/find.zig",
+    "source": "const child_windows = if (is_windows) @import(\"Child/child_windows.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Child/child_types.zig",
+    "source": "pub const toPosix = if (is_windows)",
+    "detail": "variable 'toPosix' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z012",
+    "path": "src/Child/child_types.zig",
+    "source": "pub fn execError(err: posix.E) SpawnError {",
+    "detail": "public function exposes private type 'SpawnError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/windows_completion.zig",
+    "source": "const std = @import(\"std\");",
+    "detail": "duplicate import '\"std\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/windows_completion.zig",
+    "source": "const std = @import(\"std\");",
+    "detail": "duplicate import '\"std\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn releaseSurvivors(_: *@This()) !void {}",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn end(self: *@This()) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn ended(_: *@This()) !bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn empty(self: *@This()) !bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn releaseSurvivors(_: *@This()) !void {}",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn end(self: *@This()) !void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn ended(_: *@This()) !bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn empty(self: *@This()) !bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn releaseSurvivors(_: *@This()) !void {}",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn end(_: *@This()) !void {}",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn empty(_: *@This()) !bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/windows_completion.zig",
+    "source": "fn ended(self: *@This()) !bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn deinit(fixture: *Fixture) void {",
+    "detail": "deinit should set fixture.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const cgroups = @import(\"../cgroup.zig\");",
+    "detail": "duplicate import '\"../cgroup.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const cgroups = @import(\"../cgroup.zig\");",
+    "detail": "duplicate import '\"../cgroup.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const cgroups = @import(\"../cgroup.zig\");",
+    "detail": "duplicate import '\"../cgroup.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const cgroups = @import(\"../cgroup.zig\");",
+    "detail": "duplicate import '\"../cgroup.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn capture(id: Child.Id) !@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn alive(process: *const @This()) bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn end(process: *@This()) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn capture(id: Child.Id) !@This() {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn alive(process: *const @This()) bool {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/descendants_test.zig",
+    "source": "fn end(process: *@This()) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const win32 = if (windows) @import(\"../win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const tree = if (windows) struct {} else @import(\"../tree.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const program = try std.Io.Dir.cwd().realPathFileAlloc(io, @import(\"conduit_test_options\").tree_fixture, gpa);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const hook = &@import(\"../lineage.zig\").testing_hook.delay_ms;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/descendants_test.zig",
+    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/descendants_test.zig",
+    "source": "_ = process.held.wait(io, budget_ms) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/descendants_test.zig",
+    "source": "_ = fixture.child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child/child_windows.zig",
+    "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child/child_windows.zig",
+    "source": "arena: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child/child_windows.zig",
+    "source": "arena: Allocator,",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Child/child_windows.zig",
+    "source": "fn deinit(handles: *ChildHandles) void {",
+    "detail": "deinit should set handles.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child/child_windows.zig",
+    "source": "fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {",
+    "detail": "'Allocator' parameter should come before 'other'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Child/child_windows.zig",
+    "source": "fn deinit(list: *AttributeList) void {",
+    "detail": "deinit should set list.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z023",
+    "path": "src/Child/child_posix.zig",
+    "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
+    "detail": "'Allocator' parameter should come before 'Io'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/Child/child_posix.zig",
+    "source": "const SIG = posix.SIG;",
+    "detail": "acronym in 'SIG' should use standard casing: 'Sig'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Child/child_posix.zig",
+    "source": "const setrlimitSym = if (posix.lfs64_abi) c.setrlimit64 else c.setrlimit;",
+    "detail": "variable 'setrlimitSym' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/Child/child_posix.zig",
+    "source": "const SIG = enum(u32) {",
+    "detail": "acronym in 'SIG' should use standard casing: 'Sig'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Child/child_posix.zig",
+    "source": "const IGN: Handler = .ignored;",
+    "detail": "variable 'IGN' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/Child/child_posix.zig",
+    "source": "const DFL: Handler = .default;",
+    "detail": "variable 'DFL' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_posix.zig",
+    "source": "const supervisor = if (builtin.os.tag == .linux) @import(\"../supervisor.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_posix.zig",
+    "source": "if (builtin.is_test) @import(\"../testing/test_support.zig\").SpawnCalls.forks += 1;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_posix.zig",
+    "source": "var lineage: ?*@import(\"../lineage.zig\").Tracker = null;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_posix.zig",
+    "source": "if (comptime @import(\"../lineage.zig\").supported) if (options.descendants == .contain) {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_posix.zig",
+    "source": "lineage = @import(\"../lineage.zig\").Tracker.start(pid) catch |err| {",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z017",
+    "path": "src/Child/posix_spawn.zig",
+    "source": "if (rc == 0) return try started(pid);",
+    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try started(pid); return value;`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/posix_spawn.zig",
+    "source": "if (builtin.is_test) @import(\"../testing/test_support.zig\").SpawnCalls.file_actions += 1;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z009",
+    "path": "src/Child/child_state.zig",
+    "source": "//! The child lifecycle, shared only by the process implementation and Reaper.",
+    "detail": "file 'child_state.zig' has top-level fields and should be PascalCase",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z021",
+    "path": "src/Child/child_state.zig",
+    "source": "const State = @This();",
+    "detail": "@This() alias 'State' should match filename 'child_state' or be 'Self'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_state.zig",
+    "source": "const tree = if (is_windows) struct {} else @import(\"../tree.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_state.zig",
+    "source": "const cgroups = if (is_windows) struct {} else @import(\"../cgroup.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_state.zig",
+    "source": "pty: ?@import(\"../Pty.zig\").Pty.Master = null,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_state.zig",
+    "source": "supervisor: if (builtin.os.tag == .linux) ?@import(\"../supervisor.zig\").Supervisor else void = if (builtin.os.tag == .linux) null else {},",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_state.zig",
+    "source": "lineage: if (is_windows) void else ?*@import(\"../lineage.zig\").Tracker = if (is_windows) {} else null,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/Child/spawn_test.zig",
+    "source": "fn deinit(sink: *Sink) void {",
+    "detail": "deinit should set sink.* = undefined",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z007",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const spawn_path = @import(\"posix_spawn.zig\");",
+    "detail": "duplicate import '\"posix_spawn.zig\"'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/spawn_test.zig",
+    "source": "fn run(s: *@This()) void {",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z020",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
+    "detail": "inline @This(); assign it to `const Self = @This();`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const wait_for = if (is_windows) struct {} else @import(\"../wait.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const tree = if (is_windows) struct {} else @import(\"../tree.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const cgroup = if (is_windows) struct {} else @import(\"../cgroup.zig\");",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const win32 = if (is_windows) @import(\"../win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const detached_grandchild = [_][]const u8{@import(\"conduit_test_options\").tree_fixture};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": ".argv = &.{@import(\"conduit_test_options\").tty_fixture},",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "const fast_path = if (is_windows) false else @import(\"posix_spawn.zig\").available;",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/spawn_test.zig",
+    "source": "@import(\"../Pty.zig\").placeMasterForTest(&pair, 0);",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/spawn_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/spawn_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/spawn_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/spawn_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/spawn_test.zig",
+    "source": "_ = child.killWait(io, 0) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_reaper_test.zig",
+    "source": "const win32 = if (is_windows) @import(\"../win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_reaper_test.zig",
+    "source": "reaper: *@import(\"../Reaper.zig\").Reaper,",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_reaper_test.zig",
+    "source": "var watchdog: @import(\"../testing/test_support.zig\").Watchdog = .init(@src());",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/child_reaper_test.zig",
+    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&child, .{});",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z026",
+    "path": "src/Child/child_reaper_test.zig",
+    "source": "_ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};",
+    "detail": "empty catch block suppresses errors: `catch {}`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/exchange_test.zig",
+    "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, mode },",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/Child/exchange_test.zig",
+    "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, \"stall\" },",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z028",
+    "path": "src/process_exists.zig",
+    "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
+    "detail": "inline @import; assign to a top-level const",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/tty.zig",
+    "source": "pub fn rawMode(handle: Handle) RawModeError!Saved {",
+    "detail": "public function exposes private error set 'RawModeError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/tty.zig",
+    "source": "pub fn winSize(handle: Handle) WinSizeError!Size {",
+    "detail": "public function exposes private error set 'WinSizeError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tty.zig",
+    "source": "pub const setWinSize = if (is_windows)",
+    "detail": "variable 'setWinSize' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z015",
+    "path": "src/tty.zig",
+    "source": "pub fn openControlling(io: std.Io) OpenControllingError!Controlling {",
+    "detail": "public function exposes private error set 'OpenControllingError'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tty.zig",
+    "source": "pub const ttyName = if (is_windows)",
+    "detail": "variable 'ttyName' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z011",
+    "path": "src/tty.zig",
+    "source": "const path = std.fmt.bufPrintZ(&path_buf, \"/proc/self/fd/{d}\", .{handle}) catch unreachable;",
+    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/tty.zig",
+    "source": "pub const foregroundGroup = if (is_windows)",
+    "detail": "variable 'foregroundGroup' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const DWORD = windows.DWORD;",
+    "detail": "acronym in 'DWORD' should use standard casing: 'Dword'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const HANDLE = windows.HANDLE;",
+    "detail": "acronym in 'HANDLE' should use standard casing: 'Handle'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const BOOL = windows.BOOL;",
+    "detail": "acronym in 'BOOL' should use standard casing: 'Bool'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const SHORT = windows.SHORT;",
+    "detail": "acronym in 'SHORT' should use standard casing: 'Short'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const WORD = windows.WORD;",
+    "detail": "acronym in 'WORD' should use standard casing: 'Word'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const COORD = windows.COORD;",
+    "detail": "acronym in 'COORD' should use standard casing: 'Coord'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_PROCESSED_INPUT: DWORD = 0x0001;",
+    "detail": "variable 'ENABLE_PROCESSED_INPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_LINE_INPUT: DWORD = 0x0002;",
+    "detail": "variable 'ENABLE_LINE_INPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_ECHO_INPUT: DWORD = 0x0004;",
+    "detail": "variable 'ENABLE_ECHO_INPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_WINDOW_INPUT: DWORD = 0x0008;",
+    "detail": "variable 'ENABLE_WINDOW_INPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_MOUSE_INPUT: DWORD = 0x0010;",
+    "detail": "variable 'ENABLE_MOUSE_INPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_INSERT_MODE: DWORD = 0x0020;",
+    "detail": "variable 'ENABLE_INSERT_MODE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_QUICK_EDIT_MODE: DWORD = 0x0040;",
+    "detail": "variable 'ENABLE_QUICK_EDIT_MODE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_EXTENDED_FLAGS: DWORD = 0x0080;",
+    "detail": "variable 'ENABLE_EXTENDED_FLAGS' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_VIRTUAL_TERMINAL_INPUT: DWORD = 0x0200;",
+    "detail": "variable 'ENABLE_VIRTUAL_TERMINAL_INPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_PROCESSED_OUTPUT: DWORD = 0x0001;",
+    "detail": "variable 'ENABLE_PROCESSED_OUTPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_WRAP_AT_EOL_OUTPUT: DWORD = 0x0002;",
+    "detail": "variable 'ENABLE_WRAP_AT_EOL_OUTPUT' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;",
+    "detail": "variable 'ENABLE_VIRTUAL_TERMINAL_PROCESSING' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const DISABLE_NEWLINE_AUTO_RETURN: DWORD = 0x0008;",
+    "detail": "variable 'DISABLE_NEWLINE_AUTO_RETURN' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const GENERIC_READ: DWORD = 0x80000000;",
+    "detail": "variable 'GENERIC_READ' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const GENERIC_WRITE: DWORD = 0x40000000;",
+    "detail": "variable 'GENERIC_WRITE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const FILE_SHARE_READ: DWORD = 0x00000001;",
+    "detail": "variable 'FILE_SHARE_READ' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const FILE_SHARE_WRITE: DWORD = 0x00000002;",
+    "detail": "variable 'FILE_SHARE_WRITE' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z006",
+    "path": "src/console.zig",
+    "source": "pub const OPEN_EXISTING: DWORD = 3;",
+    "detail": "variable 'OPEN_EXISTING' should be snake_case",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const SMALL_RECT = extern struct {",
+    "detail": "acronym in 'SMALL_RECT' should use standard casing: 'Small_Rect'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z032",
+    "path": "src/console.zig",
+    "source": "pub const CONSOLE_SCREEN_BUFFER_INFO = extern struct {",
+    "detail": "acronym in 'CONSOLE_SCREEN_BUFFER_INFO' should use standard casing: 'Console_Screen_Buffer_Info'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  }
+]

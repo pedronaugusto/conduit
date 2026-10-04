@@ -1,4 +1,4 @@
-# The glibc Linux image ci/linux.sh runs the suite in.
+# The glibc Linux image zig build ci-linux -- runs the suite in.
 #
 # Debian, because glibc is the libc most Linux users have, and because its
 # `ptsname_r` is the one that reports failure by returning the error number

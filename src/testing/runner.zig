@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const upstream = @import("standard_test_runner");
 const options = @import("conduit_runner_options");
+const timings = @import("preflight_timings");
 const io = std.Io.Threaded.global_single_threaded.io();
 
 pub const std_options: std.Options = .{ .logFn = if (builtin.fuzz) upstream.log else log };
@@ -79,6 +80,8 @@ fn serverMain(init: std.process.Init.Minimal) !void {
     var reader = std.Io.File.stdin().readerStreaming(io, &in_buffer);
     var writer = std.Io.File.stdout().writerStreaming(io, &out_buffer);
     var server = try std.zig.Server.init(.{ .in = &reader.interface, .out = &writer.interface, .zig_version = builtin.zig_version_string });
+    const recorder = if (options.record_timings) try timings.Recorder.init(io, init.environ) else {};
+    defer if (options.record_timings) recorder.deinit();
     while (true) {
         const header = try server.receiveMessage();
         switch (header.tag) {
@@ -112,6 +115,7 @@ fn serverMain(init: std.process.Init.Minimal) !void {
                 testing.io_instance = .init(testing.allocator, .{ .argv0 = .init(init.args), .environ = init.environ });
                 errors.store(0, .monotonic);
                 fuzz_test = false;
+                const started = if (options.record_timings) std.Io.Clock.Timestamp.now(io, .awake) else {};
                 const status: std.zig.Server.Message.TestResults.Status = if (test_fn.func()) |_| .pass else |err| switch (err) {
                     error.SkipZigTest => .skip,
                     else => fail: {
@@ -124,6 +128,7 @@ fn serverMain(init: std.process.Init.Minimal) !void {
                 const leaks = testing.allocator_instance.detectLeaks();
                 testing.allocator_instance.deinitWithoutLeakChecks();
                 watchdog.phase.store(.reporting, .release);
+                if (options.record_timings) try recorder.record(test_fn.name, @intCast(started.untilNow(io).raw.nanoseconds), @tagName(status));
                 try server.serveTestResults(.{ .index = index, .flags = .{
                     .status = status,
                     .fuzz = fuzz_test,

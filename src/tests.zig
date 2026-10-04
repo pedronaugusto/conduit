@@ -96,3 +96,10 @@ test "the process's own terminal opens as a terminal, or says there is none" {
     try std.testing.expect(tty.isTty(own.output.handle));
     if (!is_windows) try std.testing.expectEqual(own.input.handle, own.output.handle);
 }
+
+test {
+    _ = @import("InputWriter/input_writer_impl.zig");
+    _ = @import("Orphans.zig");
+    _ = @import("Proxy.zig");
+    if (is_windows) _ = @import("console.zig");
+}

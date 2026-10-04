@@ -1,4 +1,4 @@
-# The musl Linux image ci/linux.sh --musl runs the suite in.
+# The musl Linux image zig build ci-linux -- --musl runs the suite in.
 #
 # Alpine is here for one reason: `ptsname_r` disagrees with itself across
 # libcs. glibc returns the error number, musl and Darwin return -1 and set

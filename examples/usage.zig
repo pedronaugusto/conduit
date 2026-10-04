@@ -1,7 +1,7 @@
 //! Runs a shell on a pseudo-terminal, reads what it printed, and reports how
 //! it ended.
 //!
-//! `zig build examples` builds AND runs this; `ci/readme_usage.sh` extracts the
+//! `zig build examples` builds AND runs this; `zig build docs -- usage` extracts the
 //! region between the usage markers into README.md, so the snippet a reader
 //! copies is code CI executes.
 

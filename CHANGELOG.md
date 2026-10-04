@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Share the Zig CI gate through preflight, with requested fast runs and full merge checks.
+
 - Keep namespace entry files beside their directories; put InputWriter internals in `src/InputWriter/` and orphan records in `src/Orphans/`.
 
 - Keep the Child implementation and its tests in `src/Child/`, and test helpers in `src/testing/`.
