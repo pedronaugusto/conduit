@@ -12,4 +12,4 @@
 //! The allocator and Io used to create it must outlive it. Its own allocator
 //! calls are serialized; a shared allocator must support its other users.
 
-pub const InputWriter = @import("Child.zig").InputWriter;
+pub const InputWriter = @import("Child/Child.zig").InputWriter;

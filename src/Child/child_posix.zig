@@ -13,14 +13,14 @@ const Allocator = std.mem.Allocator;
 
 const Child = @import("child_types.zig");
 const State = @import("child_state.zig");
-const handles = @import("handles.zig");
+const handles = @import("../handles.zig");
 const posix_spawn = @import("posix_spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
-const tree = @import("tree.zig");
-const cgroup = @import("cgroup.zig");
-const Orphans = @import("Orphans.zig").Orphans;
-const supervisor = if (builtin.os.tag == .linux) @import("supervisor.zig") else struct {};
+const tree = @import("../tree.zig");
+const cgroup = @import("../cgroup.zig");
+const Orphans = @import("../Orphans.zig").Orphans;
+const supervisor = if (builtin.os.tag == .linux) @import("../supervisor.zig") else struct {};
 
 const file = handles.file;
 
@@ -160,7 +160,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     const parent = c.getpid();
 
     handles.ForkGap.startingAChild();
-    if (builtin.is_test) @import("test_support.zig").SpawnCalls.forks += 1;
+    if (builtin.is_test) @import("../testing/test_support.zig").SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
         var root_parent = parent;
@@ -229,9 +229,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // The watch, then the word to go on. This end of the pipe's reading side
     // is still open while the byte is written, so the write cannot meet a
     // pipe with no reader however the child has fared.
-    var lineage: ?*@import("lineage.zig").Tracker = null;
-    if (comptime @import("lineage.zig").supported) if (options.descendants == .contain) {
-        lineage = @import("lineage.zig").Tracker.start(pid) catch |err| {
+    var lineage: ?*@import("../lineage.zig").Tracker = null;
+    if (comptime @import("../lineage.zig").supported) if (options.descendants == .contain) {
+        lineage = @import("../lineage.zig").Tracker.start(pid) catch |err| {
             discard(pid);
             file(report[0]).close(io);
             if (go) |ends| {

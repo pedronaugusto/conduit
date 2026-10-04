@@ -51,7 +51,7 @@ const posix = std.posix;
 const c = std.c;
 
 const Child = @import("child_types.zig");
-const tree = @import("tree.zig");
+const tree = @import("../tree.zig");
 const options_for_build = @import("conduit_options");
 
 const SpawnError = Child.SpawnError;
@@ -209,7 +209,7 @@ pub fn spawn(
     var best: posix.E = .NOENT;
     for (candidates) |candidate| {
         var pid: posix.pid_t = undefined;
-        if (builtin.is_test) @import("test_support.zig").SpawnCalls.file_actions += 1;
+        if (builtin.is_test) @import("../testing/test_support.zig").SpawnCalls.file_actions += 1;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) return try started(pid);
         switch (@as(posix.E, @enumFromInt(rc))) {

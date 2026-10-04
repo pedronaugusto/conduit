@@ -13,13 +13,13 @@ const Child = @import("child_types.zig");
 const State = @import("child_state.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
-const trace = @import("trace.zig");
-const win32 = @import("win32.zig");
+const trace = @import("../trace.zig");
+const win32 = @import("../win32.zig");
 const windows_search = @import("windows_search.zig");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
-const file = @import("handles.zig").file;
+const file = @import("../handles.zig").file;
 
 /// See `Child.spawn`.
 pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {

@@ -1,8 +1,8 @@
 //! `Child.exchange`: input in, output out, one deadline, through native pipes.
 const std = @import("std");
-const conduit = @import("conduit.zig");
+const conduit = @import("../conduit.zig");
 const Child = conduit.Child;
-const Watchdog = @import("test_support.zig").Watchdog;
+const Watchdog = @import("../testing/test_support.zig").Watchdog;
 const testing = std.testing;
 const io = testing.io;
 const gpa = testing.allocator;

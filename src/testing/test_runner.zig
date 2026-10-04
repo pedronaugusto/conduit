@@ -40,8 +40,10 @@ const Watchdog = struct {
         const deadline = std.Io.Clock.awake.now(io).addDuration(.fromMilliseconds(options.watchdog_ms));
         while (!watchdog.done.load(.acquire)) {
             if (std.Io.Clock.awake.now(io).nanoseconds >= deadline.nanoseconds) {
-                const file = watchdog.name[0 .. std.mem.indexOfScalar(u8, watchdog.name, '.') orelse watchdog.name.len];
-                std.debug.print("\nconduit: watchdog: src/{s}.zig: {s}; phase={t}\n", .{ file, watchdog.name, watchdog.phase.load(.acquire) });
+                const directory = if (std.mem.startsWith(u8, watchdog.name, "Child.")) "Child/" else if (std.mem.startsWith(u8, watchdog.name, "testing.")) "testing/" else "";
+                const name = watchdog.name[directory.len..];
+                const file = name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len];
+                std.debug.print("\nconduit: watchdog: src/{s}{s}.zig: {s}; phase={t}\n", .{ directory, file, watchdog.name, watchdog.phase.load(.acquire) });
                 std.process.exit(1);
             }
             // Independent of testing.io: even its teardown must stay observable.

@@ -16,7 +16,7 @@
 const std = @import("std");
 
 const Child = @import("child_types.zig");
-const handles = @import("handles.zig");
+const handles = @import("../handles.zig");
 
 /// A stream handle: `std.posix.fd_t` on POSIX, `HANDLE` on Windows.
 pub const Handle = std.Io.File.Handle;

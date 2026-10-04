@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep the Child implementation and its tests in `src/Child/`, and test helpers in `src/testing/`.
+
 - `Child.waitTree` works on Linux for a child in a cgroup of its own: it waits for `cgroup.events` to say the cgroup has emptied, woken by the change, and is `Unsupported` for a child given no cgroup. A recorded cgroup's `waitEmpty` reads the file only when the change wakes it.
 
 - `SpawnOptions.extra_fds` gives a child files at descriptor 3 and up, in order, placed correctly whatever numbers they have here; `.close_all` closes what is above them. On Windows they are inherited through the handle list and listed in the C runtime's table in the startup record, so a child on that runtime has them at 3 and up; with `.pty` there it is `Unsupported`.
@@ -573,7 +575,7 @@ that the other has not.
   whose every candidate is an entry of it with the program on the end; and the
   Windows command line, which an argument list has to survive by the rules that
   parse it back. That last one is arithmetic on quotes and backslashes and no
-  system call at all, so it now lives in `src/command_line.zig` and is compiled
+  system call at all, so it now lives in `src/Child/command_line.zig` and is compiled
   and tested on every host rather than on Windows alone.
 
 ### Fixed

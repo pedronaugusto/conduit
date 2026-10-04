@@ -19,7 +19,7 @@ class ContainmentDocs(unittest.TestCase):
         self.check_boundary(row)
 
     def test_policy_comment_states_the_measured_observation_boundary(self):
-        policy = (ROOT / "src/child_types.zig").read_text().split("pub const Descendants = enum {", 1)[1]
+        policy = (ROOT / "src/Child/child_types.zig").read_text().split("pub const Descendants = enum {", 1)[1]
         self.check_boundary(policy.split("contain,", 1)[0])
 
 

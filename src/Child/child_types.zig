@@ -4,7 +4,7 @@ const posix = std.posix;
 const windows = std.os.windows;
 const c = std.c;
 const Allocator = std.mem.Allocator;
-const Pty = @import("Pty.zig").Pty;
+const Pty = @import("../Pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
 /// A numeric process id on either platform, never a Windows handle.
 pub const Id = if (is_windows) windows.DWORD else posix.pid_t;

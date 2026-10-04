@@ -50,9 +50,9 @@ const CapturedPid = conduit.CapturedPid;
 const captureStarted = conduit.captureStarted;
 const endRecorded = conduit.endRecorded;
 test {
-    _ = @import("test_support.zig");
+    _ = @import("testing/test_support.zig");
     _ = @import("input_writer_test.zig");
-    _ = @import("exchange_test.zig");
+    _ = @import("Child/exchange_test.zig");
     _ = Pty;
     _ = Child;
     _ = Reaper;
@@ -67,16 +67,16 @@ test {
     _ = environ_impl;
     _ = shell;
     _ = @import("find.zig");
-    _ = @import("windows_search.zig");
-    _ = @import("spawn_test.zig");
-    _ = @import("descendants_test.zig");
-    _ = @import("windows_completion.zig");
+    _ = @import("Child/windows_search.zig");
+    _ = @import("Child/spawn_test.zig");
+    _ = @import("Child/descendants_test.zig");
+    _ = @import("Child/windows_completion.zig");
     if (builtin.os.tag == .linux) _ = @import("supervisor.zig");
     _ = @import("lineage.zig");
 }
 
 test {
-    _ = @import("child_reaper_test.zig");
+    _ = @import("Child/child_reaper_test.zig");
     if (comptime !is_windows) _ = @import("tree_test.zig");
     if (comptime !is_windows) _ = @import("wait_test.zig");
     _ = @import("handles_test.zig");

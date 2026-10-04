@@ -37,17 +37,17 @@ const c = std.c;
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
-const Expect = @import("Expect.zig").Expect;
-pub const InputWriter = @import("input_writer_impl.zig").Writer(Child).InputWriter;
-const Pty = @import("Pty.zig").Pty;
-const trace = @import("trace.zig");
-const handles = @import("handles.zig");
+const Expect = @import("../Expect.zig").Expect;
+pub const InputWriter = @import("../input_writer_impl.zig").Writer(Child).InputWriter;
+const Pty = @import("../Pty.zig").Pty;
+const trace = @import("../trace.zig");
+const handles = @import("../handles.zig");
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
-const tree = if (is_windows) struct {} else @import("tree.zig");
-const cgroups = if (is_windows) struct {} else @import("cgroup.zig");
-const wait_for = if (is_windows) struct {} else @import("wait.zig");
-const orphans = @import("Orphans.zig").Orphans;
+const win32 = if (is_windows) @import("../win32.zig") else struct {};
+const tree = if (is_windows) struct {} else @import("../tree.zig");
+const cgroups = if (is_windows) struct {} else @import("../cgroup.zig");
+const wait_for = if (is_windows) struct {} else @import("../wait.zig");
+const orphans = @import("../Orphans.zig").Orphans;
 
 /// Owns the lifecycle and created pipes. Move before sharing; never copy an owner.
 pub const Child = enum(usize) {
@@ -563,7 +563,7 @@ pub const Child = enum(usize) {
         return child.reapWithin(io, deadline);
     }
 
-    const Deadline = @import("deadline.zig").Deadline;
+    const Deadline = @import("../deadline.zig").Deadline;
 
     /// How long one wait on the child's process handle lasts before the caller is
     /// given a chance to notice it has been cancelled. `wait.zig` keeps the same
@@ -1529,7 +1529,7 @@ pub const Child = enum(usize) {
             // The task closes it once written.
             state.stdin = null;
         }
-        var serial: @import("serial_allocator.zig").SerialAllocator = .{ .parent = allocator, .io = io };
+        var serial: @import("../serial_allocator.zig").SerialAllocator = .{ .parent = allocator, .io = io };
         var collected = try child.outputUntil(io, serial.allocator(), .{
             .max_bytes = options.max_bytes,
             .grace_ms = 0,
@@ -2115,7 +2115,7 @@ pub const Child = enum(usize) {
         if (!tree.Forks.supported) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+        var watchdog: @import("../testing/test_support.zig").Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
         var child = try Child.spawn(io, testing.allocator, .{
@@ -2148,7 +2148,7 @@ pub const Child = enum(usize) {
     test "output on tasks bounds draining by elapsed time after a delayed sleep" {
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+        var watchdog: @import("../testing/test_support.zig").Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
@@ -2201,7 +2201,7 @@ pub const Child = enum(usize) {
         if (is_windows) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: @import("test_support.zig").Watchdog = .init(@src());
+        var watchdog: @import("../testing/test_support.zig").Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
 
@@ -2237,9 +2237,9 @@ pub const Child = enum(usize) {
             _ = @import("child_windows.zig");
         } else {
             _ = @import("child_posix.zig");
-            _ = @import("cgroup.zig");
-            _ = @import("tree.zig");
-            _ = @import("wait.zig");
+            _ = @import("../cgroup.zig");
+            _ = @import("../tree.zig");
+            _ = @import("../wait.zig");
         }
     }
 

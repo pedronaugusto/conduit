@@ -4,20 +4,20 @@ const gantry = @import("gantry");
 pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "primitives", .patterns = &.{
         "src/adoption_record.zig",
-        "src/command_line.zig",
+        "src/Child/command_line.zig",
         "src/console.zig",
         "src/deadline.zig",
         "src/environ.zig",
         "src/handles.zig",
         "src/serial_allocator.zig",
-        "src/test_input_process.zig",
-        "src/test_process.zig",
-        "src/test_runner.zig",
-        "src/windows_search.zig",
+        "src/testing/test_input_process.zig",
+        "src/testing/test_process.zig",
+        "src/testing/test_runner.zig",
+        "src/Child/windows_search.zig",
     } },
     .{ .name = "platform handles", .patterns = &.{
         "src/cgroup.zig",
-        "src/test_support.zig",
+        "src/testing/test_support.zig",
         "src/tty.zig",
         "src/wait.zig",
     } },
@@ -32,30 +32,30 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "child contracts", .patterns = &.{
         "src/Expect.zig",
-        "src/child_types.zig",
+        "src/Child/child_types.zig",
     } },
     .{ .name = "process policy", .patterns = &.{
         "src/process_exists.zig",
-        "src/stdio_plan.zig",
+        "src/Child/stdio_plan.zig",
         "src/tree.zig",
-        "src/windows_completion.zig",
+        "src/Child/windows_completion.zig",
     } },
     .{ .name = "descendant owners", .patterns = &.{
         "src/Orphans.zig",
         "src/lineage.zig",
-        "src/posix_spawn.zig",
+        "src/Child/posix_spawn.zig",
         "src/supervisor.zig",
     } },
     .{ .name = "lifecycle storage", .patterns = &.{
-        "src/child_state.zig",
+        "src/Child/child_state.zig",
     } },
     .{ .name = "spawn and input policy", .patterns = &.{
-        "src/child_posix.zig",
-        "src/child_windows.zig",
+        "src/Child/child_posix.zig",
+        "src/Child/child_windows.zig",
         "src/input_writer_impl.zig",
     } },
     .{ .name = "child owner", .patterns = &.{
-        "src/Child.zig",
+        "src/Child/Child.zig",
         "src/find.zig",
     } },
     .{ .name = "conversations and reaping", .patterns = &.{
@@ -70,26 +70,26 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/wait_test.zig",
     } },
     .{ .name = "public and identity scenarios", .patterns = &.{
-        "src/child_reaper_test.zig",
+        "src/Child/child_reaper_test.zig",
         "src/conduit.zig",
-        "src/descendants_test.zig",
+        "src/Child/descendants_test.zig",
     } },
     .{ .name = "public scenarios", .patterns = &.{
-        "src/exchange_test.zig",
+        "src/Child/exchange_test.zig",
         "src/input_writer_test.zig",
-        "src/spawn_test.zig",
+        "src/Child/spawn_test.zig",
     } },
     .{ .name = "tests", .patterns = &.{
         "src/test_root.zig",
-        "src/test_tty_process.zig",
+        "src/testing/test_tty_process.zig",
     } },
 };
 
 pub const entries: []const []const u8 = &.{
-    "src/test_input_process.zig",
-    "src/test_process.zig",
-    "src/test_tty_process.zig",
-    "src/test_runner.zig",
+    "src/testing/test_input_process.zig",
+    "src/testing/test_process.zig",
+    "src/testing/test_tty_process.zig",
+    "src/testing/test_runner.zig",
 };
 
 pub const modules: []const gantry.NamedModule = &.{.{ .name = "conduit.tty", .path = "src/tty.zig" }};
@@ -120,12 +120,12 @@ pub const required = blk: {
 /// Tokens only their owners may spell: Windows declarations, the terminal's
 /// modes, pseudoterminals, exec and cgroups each have their files.
 pub const owned: []const gantry.rules.TokenRule = &.{
-    .{ .name = "windows declarations", .kind = .string, .token = "kernel32", .owners = &.{ "src/win32.zig", "src/console.zig", "src/test_process.zig", "src/test_input_process.zig" } },
+    .{ .name = "windows declarations", .kind = .string, .token = "kernel32", .owners = &.{ "src/win32.zig", "src/console.zig", "src/testing/test_process.zig", "src/testing/test_input_process.zig" } },
     .{ .name = "terminal mode owner", .token = "tcgetattr", .owners = &.{ "src/tty.zig", "src/Pty.zig" } },
     .{ .name = "terminal mode owner", .token = "tcsetattr", .owners = &.{ "src/tty.zig", "src/Pty.zig" } },
     .{ .name = "pseudoterminal owner", .token = "posix_openpt", .owners = &.{"src/Pty.zig"} },
     .{ .name = "pseudoterminal owner", .token = "CreatePseudoConsole", .owners = &.{ "src/Pty.zig", "src/win32.zig" } },
-    .{ .name = "exec owner", .token = "execve", .owners = &.{"src/child_posix.zig"} },
-    .{ .name = "exec owner", .token = "posix_spawn", .owners = &.{ "src/child_posix.zig", "src/posix_spawn.zig" } },
+    .{ .name = "exec owner", .token = "execve", .owners = &.{"src/Child/child_posix.zig"} },
+    .{ .name = "exec owner", .token = "posix_spawn", .owners = &.{ "src/Child/child_posix.zig", "src/Child/posix_spawn.zig" } },
     .{ .name = "cgroup owner", .kind = .string, .token = "/sys/fs/cgroup*", .owners = &.{"src/cgroup.zig"} },
 };

@@ -24,23 +24,23 @@ const State = @import("child_state.zig");
 const posix = std.posix;
 const c = std.c;
 
-const conduit = @import("conduit.zig");
+const conduit = @import("../conduit.zig");
 const Child = conduit.Child;
-const Deadline = @import("deadline.zig").Deadline;
+const Deadline = @import("../deadline.zig").Deadline;
 const Pty = conduit.Pty;
-const handles = @import("handles.zig");
-const wait_for = if (is_windows) struct {} else @import("wait.zig");
-const tree = if (is_windows) struct {} else @import("tree.zig");
-const cgroup = if (is_windows) struct {} else @import("cgroup.zig");
-const trace = @import("trace.zig");
-const Watchdog = @import("test_support.zig").Watchdog;
+const handles = @import("../handles.zig");
+const wait_for = if (is_windows) struct {} else @import("../wait.zig");
+const tree = if (is_windows) struct {} else @import("../tree.zig");
+const cgroup = if (is_windows) struct {} else @import("../cgroup.zig");
+const trace = @import("../trace.zig");
+const Watchdog = @import("../testing/test_support.zig").Watchdog;
 
 const io = std.testing.io;
 const gpa = std.testing.allocator;
 const testing = std.testing;
 
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
+const win32 = if (is_windows) @import("../win32.zig") else struct {};
 
 /// How long any one test will wait for a child to say or do something before
 /// it gives up. Generous, because it is a failure budget and not a timing
@@ -3630,7 +3630,7 @@ test "a spawn expressible by file actions makes no fork call" {
     defer watchdog.deinit(io);
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
-    const calls = @import("test_support.zig").SpawnCalls;
+    const calls = @import("../testing/test_support.zig").SpawnCalls;
     calls.forks = 0;
     calls.file_actions = 0;
     var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
@@ -4202,7 +4202,7 @@ test "extra files arrive at descriptor 3 and up, in order" {
         for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
         defer for (files) |f| f.close(io);
 
-        const calls = @import("test_support.zig").SpawnCalls;
+        const calls = @import("../testing/test_support.zig").SpawnCalls;
         calls.file_actions = 0;
         var child = try Child.spawn(io, gpa, .{
             .argv = &.{ inherited_fixture, "inherited", "3" },
@@ -4839,7 +4839,7 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     defer pair.close(io);
     var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
     defer stdin.restore();
-    @import("Pty.zig").placeMasterForTest(&pair, 0);
+    @import("../Pty.zig").placeMasterForTest(&pair, 0);
     // Close the temporary master before restoring the runner's stdin,
     // including on a failed spawn or assertion.
     defer pair.closeMaster(io);
