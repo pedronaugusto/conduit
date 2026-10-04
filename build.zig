@@ -158,6 +158,7 @@ pub fn build(b: *std.Build) void {
     // two it was.
     const unit_step = b.step("unit", "Run the conduit tests, without the examples");
     unit_step.dependOn(&b.addRunArtifact(tests).step);
+    b.step("check-unit", "Compile the conduit tests without running them").dependOn(&tests.step);
 
     const test_step = b.step("test", "Run the conduit tests");
     test_step.dependOn(unit_step);
