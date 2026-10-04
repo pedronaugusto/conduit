@@ -3,7 +3,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const posix = std.posix;
-const Id = @import("Child/child_types.zig").Id;
+const Id = @import("Child/contract.zig").Id;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};

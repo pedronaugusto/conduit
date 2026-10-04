@@ -2,11 +2,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Child = @import("../Child.zig").Child;
-const State = @import("child_state.zig");
+const State = @import("state.zig");
 const windows = builtin.os.tag == .windows;
 const win32 = if (windows) @import("../win32.zig") else struct {};
 const tree = if (windows) struct {} else @import("../tree.zig");
-const Watchdog = @import("../testing/test_support.zig").Watchdog;
+const Watchdog = @import("../testing/support.zig").Watchdog;
 const io = std.testing.io;
 const gpa = std.testing.allocator;
 const budget_ms = 5000;

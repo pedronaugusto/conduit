@@ -1,5 +1,5 @@
 //! The nonblocking Windows publication decision, shared by every reap path.
-const Child = @import("child_types.zig");
+const Child = @import("../contract.zig");
 
 pub fn poll(comptime System: type, context: anytype, term: Child.Term, policy: Child.Descendants, ending: bool) Child.TryWaitError!?Child.Term {
     if (policy == .survive and !ending and term == .exited) {

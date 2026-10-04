@@ -20,7 +20,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const State = @import("child_state.zig");
+const State = @import("state.zig");
 const posix = std.posix;
 const c = std.c;
 
@@ -33,7 +33,7 @@ const wait_for = if (is_windows) struct {} else @import("../wait.zig");
 const tree = if (is_windows) struct {} else @import("../tree.zig");
 const cgroup = if (is_windows) struct {} else @import("../cgroup.zig");
 const trace = @import("../trace.zig");
-const Watchdog = @import("../testing/test_support.zig").Watchdog;
+const Watchdog = @import("../testing/support.zig").Watchdog;
 
 const io = std.testing.io;
 const gpa = std.testing.allocator;
@@ -3551,7 +3551,7 @@ extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 //======================================================================
 
 /// Whether `Child.spawn` has a `posix_spawn` path in this build.
-const fast_path = if (is_windows) false else @import("posix_spawn.zig").available;
+const fast_path = if (is_windows) false else @import("posix/spawn.zig").available;
 
 test "both spawn paths start the same child" {
     var watchdog: Watchdog = .init(@src());
@@ -3630,7 +3630,7 @@ test "a spawn expressible by file actions makes no fork call" {
     defer watchdog.deinit(io);
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
-    const calls = @import("../testing/test_support.zig").SpawnCalls;
+    const calls = @import("../testing/support.zig").SpawnCalls;
     calls.forks = 0;
     calls.file_actions = 0;
     var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
@@ -4202,7 +4202,7 @@ test "extra files arrive at descriptor 3 and up, in order" {
         for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
         defer for (files) |f| f.close(io);
 
-        const calls = @import("../testing/test_support.zig").SpawnCalls;
+        const calls = @import("../testing/support.zig").SpawnCalls;
         calls.file_actions = 0;
         var child = try Child.spawn(io, gpa, .{
             .argv = &.{ inherited_fixture, "inherited", "3" },
@@ -4506,7 +4506,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
-    const spawn_path = @import("posix_spawn.zig");
+    const spawn_path = @import("posix/spawn.zig");
     // A cgroup of the child's own sends any spawn to the fork: this is about
     // the ones that take `posix_spawn`.
     cgroup.testing_hook.off = true;
@@ -4549,7 +4549,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
 
 test "a spawn with a parent death signal takes the fork, where the signal is set" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    const spawn_path = @import("posix_spawn.zig");
+    const spawn_path = @import("posix/spawn.zig");
     try testing.expect(!spawn_path.suits(.{ .argv = &script.greeting, .parent_death_signal = .kill }));
     try testing.expectEqual(spawn_path.available, spawn_path.suits(.{ .argv = &script.greeting }));
 }

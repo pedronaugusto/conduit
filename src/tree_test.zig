@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("Child/child_state.zig");
+const State = @import("Child/state.zig");
 const access = @import("tree.zig").test_access;
 const Deadline = access.Deadline;
 const wait_for = access.wait_for;
@@ -61,7 +61,7 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("Child.zig").Child;
@@ -387,7 +387,7 @@ test "a captured process keeps its identity across exec" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("Child.zig").Child;
@@ -419,7 +419,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("Child.zig").Child;

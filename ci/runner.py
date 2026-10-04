@@ -24,8 +24,8 @@ with tempfile.TemporaryDirectory(prefix="runner-probe-", dir=cache) as temporary
         cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, timeout=60,
     )
-    expected = ("conduit: watchdog: src/testing/test_support.zig: "
-                "testing.test_support.test.runner teardown probe; phase=io_teardown")
+    expected = ("conduit: watchdog: src/testing/support.zig: "
+                "testing.support.test.runner teardown probe; phase=io_teardown")
     if result.returncode == 0 or expected not in result.stdout:
         raise SystemExit("runner probe did not identify backend teardown:\n" + result.stdout)
 print("runner probe: stuck backend teardown names its test and source")

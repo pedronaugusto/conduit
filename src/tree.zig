@@ -520,7 +520,7 @@ pub const RecordedOptions = struct {
     cgroup: ?*@import("cgroup.zig").Cgroup.Recorded = null,
     /// Linux: the private adoption owner. It receives TERM as a request to
     /// empty its scope; never kill that owner before it has reaped the tree.
-    supervisor: ?@import("Child/child_types.zig").SupervisorRecord = null,
+    supervisor: ?@import("Child/contract.zig").SupervisorRecord = null,
     grace_ms: u32,
 };
 

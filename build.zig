@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) void {
     ) orelse false;
 
     const test_module = b.createModule(.{
-        .root_source_file = b.path("src/test_root.zig"),
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
@@ -107,7 +107,7 @@ pub fn build(b: *std.Build) void {
         const fixture = b.addExecutable(.{
             .name = "conduit-tree-fixture",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/testing/test_process.zig"),
+                .root_source_file = b.path("src/testing/process.zig"),
                 .target = target,
                 .optimize = optimize,
                 .link_libc = link_libc,
@@ -118,7 +118,7 @@ pub fn build(b: *std.Build) void {
         const input_fixture = b.addExecutable(.{
             .name = "conduit-input-fixture",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/testing/test_input_process.zig"),
+                .root_source_file = b.path("src/testing/input_process.zig"),
                 .target = target,
                 .optimize = optimize,
                 .link_libc = link_libc,
@@ -128,7 +128,7 @@ pub fn build(b: *std.Build) void {
         const tty_fixture = b.addExecutable(.{
             .name = "conduit-tty-fixture",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("src/testing/test_tty_process.zig"),
+                .root_source_file = b.path("src/testing/tty_process.zig"),
                 .target = target,
                 .optimize = optimize,
                 .link_libc = link_libc,
@@ -148,7 +148,7 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{
         .name = "conduit-tests",
-        .test_runner = .{ .path = b.path("src/testing/test_runner.zig"), .mode = .server },
+        .test_runner = .{ .path = b.path("src/testing/runner.zig"), .mode = .server },
         .filters = test_filters,
         .root_module = test_module,
     });

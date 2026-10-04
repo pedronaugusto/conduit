@@ -9,13 +9,13 @@ const std = @import("std");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("child_types.zig");
-const State = @import("child_state.zig");
+const Child = @import("contract.zig");
+const State = @import("state.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("../trace.zig");
 const win32 = @import("../win32.zig");
-const windows_search = @import("windows_search.zig");
+const windows_search = @import("windows/search.zig");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;

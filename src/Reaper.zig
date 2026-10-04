@@ -46,7 +46,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const State = @import("Child/child_state.zig");
+const State = @import("Child/state.zig");
 const posix = std.posix;
 const c = std.c;
 const Child = @import("Child.zig").Child;
@@ -595,7 +595,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     var child = try Child.spawn(io, testing.allocator, .{
@@ -695,7 +695,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
     if (is_windows) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     var child = try Child.spawn(io, testing.allocator, .{

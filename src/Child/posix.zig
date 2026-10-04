@@ -11,10 +11,10 @@ const posix = std.posix;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 
-const Child = @import("child_types.zig");
-const State = @import("child_state.zig");
+const Child = @import("contract.zig");
+const State = @import("state.zig");
 const handles = @import("../handles.zig");
-const posix_spawn = @import("posix_spawn.zig");
+const posix_spawn = @import("posix/spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
 const tree = @import("../tree.zig");
@@ -160,7 +160,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     const parent = c.getpid();
 
     handles.ForkGap.startingAChild();
-    if (builtin.is_test) @import("../testing/test_support.zig").SpawnCalls.forks += 1;
+    if (builtin.is_test) @import("../testing/support.zig").SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
         var root_parent = parent;

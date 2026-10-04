@@ -668,7 +668,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     //======================================================================
 
     const testing = std.testing;
-    const Watchdog = @import("testing/test_support.zig").Watchdog;
+    const Watchdog = @import("testing/support.zig").Watchdog;
 
     /// Reads the master and throws it away, on a task of its own.
     ///

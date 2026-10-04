@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const Pty = @import("../Pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
 const Child = @import("../Child.zig").Child;
-const State = @import("child_state.zig");
+const State = @import("state.zig");
 const win32 = if (is_windows) @import("../win32.zig") else struct {};
 const access = @import("../Child.zig").test_access;
 const Observer = struct {
@@ -31,7 +31,7 @@ const Observer = struct {
 test "a Reaper cannot retire the identity while kill is delivering a signal" {
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("../testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("../testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
 

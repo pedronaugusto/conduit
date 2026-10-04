@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("Child/child_state.zig");
+const State = @import("Child/state.zig");
 const access = @import("wait.zig").test_access;
 const Deadline = @import("wait.zig").Deadline;
 const slice_ms = @import("wait.zig").slice_ms;
@@ -95,7 +95,7 @@ test "a watch on a child that is still running says so" {
 test "exit observation keeps the child's identity until its owner reaps it" {
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
+    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("Child.zig").Child;

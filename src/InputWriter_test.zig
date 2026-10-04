@@ -1,10 +1,10 @@
 //! Input delivery and lifetime, through the public API and native pipes.
 const std = @import("std");
 const builtin = @import("builtin");
-const conduit = @import("../conduit.zig");
+const conduit = @import("conduit.zig");
 const InputWriter = conduit.InputWriter;
 const Child = conduit.Child;
-const Watchdog = @import("../testing/test_support.zig").Watchdog;
+const Watchdog = @import("testing/support.zig").Watchdog;
 const testing = std.testing;
 const io = testing.io;
 const gpa = testing.allocator;

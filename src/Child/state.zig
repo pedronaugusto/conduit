@@ -2,7 +2,7 @@
 const State = @This();
 const builtin = @import("builtin");
 const std = @import("std");
-const Child = @import("child_types.zig");
+const Child = @import("contract.zig");
 const posix = std.posix;
 const windows = std.os.windows;
 const is_windows = builtin.os.tag == .windows;
