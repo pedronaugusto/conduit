@@ -3,7 +3,7 @@ const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "primitives", .patterns = &.{
-        "src/adoption_record.zig",
+        "src/Orphans/**",
         "src/Child/command_line.zig",
         "src/console.zig",
         "src/deadline.zig",
@@ -52,10 +52,10 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "spawn and input policy", .patterns = &.{
         "src/Child/child_posix.zig",
         "src/Child/child_windows.zig",
-        "src/input_writer_impl.zig",
+        "src/InputWriter/input_writer_impl.zig",
     } },
     .{ .name = "child owner", .patterns = &.{
-        "src/Child/Child.zig",
+        "src/Child.zig",
         "src/find.zig",
     } },
     .{ .name = "conversations and reaping", .patterns = &.{
@@ -76,7 +76,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "public scenarios", .patterns = &.{
         "src/Child/exchange_test.zig",
-        "src/input_writer_test.zig",
+        "src/InputWriter/input_writer_test.zig",
         "src/Child/spawn_test.zig",
     } },
     .{ .name = "tests", .patterns = &.{
@@ -105,16 +105,58 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
 };
 
-pub const required = blk: {
-    var count: usize = 0;
-    for (layers) |layer| count += layer.patterns.len;
-    var paths: [count][]const u8 = undefined;
-    var i: usize = 0;
-    for (layers) |layer| for (layer.patterns) |path| {
-        paths[i] = path;
-        i += 1;
-    };
-    break :blk paths;
+pub const required = [_][]const u8{
+    "src/Orphans/adoption_record.zig",
+    "src/Child/command_line.zig",
+    "src/console.zig",
+    "src/deadline.zig",
+    "src/environ.zig",
+    "src/handles.zig",
+    "src/serial_allocator.zig",
+    "src/testing/test_input_process.zig",
+    "src/testing/test_process.zig",
+    "src/testing/test_runner.zig",
+    "src/Child/windows_search.zig",
+    "src/cgroup.zig",
+    "src/testing/test_support.zig",
+    "src/tty.zig",
+    "src/wait.zig",
+    "src/win32.zig",
+    "src/trace.zig",
+    "src/Pty.zig",
+    "src/Expect.zig",
+    "src/Child/child_types.zig",
+    "src/process_exists.zig",
+    "src/Child/stdio_plan.zig",
+    "src/tree.zig",
+    "src/Child/windows_completion.zig",
+    "src/Orphans.zig",
+    "src/lineage.zig",
+    "src/Child/posix_spawn.zig",
+    "src/supervisor.zig",
+    "src/Child/child_state.zig",
+    "src/Child/child_posix.zig",
+    "src/Child/child_windows.zig",
+    "src/InputWriter/input_writer_impl.zig",
+    "src/Child.zig",
+    "src/find.zig",
+    "src/InputWriter.zig",
+    "src/Proxy.zig",
+    "src/Reaper.zig",
+    "src/expect_test.zig",
+    "src/handles_test.zig",
+    "src/lineage_test.zig",
+    "src/shell.zig",
+    "src/tree_test.zig",
+    "src/wait_test.zig",
+    "src/Child/child_reaper_test.zig",
+    "src/conduit.zig",
+    "src/Child/descendants_test.zig",
+    "src/Child/exchange_test.zig",
+    "src/InputWriter/input_writer_test.zig",
+    "src/Child/spawn_test.zig",
+    "src/test_root.zig",
+    "src/testing/test_tty_process.zig",
 };
 
 /// Tokens only their owners may spell: Windows declarations, the terminal's

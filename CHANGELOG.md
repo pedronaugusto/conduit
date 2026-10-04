@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Keep namespace entry files beside their directories; put InputWriter internals in `src/InputWriter/` and orphan records in `src/Orphans/`.
+
 - Keep the Child implementation and its tests in `src/Child/`, and test helpers in `src/testing/`.
 
 - `Child.waitTree` works on Linux for a child in a cgroup of its own: it waits for `cgroup.events` to say the cgroup has emptied, woken by the change, and is `Unsupported` for a child given no cgroup. A recorded cgroup's `waitEmpty` reads the file only when the change wakes it.

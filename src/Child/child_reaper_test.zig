@@ -6,10 +6,10 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 const Pty = @import("../Pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
-const Child = @import("Child.zig").Child;
+const Child = @import("../Child.zig").Child;
 const State = @import("child_state.zig");
 const win32 = if (is_windows) @import("../win32.zig") else struct {};
-const access = @import("Child.zig").test_access;
+const access = @import("../Child.zig").test_access;
 const Observer = struct {
     reaper: *@import("../Reaper.zig").Reaper,
     retired: bool = false,

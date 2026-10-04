@@ -51,7 +51,7 @@ const captureStarted = conduit.captureStarted;
 const endRecorded = conduit.endRecorded;
 test {
     _ = @import("testing/test_support.zig");
-    _ = @import("input_writer_test.zig");
+    _ = @import("InputWriter/input_writer_test.zig");
     _ = @import("Child/exchange_test.zig");
     _ = Pty;
     _ = Child;

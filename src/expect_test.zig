@@ -20,7 +20,7 @@ const start = Expect.start;
 const until = Expect.until;
 const untilAny = Expect.untilAny;
 const testing = std.testing;
-const Child = @import("Child/Child.zig").Child;
+const Child = @import("Child.zig").Child;
 const Watchdog = @import("testing/test_support.zig").Watchdog;
 
 /// Generous: it is a failure budget, not a timing assertion.

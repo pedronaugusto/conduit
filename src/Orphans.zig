@@ -292,7 +292,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// A copied process identity. Retain both fields; the pid alone is not
     /// authority to signal. Save this boot's identity alongside persistent
     /// records, then use captureStarted or endRecorded within that boot.
-    pub const Record = @import("adoption_record.zig").Record;
+    pub const Record = @import("Orphans/adoption_record.zig").Record;
 
     pub const ListError = LookError || error{IdentityUnavailable};
 

@@ -23,7 +23,7 @@ const endedKqueue = access.endedKqueue;
 const endedOrWokenKqueue = access.endedOrWokenKqueue;
 test "a watch on a child ends when the child does" {
     const testing = std.testing;
-    const Child = @import("Child/Child.zig").Child;
+    const Child = @import("Child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.io, testing.allocator, .{
@@ -44,7 +44,7 @@ test "a watch on a child ends when the child does" {
 
 test "a watch with a wake ends on the wake, then on the child" {
     const testing = std.testing;
-    const Child = @import("Child/Child.zig").Child;
+    const Child = @import("Child.zig").Child;
     const handles = @import("handles.zig");
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
@@ -76,7 +76,7 @@ test "a watch with a wake ends on the wake, then on the child" {
 
 test "a watch on a child that is still running says so" {
     const testing = std.testing;
-    const Child = @import("Child/Child.zig").Child;
+    const Child = @import("Child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.io, testing.allocator, .{
@@ -98,7 +98,7 @@ test "exit observation keeps the child's identity until its owner reaps it" {
     var watchdog: @import("testing/test_support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child/Child.zig").Child;
+    const Child = @import("Child.zig").Child;
     var child = try Child.spawn(io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 0" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },

@@ -1,7 +1,7 @@
 //! One descendant lifetime contract on every host.
 const std = @import("std");
 const builtin = @import("builtin");
-const Child = @import("Child.zig").Child;
+const Child = @import("../Child.zig").Child;
 const State = @import("child_state.zig");
 const windows = builtin.os.tag == .windows;
 const win32 = if (windows) @import("../win32.zig") else struct {};

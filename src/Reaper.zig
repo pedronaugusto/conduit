@@ -49,7 +49,7 @@ const std = @import("std");
 const State = @import("Child/child_state.zig");
 const posix = std.posix;
 const c = std.c;
-const Child = @import("Child/Child.zig").Child;
+const Child = @import("Child.zig").Child;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
