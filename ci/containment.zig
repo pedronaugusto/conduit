@@ -64,7 +64,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
         .timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } },
     });
     const output = try std.mem.concat(a, u8, &.{ result.stdout, result.stderr });
-    const expected = "conduit: watchdog: src/testing/support.zig: testing.test_support.test.runner teardown probe; phase=io_teardown";
+    const expected = "conduit: watchdog: src/testing/support.zig: testing.support.test.runner teardown probe; phase=io_teardown";
     if ((result.term == .exited and result.term.exited == 0) or std.mem.indexOf(u8, output, expected) == null) {
         std.debug.print("runner probe did not identify backend teardown:\n{s}\n", .{output});
         return error.RunnerProbeFailed;
