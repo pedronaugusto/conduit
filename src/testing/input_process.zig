@@ -41,7 +41,7 @@ fn inherited(count: usize) !void {
     }
     var startup: windows.STARTUPINFOW = undefined;
     GetStartupInfoW(&startup);
-    const table: [*]const u8 = @ptrCast(startup.lpReserved2 orelse return error.FixtureNoTable);
+    const table: [*]const u8 = @ptrCast(startup.lpReserved2 orelse return error.FixtureNoTable); // safe: the startup record supplies cbReserved2 bytes; byte alignment is sufficient.
     const listed: usize = @intCast(std.mem.readInt(i32, table[0..4], .little));
     if (listed < 3 + count) return error.FixtureTableTooShort;
     const flags = table[4..][0..listed];

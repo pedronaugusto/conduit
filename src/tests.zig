@@ -98,7 +98,7 @@ test "the process's own terminal opens as a terminal, or says there is none" {
 }
 
 test {
-    _ = @import("InputWriter/input_writer_impl.zig");
+    _ = @import("InputWriter.zig");
     _ = @import("Orphans.zig");
     _ = @import("Proxy.zig");
     _ = tty.console;

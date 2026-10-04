@@ -25,7 +25,7 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.startsWith(u8, line, "| macOS |") and std.mem.indexOf(u8, line, "lineage") != null) row = line;
     }
     try boundary(a, row orelse return error.MissingDarwinPlatformRow);
-    const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "src/Child/child_types.zig", a, .limited(1024 * 1024));
+    const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "src/Child/contract.zig", a, .limited(1024 * 1024));
     const start = (std.mem.indexOf(u8, source, "pub const Descendants = enum {") orelse return error.MissingDescendantsPolicy) + "pub const Descendants = enum {".len;
     const end = std.mem.indexOfPos(u8, source, start, "contain,") orelse return error.MissingContainmentPolicy;
     try boundary(a, source[start..end]);
@@ -64,7 +64,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
         .timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } },
     });
     const output = try std.mem.concat(a, u8, &.{ result.stdout, result.stderr });
-    const expected = "conduit: watchdog: src/testing/test_support.zig: testing.test_support.test.runner teardown probe; phase=io_teardown";
+    const expected = "conduit: watchdog: src/testing/support.zig: testing.test_support.test.runner teardown probe; phase=io_teardown";
     if ((result.term == .exited and result.term.exited == 0) or std.mem.indexOf(u8, output, expected) == null) {
         std.debug.print("runner probe did not identify backend teardown:\n{s}\n", .{output});
         return error.RunnerProbeFailed;
