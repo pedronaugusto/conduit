@@ -10,8 +10,6 @@ on:
         default: false
   pull_request:
   merge_group:
-  schedule:
-    - cron: '17 4 * * 1'
 concurrency:
   # Main status runs must not share the replaceable branch queue.
   group: ci-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('main-status-{0}', github.run_id) || github.head_ref || github.ref_name }}
@@ -21,11 +19,14 @@ permissions:
   actions: read
 jobs:
   gate:
-    uses: pedronaugusto/preflight/.github/workflows/zig.yml@25a0b56ab1802b3479105a5b477b8fb3b6658869
+    uses: pedronaugusto/preflight/.github/workflows/zig.yml@709e5c312f5f9d86b3bbdd577ad3b0a6db0c8f44
     with:
-      preflight-ref: 25a0b56ab1802b3479105a5b477b8fb3b6658869
+      preflight-ref: 709e5c312f5f9d86b3bbdd577ad3b0a6db0c8f44
       full: ${{ github.event_name != 'workflow_dispatch' || inputs.full }}
       attest: ${{ github.event_name == 'push' }}
+      # Generated from ci/workflow.json with zig build plan -- --full true.
+      full-matrix: >-
+        {"include":[{"os":"ubuntu-latest","name":"test (ubuntu-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"25f449f3154b7d3d","artifact":""},{"os":"ubuntu-latest","name":"test (ubuntu-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"cc6c1cc24da7f214","artifact":""},{"os":"ubuntu-latest","name":"test (ubuntu-latest, ReleaseFast)","step":"ci","args":"-Doptimize=ReleaseFast -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"7c21bf8ca8c8a4cd","artifact":""},{"os":"macos-latest","name":"test (macos-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"301095300dc4aa8e","artifact":""},{"os":"macos-latest","name":"test (macos-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"768b6e45387c7a43","artifact":""},{"os":"windows-latest","name":"test (windows-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"a98a02c7e73a200d","artifact":""},{"os":"windows-latest","name":"test (windows-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"b36a8ccc2ca2a9c0","artifact":""},{"os":"ubuntu-latest","name":"source checks and documented snippets","step":"lint","args":"","cases":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"10bdf2590c7a0117","artifact":""},{"os":"ubuntu-latest","name":"compile (ReleaseSmall)","step":"check","args":"-Doptimize=ReleaseSmall","cases":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"2d9a4fde819ce492","artifact":""},{"os":"ubuntu-latest","name":"cross (all configured targets)","step":"preflight-cross","args":"","cases":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"0abaad5bfb3ff7f9","artifact":""},{"os":"ubuntu-latest","name":"ThreadSanitizer (Linux)","step":"unit","args":"-Dthread-sanitizer -Doptimize=Debug","cases":"","timeout":"--test-timeout 120s","setup":true,"job_timeout":20,"cache_key":"0767d29636bd4295","artifact":""}]}
   fork:
     if: github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.full)
     runs-on: ${{ matrix.os }}
@@ -38,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: 25a0b56ab1802b3479105a5b477b8fb3b6658869
+          ref: 709e5c312f5f9d86b3bbdd577ad3b0a6db0c8f44
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci -Dci-lint=false -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
@@ -59,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: 25a0b56ab1802b3479105a5b477b8fb3b6658869
+          ref: 709e5c312f5f9d86b3bbdd577ad3b0a6db0c8f44
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci-linux -- --musl --no-lint --optimize ${{ matrix.optimize }} --cgroup ${{ matrix.cgroup }}
