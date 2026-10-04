@@ -20,6 +20,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const test_options = @import("conduit_test_options");
 const State = @import("state.zig");
 const posix = std.posix;
 const c = std.c;
@@ -79,13 +80,10 @@ const script = if (is_windows) struct {
     ///
     /// `DECSCUSR` is the one a console host that models what passes through it
     /// does not model, so it survives only where passthrough was granted.
-    /// `[char]27` is the escape: `cmd.exe` has no way to spell one.
+    /// The native fixture writes the bytes directly, without shell startup.
     const cursor_shape = [_][]const u8{
-        "powershell.exe",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "[Console]::Out.Write([char]27 + '[5 q'); Start-Sleep -Seconds 30",
+        test_options.tty_fixture,
+        "cursor",
     };
     const report_environment = [_][]const u8{ "cmd.exe", "/c", "echo %CONDUIT_TEST_VALUE% %CD%" };
     const working_directory = "C:\\Windows";
