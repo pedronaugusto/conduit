@@ -20,9 +20,9 @@ permissions:
   actions: read
 jobs:
   gate:
-    uses: pedronaugusto/preflight/.github/workflows/zig.yml@9cdff538384c14e7f268cbb4942c5075caf0ed42
+    uses: pedronaugusto/preflight/.github/workflows/zig.yml@8422cd19dbdb335d2b030138c4167f6166cd397a
     with:
-      preflight-ref: 9cdff538384c14e7f268cbb4942c5075caf0ed42
+      preflight-ref: 8422cd19dbdb335d2b030138c4167f6166cd397a
       full: ${{ github.event_name != 'workflow_dispatch' || inputs.full }}
       attest: ${{ github.event_name == 'push' }}
   fork:
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: 9cdff538384c14e7f268cbb4942c5075caf0ed42
+          ref: 8422cd19dbdb335d2b030138c4167f6166cd397a
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci -Dci-lint=false -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: 9cdff538384c14e7f268cbb4942c5075caf0ed42
+          ref: 8422cd19dbdb335d2b030138c4167f6166cd397a
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci-linux -- --musl --no-lint --optimize ${{ matrix.optimize }} --cgroup ${{ matrix.cgroup }}

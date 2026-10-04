@@ -3,7 +3,8 @@
     "src"
   ],
   "test_roots": [
-    "src/test_root.zig"
+    "src/test_root.zig",
+    "src/console.zig"
   ],
   "test_support": [
     "src/testing/*",

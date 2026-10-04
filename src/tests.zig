@@ -101,5 +101,5 @@ test {
     _ = @import("InputWriter/input_writer_impl.zig");
     _ = @import("Orphans.zig");
     _ = @import("Proxy.zig");
-    if (is_windows) _ = @import("console.zig");
+    _ = tty.console;
 }
