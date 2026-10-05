@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const Pty = @import("../pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
 const Child = @import("../child.zig").Child;
-const State = @import("state.zig");
+const State = @import("State.zig");
 const win32 = @import("../win32.zig");
 const access = @import("../child.zig").test_access;
 const Reaper = @import("../reaper.zig").Reaper;

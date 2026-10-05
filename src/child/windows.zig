@@ -10,7 +10,7 @@ const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
 const Child = @import("contract.zig");
-const State = @import("state.zig");
+const State = @import("State.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("../trace.zig");

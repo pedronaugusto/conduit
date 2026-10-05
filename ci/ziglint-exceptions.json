@@ -57,13 +57,6 @@
   },
   {
     "rule": "Z030",
-    "path": "src/lineage.zig",
-    "source": "pub fn deinit(tracker: *Darwin) void {",
-    "detail": "deinit should set tracker.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
     "path": "src/reaper.zig",
     "source": "pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {",
     "detail": "deinit should set reaper.* = undefined (has early return before invalidation)",
@@ -109,13 +102,6 @@
     "path": "src/child/posix.zig",
     "source": "const DFL: Handler = .default;",
     "detail": "variable 'DFL' should be snake_case",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z009",
-    "path": "src/child/state.zig",
-    "source": "//! The child lifecycle, shared only by the process implementation and Reaper.",
-    "detail": "file 'state.zig' has top-level fields and should be PascalCase",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {

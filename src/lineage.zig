@@ -30,7 +30,7 @@ const NoTracker = struct {
     pub fn failedTracking(_: *const NoTracker) bool {
         return false;
     }
-    pub fn deinit(tracker: *NoTracker) void {
+    pub fn destroy(tracker: *NoTracker) void {
         tracker.* = undefined;
     }
 };
@@ -177,7 +177,9 @@ const Darwin = struct {
         }
     }
 
-    pub fn deinit(tracker: *Darwin) void {
+    /// Stops the task, closes the queue and frees the tracker: `tracker` is
+    /// gone when this returns.
+    pub fn destroy(tracker: *Darwin) void {
         _ = tracker.finish();
         if (tracker.thread) |thread| thread.join();
         _ = c.close(tracker.queue);

@@ -12,7 +12,7 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const Child = @import("contract.zig");
-const State = @import("state.zig");
+const State = @import("State.zig");
 const handles = @import("../handles.zig");
 const posix_spawn = @import("posix/spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
@@ -243,7 +243,7 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
             return err;
         };
     };
-    errdefer if (tracker) |owned| owned.deinit();
+    errdefer if (tracker) |owned| owned.destroy();
     const scope_record: ?Child.SupervisorRecord = if (supervised) .{
         .pid = pid,
         .start = (tree.startTime(pid) catch null) orelse {

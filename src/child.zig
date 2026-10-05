@@ -28,7 +28,7 @@
 //! What the two systems do *not* share is spelled out on `SpawnOptions.detach`
 //! and on `Signal`.
 
-const State = @import("child/state.zig");
+const State = @import("child/State.zig");
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -331,7 +331,7 @@ pub const Child = enum(usize) {
             child.closeJob();
         } else {
             if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| owner.close();
-            if (State.get(child).lineage) |tracker| tracker.deinit();
+            if (State.get(child).lineage) |tracker| tracker.destroy();
             State.get(child).forks.close();
             State.get(child).cgroup.release();
         }

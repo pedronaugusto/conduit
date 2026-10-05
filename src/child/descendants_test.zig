@@ -2,7 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Child = @import("../child.zig").Child;
-const State = @import("state.zig");
+const State = @import("State.zig");
 const windows = builtin.os.tag == .windows;
 const win32 = @import("../win32.zig");
 const tree = @import("../tree.zig");

@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("child/state.zig");
+const State = @import("child/State.zig");
 const access = @import("tree.zig").test_access;
 const Deadline = access.Deadline;
 const wait_for = access.wait_for;

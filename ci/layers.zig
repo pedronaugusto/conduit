@@ -48,7 +48,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/supervisor.zig",
     } },
     .{ .name = "lifecycle storage", .patterns = &.{
-        "src/child/state.zig",
+        "src/child/State.zig",
     } },
     .{ .name = "spawn and input policy", .patterns = &.{
         "src/child/posix.zig",
@@ -137,7 +137,7 @@ pub const required = [_][]const u8{
     "src/lineage.zig",
     "src/child/posix/spawn.zig",
     "src/supervisor.zig",
-    "src/child/state.zig",
+    "src/child/State.zig",
     "src/child/posix.zig",
     "src/child/windows.zig",
     "src/input_writer.zig",

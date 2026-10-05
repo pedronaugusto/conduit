@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const handles = @import("handles.zig");
-const ChildState = @import("child/state.zig");
+const ChildState = @import("child/State.zig");
 
 pub fn Writer(comptime Child: type) type {
     return struct {

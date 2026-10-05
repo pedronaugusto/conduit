@@ -21,7 +21,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const test_options = @import("conduit_test_options");
-const State = @import("state.zig");
+const State = @import("State.zig");
 const posix = std.posix;
 const c = std.c;
 
