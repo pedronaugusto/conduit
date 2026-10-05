@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `console` spells Windows' names in Zig's casing: the mode flags and `CreateFileW` arguments are `enable_line_input`, `generic_read` and the like, `SMALL_RECT` and `CONSOLE_SCREEN_BUFFER_INFO` are `SmallRect` and `ConsoleScreenBufferInfo`, and the `DWORD`, `HANDLE`, `BOOL`, `SHORT`, `WORD` and `COORD` re-exports are gone in favour of `std.os.windows`.
+
 - `setWinSize`, `ttyName`, `foregroundGroup`, `Pty.slaveFile`, `Child.Signal.toPosix`, `Child.waitTree`, `startTime`, `captureStarted` and `endRecorded` are functions rather than constants chosen per system. On a system without them, calling one is the compile error that says why; naming one without calling it no longer is.
 
 - `CONDUIT_TRACE` lines go through `std.log` at the info level under the `conduit` scope, and the `GetLastError` number behind an `error.Unexpected` on Windows at the warning level, so the program's log function and level decide where they go, instead of standard error.

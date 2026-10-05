@@ -597,8 +597,8 @@ pub const Child = enum(usize) {
                 // A blocking wait on a handle is not a cancelation point, so it is
                 // spent in slices and cancelation is asked about between them.
                 switch (win32.WaitForSingleObject(State.get(child).id, @min(left, windows_slice_ms))) {
-                    win32.WAIT_TIMEOUT => {},
-                    win32.WAIT_OBJECT_0 => return child.reapEnded(io, deadline),
+                    win32.wait_timeout => {},
+                    win32.wait_object_0 => return child.reapEnded(io, deadline),
                     // Ended, or a handle that cannot be waited on: either way the
                     // reap below is what says so.
                     else => break,
@@ -1224,7 +1224,7 @@ pub const Child = enum(usize) {
 
         while (true) {
             const left = deadline.remainingMs(io);
-            var message: win32.DWORD = undefined;
+            var message: windows.DWORD = undefined;
             var key: windows.ULONG_PTR = undefined;
             var overlapped: ?*anyopaque = undefined;
             if (win32.GetQueuedCompletionStatus(
@@ -1237,7 +1237,7 @@ pub const Child = enum(usize) {
                 // A job reports more than the one thing: a process started, a
                 // process exited, a limit was reached. Only one of them is the
                 // answer, and the rest are taken off the port and dropped.
-                if (key == @intFromPtr(job) and message == win32.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) { // safe: the completion key against the job handle's value, nothing dereferenced
+                if (key == @intFromPtr(job) and message == win32.job_object_msg_active_process_zero) { // safe: the completion key against the job handle's value, nothing dereferenced
                     State.get(child).tree_ended = true;
                     return true;
                 }
@@ -1930,11 +1930,11 @@ pub const Child = enum(usize) {
 
     fn tryWaitWindows(child: *Child) TryWaitError!?Term {
         switch (win32.WaitForSingleObject(State.get(child).id, 0)) {
-            win32.WAIT_OBJECT_0 => {},
-            win32.WAIT_TIMEOUT => return null,
+            win32.wait_object_0 => {},
+            win32.wait_timeout => return null,
             else => return win32.unexpected(windows.GetLastError()),
         }
-        var code: win32.DWORD = undefined;
+        var code: windows.DWORD = undefined;
         const term: Term = if (win32.GetExitCodeProcess(State.get(child).id, &code) != .FALSE)
             .{ .exited = code }
         else
@@ -1959,8 +1959,8 @@ pub const Child = enum(usize) {
         }
         pub fn empty(child: *Child) Child.TryWaitError!bool {
             const job = State.get(child).job orelse return error.Unexpected;
-            var counts: win32.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = undefined;
-            if (win32.QueryInformationJobObject(job, win32.JobObjectBasicAccountingInformation, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
+            var counts: win32.JobObjectBasicAccountingInformation = undefined;
+            if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
             return counts.ActiveProcesses == 0;
         }
@@ -1969,7 +1969,7 @@ pub const Child = enum(usize) {
             const job = State.get(child).job orelse return error.Unexpected;
             const port = State.get(child).job_port orelse return error.Unexpected;
             while (true) {
-                var message: win32.DWORD = undefined;
+                var message: windows.DWORD = undefined;
                 var key: windows.ULONG_PTR = undefined;
                 var overlapped: ?*anyopaque = undefined;
                 if (win32.GetQueuedCompletionStatus(port, &message, &key, &overlapped, 0) == .FALSE)
@@ -1977,7 +1977,7 @@ pub const Child = enum(usize) {
                         .WAIT_TIMEOUT => false,
                         else => |err| win32.unexpected(err),
                     };
-                if (key == @intFromPtr(job) and message == win32.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) { // safe: the completion key is compared with the job handle, never dereferenced.
+                if (key == @intFromPtr(job) and message == win32.job_object_msg_active_process_zero) { // safe: the completion key is compared with the job handle, never dereferenced.
                     State.get(child).tree_ended = true;
                     return true;
                 }
@@ -1989,18 +1989,18 @@ pub const Child = enum(usize) {
     /// chose. Failure leaves the process handles and status available to retry.
     fn releaseJobSurvivors(child: *Child) TryWaitError!void {
         const job = State.get(child).job orelse return;
-        var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = undefined;
-        if (win32.QueryInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits)), null) == .FALSE)
+        var limits: win32.JobObjectExtendedLimitInformation = undefined;
+        if (win32.QueryInformationJobObject(job, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits)), null) == .FALSE)
             return win32.unexpected(windows.GetLastError());
-        limits.BasicLimitInformation.LimitFlags &= ~win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if (win32.SetInformationJobObject(job, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits))) == .FALSE)
+        limits.BasicLimitInformation.LimitFlags &= ~win32.job_object_limit_kill_on_job_close;
+        if (win32.SetInformationJobObject(job, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits))) == .FALSE)
             return win32.unexpected(windows.GetLastError());
     }
 
     fn killWindows(child: *Child, signal: Signal) KillError!void {
-        const event: win32.DWORD = switch (signal) {
-            .interrupt => win32.CTRL_C_EVENT,
-            .terminate => win32.CTRL_BREAK_EVENT,
+        const event: windows.DWORD = switch (signal) {
+            .interrupt => win32.ctrl_c_event,
+            .terminate => win32.ctrl_break_event,
             .kill => return child.terminateWindows(),
             // `Signal` names each of these and why Windows has nothing for it.
             else => return error.Unsupported,
@@ -2036,7 +2036,7 @@ pub const Child = enum(usize) {
             .ACCESS_DENIED => {
                 // Usually this means the process has already exited. Observe it
                 // without reaping while signal delivery owns the identity.
-                if (win32.WaitForSingleObject(State.get(child).id, 0) == win32.WAIT_OBJECT_0) return;
+                if (win32.WaitForSingleObject(State.get(child).id, 0) == win32.wait_object_0) return;
                 return error.PermissionDenied;
             },
             .INVALID_HANDLE => {},

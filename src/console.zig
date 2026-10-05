@@ -5,17 +5,15 @@
 //! and nothing here is reached off Windows. They live with the primitives,
 //! in the module that may be imported without the rest of conduit, and
 //! conduit's own Windows code takes them from here.
+//!
+//! Windows' names, in Zig's casing: `ENABLE_LINE_INPUT` is
+//! `enable_line_input` and `CONSOLE_SCREEN_BUFFER_INFO` is
+//! `ConsoleScreenBufferInfo`. Functions keep their symbol names, and the
+//! types `std.os.windows` declares are taken from there.
 
 const std = @import("std");
 const windows = std.os.windows;
 const log = std.log.scoped(.conduit);
-
-pub const DWORD = windows.DWORD;
-pub const HANDLE = windows.HANDLE;
-pub const BOOL = windows.BOOL;
-pub const SHORT = windows.SHORT;
-pub const WORD = windows.WORD;
-pub const COORD = windows.COORD;
 
 /// `GetLastError` as `error.Unexpected`, keeping the number.
 ///
@@ -34,79 +32,79 @@ pub fn unexpected(err: windows.Win32Error) std.Io.UnexpectedError {
     return error.Unexpected;
 }
 
-pub const ENABLE_PROCESSED_INPUT: DWORD = 0x0001;
-pub const ENABLE_LINE_INPUT: DWORD = 0x0002;
-pub const ENABLE_ECHO_INPUT: DWORD = 0x0004;
-pub const ENABLE_WINDOW_INPUT: DWORD = 0x0008;
-pub const ENABLE_MOUSE_INPUT: DWORD = 0x0010;
-pub const ENABLE_INSERT_MODE: DWORD = 0x0020;
-pub const ENABLE_QUICK_EDIT_MODE: DWORD = 0x0040;
-pub const ENABLE_EXTENDED_FLAGS: DWORD = 0x0080;
-pub const ENABLE_VIRTUAL_TERMINAL_INPUT: DWORD = 0x0200;
+pub const enable_processed_input: windows.DWORD = 0x0001;
+pub const enable_line_input: windows.DWORD = 0x0002;
+pub const enable_echo_input: windows.DWORD = 0x0004;
+pub const enable_window_input: windows.DWORD = 0x0008;
+pub const enable_mouse_input: windows.DWORD = 0x0010;
+pub const enable_insert_mode: windows.DWORD = 0x0020;
+pub const enable_quick_edit_mode: windows.DWORD = 0x0040;
+pub const enable_extended_flags: windows.DWORD = 0x0080;
+pub const enable_virtual_terminal_input: windows.DWORD = 0x0200;
 
-pub const ENABLE_PROCESSED_OUTPUT: DWORD = 0x0001;
-pub const ENABLE_WRAP_AT_EOL_OUTPUT: DWORD = 0x0002;
-pub const ENABLE_VIRTUAL_TERMINAL_PROCESSING: DWORD = 0x0004;
-pub const DISABLE_NEWLINE_AUTO_RETURN: DWORD = 0x0008;
+pub const enable_processed_output: windows.DWORD = 0x0001;
+pub const enable_wrap_at_eol_output: windows.DWORD = 0x0002;
+pub const enable_virtual_terminal_processing: windows.DWORD = 0x0004;
+pub const disable_newline_auto_return: windows.DWORD = 0x0008;
 
-pub const GENERIC_READ: DWORD = 0x80000000;
-pub const GENERIC_WRITE: DWORD = 0x40000000;
-pub const FILE_SHARE_READ: DWORD = 0x00000001;
-pub const FILE_SHARE_WRITE: DWORD = 0x00000002;
-pub const OPEN_EXISTING: DWORD = 3;
+pub const generic_read: windows.DWORD = 0x80000000;
+pub const generic_write: windows.DWORD = 0x40000000;
+pub const file_share_read: windows.DWORD = 0x00000001;
+pub const file_share_write: windows.DWORD = 0x00000002;
+pub const open_existing: windows.DWORD = 3;
 
 /// Opens a file or a device by name: here, `CONIN$` and `CONOUT$`, the
 /// console's input buffer and screen buffer, whatever the standard handles
 /// were redirected to.
 pub extern "kernel32" fn CreateFileW(
     lpFileName: windows.LPCWSTR,
-    dwDesiredAccess: DWORD,
-    dwShareMode: DWORD,
+    dwDesiredAccess: windows.DWORD,
+    dwShareMode: windows.DWORD,
     lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
-    dwCreationDisposition: DWORD,
-    dwFlagsAndAttributes: DWORD,
-    hTemplateFile: ?HANDLE,
-) callconv(.winapi) HANDLE;
+    dwCreationDisposition: windows.DWORD,
+    dwFlagsAndAttributes: windows.DWORD,
+    hTemplateFile: ?windows.HANDLE,
+) callconv(.winapi) windows.HANDLE;
 
 /// Writes to a handle with no `std.Io` in between, which is what a panic
 /// handler putting a console back has to hand.
 pub extern "kernel32" fn WriteFile(
-    hFile: HANDLE,
+    hFile: windows.HANDLE,
     lpBuffer: [*]const u8,
-    nNumberOfBytesToWrite: DWORD,
-    lpNumberOfBytesWritten: ?*DWORD,
+    nNumberOfBytesToWrite: windows.DWORD,
+    lpNumberOfBytesWritten: ?*windows.DWORD,
     lpOverlapped: ?*anyopaque,
-) callconv(.winapi) BOOL;
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn GetConsoleMode(
-    hConsoleHandle: HANDLE,
-    lpMode: *DWORD,
-) callconv(.winapi) BOOL;
+    hConsoleHandle: windows.HANDLE,
+    lpMode: *windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn SetConsoleMode(
-    hConsoleHandle: HANDLE,
-    dwMode: DWORD,
-) callconv(.winapi) BOOL;
+    hConsoleHandle: windows.HANDLE,
+    dwMode: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
-pub const SMALL_RECT = extern struct {
-    Left: SHORT,
-    Top: SHORT,
-    Right: SHORT,
-    Bottom: SHORT,
+pub const SmallRect = extern struct {
+    Left: windows.SHORT,
+    Top: windows.SHORT,
+    Right: windows.SHORT,
+    Bottom: windows.SHORT,
 };
 
-pub const CONSOLE_SCREEN_BUFFER_INFO = extern struct {
-    dwSize: COORD,
-    dwCursorPosition: COORD,
-    wAttributes: WORD,
-    srWindow: SMALL_RECT,
-    dwMaximumWindowSize: COORD,
+pub const ConsoleScreenBufferInfo = extern struct {
+    dwSize: windows.COORD,
+    dwCursorPosition: windows.COORD,
+    wAttributes: windows.WORD,
+    srWindow: SmallRect,
+    dwMaximumWindowSize: windows.COORD,
 };
 
 pub extern "kernel32" fn GetConsoleScreenBufferInfo(
-    hConsoleOutput: HANDLE,
-    lpConsoleScreenBufferInfo: *CONSOLE_SCREEN_BUFFER_INFO,
-) callconv(.winapi) BOOL;
+    hConsoleOutput: windows.HANDLE,
+    lpConsoleScreenBufferInfo: *ConsoleScreenBufferInfo,
+) callconv(.winapi) windows.BOOL;
 
 /// A key event from a Windows console input buffer. Other input record
 /// kinds are retained in `InputRecord.raw` so they can be discarded without
@@ -139,14 +137,14 @@ comptime {
     std.debug.assert(@offsetOf(InputRecord, "event") == 4);
 }
 
-extern "kernel32" fn WaitForSingleObject(handle: HANDLE, milliseconds: DWORD) callconv(.winapi) DWORD;
-extern "kernel32" fn PeekConsoleInputW(handle: HANDLE, buffer: [*]InputRecord, capacity: DWORD, read_count: *DWORD) callconv(.winapi) BOOL;
-extern "kernel32" fn ReadConsoleInputW(handle: HANDLE, buffer: [*]InputRecord, capacity: DWORD, read_count: *DWORD) callconv(.winapi) BOOL;
+extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
+extern "kernel32" fn PeekConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;
+extern "kernel32" fn ReadConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;
 
 pub const WaitResult = enum { ready, timed_out };
 
 /// Wait for any console input record to arrive, up to `milliseconds`.
-pub fn waitInput(handle: HANDLE, milliseconds: u32) std.Io.UnexpectedError!WaitResult {
+pub fn waitInput(handle: windows.HANDLE, milliseconds: u32) std.Io.UnexpectedError!WaitResult {
     return switch (WaitForSingleObject(handle, milliseconds)) {
         0 => .ready,
         0x102 => .timed_out,
@@ -156,19 +154,19 @@ pub fn waitInput(handle: HANDLE, milliseconds: u32) std.Io.UnexpectedError!WaitR
 
 /// Look at queued records without consuming them. A caller can ignore
 /// non-key records and then drain them with `readInput` before waiting again.
-pub fn peekInput(handle: HANDLE, buffer: []InputRecord) std.Io.UnexpectedError!usize {
+pub fn peekInput(handle: windows.HANDLE, buffer: []InputRecord) std.Io.UnexpectedError!usize {
     if (buffer.len == 0) return 0;
-    var count: DWORD = 0;
-    if (PeekConsoleInputW(handle, buffer.ptr, @intCast(@min(buffer.len, std.math.maxInt(DWORD))), &count) == .FALSE)
+    var count: windows.DWORD = 0;
+    if (PeekConsoleInputW(handle, buffer.ptr, @intCast(@min(buffer.len, std.math.maxInt(windows.DWORD))), &count) == .FALSE)
         return unexpected(windows.GetLastError());
     return count;
 }
 
 /// Consume up to `buffer.len` records from a console input buffer.
-pub fn readInput(handle: HANDLE, buffer: []InputRecord) std.Io.UnexpectedError!usize {
+pub fn readInput(handle: windows.HANDLE, buffer: []InputRecord) std.Io.UnexpectedError!usize {
     if (buffer.len == 0) return 0;
-    var count: DWORD = 0;
-    if (ReadConsoleInputW(handle, buffer.ptr, @intCast(@min(buffer.len, std.math.maxInt(DWORD))), &count) == .FALSE)
+    var count: windows.DWORD = 0;
+    if (ReadConsoleInputW(handle, buffer.ptr, @intCast(@min(buffer.len, std.math.maxInt(windows.DWORD))), &count) == .FALSE)
         return unexpected(windows.GetLastError());
     return count;
 }

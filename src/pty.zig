@@ -93,7 +93,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// POSIX: the slave file descriptor, which a child gets as its standard
     /// input, output and error. Windows: the pseudoconsole, which a child is
     /// attached to rather than handed.
-    pub const Slave = if (is_windows) win32.HPCON else posix.fd_t;
+    pub const Slave = if (is_windows) win32.Hpcon else posix.fd_t;
 
     /// The master end as two `std.Io.File`s.
     pub const Master = struct {
@@ -561,7 +561,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// repaint of a large window — and a console host blocked on a full pipe
     /// blocks `ResizePseudoConsole` and `ClosePseudoConsole` with it. This is
     /// enough for a repaint of a window far larger than anyone runs.
-    const pipe_bytes: win32.DWORD = 256 * 1024;
+    const pipe_bytes: windows.DWORD = 256 * 1024;
 
     fn openWindows(allocator: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
         const remembered = try allocator.create(Geometry);
@@ -574,20 +574,20 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // child is started is not handed to it. The console duplicates what it is
         // given, and a child reaches the console through the attribute list rather
         // than through an inherited handle.
-        var input_read: win32.HANDLE = undefined;
-        var input_write: win32.HANDLE = undefined;
+        var input_read: windows.HANDLE = undefined;
+        var input_write: windows.HANDLE = undefined;
         if (win32.CreatePipe(&input_read, &input_write, null, pipe_bytes) == .FALSE) return lastError();
         errdefer windows.CloseHandle(input_write);
         errdefer windows.CloseHandle(input_read);
 
-        var output_read: win32.HANDLE = undefined;
-        var output_write: win32.HANDLE = undefined;
+        var output_read: windows.HANDLE = undefined;
+        var output_write: windows.HANDLE = undefined;
         if (win32.CreatePipe(&output_read, &output_write, null, pipe_bytes) == .FALSE) return lastError();
         errdefer windows.CloseHandle(output_write);
         errdefer windows.CloseHandle(output_read);
 
         const geometry = options.size();
-        var console: win32.HPCON = undefined;
+        var console: win32.Hpcon = undefined;
         // Each of the three console options arrived in a different Windows, and a
         // version that does not know one refuses the whole call with
         // `E_INVALIDARG` rather than ignoring the flag. So the ask is narrowed
@@ -606,7 +606,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 win32.ok => break,
                 // `E_INVALIDARG`: one of the flags. Which one is not said, so they
                 // go one at a time, newest first.
-                @as(win32.HRESULT, @bitCast(@as(u32, 0x80070057))) => {
+                @as(win32.Hresult, @bitCast(@as(u32, 0x80070057))) => {
                     if (granted.passthrough) {
                         granted.passthrough = false;
                     } else if (granted.win32_input) {
@@ -619,7 +619,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 // `HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY)`. Every other
                 // failure here is a bug in this package's arguments rather than a
                 // condition a caller can do anything about.
-                @as(win32.HRESULT, @bitCast(@as(u32, 0x8007000E))) => return error.SystemResources,
+                @as(win32.Hresult, @bitCast(@as(u32, 0x8007000E))) => return error.SystemResources,
                 else => return error.Unexpected,
             }
         }
@@ -648,11 +648,11 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         });
     }
 
-    fn consoleFlags(options: ConsoleOptions) win32.DWORD {
-        var flags: win32.DWORD = 0;
-        if (options.resize_quirk) flags |= win32.PSEUDOCONSOLE_RESIZE_QUIRK;
-        if (options.win32_input) flags |= win32.PSEUDOCONSOLE_WIN32_INPUT_MODE;
-        if (options.passthrough) flags |= win32.PSEUDOCONSOLE_PASSTHROUGH_MODE;
+    fn consoleFlags(options: ConsoleOptions) windows.DWORD {
+        var flags: windows.DWORD = 0;
+        if (options.resize_quirk) flags |= win32.pseudoconsole_resize_quirk;
+        if (options.win32_input) flags |= win32.pseudoconsole_win32_input_mode;
+        if (options.passthrough) flags |= win32.pseudoconsole_passthrough_mode;
         return flags;
     }
 

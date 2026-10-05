@@ -37,7 +37,7 @@ pub fn processExists(pid: Id) ?bool {
 
 fn existsWindows(pid: Id) ?bool {
     const windows = std.os.windows;
-    const handle = win32.OpenProcess(win32.PROCESS_QUERY_LIMITED_INFORMATION, .FALSE, pid) orelse
+    const handle = win32.OpenProcess(win32.process_query_limited_information, .FALSE, pid) orelse
         return switch (windows.GetLastError()) {
             // There, and not to be opened by this process.
             .ACCESS_DENIED => true,

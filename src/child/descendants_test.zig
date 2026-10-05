@@ -19,12 +19,12 @@ extern "c" fn getpgid(pid: std.posix.pid_t) std.posix.pid_t;
 extern "c" fn getsid(pid: std.posix.pid_t) std.posix.pid_t;
 
 const Process = if (windows) struct {
-    handle: win32.HANDLE,
+    handle: std.os.windows.HANDLE,
     fn capture(id: Child.Id) !Process {
-        return .{ .handle = win32.OpenProcess(win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION | win32.PROCESS_TERMINATE, .FALSE, id) orelse return error.TestDaemonNotFound };
+        return .{ .handle = win32.OpenProcess(win32.synchronize | win32.process_query_limited_information | win32.process_terminate, .FALSE, id) orelse return error.TestDaemonNotFound };
     }
     fn alive(process: *const Process) bool {
-        return win32.WaitForSingleObject(process.handle, 0) == win32.WAIT_TIMEOUT;
+        return win32.WaitForSingleObject(process.handle, 0) == win32.wait_timeout;
     }
     fn end(process: *Process) void {
         _ = win32.TerminateProcess(process.handle, 1);
@@ -77,7 +77,7 @@ const Fixture = struct {
         errdefer daemon.end();
         try std.testing.expect(daemon.alive());
         if (windows) {
-            var member: win32.BOOL = .FALSE;
+            var member: std.os.windows.BOOL = .FALSE;
             try std.testing.expect(win32.IsProcessInJob(daemon.handle, State.get(&child).job.?, &member) != .FALSE);
             try std.testing.expect(member != .FALSE);
         }
@@ -128,11 +128,11 @@ test "normal reap and deinit leave a detached daemon alive by default" {
         } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .exited = if (comptime std.mem.eql(u8, method, "exit-7")) 7 else 0 }, term);
         if (windows) {
-            var limits: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = undefined;
-            try std.testing.expect(win32.QueryInformationJobObject(State.get(&fixture.child).job.?, win32.JobObjectExtendedLimitInformation, &limits, @sizeOf(@TypeOf(limits)), null) != .FALSE);
+            var limits: win32.JobObjectExtendedLimitInformation = undefined;
+            try std.testing.expect(win32.QueryInformationJobObject(State.get(&fixture.child).job.?, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits)), null) != .FALSE);
             try std.testing.expectEqual(@as(u32, 4), limits.BasicLimitInformation.ActiveProcessLimit);
-            try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.JOB_OBJECT_LIMIT_ACTIVE_PROCESS != 0);
-            try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE == 0);
+            try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_active_process != 0);
+            try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_kill_on_job_close == 0);
         }
         fixture.child.release(io) catch unreachable;
         try std.testing.expect(fixture.daemon.alive());

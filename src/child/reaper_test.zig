@@ -26,7 +26,7 @@ const Observer = struct {
         // ziglint-ignore: Z026 only a pause for the Reaper; the assertion is what it did meanwhile, read below
         _ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};
         probe.retired = State.get(child).reaped.load(.acquire) or if (is_windows) retired: {
-            var code: win32.DWORD = undefined;
+            var code: windows.DWORD = undefined;
             break :retired win32.GetExitCodeProcess(State.get(child).id, &code) == .FALSE;
         } else c.kill(State.get(child).id, @enumFromInt(0)) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
     }

@@ -11,6 +11,12 @@
 //! This file is compiled only on Windows targets. Nothing in it is public API;
 //! it is the seam between `Pty`, `Child` and `tty` and the operating system.
 //!
+//! Windows' names, in Zig's casing: `JOBOBJECT_BASIC_LIMIT_INFORMATION` is
+//! `JobObjectBasicLimitInformation`, `WAIT_TIMEOUT` is `wait_timeout`, and the
+//! information class `JobObjectBasicAccountingInformation` is
+//! `job_object_basic_accounting_information`. Functions keep their symbol
+//! names, and the types `std.os.windows` declares are taken from there.
+//!
 //! # Minimum version
 //!
 //! `CreatePseudoConsole`, `ResizePseudoConsole` and `ClosePseudoConsole`
@@ -23,26 +29,14 @@ const std = @import("std");
 const windows = std.os.windows;
 const console = @import("conduit.tty").console;
 
-pub const BOOL = windows.BOOL;
-pub const DWORD = windows.DWORD;
-pub const HANDLE = windows.HANDLE;
-pub const HRESULT = windows.LONG;
-pub const LPCWSTR = windows.LPCWSTR;
-pub const LPWSTR = windows.LPWSTR;
-pub const SHORT = windows.SHORT;
-pub const SIZE_T = windows.SIZE_T;
-pub const UINT = windows.UINT;
-pub const WORD = windows.WORD;
-pub const COORD = windows.COORD;
-pub const SECURITY_ATTRIBUTES = windows.SECURITY_ATTRIBUTES;
-pub const STARTUPINFOW = windows.STARTUPINFOW;
+pub const Hresult = windows.LONG;
 
 /// `GetLastError` as `error.Unexpected`, keeping the number. Declared with
 /// the console calls in the terminal module, which needs it too.
 pub const unexpected = console.unexpected;
 
 /// `S_OK`. Every `HRESULT` this package reads is either this or a failure.
-pub const ok: HRESULT = 0;
+pub const ok: Hresult = 0;
 
 //======================================================================
 // Pseudoconsoles.
@@ -51,7 +45,7 @@ pub const ok: HRESULT = 0;
 /// A pseudoconsole. The Windows counterpart of the slave end of a
 /// pseudo-terminal pair: the object a child process is attached to, not a
 /// stream anything reads or writes.
-pub const HPCON = *anyopaque;
+pub const Hpcon = *anyopaque;
 
 /// Creates a pseudoconsole of `size` reading its input from `hInput` and
 /// writing its output to `hOutput`.
@@ -62,37 +56,37 @@ pub const HPCON = *anyopaque;
 /// `hOutput`. The console duplicates both, so the caller closes its copies as
 /// soon as this returns.
 pub extern "kernel32" fn CreatePseudoConsole(
-    size: COORD,
-    hInput: HANDLE,
-    hOutput: HANDLE,
-    dwFlags: DWORD,
-    phPC: *HPCON,
-) callconv(.winapi) HRESULT;
+    size: windows.COORD,
+    hInput: windows.HANDLE,
+    hOutput: windows.HANDLE,
+    dwFlags: windows.DWORD,
+    phPC: *Hpcon,
+) callconv(.winapi) Hresult;
 
 /// `PSEUDOCONSOLE_RESIZE_QUIRK`: a resize does not reflow what the client has
 /// already written.
-pub const PSEUDOCONSOLE_RESIZE_QUIRK: DWORD = 0x00000002;
+pub const pseudoconsole_resize_quirk: windows.DWORD = 0x00000002;
 /// `PSEUDOCONSOLE_WIN32_INPUT_MODE`: what is written to the console's input is
 /// read as Windows input records rather than as a character stream.
-pub const PSEUDOCONSOLE_WIN32_INPUT_MODE: DWORD = 0x00000004;
+pub const pseudoconsole_win32_input_mode: windows.DWORD = 0x00000004;
 /// `PSEUDOCONSOLE_PASSTHROUGH_MODE`: the client's output reaches the reader as
 /// the client wrote it. Windows 11 22H2 and newer; older systems refuse the
 /// whole call with `E_INVALIDARG`.
-pub const PSEUDOCONSOLE_PASSTHROUGH_MODE: DWORD = 0x00000008;
+pub const pseudoconsole_passthrough_mode: windows.DWORD = 0x00000008;
 
 /// Changes a pseudoconsole's geometry. The attached client is told the way a
 /// program on a POSIX terminal is told by `SIGWINCH`: through the console API
 /// it already polls.
 pub extern "kernel32" fn ResizePseudoConsole(
-    hPC: HPCON,
-    size: COORD,
-) callconv(.winapi) HRESULT;
+    hPC: Hpcon,
+    size: windows.COORD,
+) callconv(.winapi) Hresult;
 
 /// Shuts a pseudoconsole down and releases it.
 ///
 /// This ends the attached client: there is no Windows counterpart of closing
 /// only the parent's copy of a slave descriptor while the child keeps its own.
-pub extern "kernel32" fn ClosePseudoConsole(hPC: HPCON) callconv(.winapi) void;
+pub extern "kernel32" fn ClosePseudoConsole(hPC: Hpcon) callconv(.winapi) void;
 
 //======================================================================
 // Job objects.
@@ -103,97 +97,97 @@ pub extern "kernel32" fn ClosePseudoConsole(hPC: HPCON) callconv(.winapi) void;
 /// job can be ended or accounted for as a unit. It is the Windows answer to
 /// the question a POSIX process group answers.
 pub extern "kernel32" fn CreateJobObjectW(
-    lpJobAttributes: ?*SECURITY_ATTRIBUTES,
-    lpName: ?LPCWSTR,
-) callconv(.winapi) ?HANDLE;
+    lpJobAttributes: ?*windows.SECURITY_ATTRIBUTES,
+    lpName: ?windows.LPCWSTR,
+) callconv(.winapi) ?windows.HANDLE;
 
 pub extern "kernel32" fn AssignProcessToJobObject(
-    hJob: HANDLE,
-    hProcess: HANDLE,
-) callconv(.winapi) BOOL;
+    hJob: windows.HANDLE,
+    hProcess: windows.HANDLE,
+) callconv(.winapi) windows.BOOL;
 
 /// Whether a held process belongs to this specific job. The test fixtures
 /// prove this before asking job termination to reach the grandchild.
 pub extern "kernel32" fn IsProcessInJob(
-    ProcessHandle: HANDLE,
-    JobHandle: HANDLE,
-    Result: *BOOL,
-) callconv(.winapi) BOOL;
+    ProcessHandle: windows.HANDLE,
+    JobHandle: windows.HANDLE,
+    Result: *windows.BOOL,
+) callconv(.winapi) windows.BOOL;
 
 /// Ends every process in the job, each with `uExitCode`.
 pub extern "kernel32" fn TerminateJobObject(
-    hJob: HANDLE,
-    uExitCode: UINT,
-) callconv(.winapi) BOOL;
+    hJob: windows.HANDLE,
+    uExitCode: windows.UINT,
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn QueryInformationJobObject(
-    hJob: HANDLE,
+    hJob: windows.HANDLE,
     JobObjectInformationClass: c_int,
     lpJobObjectInformation: *anyopaque,
-    cbJobObjectInformationLength: DWORD,
-    lpReturnLength: ?*DWORD,
-) callconv(.winapi) BOOL;
+    cbJobObjectInformationLength: windows.DWORD,
+    lpReturnLength: ?*windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn SetInformationJobObject(
-    hJob: HANDLE,
+    hJob: windows.HANDLE,
     JobObjectInformationClass: c_int,
     lpJobObjectInformation: *anyopaque,
-    cbJobObjectInformationLength: DWORD,
-) callconv(.winapi) BOOL;
+    cbJobObjectInformationLength: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
 /// `JobObjectBasicAccountingInformation` in `JOBOBJECTINFOCLASS`.
-pub const JobObjectBasicAccountingInformation: c_int = 1;
+pub const job_object_basic_accounting_information: c_int = 1;
 
-pub const JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = extern struct {
+pub const JobObjectBasicAccountingInformation = extern struct {
     TotalUserTime: windows.LARGE_INTEGER,
     TotalKernelTime: windows.LARGE_INTEGER,
     ThisPeriodTotalUserTime: windows.LARGE_INTEGER,
     ThisPeriodTotalKernelTime: windows.LARGE_INTEGER,
-    TotalPageFaultCount: DWORD,
-    TotalProcesses: DWORD,
-    ActiveProcesses: DWORD,
-    TotalTerminatedProcesses: DWORD,
+    TotalPageFaultCount: windows.DWORD,
+    TotalProcesses: windows.DWORD,
+    ActiveProcesses: windows.DWORD,
+    TotalTerminatedProcesses: windows.DWORD,
 };
 
 /// `JobObjectExtendedLimitInformation` in `JOBOBJECTINFOCLASS`.
-pub const JobObjectExtendedLimitInformation: c_int = 9;
+pub const job_object_extended_limit_information: c_int = 9;
 
 /// Every process still in the job is ended when the last handle to the job is
 /// closed.
-pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x00002000;
+pub const job_object_limit_kill_on_job_close: windows.DWORD = 0x00002000;
 /// `ActiveProcessLimit` is in force: a process that would be one too many does
 /// not start.
-pub const JOB_OBJECT_LIMIT_ACTIVE_PROCESS: DWORD = 0x00000008;
+pub const job_object_limit_active_process: windows.DWORD = 0x00000008;
 /// `ProcessMemoryLimit` is in force, per process in the job.
-pub const JOB_OBJECT_LIMIT_PROCESS_MEMORY: DWORD = 0x00000100;
+pub const job_object_limit_process_memory: windows.DWORD = 0x00000100;
 /// `JobMemoryLimit` is in force, across the job.
-pub const JOB_OBJECT_LIMIT_JOB_MEMORY: DWORD = 0x00000200;
+pub const job_object_limit_job_memory: windows.DWORD = 0x00000200;
 
 /// `JobObjectAssociateCompletionPortInformation` in `JOBOBJECTINFOCLASS`.
-pub const JobObjectAssociateCompletionPortInformation: c_int = 7;
+pub const job_object_associate_completion_port_information: c_int = 7;
 
 /// Where a job sends what happens inside it. `CompletionKey` comes back on
 /// every message as the key, so one port can carry several jobs; this package
 /// gives each job a port of its own and uses the job handle as the key.
-pub const JOBOBJECT_ASSOCIATE_COMPLETION_PORT = extern struct {
+pub const JobObjectAssociateCompletionPort = extern struct {
     CompletionKey: ?*anyopaque,
-    CompletionPort: ?HANDLE,
+    CompletionPort: ?windows.HANDLE,
 };
 
 /// `JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO`: the job has no processes left in it.
 /// Posted on the transition, so a job that is empty when a port is associated
 /// with it does not produce one.
-pub const JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO: DWORD = 4;
+pub const job_object_msg_active_process_zero: windows.DWORD = 4;
 
 /// Makes an I/O completion port that is not attached to a file: the first
 /// argument is `INVALID_HANDLE_VALUE` and there is no existing port. That is
 /// the form a job object's messages want, and the only form this package uses.
 pub extern "kernel32" fn CreateIoCompletionPort(
-    FileHandle: HANDLE,
-    ExistingCompletionPort: ?HANDLE,
+    FileHandle: windows.HANDLE,
+    ExistingCompletionPort: ?windows.HANDLE,
     CompletionKey: windows.ULONG_PTR,
-    NumberOfConcurrentThreads: DWORD,
-) callconv(.winapi) ?HANDLE;
+    NumberOfConcurrentThreads: windows.DWORD,
+) callconv(.winapi) ?windows.HANDLE;
 
 /// Takes the next message off a completion port, waiting up to
 /// `dwMilliseconds` for one.
@@ -203,39 +197,39 @@ pub extern "kernel32" fn CreateIoCompletionPort(
 /// the key is the one the job was associated with, and the overlapped pointer
 /// carries a process id as a value rather than an address.
 pub extern "kernel32" fn GetQueuedCompletionStatus(
-    CompletionPort: HANDLE,
-    lpNumberOfBytesTransferred: *DWORD,
+    CompletionPort: windows.HANDLE,
+    lpNumberOfBytesTransferred: *windows.DWORD,
     lpCompletionKey: *windows.ULONG_PTR,
     lpOverlapped: *?*anyopaque,
-    dwMilliseconds: DWORD,
-) callconv(.winapi) BOOL;
+    dwMilliseconds: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
 /// `JobObjectCpuRateControlInformation` in `JOBOBJECTINFOCLASS`.
-pub const JobObjectCpuRateControlInformation: c_int = 15;
+pub const job_object_cpu_rate_control_information: c_int = 15;
 
-pub const JOB_OBJECT_CPU_RATE_CONTROL_ENABLE: DWORD = 0x00000001;
-pub const JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP: DWORD = 0x00000004;
+pub const job_object_cpu_rate_control_enable: windows.DWORD = 0x00000001;
+pub const job_object_cpu_rate_control_hard_cap: windows.DWORD = 0x00000004;
 
 /// The rate is in hundredths of a percent of one processor: 10_000 is a whole
 /// one.
-pub const JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = extern struct {
-    ControlFlags: DWORD,
-    Value: DWORD,
+pub const JobObjectCpuRateControlInformation = extern struct {
+    ControlFlags: windows.DWORD,
+    Value: windows.DWORD,
 };
 
-pub const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
+pub const JobObjectBasicLimitInformation = extern struct {
     PerProcessUserTimeLimit: windows.LARGE_INTEGER,
     PerJobUserTimeLimit: windows.LARGE_INTEGER,
-    LimitFlags: DWORD,
-    MinimumWorkingSetSize: SIZE_T,
-    MaximumWorkingSetSize: SIZE_T,
-    ActiveProcessLimit: DWORD,
+    LimitFlags: windows.DWORD,
+    MinimumWorkingSetSize: windows.SIZE_T,
+    MaximumWorkingSetSize: windows.SIZE_T,
+    ActiveProcessLimit: windows.DWORD,
     Affinity: windows.ULONG_PTR,
-    PriorityClass: DWORD,
-    SchedulingClass: DWORD,
+    PriorityClass: windows.DWORD,
+    SchedulingClass: windows.DWORD,
 };
 
-pub const IO_COUNTERS = extern struct {
+pub const IoCounters = extern struct {
     ReadOperationCount: u64,
     WriteOperationCount: u64,
     OtherOperationCount: u64,
@@ -244,39 +238,39 @@ pub const IO_COUNTERS = extern struct {
     OtherTransferCount: u64,
 };
 
-pub const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
-    BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
-    IoInfo: IO_COUNTERS,
-    ProcessMemoryLimit: SIZE_T,
-    JobMemoryLimit: SIZE_T,
-    PeakProcessMemoryUsed: SIZE_T,
-    PeakJobMemoryUsed: SIZE_T,
+pub const JobObjectExtendedLimitInformation = extern struct {
+    BasicLimitInformation: JobObjectBasicLimitInformation,
+    IoInfo: IoCounters,
+    ProcessMemoryLimit: windows.SIZE_T,
+    JobMemoryLimit: windows.SIZE_T,
+    PeakProcessMemoryUsed: windows.SIZE_T,
+    PeakJobMemoryUsed: windows.SIZE_T,
 };
 
 /// Lets a thread `CreateProcessW` started suspended begin running. Returns the
 /// previous suspend count, or `maxInt(DWORD)` on failure.
-pub extern "kernel32" fn ResumeThread(hThread: HANDLE) callconv(.winapi) DWORD;
+pub extern "kernel32" fn ResumeThread(hThread: windows.HANDLE) callconv(.winapi) windows.DWORD;
 
 //======================================================================
 // Handles and pipes.
 //======================================================================
 
 pub extern "kernel32" fn CreatePipe(
-    hReadPipe: *HANDLE,
-    hWritePipe: *HANDLE,
-    lpPipeAttributes: ?*SECURITY_ATTRIBUTES,
-    nSize: DWORD,
-) callconv(.winapi) BOOL;
+    hReadPipe: *windows.HANDLE,
+    hWritePipe: *windows.HANDLE,
+    lpPipeAttributes: ?*windows.SECURITY_ATTRIBUTES,
+    nSize: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
-pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;
+pub const handle_flag_inherit: windows.DWORD = 0x00000001;
 
 /// What `GetFileAttributesW` returns when it could not look at the path.
-pub const INVALID_FILE_ATTRIBUTES: DWORD = 0xFFFFFFFF;
-pub const FILE_ATTRIBUTE_DIRECTORY: DWORD = 0x00000010;
+pub const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
+pub const file_attribute_directory: windows.DWORD = 0x00000010;
 
 pub extern "kernel32" fn GetFileAttributesW(
     lpFileName: [*:0]const u16,
-) callconv(.winapi) DWORD;
+) callconv(.winapi) windows.DWORD;
 
 /// Looks one variable up in this process's environment.
 ///
@@ -287,39 +281,39 @@ pub extern "kernel32" fn GetFileAttributesW(
 pub extern "kernel32" fn GetEnvironmentVariableW(
     lpName: [*:0]const u16,
     lpBuffer: ?[*]u16,
-    nSize: DWORD,
-) callconv(.winapi) DWORD;
+    nSize: windows.DWORD,
+) callconv(.winapi) windows.DWORD;
 
 pub extern "kernel32" fn SetHandleInformation(
-    hObject: HANDLE,
-    dwMask: DWORD,
-    dwFlags: DWORD,
-) callconv(.winapi) BOOL;
+    hObject: windows.HANDLE,
+    dwMask: windows.DWORD,
+    dwFlags: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
 /// What `SetHandleInformation` would be changing. Read before a spawn marks a
 /// caller's handle inheritable, so that the flag can be put back after.
 pub extern "kernel32" fn GetHandleInformation(
-    hObject: HANDLE,
-    lpdwFlags: *DWORD,
-) callconv(.winapi) BOOL;
+    hObject: windows.HANDLE,
+    lpdwFlags: *windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
-pub const DUPLICATE_SAME_ACCESS: DWORD = 0x00000002;
+pub const duplicate_same_access: windows.DWORD = 0x00000002;
 
 pub extern "kernel32" fn DuplicateHandle(
-    hSourceProcessHandle: HANDLE,
-    hSourceHandle: HANDLE,
-    hTargetProcessHandle: HANDLE,
-    lpTargetHandle: *HANDLE,
-    dwDesiredAccess: DWORD,
-    bInheritHandle: BOOL,
-    dwOptions: DWORD,
-) callconv(.winapi) BOOL;
+    hSourceProcessHandle: windows.HANDLE,
+    hSourceHandle: windows.HANDLE,
+    hTargetProcessHandle: windows.HANDLE,
+    lpTargetHandle: *windows.HANDLE,
+    dwDesiredAccess: windows.DWORD,
+    bInheritHandle: windows.BOOL,
+    dwOptions: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
-pub const GENERIC_READ = console.GENERIC_READ;
-pub const GENERIC_WRITE = console.GENERIC_WRITE;
-pub const FILE_SHARE_READ = console.FILE_SHARE_READ;
-pub const FILE_SHARE_WRITE = console.FILE_SHARE_WRITE;
-pub const OPEN_EXISTING = console.OPEN_EXISTING;
+pub const generic_read = console.generic_read;
+pub const generic_write = console.generic_write;
+pub const file_share_read = console.file_share_read;
+pub const file_share_write = console.file_share_write;
+pub const open_existing = console.open_existing;
 pub const CreateFileW = console.CreateFileW;
 
 //======================================================================
@@ -328,92 +322,92 @@ pub const CreateFileW = console.CreateFileW;
 
 /// An opaque, caller-allocated block whose size `InitializeProcThreadAttributeList`
 /// reports. It is passed by address and never inspected.
-pub const PROC_THREAD_ATTRIBUTE_LIST = opaque {};
+pub const ProcThreadAttributeList = opaque {};
 
 /// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, from `<processthreadsapi.h>`:
 /// number 22, input, of thread-and-process scope.
-pub const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
+pub const proc_thread_attribute_pseudoconsole: usize = 0x00020016;
 
 /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`: number 2, input, of thread scope.
 ///
 /// The list of handles a child may inherit. Without it `bInheritHandles` means
 /// *every* inheritable handle this process holds, which is far more than the
 /// three a child is being given.
-pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x00020002;
+pub const proc_thread_attribute_handle_list: usize = 0x00020002;
 
 pub extern "kernel32" fn InitializeProcThreadAttributeList(
-    lpAttributeList: ?*PROC_THREAD_ATTRIBUTE_LIST,
-    dwAttributeCount: DWORD,
-    dwFlags: DWORD,
-    lpSize: *SIZE_T,
-) callconv(.winapi) BOOL;
+    lpAttributeList: ?*ProcThreadAttributeList,
+    dwAttributeCount: windows.DWORD,
+    dwFlags: windows.DWORD,
+    lpSize: *windows.SIZE_T,
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn UpdateProcThreadAttribute(
-    lpAttributeList: *PROC_THREAD_ATTRIBUTE_LIST,
-    dwFlags: DWORD,
+    lpAttributeList: *ProcThreadAttributeList,
+    dwFlags: windows.DWORD,
     Attribute: usize,
     lpValue: ?*anyopaque,
-    cbSize: SIZE_T,
+    cbSize: windows.SIZE_T,
     lpPreviousValue: ?*anyopaque,
-    lpReturnSize: ?*SIZE_T,
-) callconv(.winapi) BOOL;
+    lpReturnSize: ?*windows.SIZE_T,
+) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn DeleteProcThreadAttributeList(
-    lpAttributeList: *PROC_THREAD_ATTRIBUTE_LIST,
+    lpAttributeList: *ProcThreadAttributeList,
 ) callconv(.winapi) void;
 
 /// `STARTUPINFOEXW`. The plain `STARTUPINFOW` is the first field, which is why
 /// `CreateProcessW` takes a pointer to it and reads the rest only when
 /// `extended_startupinfo_present` is set.
-pub const STARTUPINFOEXW = extern struct {
-    StartupInfo: STARTUPINFOW,
-    lpAttributeList: ?*PROC_THREAD_ATTRIBUTE_LIST,
+pub const StartupInfoExW = extern struct {
+    StartupInfo: windows.STARTUPINFOW,
+    lpAttributeList: ?*ProcThreadAttributeList,
 };
 
-pub const STARTF_USESTDHANDLES: DWORD = 0x00000100;
+pub const startf_usestdhandles: windows.DWORD = 0x00000100;
 
 /// What kind of object a handle is, for the C runtime's flags on an
 /// inherited descriptor.
-pub const FILE_TYPE_CHAR: DWORD = 0x0002;
-pub const FILE_TYPE_PIPE: DWORD = 0x0003;
-pub extern "kernel32" fn GetFileType(hFile: HANDLE) callconv(.winapi) DWORD;
+pub const file_type_char: windows.DWORD = 0x0002;
+pub const file_type_pipe: windows.DWORD = 0x0003;
+pub extern "kernel32" fn GetFileType(hFile: windows.HANDLE) callconv(.winapi) windows.DWORD;
 
 //======================================================================
 // Processes.
 //======================================================================
 
 pub extern "kernel32" fn TerminateProcess(
-    hProcess: HANDLE,
-    uExitCode: UINT,
-) callconv(.winapi) BOOL;
+    hProcess: windows.HANDLE,
+    uExitCode: windows.UINT,
+) callconv(.winapi) windows.BOOL;
 
 /// Enough access to wait on a process this package did not start and to ask
 /// how it ended. Used by the tests, which is where a process named only by its
 /// id has to be looked at.
-pub const SYNCHRONIZE: DWORD = 0x00100000;
-pub const PROCESS_TERMINATE: DWORD = 0x00000001;
-pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x00001000;
+pub const synchronize: windows.DWORD = 0x00100000;
+pub const process_terminate: windows.DWORD = 0x00000001;
+pub const process_query_limited_information: windows.DWORD = 0x00001000;
 
 pub extern "kernel32" fn OpenProcess(
-    dwDesiredAccess: DWORD,
-    bInheritHandle: BOOL,
-    dwProcessId: DWORD,
-) callconv(.winapi) ?HANDLE;
+    dwDesiredAccess: windows.DWORD,
+    bInheritHandle: windows.BOOL,
+    dwProcessId: windows.DWORD,
+) callconv(.winapi) ?windows.HANDLE;
 
 pub extern "kernel32" fn GetExitCodeProcess(
-    hProcess: HANDLE,
-    lpExitCode: *DWORD,
-) callconv(.winapi) BOOL;
+    hProcess: windows.HANDLE,
+    lpExitCode: *windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
-pub const WAIT_OBJECT_0: DWORD = 0;
-pub const WAIT_TIMEOUT: DWORD = 258;
+pub const wait_object_0: windows.DWORD = 0;
+pub const wait_timeout: windows.DWORD = 258;
 pub extern "kernel32" fn WaitForSingleObject(
-    hHandle: HANDLE,
-    dwMilliseconds: DWORD,
-) callconv(.winapi) DWORD;
+    hHandle: windows.HANDLE,
+    dwMilliseconds: windows.DWORD,
+) callconv(.winapi) windows.DWORD;
 
-pub const CTRL_C_EVENT: DWORD = 0;
-pub const CTRL_BREAK_EVENT: DWORD = 1;
+pub const ctrl_c_event: windows.DWORD = 0;
+pub const ctrl_break_event: windows.DWORD = 1;
 
 /// Sends a console control event to a process group. The only way to ask a
 /// Windows process to stop that it can decline, and it works only for a group
@@ -421,18 +415,18 @@ pub const CTRL_BREAK_EVENT: DWORD = 1;
 /// An event, for the tests: two handles to one event can be shown to be
 /// one object by signalling through one and waiting on the other.
 pub extern "kernel32" fn CreateEventW(
-    lpEventAttributes: ?*SECURITY_ATTRIBUTES,
-    bManualReset: BOOL,
-    bInitialState: BOOL,
-    lpName: ?LPCWSTR,
-) callconv(.winapi) ?HANDLE;
-pub extern "kernel32" fn SetEvent(hEvent: HANDLE) callconv(.winapi) BOOL;
-pub extern "kernel32" fn ResetEvent(hEvent: HANDLE) callconv(.winapi) BOOL;
+    lpEventAttributes: ?*windows.SECURITY_ATTRIBUTES,
+    bManualReset: windows.BOOL,
+    bInitialState: windows.BOOL,
+    lpName: ?windows.LPCWSTR,
+) callconv(.winapi) ?windows.HANDLE;
+pub extern "kernel32" fn SetEvent(hEvent: windows.HANDLE) callconv(.winapi) windows.BOOL;
+pub extern "kernel32" fn ResetEvent(hEvent: windows.HANDLE) callconv(.winapi) windows.BOOL;
 
 pub extern "kernel32" fn GenerateConsoleCtrlEvent(
-    dwCtrlEvent: DWORD,
-    dwProcessGroupId: DWORD,
-) callconv(.winapi) BOOL;
+    dwCtrlEvent: windows.DWORD,
+    dwProcessGroupId: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
 
 //======================================================================
 // Console mode: declared in the terminal module, whose call it is.

@@ -114,7 +114,7 @@ pub const Size = struct {
 /// platform `termios`; on Windows it is the console mode word plus which of
 /// the two kinds of console handle it came from.
 pub const Saved = if (is_windows) struct {
-    mode: win32.DWORD,
+    mode: windows.DWORD,
     kind: Kind,
 
     /// Which set of mode flags `mode` holds. The two sets share bit values and
@@ -239,7 +239,7 @@ pub const WinSizeError = error{
 /// draw in, and that is what the POSIX number means.
 pub fn winSize(handle: Handle) WinSizeError!Size {
     if (is_windows) {
-        var info: win32.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+        var info: win32.ConsoleScreenBufferInfo = undefined;
         if (win32.GetConsoleScreenBufferInfo(handle, &info) == .FALSE) {
             return consoleError(WinSizeError);
         }
@@ -298,7 +298,7 @@ fn setWinSizePosix(handle: Handle, size: Size) SetWinSizeError!void {
 /// console mode can be read from it.
 pub fn isTty(handle: Handle) bool {
     if (is_windows) {
-        var mode: win32.DWORD = undefined;
+        var mode: windows.DWORD = undefined;
         return win32.GetConsoleMode(handle, &mode) != .FALSE;
     }
     _ = posix.tcgetattr(handle) catch return false;
@@ -384,10 +384,10 @@ fn deviceOf(ctty: Handle, buf: []u8) ?[]const u8 {
 fn openConsole(name: [*:0]const u16) error{NotATerminal}!windows.HANDLE {
     const handle = win32.CreateFileW(
         name,
-        win32.GENERIC_READ | win32.GENERIC_WRITE,
-        win32.FILE_SHARE_READ | win32.FILE_SHARE_WRITE,
+        win32.generic_read | win32.generic_write,
+        win32.file_share_read | win32.file_share_write,
         null,
-        win32.OPEN_EXISTING,
+        win32.open_existing,
         0,
         null,
     );
@@ -527,23 +527,23 @@ fn foregroundGroupPosix(handle: Handle) ForegroundGroupError!posix.pid_t {
 //======================================================================
 
 fn rawModeWindows(handle: Handle) RawModeError!Saved {
-    var mode: win32.DWORD = undefined;
+    var mode: windows.DWORD = undefined;
     if (win32.GetConsoleMode(handle, &mode) == .FALSE) return consoleError(RawModeError);
 
     // Which half of the console this is. Only a screen buffer answers this
     // call, and the two sets of mode flags share bit values, so guessing would
     // mean silently writing an input mode onto an output handle.
-    var info: win32.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+    var info: win32.ConsoleScreenBufferInfo = undefined;
     const is_screen_buffer = win32.GetConsoleScreenBufferInfo(handle, &info) != .FALSE;
 
-    const raw: win32.DWORD = if (is_screen_buffer)
+    const raw: windows.DWORD = if (is_screen_buffer)
         // Virtual terminal processing needs processed output to be on; it is
         // the processor. `DISABLE_NEWLINE_AUTO_RETURN` stops the console from
         // adding a carriage return to a line feed as well, which would undo
         // the positioning a pseudoconsole child already wrote correctly.
-        mode | win32.ENABLE_PROCESSED_OUTPUT |
-            win32.ENABLE_VIRTUAL_TERMINAL_PROCESSING |
-            win32.DISABLE_NEWLINE_AUTO_RETURN
+        mode | win32.enable_processed_output |
+            win32.enable_virtual_terminal_processing |
+            win32.disable_newline_auto_return
     else
         // Without virtual terminal input, keys arrive as console input records
         // that a byte stream cannot carry. With it they arrive as the escape
@@ -553,11 +553,11 @@ fn rawModeWindows(handle: Handle) RawModeError!Saved {
         // edit goes too, so the mouse is the program's rather than a
         // selection that pauses the console's output; the console reads
         // that flag only with `ENABLE_EXTENDED_FLAGS` set beside it.
-        (mode & ~(win32.ENABLE_LINE_INPUT |
-            win32.ENABLE_ECHO_INPUT |
-            win32.ENABLE_PROCESSED_INPUT |
-            win32.ENABLE_QUICK_EDIT_MODE)) |
-            win32.ENABLE_VIRTUAL_TERMINAL_INPUT | win32.ENABLE_EXTENDED_FLAGS;
+        (mode & ~(win32.enable_line_input |
+            win32.enable_echo_input |
+            win32.enable_processed_input |
+            win32.enable_quick_edit_mode)) |
+            win32.enable_virtual_terminal_input | win32.enable_extended_flags;
 
     if (win32.SetConsoleMode(handle, raw) == .FALSE) return consoleError(RawModeError);
     return .{

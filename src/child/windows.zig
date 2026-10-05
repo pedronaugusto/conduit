@@ -67,7 +67,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
         extras_made += 1;
     }
 
-    var startup: win32.STARTUPINFOEXW = std.mem.zeroes(win32.STARTUPINFOEXW);
+    var startup: win32.StartupInfoExW = std.mem.zeroes(win32.StartupInfoExW);
     var flags: windows.CreateProcessFlags = .{
         .create_new_process_group = options.detach,
         .create_unicode_environment = environment != null,
@@ -133,7 +133,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     if (win32.AssignProcessToJobObject(job.handle, information.hProcess) == .FALSE) {
         return error.JobAssignmentFailed;
     }
-    if (win32.ResumeThread(information.hThread) == std.math.maxInt(win32.DWORD)) {
+    if (win32.ResumeThread(information.hThread) == std.math.maxInt(windows.DWORD)) {
         return createError();
     }
 
@@ -179,7 +179,7 @@ fn describeChild(
     options: SpawnOptions,
     given: [3]?windows.HANDLE,
     extras: []const windows.HANDLE,
-    startup: *win32.STARTUPINFOEXW,
+    startup: *win32.StartupInfoExW,
     flags: *windows.CreateProcessFlags,
     attributes: *?AttributeList,
 ) SpawnError!void {
@@ -192,7 +192,7 @@ fn describeChild(
                 trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)}); // safe: printed, never dereferenced
             }
             attributes.* = list;
-            startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
+            startup.StartupInfo.cb = @sizeOf(win32.StartupInfoExW);
             startup.lpAttributeList = list.raw;
             flags.extended_startupinfo_present = true;
 
@@ -214,11 +214,11 @@ fn describeChild(
             // documents as unsupported alongside a pseudoconsole -- that is
             // *naming* a handle, which is why `stderr_to` with `.pty` is
             // refused rather than merged in here.
-            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
+            startup.StartupInfo.dwFlags = win32.startf_usestdhandles;
         },
         else => {
-            startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOW);
-            startup.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
+            startup.StartupInfo.cb = @sizeOf(windows.STARTUPINFOW);
+            startup.StartupInfo.dwFlags = win32.startf_usestdhandles;
             startup.StartupInfo.hStdInput = given[0];
             startup.StartupInfo.hStdOutput = given[1];
             startup.StartupInfo.hStdError = given[2];
@@ -233,7 +233,7 @@ fn describeChild(
                 var list = try AttributeList.init(arena, 1);
                 try list.setHandleList(inheritable);
                 attributes.* = list;
-                startup.StartupInfo.cb = @sizeOf(win32.STARTUPINFOEXW);
+                startup.StartupInfo.cb = @sizeOf(win32.StartupInfoExW);
                 startup.lpAttributeList = list.raw;
                 flags.extended_startupinfo_present = true;
             }
@@ -265,8 +265,8 @@ fn workingDirectory(arena: Allocator, wanted: ?[]const u8) SpawnError!?[*:0]cons
     const dir = wanted orelse return null;
     const wide = (try std.unicode.wtf8ToWtf16LeAllocZ(arena, dir)).ptr;
     const attributes = win32.GetFileAttributesW(wide);
-    if (attributes == win32.INVALID_FILE_ATTRIBUTES) return error.BadWorkingDirectory;
-    if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY == 0) return error.BadWorkingDirectory;
+    if (attributes == win32.invalid_file_attributes) return error.BadWorkingDirectory;
+    if (attributes & win32.file_attribute_directory == 0) return error.BadWorkingDirectory;
     return wide;
 }
 
@@ -333,8 +333,8 @@ pub fn findBare(
             else => continue,
         };
         const attributes = win32.GetFileAttributesW(wide.ptr);
-        if (attributes == win32.INVALID_FILE_ATTRIBUTES) continue;
-        if (attributes & win32.FILE_ATTRIBUTE_DIRECTORY != 0) continue;
+        if (attributes == win32.invalid_file_attributes) continue;
+        if (attributes & win32.file_attribute_directory != 0) continue;
         return candidate;
     }
     return null;
@@ -382,7 +382,7 @@ fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
 /// to print it.
 fn traceSpawn(
     options: SpawnOptions,
-    startup: *const win32.STARTUPINFOEXW,
+    startup: *const win32.StartupInfoExW,
     flags: windows.CreateProcessFlags,
     inherit_handles: windows.BOOL,
 ) void {
@@ -467,57 +467,57 @@ fn createJob(limits: Child.JobLimits) SpawnError!Job {
     // The job handle as the key, so a message that arrives on this port can be
     // told to be this job's. One port per job makes that a formality; a key
     // that means nothing would not.
-    var association: win32.JOBOBJECT_ASSOCIATE_COMPLETION_PORT = .{
+    var association: win32.JobObjectAssociateCompletionPort = .{
         .CompletionKey = handle,
         .CompletionPort = port,
     };
     if (win32.SetInformationJobObject(
         handle,
-        win32.JobObjectAssociateCompletionPortInformation,
+        win32.job_object_associate_completion_port_information,
         &association,
-        @sizeOf(win32.JOBOBJECT_ASSOCIATE_COMPLETION_PORT),
+        @sizeOf(win32.JobObjectAssociateCompletionPort),
     ) == .FALSE) return createError();
 
     const job: Job = .{ .handle = handle, .port = port };
 
-    var extended: win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(
-        win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    var extended: win32.JobObjectExtendedLimitInformation = std.mem.zeroes(
+        win32.JobObjectExtendedLimitInformation,
     );
-    var flags = win32.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    var flags = win32.job_object_limit_kill_on_job_close;
     if (limits.active_processes) |most| {
-        flags |= win32.JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        flags |= win32.job_object_limit_active_process;
         extended.BasicLimitInformation.ActiveProcessLimit = most;
     }
     if (limits.process_memory_bytes) |bytes| {
-        flags |= win32.JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        flags |= win32.job_object_limit_process_memory;
         extended.ProcessMemoryLimit = bytes;
     }
     if (limits.job_memory_bytes) |bytes| {
-        flags |= win32.JOB_OBJECT_LIMIT_JOB_MEMORY;
+        flags |= win32.job_object_limit_job_memory;
         extended.JobMemoryLimit = bytes;
     }
     extended.BasicLimitInformation.LimitFlags = flags;
     if (win32.SetInformationJobObject(
         job.handle,
-        win32.JobObjectExtendedLimitInformation,
+        win32.job_object_extended_limit_information,
         &extended,
-        @sizeOf(win32.JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
+        @sizeOf(win32.JobObjectExtendedLimitInformation),
     ) == .FALSE) return createError();
 
     // A second call, because the processor share is a different information
     // class from the rest -- it is scheduling rather than a limit on a
     // resource the job holds.
     if (limits.cpu_rate) |rate| {
-        var control: win32.JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = .{
-            .ControlFlags = win32.JOB_OBJECT_CPU_RATE_CONTROL_ENABLE |
-                win32.JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+        var control: win32.JobObjectCpuRateControlInformation = .{
+            .ControlFlags = win32.job_object_cpu_rate_control_enable |
+                win32.job_object_cpu_rate_control_hard_cap,
             .Value = rate,
         };
         if (win32.SetInformationJobObject(
             job.handle,
-            win32.JobObjectCpuRateControlInformation,
+            win32.job_object_cpu_rate_control_information,
             &control,
-            @sizeOf(win32.JOBOBJECT_CPU_RATE_CONTROL_INFORMATION),
+            @sizeOf(win32.JobObjectCpuRateControlInformation),
         ) == .FALSE) return createError();
     }
 
@@ -654,8 +654,8 @@ fn runtimeTable(arena: Allocator, extras: []const windows.HANDLE) Allocator.Erro
         const value: usize = if (fd < 3) invalid else @intFromPtr(extras[fd - 3]); // safe: the handle's value, written into the record the child reads, never dereferenced
         std.mem.writeInt(usize, values[fd * @sizeOf(usize) ..][0..@sizeOf(usize)], value, .little);
         flags[fd] = if (fd < 3) 0 else switch (win32.GetFileType(extras[fd - 3])) {
-            win32.FILE_TYPE_PIPE => runtime_open | runtime_pipe,
-            win32.FILE_TYPE_CHAR => runtime_open | runtime_device,
+            win32.file_type_pipe => runtime_open | runtime_pipe,
+            win32.file_type_char => runtime_open | runtime_device,
             else => runtime_open,
         };
     }
@@ -672,7 +672,7 @@ const runtime_device: u8 = 0x40;
 fn inheritableCopy(original: windows.HANDLE) SpawnError!windows.HANDLE {
     const process = windows.GetCurrentProcess();
     var made: windows.HANDLE = undefined;
-    if (win32.DuplicateHandle(process, original, process, &made, 0, .TRUE, win32.DUPLICATE_SAME_ACCESS) == .FALSE)
+    if (win32.DuplicateHandle(process, original, process, &made, 0, .TRUE, win32.duplicate_same_access) == .FALSE)
         return createError();
     return made;
 }
@@ -683,7 +683,7 @@ fn inheritableCopy(original: windows.HANDLE) SpawnError!windows.HANDLE {
 /// process that shares this one's console has its console handles already, and
 /// naming one in a handle list makes `CreateProcessW` fail.
 fn isConsole(handle: windows.HANDLE) bool {
-    var mode: win32.DWORD = undefined;
+    var mode: windows.DWORD = undefined;
     return win32.GetConsoleMode(handle, &mode) != .FALSE;
 }
 
@@ -713,8 +713,8 @@ const PipeDirection = enum { to_child, from_child };
 /// process keeps has the flag cleared again immediately, which is what stops a
 /// later, unrelated spawn from handing it to someone else.
 fn makePipe(direction: PipeDirection) SpawnError!stdio_plan.Pipe {
-    var security: win32.SECURITY_ATTRIBUTES = .{
-        .nLength = @sizeOf(win32.SECURITY_ATTRIBUTES),
+    var security: windows.SECURITY_ATTRIBUTES = .{
+        .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
         .lpSecurityDescriptor = null,
         .bInheritHandle = .TRUE,
     };
@@ -726,24 +726,24 @@ fn makePipe(direction: PipeDirection) SpawnError!stdio_plan.Pipe {
         .to_child => .{ .child = read_end, .parent = write_end },
         .from_child => .{ .child = write_end, .parent = read_end },
     };
-    _ = win32.SetHandleInformation(ends.parent, win32.HANDLE_FLAG_INHERIT, 0);
+    _ = win32.SetHandleInformation(ends.parent, win32.handle_flag_inherit, 0);
     return ends;
 }
 
 /// The null device, opened for both directions and inheritable, so one handle
 /// can serve all three of the child's streams.
 fn openNul() SpawnError!windows.HANDLE {
-    var security: win32.SECURITY_ATTRIBUTES = .{
-        .nLength = @sizeOf(win32.SECURITY_ATTRIBUTES),
+    var security: windows.SECURITY_ATTRIBUTES = .{
+        .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
         .lpSecurityDescriptor = null,
         .bInheritHandle = .TRUE,
     };
     const handle = win32.CreateFileW(
         std.unicode.wtf8ToWtf16LeStringLiteral("NUL"),
-        win32.GENERIC_READ | win32.GENERIC_WRITE,
-        win32.FILE_SHARE_READ | win32.FILE_SHARE_WRITE,
+        win32.generic_read | win32.generic_write,
+        win32.file_share_read | win32.file_share_write,
         &security,
-        win32.OPEN_EXISTING,
+        win32.open_existing,
         0,
         null,
     );
@@ -761,10 +761,10 @@ fn openNul() SpawnError!windows.HANDLE {
 /// be deleted with `DeleteProcThreadAttributeList` before that memory goes
 /// away, which is what `deinit` is for.
 const AttributeList = struct {
-    raw: *win32.PROC_THREAD_ATTRIBUTE_LIST,
+    raw: *win32.ProcThreadAttributeList,
 
     fn init(arena: Allocator, count: u32) SpawnError!AttributeList {
-        var size: win32.SIZE_T = 0;
+        var size: windows.SIZE_T = 0;
         // Documented to fail with `ERROR_INSUFFICIENT_BUFFER` and report the
         // size it wants; a success here would mean a list of no bytes.
         _ = win32.InitializeProcThreadAttributeList(null, count, 0, &size);
@@ -772,7 +772,7 @@ const AttributeList = struct {
 
         // Over-aligned rather than guessed at: the list holds pointers.
         const buffer = try arena.alignedAlloc(u8, .of(usize), size);
-        const raw: *win32.PROC_THREAD_ATTRIBUTE_LIST = @ptrCast(buffer.ptr); // safe: an opaque list in a buffer of the size Windows asked for, pointer-aligned
+        const raw: *win32.ProcThreadAttributeList = @ptrCast(buffer.ptr); // safe: an opaque list in a buffer of the size Windows asked for, pointer-aligned
         if (win32.InitializeProcThreadAttributeList(raw, count, 0, &size) == .FALSE) {
             return createError();
         }
@@ -784,13 +784,13 @@ const AttributeList = struct {
     /// `UpdateProcThreadAttribute` keeps a pointer to the value rather than
     /// copying it for some attributes, so the `HPCON` must stay put until
     /// `CreateProcessW` has returned. It does: the `Pty` outlives the spawn.
-    fn setPseudoConsole(list: *AttributeList, console: win32.HPCON) SpawnError!void {
+    fn setPseudoConsole(list: *AttributeList, console: win32.Hpcon) SpawnError!void {
         if (win32.UpdateProcThreadAttribute(
             list.raw,
             0,
-            win32.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+            win32.proc_thread_attribute_pseudoconsole,
             console,
-            @sizeOf(win32.HPCON),
+            @sizeOf(win32.Hpcon),
             null,
             null,
         ) == .FALSE) return createError();
@@ -805,7 +805,7 @@ const AttributeList = struct {
         if (win32.UpdateProcThreadAttribute(
             list.raw,
             0,
-            win32.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            win32.proc_thread_attribute_handle_list,
             @ptrCast(handles.ptr), // safe: the handle array Windows reads, its size in bytes beside it
             handles.len * @sizeOf(windows.HANDLE),
             null,

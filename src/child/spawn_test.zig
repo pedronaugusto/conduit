@@ -42,6 +42,7 @@ const testing = std.testing;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = @import("../win32.zig");
+const windows = std.os.windows;
 const placeMasterForTest = @import("../pty.zig").placeMasterForTest;
 const spawn_path = @import("posix/spawn.zig");
 
@@ -890,7 +891,7 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
     try sink.start(child.stdoutFile().?);
     try errors.start(child.stderrFile().?);
 
-    const id = try readMarkedNumber(win32.DWORD, &sink);
+    const id = try readMarkedNumber(windows.DWORD, &sink);
     stage = "opening the reported grandchild";
     const grandchild = try openById(id);
     defer closeFixtureProcess(grandchild);
@@ -2303,9 +2304,9 @@ fn alive(pid: posix.pid_t) bool {
 /// process id is reused, and a later question asked by number could be about
 /// somebody else. A handle stays the one process for as long as it is open,
 /// even after that process has ended.
-fn openById(id: win32.DWORD) !win32.HANDLE {
+fn openById(id: windows.DWORD) !windows.HANDLE {
     return win32.OpenProcess(
-        win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION | win32.PROCESS_TERMINATE,
+        win32.synchronize | win32.process_query_limited_information | win32.process_terminate,
         .FALSE,
         id,
     ) orelse {
@@ -2316,13 +2317,13 @@ fn openById(id: win32.DWORD) !win32.HANDLE {
 
 /// A failed job assertion must still end the held witness, including one
 /// that the fixture accidentally started outside the child's job.
-fn closeFixtureProcess(process: win32.HANDLE) void {
+fn closeFixtureProcess(process: windows.HANDLE) void {
     if (runningNow(process)) _ = win32.TerminateProcess(process, 1);
     std.os.windows.CloseHandle(process);
 }
 
-fn expectFixtureInJob(process: win32.HANDLE, child: *Child) !void {
-    var member: win32.BOOL = .FALSE;
+fn expectFixtureInJob(process: windows.HANDLE, child: *Child) !void {
+    var member: windows.BOOL = .FALSE;
     if (win32.IsProcessInJob(process, State.get(child).job.?, &member) == .FALSE) {
         std.debug.print("\nIsProcessInJob failed: Windows error {d}\n", .{@intFromEnum(std.os.windows.GetLastError())});
         return error.TestJobQueryFailed;
@@ -2334,14 +2335,14 @@ fn expectFixtureInJob(process: win32.HANDLE, child: *Child) !void {
 }
 
 /// Whether that process is still running. Windows only.
-fn runningNow(handle: win32.HANDLE) bool {
-    return win32.WaitForSingleObject(handle, 0) == win32.WAIT_TIMEOUT;
+fn runningNow(handle: windows.HANDLE) bool {
+    return win32.WaitForSingleObject(handle, 0) == win32.wait_timeout;
 }
 
 /// Waits for that process to end, and says whether it did within the budget.
 /// Windows only.
-fn endedWithin(handle: win32.HANDLE) bool {
-    return win32.WaitForSingleObject(handle, budget_ms) == win32.WAIT_OBJECT_0;
+fn endedWithin(handle: windows.HANDLE) bool {
+    return win32.WaitForSingleObject(handle, budget_ms) == win32.wait_object_0;
 }
 
 test "waitTree says the tree has ended, and does not say it early" {
@@ -2372,7 +2373,7 @@ test "waitTree says the tree has ended, and does not say it early" {
     try sink.start(child.stdoutFile().?);
     try errors.start(child.stderrFile().?);
 
-    const id = try readMarkedNumber(win32.DWORD, &sink);
+    const id = try readMarkedNumber(windows.DWORD, &sink);
     stage = "opening the reported grandchild";
     const grandchild = try openById(id);
     defer closeFixtureProcess(grandchild);
@@ -2488,7 +2489,7 @@ test "a contained wait ends a grandchild before lifecycle release" {
     try sink.start(child.stdoutFile().?);
     try errors.start(child.stderrFile().?);
 
-    const id = try readMarkedNumber(win32.DWORD, &sink);
+    const id = try readMarkedNumber(windows.DWORD, &sink);
     stage = "opening the reported grandchild";
     const grandchild = try openById(id);
     defer closeFixtureProcess(grandchild);
@@ -3720,10 +3721,10 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
     var sink = try tmp.dir.createFile(io, "out", .{});
     defer sink.close(io);
 
-    _ = win32.SetHandleInformation(sink.handle, win32.HANDLE_FLAG_INHERIT, 0);
+    _ = win32.SetHandleInformation(sink.handle, win32.handle_flag_inherit, 0);
     var before: u32 = 1;
     try testing.expect(win32.GetHandleInformation(sink.handle, &before) != .FALSE);
-    try testing.expectEqual(@as(u32, 0), before & win32.HANDLE_FLAG_INHERIT);
+    try testing.expectEqual(@as(u32, 0), before & win32.handle_flag_inherit);
 
     var child = try Child.spawn(io, gpa, .{
         .argv = &.{ "cmd.exe", "/c", "echo to the caller's file" },
@@ -3740,7 +3741,7 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
     // The child got it, and this process has it back the way it was.
     var after: u32 = 1;
     try testing.expect(win32.GetHandleInformation(sink.handle, &after) != .FALSE);
-    try testing.expectEqual(@as(u32, 0), after & win32.HANDLE_FLAG_INHERIT);
+    try testing.expectEqual(@as(u32, 0), after & win32.handle_flag_inherit);
 
     var contents: [64]u8 = undefined;
     const written = try tmp.dir.readFile(io, "out", &contents);
@@ -3757,7 +3758,7 @@ test "concurrent Windows spawns never change a caller handle's inheritance flag"
     defer tmp.cleanup();
     var sink = try tmp.dir.createFile(io, "out", .{});
     defer sink.close(io);
-    try testing.expect(win32.SetHandleInformation(sink.handle, win32.HANDLE_FLAG_INHERIT, 0) != .FALSE);
+    try testing.expect(win32.SetHandleInformation(sink.handle, win32.handle_flag_inherit, 0) != .FALSE);
 
     var changed: std.atomic.Value(bool) = .init(false);
     var group: std.Io.Group = .init;
@@ -3771,7 +3772,7 @@ test "concurrent Windows spawns never change a caller handle's inheritance flag"
 
     var flags: u32 = 0;
     try testing.expect(win32.GetHandleInformation(sink.handle, &flags) != .FALSE);
-    try testing.expectEqual(@as(u32, 0), flags & win32.HANDLE_FLAG_INHERIT);
+    try testing.expectEqual(@as(u32, 0), flags & win32.handle_flag_inherit);
     try testing.expect(!changed.load(.acquire));
 }
 
@@ -3800,7 +3801,7 @@ fn spawnWithSharedHandle(sink: std.Io.File, changed: *std.atomic.Value(bool)) st
 
         var flags: u32 = 0;
         if (win32.GetHandleInformation(sink.handle, &flags) == .FALSE or
-            flags & win32.HANDLE_FLAG_INHERIT != 0)
+            flags & win32.handle_flag_inherit != 0)
         {
             changed.store(true, .release);
         }
@@ -3812,7 +3813,6 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (!is_windows) return error.SkipZigTest;
-    const windows = std.os.windows;
 
     // A handle this process holds that is inheritable and has nothing to do
     // with the child: what `bInheritHandles` alone would hand over. An event,
@@ -3820,8 +3820,8 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     // signal through one, and the other is signalled -- which is a question
     // the operating system answers about the object rather than about a
     // number.
-    var security: win32.SECURITY_ATTRIBUTES = .{
-        .nLength = @sizeOf(win32.SECURITY_ATTRIBUTES),
+    var security: windows.SECURITY_ATTRIBUTES = .{
+        .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
         .lpSecurityDescriptor = null,
         .bInheritHandle = .TRUE,
     };
@@ -3885,7 +3885,6 @@ const Probe = enum { nothing, something_else, the_object };
 /// was what got signalled. Prints what the system said wherever the answer
 /// is not the plain one, so a failure names its cause.
 fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
-    const windows = std.os.windows;
     var copy: windows.HANDLE = undefined;
     if (win32.DuplicateHandle(
         process,
@@ -3894,7 +3893,7 @@ fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
         &copy,
         0,
         .FALSE,
-        win32.DUPLICATE_SAME_ACCESS,
+        win32.duplicate_same_access,
     ) == .FALSE) {
         const code = windows.GetLastError();
         if (code != .INVALID_HANDLE) {
@@ -3917,7 +3916,7 @@ fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
         return .something_else;
     }
     const waited = win32.WaitForSingleObject(event, 0);
-    if (waited == win32.WAIT_OBJECT_0) return .the_object;
+    if (waited == win32.wait_object_0) return .the_object;
     std.debug.print("the copy of 0x{x} is another object: wait said {d}\n", .{ @intFromPtr(event), waited });
     return .something_else;
 }
@@ -3927,7 +3926,6 @@ fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
 /// created suspended and given no standard handles, so it never runs; what
 /// comes back is its process handle, for the caller to end and close.
 fn plainSpawn(argv: []const []const u8) !std.os.windows.HANDLE {
-    const windows = std.os.windows;
     const joined = try std.mem.join(gpa, " ", argv);
     defer gpa.free(joined);
     const line = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, joined);
@@ -3935,7 +3933,7 @@ fn plainSpawn(argv: []const []const u8) !std.os.windows.HANDLE {
 
     var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
     startup.cb = @sizeOf(windows.STARTUPINFOW);
-    startup.dwFlags = win32.STARTF_USESTDHANDLES;
+    startup.dwFlags = win32.startf_usestdhandles;
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
         null,
