@@ -16,17 +16,22 @@ pub const testing_hook = struct {
 };
 
 pub const supported = if (builtin.os.tag == .windows) false else tree.Forks.supported;
-pub const Tracker = if (supported) Darwin else struct {
-    pub fn start(_: posix.pid_t) error{SystemResources}!*@This() {
+pub const Tracker = if (supported) Darwin else NoTracker;
+
+/// Where there is no fork note to observe: no tracker ever starts.
+const NoTracker = struct {
+    pub fn start(_: posix.pid_t) error{SystemResources}!*NoTracker {
         return error.SystemResources;
     }
-    pub fn finish(_: *@This()) bool {
+    pub fn finish(_: *NoTracker) bool {
         return true;
     }
-    pub fn failedTracking(_: *const @This()) bool {
+    pub fn failedTracking(_: *const NoTracker) bool {
         return false;
     }
-    pub fn deinit(_: *@This()) void {}
+    pub fn deinit(tracker: *NoTracker) void {
+        tracker.* = undefined;
+    }
 };
 
 const Darwin = struct {
@@ -179,6 +184,7 @@ const Darwin = struct {
         _ = c.close(tracker.wake[1]);
         const allocator = tracker.allocator;
         tracker.known.deinit(allocator);
+        tracker.* = undefined;
         allocator.destroy(tracker);
     }
 };

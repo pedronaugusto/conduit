@@ -593,7 +593,7 @@ const ChildHandles = struct {
 
     fn deinit(handles: *ChildHandles) void {
         for (handles.duplicates[0..handles.count]) |handle| windows.CloseHandle(handle);
-        handles.count = 0;
+        handles.* = undefined;
     }
 };
 
@@ -815,6 +815,7 @@ const AttributeList = struct {
 
     fn deinit(list: *AttributeList) void {
         win32.DeleteProcThreadAttributeList(list.raw);
+        list.* = undefined;
     }
 };
 

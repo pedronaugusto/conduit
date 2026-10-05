@@ -156,6 +156,7 @@ const Sink = struct {
         sink.group.cancel(io);
         trace.print("sink: reader joined", .{});
         sink.bytes.deinit(gpa);
+        sink.* = undefined;
     }
 
     fn read(sink: *Sink, file: std.Io.File) std.Io.Cancelable!void {

@@ -211,7 +211,10 @@ pub fn spawn(
         var pid: posix.pid_t = undefined;
         if (builtin.is_test) @import("../../testing/support.zig").SpawnCalls.file_actions += 1;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
-        if (rc == 0) return try started(pid);
+        if (rc == 0) {
+            const spawned = try started(pid);
+            return spawned;
+        }
         switch (@as(posix.E, @enumFromInt(rc))) {
             .NOENT, .NOTDIR => {},
             else => |err| best = err,

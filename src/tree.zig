@@ -835,6 +835,7 @@ const LinuxProcess = struct {
 
     pub fn deinit(process: *LinuxProcess) void {
         _ = std.os.linux.close(process.pidfd);
+        process.* = undefined;
     }
 };
 
@@ -964,7 +965,7 @@ pub const DarwinProcess = struct {
     }
 
     pub fn deinit(process: *DarwinProcess) void {
-        _ = process;
+        process.* = undefined;
     }
 };
 
@@ -1034,7 +1035,7 @@ const NoProcess = struct {
     }
 
     pub fn deinit(process: *NoProcess) void {
-        _ = process;
+        process.* = undefined;
     }
 };
 

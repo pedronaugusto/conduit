@@ -140,13 +140,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z030",
-    "path": "src/shell.zig",
-    "source": "pub fn deinit(shell: *Shell, io: std.Io) void {",
-    "detail": "deinit should set shell.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z015",
     "path": "src/shell.zig",
     "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
@@ -158,20 +151,6 @@
     "path": "src/shell.zig",
     "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
     "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z017",
-    "path": "src/shell.zig",
-    "source": "return try allocator.dupe(u8, buffer[0..len]);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, buffer[0..len; return value;`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z017",
-    "path": "src/shell.zig",
-    "source": "return try allocator.dupe(u8, value);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, value); return value;`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -252,13 +231,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z030",
-    "path": "src/expect.zig",
-    "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",
-    "detail": "deinit should set expect.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z011",
     "path": "src/expect.zig",
     "source": "std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);",
@@ -271,13 +243,6 @@
     "source": "pub fn compact(value: anytype, io: std.Io) void {",
     "detail": "'Io' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/testing/support.zig",
-    "source": "pub fn deinit(watchdog: *Watchdog, io: std.Io) void {",
-    "detail": "deinit should set watchdog.* = undefined",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
@@ -870,13 +835,6 @@
   {
     "rule": "Z030",
     "path": "src/lineage.zig",
-    "source": "pub fn deinit(_: *@This()) void {}",
-    "detail": "deinit should set _.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/lineage.zig",
     "source": "pub fn deinit(tracker: *Darwin) void {",
     "detail": "deinit should set tracker.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -886,34 +844,6 @@
     "path": "src/lineage.zig",
     "source": "pub const Darwin = fixture_Darwin;",
     "detail": "variable 'Darwin' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/lineage.zig",
-    "source": "pub fn start(_: posix.pid_t) error{SystemResources}!*@This() {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/lineage.zig",
-    "source": "pub fn finish(_: *@This()) bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/lineage.zig",
-    "source": "pub fn failedTracking(_: *const @This()) bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/lineage.zig",
-    "source": "pub fn deinit(_: *@This()) void {}",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -1176,13 +1106,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z030",
-    "path": "src/pty.zig",
-    "source": "fn deinit(drain: *Drain, io: std.Io) void {",
-    "detail": "deinit should set drain.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/pty.zig",
     "source": "const FD_CLOEXEC: c_int = c.FD_CLOEXEC;",
@@ -1243,27 +1166,6 @@
     "path": "src/tree.zig",
     "source": "allocator: std.mem.Allocator,",
     "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/tree.zig",
-    "source": "pub fn deinit(process: *LinuxProcess) void {",
-    "detail": "deinit should set process.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/tree.zig",
-    "source": "pub fn deinit(process: *DarwinProcess) void {",
-    "detail": "deinit should set process.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/tree.zig",
-    "source": "pub fn deinit(process: *NoProcess) void {",
-    "detail": "deinit should set process.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -2072,31 +1974,10 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z017",
-    "path": "src/find.zig",
-    "source": "return try allocator.dupe(u8, found);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, found); return value;`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z017",
-    "path": "src/find.zig",
-    "source": "if (runnable(io, candidate)) return try allocator.dupe(u8, candidate);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, candidate); return value;`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/find.zig",
     "source": "fn directWindowsProgram(io: std.Io, allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {",
     "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z017",
-    "path": "src/find.zig",
-    "source": "return try allocator.dupe(u8, name);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try allocator.dupe(u8, name); return value;`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -2107,25 +1988,11 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z017",
-    "path": "src/child/posix/spawn.zig",
-    "source": "if (rc == 0) return try started(pid);",
-    "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try started(pid); return value;`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z028",
     "path": "src/child/posix/spawn.zig",
     "source": "if (builtin.is_test) @import(\"../../testing/support.zig\").SpawnCalls.file_actions += 1;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn deinit(fixture: *Fixture) void {",
-    "detail": "deinit should set fixture.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z007",
@@ -2324,13 +2191,6 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z030",
-    "path": "src/child/spawn_test.zig",
-    "source": "fn deinit(sink: *Sink) void {",
-    "detail": "deinit should set sink.* = undefined",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z011",
     "path": "src/child/spawn_test.zig",
     "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
@@ -2450,24 +2310,10 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z030",
-    "path": "src/child/windows.zig",
-    "source": "fn deinit(handles: *ChildHandles) void {",
-    "detail": "deinit should set handles.* = undefined",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z023",
     "path": "src/child/windows.zig",
     "source": "fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {",
     "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/child/windows.zig",
-    "source": "fn deinit(list: *AttributeList) void {",
-    "detail": "deinit should set list.* = undefined",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
@@ -2965,6 +2811,13 @@
     "path": "src/console.zig",
     "source": "pub const CONSOLE_SCREEN_BUFFER_INFO = extern struct {",
     "detail": "acronym in 'CONSOLE_SCREEN_BUFFER_INFO' should use standard casing: 'Console_Screen_Buffer_Info'",
+    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
+  },
+  {
+    "rule": "Z030",
+    "path": "src/expect.zig",
+    "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",
+    "detail": "deinit should set expect.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   }
 ]

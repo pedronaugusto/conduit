@@ -55,6 +55,7 @@ pub const Watchdog = struct {
     pub fn deinit(watchdog: *Watchdog, io: std.Io) void {
         watchdog.finished.store(true, .release);
         watchdog.group.cancel(io);
+        watchdog.* = undefined;
     }
 
     fn watch(watchdog: *Watchdog, io: std.Io) std.Io.Cancelable!void {

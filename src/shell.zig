@@ -53,6 +53,7 @@ pub const Shell = enum(@Int(.unsigned, @sizeOf(ShellState) * 8)) {
     pub fn deinit(shell: *Shell, io: std.Io) void {
         shell.inner().child.deinit(io);
         shell.inner().pty.close(io);
+        shell.* = undefined;
     }
 };
 
@@ -189,7 +190,8 @@ fn fromEnvironment(allocator: Allocator, name: []const u8) Allocator.Error!?[]u8
         // been written and there is nothing to read.
         if (written == 0 or written >= value.len) return null;
         const len = std.unicode.wtf16LeToWtf8(&buffer, value[0..written]);
-        return try allocator.dupe(u8, buffer[0..len]);
+        const program = try allocator.dupe(u8, buffer[0..len]);
+        return program;
     }
     var index: usize = 0;
     while (std.c.environ[index]) |entry| : (index += 1) {
@@ -199,7 +201,8 @@ fn fromEnvironment(allocator: Allocator, name: []const u8) Allocator.Error!?[]u8
         if (pair[name.len] != '=') continue;
         const value = pair[name.len + 1 ..];
         if (value.len == 0) continue;
-        return try allocator.dupe(u8, value);
+        const program = try allocator.dupe(u8, value);
+        return program;
     }
     return null;
 }

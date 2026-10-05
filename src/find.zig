@@ -46,7 +46,8 @@ pub fn findProgram(
         }
         if (windows_search.isBatchFile(name)) return null;
         const found = try child_windows.findBare(io, arena_state.allocator(), name, environ) orelse return null;
-        return try allocator.dupe(u8, found);
+        const program = try allocator.dupe(u8, found);
+        return program;
     }
 
     if (std.mem.indexOfScalar(u8, name, '/') != null) {
@@ -60,7 +61,10 @@ pub fn findProgram(
     while (it.next()) |dir| {
         const prefix = if (dir.len == 0) "." else dir;
         const candidate = std.fmt.bufPrint(&buffer, "{s}/{s}", .{ prefix, name }) catch continue;
-        if (runnable(io, candidate)) return try allocator.dupe(u8, candidate);
+        if (runnable(io, candidate)) {
+            const program = try allocator.dupe(u8, candidate);
+            return program;
+        }
     }
     return null;
 }
@@ -71,7 +75,8 @@ fn directWindowsProgram(io: std.Io, allocator: Allocator, name: []const u8) Allo
     if (windows_search.isBatchFile(name)) return null;
     const stat = std.Io.Dir.cwd().statFile(io, name, .{}) catch return null;
     if (stat.kind == .directory) return null;
-    return try allocator.dupe(u8, name);
+    const program = try allocator.dupe(u8, name);
+    return program;
 }
 
 /// A file with an execute bit that this process may execute: what

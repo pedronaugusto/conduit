@@ -687,6 +687,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
         fn deinit(drain: *Drain, io: std.Io) void {
             drain.group.cancel(io);
+            drain.* = undefined;
         }
 
         fn run(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {

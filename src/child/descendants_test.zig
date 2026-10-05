@@ -85,6 +85,7 @@ const Fixture = struct {
         fixture.child.release(io) catch unreachable;
         fixture.daemon.end();
         fixture.tmp.cleanup();
+        fixture.* = undefined;
     }
 
     fn expectEnded(fixture: *Fixture) !void {
