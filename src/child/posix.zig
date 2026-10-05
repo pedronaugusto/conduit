@@ -46,41 +46,16 @@ const Plan = stdio_plan.Plan(struct {
 
 /// See `Child.spawn`.
 pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
+    // `Child.spawn` has refused an empty `argv`, and made a contained child
+    // a group of its own.
+    std.debug.assert(options.argv.len > 0);
+    std.debug.assert(options.descendants != .contain or options.detach);
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const argv = try arena.allocSentinel(?[*:0]const u8, options.argv.len, null);
-    for (options.argv, argv[0..options.argv.len]) |arg, *slot| {
-        slot.* = (try arena.dupeZ(u8, arg)).ptr;
-    }
-
-    const envp: [*:null]const ?[*:0]const u8 = if (options.environ) |map| envp: {
-        const block = try map.createPosixBlock(arena, .{});
-        break :envp block.slice.ptr;
-    } else c.environ;
-
-    const path_value: ?[]const u8 = switch (options.path_search) {
-        .child_environ => if (options.environ) |map| map.get("PATH") else environPath(),
-        .parent_environ => environPath(),
-        .none => null,
-    };
-    const candidates = try searchPath(
-        arena,
-        options.argv[0],
-        path_value,
-        options.path_search != .none,
-    );
-
-    const cwd_z: ?[*:0]const u8 = if (options.cwd) |dir| (try arena.dupeZ(u8, dir)).ptr else null;
-
-    // The descriptors the child gets from 3 upward, as numbers the fork
-    // child may rewrite while it moves one out of another's way.
-    const extras = try arena.alloc(posix.fd_t, options.extra_fds.len);
-    for (options.extra_fds, extras) |extra, *fd| fd.* = extra.handle;
+    const exec: Exec = try .prepare(arena_state.allocator(), options);
 
     // The descriptors the child will have as 0, 1 and 2, and the ones the
     // parent keeps. `plan` opens nothing the caller owns.
@@ -111,22 +86,7 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     // child is always forked: joining its cgroup is a write, and there is no
     // file action for one.
     if (contained == null and posix_spawn.suits(options)) {
-        const started_child = child: {
-            handles.ForkGap.startingAChild();
-            defer handles.ForkGap.release();
-            break :child try posix_spawn.spawn(plan.child, extras, candidates, argv.ptr, envp, options);
-        };
-        if (started_child) |child| {
-            adoption.started(child.pid) catch |err| {
-                var forks = child.forks;
-                forks.close();
-                discard(child.pid);
-                return err;
-            };
-            adoption.finish();
-            plan.closeChildSide(io);
-            return started(state, child.pid, child.forks, .none, &plan, options);
-        }
+        if (try spawnWithoutFork(io, options, exec, &plan, &adoption, state)) |child| return child;
     }
 
     // How the fork child reports a failure that happens after the fork. The
@@ -143,81 +103,23 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
         _ = c.close(fd);
     };
     const report = try controlPipe();
-    // Where there is a watch on the child's forks (`tree.Forks`), the fork
-    // child waits on this before its `execve` until the parent has registered
-    // it, so the program the child becomes cannot fork before the watch is
-    // in. Without a pipe there is no watch, and `kill` walks as it always
-    // did.
-    const go: ?[2]posix.fd_t = if (tree.Forks.supported or supervised) controlPipe() catch |err| failed: {
-        if (options.descendants == .contain) {
-            file(report[0]).close(io);
-            file(report[1]).close(io);
-            return err;
-        }
-        break :failed null;
-    } else null;
-    // Who the child's parent is before the fork: the child compares it with
-    // its own parent once its death signal is set, to catch a parent that
-    // was gone before it.
-    const parent = c.getpid();
-
-    handles.ForkGap.startingAChild();
-    if (builtin.is_test) SpawnCalls.forks += 1;
-    const pid = c.fork();
-    if (pid == 0) {
-        var root_parent = parent;
-        if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
-            _ = c.close(ends[0]);
-            clearSignals();
-            const prepared = switch (supervisor.prepare()) {
-                .ready => |prepared| prepared,
-                .failed => |errno| {
-                    const record: Failure = .{ .stage = .supervisor, .errno = @intFromEnum(errno) };
-                    _ = c.write(report[1], std.mem.asBytes(&record), @sizeOf(Failure));
-                    c._exit(127);
-                },
-            };
-            root_parent = c.getpid();
-            const root = c.fork();
-            if (root < 0) bail(report[1], .supervisor);
-            if (root != 0) {
-                const root_record: Failure = .{ .stage = .supervisor_root, .errno = @intCast(root) };
-                _ = c.write(report[1], std.mem.asBytes(&root_record), @sizeOf(Failure));
-                supervisor.run(root, ends[1], options.detach, prepared, scope_kill);
-            }
-            _ = c.close(ends[1]);
-            _ = c.close(prepared.signals);
-            _ = c.close(prepared.children);
-            if (scope_kill) |fd| _ = c.close(fd);
-        };
-        // The child inherits the lock as held, and the only thing it does with
-        // it is not touch it: it runs a handful of system calls and execs.
-        const join: posix.fd_t = if (contained) |pending| pending.joinDescriptor() else -1;
-        childMain(options, plan, extras, candidates, argv.ptr, envp, cwd_z, report[1], root_parent, go, join);
-    }
-    handles.ForkGap.release();
-
-    if (pid < 0) {
-        file(report[0]).close(io);
-        file(report[1]).close(io);
-        if (go) |ends| {
-            file(ends[0]).close(io);
-            file(ends[1]).close(io);
-        }
-        switch (c.errno(@as(c_int, -1))) {
-            .AGAIN => return error.ResourceLimitReached,
-            .NOMEM => return error.SystemResources,
-            else => |err| return posix.unexpectedErrno(err),
-        }
-    }
+    const go = goPipe(options, supervised) catch |err| {
+        closePipes(io, &report, null);
+        return err;
+    };
+    const pid = forkChild(options, plan, exec, .{
+        .report = report[1],
+        .go = go,
+        .channel = channel_ends,
+        .scope_kill = scope_kill,
+        .join = if (contained) |pending| pending.joinDescriptor() else -1,
+    }) catch |err| {
+        closePipes(io, &report, go);
+        return err;
+    };
     adoption.started(pid) catch |err| {
         discard(pid);
-        file(report[0]).close(io);
-        file(report[1]).close(io);
-        if (go) |ends| {
-            file(ends[0]).close(io);
-            file(ends[1]).close(io);
-        }
+        closePipes(io, &report, go);
         return err;
     };
     adoption.finish();
@@ -228,43 +130,113 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     file(report[1]).close(io);
     plan.closeChildSide(io);
 
-    // The watch, then the word to go on. This end of the pipe's reading side
-    // is still open while the byte is written, so the write cannot meet a
-    // pipe with no reader however the child has fared.
+    var watched = watchStarted(io, options, pid, go, supervised) catch |err| {
+        discard(pid);
+        closePipes(io, report[0..1], go);
+        return err;
+    };
+    errdefer if (watched.tracker) |owned| owned.destroy();
+
+    const outcome = readReport(report[0], pid);
+    file(report[0]).close(io);
+    if (outcome.failure) |record| {
+        // The child is about to exit, if it has not already; reap it so it does
+        // not linger as a zombie nobody is going to wait for.
+        var status: c_int = undefined;
+        while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+        watched.forks.close();
+        return record.toError();
+    }
+
+    const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(outcome.joined) else .none;
+    contained = null;
+    const child = started(state, pid, watched.forks, kept, &plan, options);
+    state.lineage = watched.tracker;
+    if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
+        state.supervisor = .{ .channel = ends[0], .record = watched.record.? };
+        state.process_id = outcome.root_pid;
+        state.pgid = if (options.detach) outcome.root_pid else null;
+    };
+    return child;
+}
+
+/// Where there is a watch on the child's forks (`tree.Forks`), the fork
+/// child waits on this pipe before its `execve` until the parent has
+/// registered it, so the program the child becomes cannot fork before the
+/// watch is in. Without a pipe there is no watch, and `kill` walks as it
+/// always did; a contained child is not started without one.
+fn goPipe(options: SpawnOptions, supervised: bool) SpawnError!?[2]posix.fd_t {
+    if (!tree.Forks.supported and !supervised) return null;
+    return controlPipe() catch |err| if (options.descendants == .contain) err else null;
+}
+
+/// The descriptors the fork child is handed besides its plan.
+const ForkEnds = struct {
+    /// The writing end of the report pipe.
+    report: posix.fd_t,
+    go: ?[2]posix.fd_t,
+    /// The supervisor's command channel, for a contained child on Linux.
+    channel: ?[2]posix.fd_t,
+    scope_kill: ?posix.fd_t,
+    /// The cgroup to join, or -1.
+    join: posix.fd_t,
+};
+
+/// Forks, and runs `childMain` in the child. Returns the child's pid in the
+/// parent; the pipes are the caller's to close if this fails.
+fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) SpawnError!posix.pid_t {
+    std.debug.assert(ends.channel == null or builtin.os.tag == .linux);
+    // Who the child's parent is before the fork: the child compares it with
+    // its own parent once its death signal is set, to catch a parent that
+    // was gone before it.
+    const parent = c.getpid();
+
+    handles.ForkGap.startingAChild();
+    if (builtin.is_test) SpawnCalls.forks += 1;
+    const pid = c.fork();
+    if (pid == 0) {
+        const root_parent = if (comptime builtin.os.tag == .linux) if (ends.channel) |channel|
+            superviseFromForkChild(channel, ends.report, options.detach, ends.scope_kill)
+        else
+            parent else parent;
+        // The child inherits the lock as held, and the only thing it does with
+        // it is not touch it: it runs a handful of system calls and execs.
+        childMain(options, plan, exec, ends.report, root_parent, ends.go, ends.join);
+    }
+    handles.ForkGap.release();
+    if (pid > 0) return pid;
+    return switch (c.errno(@as(c_int, -1))) {
+        .AGAIN => error.ResourceLimitReached,
+        .NOMEM => error.SystemResources,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+/// What watches a forked child from before its `execve`.
+const Watched = struct {
+    tracker: ?*lineage.Tracker,
+    record: ?Child.SupervisorRecord,
+    forks: tree.Forks,
+};
+
+/// The watch, then the word to go on. The reading end of the go pipe is
+/// still open while the byte is written, so the write cannot meet a pipe
+/// with no reader however the child has fared. On an error the caller ends
+/// the child and closes the pipes.
+fn watchStarted(
+    io: std.Io,
+    options: SpawnOptions,
+    pid: posix.pid_t,
+    go: ?[2]posix.fd_t,
+    supervised: bool,
+) SpawnError!Watched {
+    std.debug.assert(pid > 0);
     var tracker: ?*lineage.Tracker = null;
     if (comptime lineage.supported) if (options.descendants == .contain) {
-        tracker = lineage.Tracker.start(pid) catch |err| {
-            discard(pid);
-            file(report[0]).close(io);
-            if (go) |ends| {
-                file(ends[0]).close(io);
-                file(ends[1]).close(io);
-            }
-            return err;
-        };
+        tracker = try lineage.Tracker.start(pid);
     };
     errdefer if (tracker) |owned| owned.destroy();
-    const scope_record: ?Child.SupervisorRecord = if (supervised) .{
-        .pid = pid,
-        .start = (tree.startTime(pid) catch null) orelse {
-            discard(pid);
-            file(report[0]).close(io);
-            if (go) |ends| {
-                file(ends[0]).close(io);
-                file(ends[1]).close(io);
-            }
-            return error.Unexpected;
-        },
-        .boot = cgroup.bootIdentity() orelse {
-            discard(pid);
-            file(report[0]).close(io);
-            if (go) |ends| {
-                file(ends[0]).close(io);
-                file(ends[1]).close(io);
-            }
-            return error.Unexpected;
-        },
-    } else null;
+    const record: ?Child.SupervisorRecord = if (supervised) supervisorRecord(pid) orelse return error.Unexpected else null;
     var forks: tree.Forks = .none;
     if (go) |ends| {
         forks = .watch(pid);
@@ -272,48 +244,173 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
         file(ends[1]).close(io);
         file(ends[0]).close(io);
     }
+    return .{ .tracker = tracker, .record = record, .forks = forks };
+}
 
-    // One report or end of file. A short read cannot happen: the child writes
-    // the whole record with one `write` to a pipe, and eight bytes is far below
-    // `PIPE_BUF`. The read is the raw one rather than `std.Io`'s because
-    // `spawn` is not a cancelation point: a child exists from the `fork` above
-    // until this function returns it, and there is no point in between at
-    // which it would be safe to stop.
+/// What the fork child execs, built in the parent: between `fork` and
+/// `execve` nothing may allocate.
+const Exec = struct {
+    argv: [*:null]const ?[*:0]const u8,
+    envp: [*:null]const ?[*:0]const u8,
+    /// Every path `argv[0]` may name, in the order they are tried.
+    candidates: []const [*:0]const u8,
+    cwd: ?[*:0]const u8,
+    /// The descriptors the child gets from 3 upward, as numbers the fork
+    /// child may rewrite while it moves one out of another's way.
+    extras: []posix.fd_t,
+
+    fn prepare(arena: Allocator, options: SpawnOptions) SpawnError!Exec {
+        const argv = try arena.allocSentinel(?[*:0]const u8, options.argv.len, null);
+        for (options.argv, argv[0..options.argv.len]) |arg, *slot| {
+            slot.* = (try arena.dupeZ(u8, arg)).ptr;
+        }
+
+        const envp: [*:null]const ?[*:0]const u8 = if (options.environ) |map| envp: {
+            const block = try map.createPosixBlock(arena, .{});
+            break :envp block.slice.ptr;
+        } else c.environ;
+
+        const path_value: ?[]const u8 = switch (options.path_search) {
+            .child_environ => if (options.environ) |map| map.get("PATH") else environPath(),
+            .parent_environ => environPath(),
+            .none => null,
+        };
+        const candidates = try searchPath(
+            arena,
+            options.argv[0],
+            path_value,
+            options.path_search != .none,
+        );
+
+        const extras = try arena.alloc(posix.fd_t, options.extra_fds.len);
+        for (options.extra_fds, extras) |extra, *fd| fd.* = extra.handle;
+
+        return .{
+            .argv = argv.ptr,
+            .envp = envp,
+            .candidates = candidates,
+            .cwd = if (options.cwd) |dir| (try arena.dupeZ(u8, dir)).ptr else null,
+            .extras = extras,
+        };
+    }
+};
+
+/// The child `posix_spawn` starts, when it can describe this one: `null`
+/// sends the caller on to the fork.
+fn spawnWithoutFork(
+    io: std.Io,
+    options: SpawnOptions,
+    exec: Exec,
+    plan: *Plan,
+    adoption: *Orphans.Spawn,
+    state: *State,
+) SpawnError!?*State {
+    const child = child: {
+        handles.ForkGap.startingAChild();
+        defer handles.ForkGap.release();
+        break :child try posix_spawn.spawn(plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options);
+    } orelse return null;
+    adoption.started(child.pid) catch |err| {
+        var forks = child.forks;
+        forks.close();
+        discard(child.pid);
+        return err;
+    };
+    adoption.finish();
+    plan.closeChildSide(io);
+    return started(state, child.pid, child.forks, .none, plan, options);
+}
+
+/// In the fork child of a contained spawn on Linux: becomes the supervisor
+/// of the scope, and returns only in the root it forks, with the pid the
+/// root sees as its parent.
+fn superviseFromForkChild(
+    ends: [2]posix.fd_t,
+    report: posix.fd_t,
+    detach: bool,
+    scope_kill: ?posix.fd_t,
+) posix.pid_t {
+    _ = c.close(ends[0]);
+    clearSignals();
+    const prepared = switch (supervisor.prepare()) {
+        .ready => |prepared| prepared,
+        .failed => |errno| {
+            const record: Failure = .{ .stage = .supervisor, .errno = @intFromEnum(errno) };
+            _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
+            c._exit(127);
+        },
+    };
+    const root_parent = c.getpid();
+    const root = c.fork();
+    if (root < 0) bail(report, .supervisor);
+    if (root != 0) {
+        const root_record: Failure = .{ .stage = .supervisor_root, .errno = @intCast(root) };
+        _ = c.write(report, std.mem.asBytes(&root_record), @sizeOf(Failure));
+        supervisor.run(root, ends[1], detach, prepared, scope_kill);
+    }
+    _ = c.close(ends[1]);
+    _ = c.close(prepared.signals);
+    _ = c.close(prepared.children);
+    if (scope_kill) |fd| _ = c.close(fd);
+    return root_parent;
+}
+
+/// What a supervised scope is recorded as: the root's pid, when it started
+/// and the boot it started in. `null` when either cannot be read.
+fn supervisorRecord(pid: posix.pid_t) ?Child.SupervisorRecord {
+    return .{
+        .pid = pid,
+        .start = (tree.startTime(pid) catch null) orelse return null,
+        .boot = cgroup.bootIdentity() orelse return null,
+    };
+}
+
+/// Closes the parent's ends of the report pipe in `report` and both ends of
+/// the go pipe, on a spawn that is not going on.
+fn closePipes(io: std.Io, report: []const posix.fd_t, go: ?[2]posix.fd_t) void {
+    for (report) |fd| file(fd).close(io);
+    if (go) |ends| {
+        file(ends[0]).close(io);
+        file(ends[1]).close(io);
+    }
+}
+
+/// What the fork child said before its `execve`, or that it said nothing.
+const Report = struct {
+    /// The record that ends the spawn, if one came.
+    failure: ?Failure,
+    /// The process the caller is given: the forked child, or the root its
+    /// supervisor forked.
+    root_pid: posix.pid_t,
+    /// Whether the child joined the cgroup made for it.
+    joined: bool,
+};
+
+/// One report or end of file. A short read cannot happen: the child writes
+/// the whole record with one `write` to a pipe, and eight bytes is far below
+/// `PIPE_BUF`. The read is the raw one rather than `std.Io`'s because
+/// `spawn` is not a cancelation point: a child exists from the `fork` until
+/// `spawn` returns it, and there is no point in between at which it would be
+/// safe to stop.
+fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
+    comptime std.debug.assert(@sizeOf(Failure) <= 512); // POSIX's floor for PIPE_BUF
     var record: Failure = undefined;
-    var n = readAll(report[0], std.mem.asBytes(&record));
+    var n = readAll(fd, std.mem.asBytes(&record));
+    var outcome: Report = .{ .failure = null, .root_pid = pid, .joined = true };
+    if (n == @sizeOf(Failure) and record.stage == .supervisor_root) {
+        outcome.root_pid = @intCast(record.errno);
+        n = readAll(fd, std.mem.asBytes(&record));
+    }
     // A child that could not join its cgroup says so and carries on; the
     // record after it, if any, is the one that ends the spawn.
-    var root_pid = pid;
-    if (n == @sizeOf(Failure) and record.stage == .supervisor_root) {
-        root_pid = @intCast(record.errno);
-        n = readAll(report[0], std.mem.asBytes(&record));
-    }
-    var joined = contained != null;
     if (n == @sizeOf(Failure) and record.stage == .containment) {
-        joined = false;
-        n = readAll(report[0], std.mem.asBytes(&record));
+        outcome.joined = false;
+        n = readAll(fd, std.mem.asBytes(&record));
     }
-    file(report[0]).close(io);
-
     if (n == @sizeOf(Failure)) {
-        // The child is about to exit, if it has not already; reap it so it does
-        // not linger as a zombie nobody is going to wait for.
-        var status: c_int = undefined;
-        while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
-        forks.close();
-        return record.toError();
-    }
-
-    const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
-    contained = null;
-    const child = started(state, pid, forks, kept, &plan, options);
-    state.lineage = tracker;
-    if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
-        state.supervisor = .{ .channel = ends[0], .record = scope_record.? };
-        state.process_id = root_pid;
-        state.pgid = if (options.detach) root_pid else null;
-    };
-    return child;
+        outcome.failure = record;
+    } else std.debug.assert(n == 0);
+    return outcome;
 }
 
 /// Ends and reaps a child that has just been started and will not be handed
@@ -427,11 +524,7 @@ const Failure = extern struct {
 fn childMain(
     options: SpawnOptions,
     plan: Plan,
-    extras: []posix.fd_t,
-    candidates: []const [*:0]const u8,
-    argv: [*:null]const ?[*:0]const u8,
-    envp: [*:null]const ?[*:0]const u8,
-    cwd: ?[*:0]const u8,
+    exec: Exec,
     report_pipe: posix.fd_t,
     parent: posix.pid_t,
     go: ?[2]posix.fd_t,
@@ -441,12 +534,13 @@ fn childMain(
     // above when it is below, so placing an extra descriptor over it cannot
     // close it before a failure has been reported; the copy is close-on-exec
     // like the original, which a placement or the exec closes.
-    const first_free: posix.fd_t = @intCast(3 + extras.len);
+    const first_free: posix.fd_t = @intCast(3 + exec.extras.len);
     var report = report_pipe;
     if (report < first_free) {
         report = c.fcntl(report_pipe, c.F.DUPFD_CLOEXEC, first_free);
         if (report < 0) bail(report_pipe, .descriptors);
     }
+    std.debug.assert(report >= first_free);
 
     // Only the parent writes the word to go on. With this copy of the writing
     // end closed, a parent that has gone reads as end of file rather than as
@@ -459,31 +553,8 @@ fn childMain(
     if (join >= 0 and !cgroup.join(join)) note(report, .containment);
 
     clearSignals();
-
-    // `spawn` refuses the option anywhere but Linux.
-    if (builtin.os.tag == .linux) if (if (options.descendants == .contain) @as(?Child.Signal, .kill) else options.parent_death_signal) |signal| {
-        const sig = signal.toPosix();
-        const rc = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_PDEATHSIG), @intFromEnum(sig), 0, 0, 0);
-        if (std.os.linux.errno(rc) != .SUCCESS) bail(report, .parent_death_signal);
-        // The parent may have ended between the fork and the line above,
-        // and then nothing will send it: the child is an orphan already.
-        if (c.getppid() != parent) {
-            _ = c.kill(c.getpid(), sig);
-            c._exit(127);
-        }
-    };
-
-    if (options.detach) {
-        switch (options.stdio) {
-            .pty => |pty| {
-                if (c.setsid() < 0) bail(report, .detach);
-                if (c.ioctl(pty.slaveHandle().?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
-                    bail(report, .controlling_terminal);
-                }
-            },
-            else => if (c.setpgid(0, 0) != 0) bail(report, .detach),
-        }
-    }
+    armParentDeathSignal(options, report, parent);
+    if (options.detach) detachChild(options, report);
 
     // Before the descriptors are placed, which may write over a low one, and
     // after the work above, which gives the parent the time it needs: the
@@ -495,7 +566,7 @@ fn childMain(
         _ = c.close(ends[0]);
     }
 
-    if (!placeDescriptors(plan, extras)) bail(report, .descriptors);
+    if (!placeDescriptors(plan, exec.extras)) bail(report, .descriptors);
 
     switch (options.stdio) {
         // The master end has no business in the child. While a descriptor for
@@ -516,6 +587,46 @@ fn childMain(
 
     if (options.fd_policy == .close_all) closeFromExcept(first_free, report);
 
+    limitAndLower(options, report);
+
+    if (exec.cwd) |dir| if (c.chdir(dir) != 0) bail(report, .chdir);
+
+    execCandidates(exec, report);
+}
+
+/// The signal a contained child or one given `parent_death_signal` gets when
+/// this process ends. Linux only; `spawn` refuses the option anywhere else.
+fn armParentDeathSignal(options: SpawnOptions, report: posix.fd_t, parent: posix.pid_t) void {
+    if (builtin.os.tag != .linux) return;
+    const signal = if (options.descendants == .contain) @as(?Child.Signal, .kill) else options.parent_death_signal;
+    const sig = (signal orelse return).toPosix();
+    const rc = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_PDEATHSIG), @intFromEnum(sig), 0, 0, 0);
+    if (std.os.linux.errno(rc) != .SUCCESS) bail(report, .parent_death_signal);
+    // The parent may have ended between the fork and the line above,
+    // and then nothing will send it: the child is an orphan already.
+    if (c.getppid() != parent) {
+        _ = c.kill(c.getpid(), sig);
+        c._exit(127);
+    }
+}
+
+/// A session of the child's own with its terminal as the controlling one,
+/// or, off a terminal, a process group of its own.
+fn detachChild(options: SpawnOptions, report: posix.fd_t) void {
+    std.debug.assert(options.detach);
+    switch (options.stdio) {
+        .pty => |pty| {
+            if (c.setsid() < 0) bail(report, .detach);
+            if (c.ioctl(pty.slaveHandle().?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
+                bail(report, .controlling_terminal);
+            }
+        },
+        else => if (c.setpgid(0, 0) != 0) bail(report, .detach),
+    }
+}
+
+/// The resource limits, then the credentials.
+fn limitAndLower(options: SpawnOptions, report: posix.fd_t) void {
     // Before the credentials below: a privileged parent can still raise a hard
     // limit for a child it is about to hand to somebody else, and after
     // `setuid` it could not.
@@ -524,9 +635,9 @@ fn childMain(
     }
 
     // Last of the things that change what this process is, and before the
-    // `chdir` below, so a working directory the new user may not enter is an
-    // error rather than a child running somewhere it could not have reached.
-    // `umask` returns the old mask and cannot fail.
+    // `chdir` after it, so a working directory the new user may not enter is
+    // an error rather than a child running somewhere it could not have
+    // reached. `umask` returns the old mask and cannot fail.
     if (options.credentials.umask) |mask| _ = c.umask(mask);
     // The group before the user: once the user has been lowered there may be
     // no privilege left to change the group with.
@@ -536,15 +647,15 @@ fn childMain(
     if (options.credentials.uid) |uid| {
         if (c.setuid(uid) != 0) bail(report, .credentials);
     }
+}
 
-    if (cwd) |dir| if (c.chdir(dir) != 0) bail(report, .chdir);
-
-    // Every candidate is tried in turn, and the error worth reporting is the
-    // one from the last attempt that got past "no such file": a program found
-    // but not executable is more informative than the missing entry after it.
+/// Every candidate is tried in turn, and the error worth reporting is the
+/// one from the last attempt that got past "no such file": a program found
+/// but not executable is more informative than the missing entry after it.
+fn execCandidates(exec: Exec, report: posix.fd_t) noreturn {
     var best: posix.E = .NOENT;
-    for (candidates) |candidate| {
-        _ = c.execve(candidate, argv, envp);
+    for (exec.candidates) |candidate| {
+        _ = c.execve(candidate, exec.argv, exec.envp);
         const err = c.errno(@as(c_int, -1));
         switch (err) {
             .NOENT, .NOTDIR => {},
