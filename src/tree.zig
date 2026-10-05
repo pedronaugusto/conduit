@@ -1222,7 +1222,7 @@ pub const Forks = switch (builtin.os.tag) {
     else => NoForks,
 };
 
-const DarwinForks = struct {
+pub const DarwinForks = struct {
     /// The kqueue, or `null` where none could be had: then every question
     /// answers `true`. Not inherited by any child: the kernel confines a
     /// kqueue to the process that made it.
@@ -1358,7 +1358,7 @@ pub const testing_hook = struct {
     extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, size: u32) c_int;
 };
 
-const NoForks = struct {
+pub const NoForks = struct {
     pub const supported = false;
     pub const none: NoForks = .{};
 

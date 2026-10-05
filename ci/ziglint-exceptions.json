@@ -476,24 +476,10 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z012",
-    "path": "src/child.zig",
-    "source": "pub fn release(held: HeldReap) void {",
-    "detail": "public function exposes private type 'HeldReap'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/child.zig",
     "source": "pub const waitTree = if (is_windows)",
     "detail": "variable 'waitTree' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/child.zig",
-    "source": "pub fn term(collected: *const Output) Term {",
-    "detail": "public function exposes private type 'Term'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -564,34 +550,6 @@
     "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/child.zig",
-    "source": "pub fn releaseSurvivors(child: *Child) TryWaitError!void {",
-    "detail": "public function exposes private error set 'TryWaitError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/child.zig",
-    "source": "pub fn end(child: *Child) TryWaitError!void {",
-    "detail": "public function exposes private error set 'TryWaitError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/child.zig",
-    "source": "pub fn empty(child: *Child) TryWaitError!bool {",
-    "detail": "public function exposes private error set 'TryWaitError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/child.zig",
-    "source": "pub fn ended(child: *Child) TryWaitError!bool {",
-    "detail": "public function exposes private error set 'TryWaitError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -1197,20 +1155,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z012",
-    "path": "src/pty.zig",
-    "source": "pub fn resize(pty: *Pty, new_size: Size) ResizeError!void {",
-    "detail": "public function exposes private type 'Size'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/pty.zig",
-    "source": "pub fn size(pty: *const Pty) SizeError!Size {",
-    "detail": "public function exposes private type 'Size'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/pty.zig",
     "source": "pub const slaveFile = if (is_windows)",
@@ -1369,20 +1313,6 @@
     "path": "src/tree.zig",
     "source": "const file = std.fmt.bufPrintZ(&file_buffer, \"{s}/children\", .{name}) catch return true;",
     "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/tree.zig",
-    "source": "pub fn watch(pid: posix.pid_t) DarwinForks {",
-    "detail": "public function exposes private type 'DarwinForks'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/tree.zig",
-    "source": "pub fn watch(pid: posix.pid_t) NoForks {",
-    "detail": "public function exposes private type 'NoForks'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -2069,20 +1999,6 @@
     "path": "src/orphans.zig",
     "source": "pub fn deinit(orphans: *Orphans) DeinitError!void {",
     "detail": "deinit should set orphans.* = undefined (has early return before invalidation)",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/orphans.zig",
-    "source": "pub fn begin() Spawn {",
-    "detail": "public function exposes private type 'Spawn'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/orphans.zig",
-    "source": "pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {",
-    "detail": "public function exposes private error set 'OwnError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {

@@ -524,7 +524,7 @@ pub const Child = enum(usize) {
         }
 
         /// Gives the right back, whether or not the child was reaped.
-        pub fn release(held: HeldReap) void {
+        pub fn release(held: Child.HeldReap) void {
             held.owner().releaseReap();
         }
     };
@@ -1409,7 +1409,7 @@ pub const Child = enum(usize) {
             return collected.value().stderr_truncated;
         }
         /// How the child ended.
-        pub fn term(collected: *const Output) Term {
+        pub fn term(collected: *const Output) Child.Term {
             return collected.value().term;
         }
         /// Whether the child was ended after its execution budget elapsed.
@@ -1944,22 +1944,22 @@ pub const Child = enum(usize) {
     }
 
     const WindowsCompletion = struct {
-        pub fn releaseSurvivors(child: *Child) TryWaitError!void {
+        pub fn releaseSurvivors(child: *Child) Child.TryWaitError!void {
             try child.releaseJobSurvivors();
         }
-        pub fn end(child: *Child) TryWaitError!void {
+        pub fn end(child: *Child) Child.TryWaitError!void {
             const job = State.get(child).job orelse return error.Unexpected;
             if (win32.TerminateJobObject(job, 1) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
         }
-        pub fn empty(child: *Child) TryWaitError!bool {
+        pub fn empty(child: *Child) Child.TryWaitError!bool {
             const job = State.get(child).job orelse return error.Unexpected;
             var counts: win32.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = undefined;
             if (win32.QueryInformationJobObject(job, win32.JobObjectBasicAccountingInformation, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
             return counts.ActiveProcesses == 0;
         }
-        pub fn ended(child: *Child) TryWaitError!bool {
+        pub fn ended(child: *Child) Child.TryWaitError!bool {
             if (State.get(child).tree_ended) return true;
             const job = State.get(child).job orelse return error.Unexpected;
             const port = State.get(child).job_port orelse return error.Unexpected;

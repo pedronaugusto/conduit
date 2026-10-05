@@ -215,7 +215,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     ///
     /// Safe to call from another task while the master is being read or written.
     /// That is what makes window-size forwarding possible at all — see `Proxy`.
-    pub fn resize(pty: *Pty, new_size: Size) ResizeError!void {
+    pub fn resize(pty: *Pty, new_size: tty.Size) ResizeError!void {
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
             geometry.lock();
@@ -239,7 +239,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// Windows a pseudoconsole cannot be asked, so this answers with what `open`
     /// or `resize` last set. Safe to read while resize is in flight; the OS
     /// change and cached geometry are serialized together on Windows.
-    pub fn size(pty: *const Pty) SizeError!Size {
+    pub fn size(pty: *const Pty) SizeError!tty.Size {
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
             geometry.lock();

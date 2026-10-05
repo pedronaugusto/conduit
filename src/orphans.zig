@@ -412,7 +412,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             return spawn;
         }
 
-        pub fn begin() Spawn {
+        pub fn begin() Orphans.Spawn {
             if (!supported) return Spawn.init(null, false);
             gate.lockShared();
             return Spawn.init(current, true);
@@ -422,7 +422,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// the child is not on it, and the caller ends and reaps it: a child
         /// conduit cannot tell from an orphan is not one to hand back.
         /// Unexpected after successful registration or finish; failed registration may retry.
-        pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {
+        pub fn started(spawn: *Spawn, pid: posix.pid_t) Orphans.OwnError!void {
             const state = spawn.inner();
             if (state.lifetime != .ready) return error.Unexpected;
             if (!supported or state.orphans == null) {
