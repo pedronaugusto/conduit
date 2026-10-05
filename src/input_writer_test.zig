@@ -6,13 +6,14 @@ const InputWriter = conduit.InputWriter;
 const Child = conduit.Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 const testing = std.testing;
+const test_options = @import("conduit_test_options");
 const io = testing.io;
 const gpa = testing.allocator;
 const budget_ms = 5000;
 
 fn spawn(mode: []const u8) !Child {
     return Child.spawn(io, gpa, .{
-        .argv = &.{ @import("conduit_test_options").input_fixture, mode },
+        .argv = &.{ test_options.input_fixture, mode },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
 }

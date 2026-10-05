@@ -4,13 +4,14 @@ const conduit = @import("../conduit.zig");
 const Child = conduit.Child;
 const Watchdog = @import("../testing/support.zig").Watchdog;
 const testing = std.testing;
+const test_options = @import("conduit_test_options");
 const io = testing.io;
 const gpa = testing.allocator;
 const budget_ms = 5000;
 
 fn spawn(mode: []const u8) !Child {
     return Child.spawn(io, gpa, .{
-        .argv = &.{ @import("conduit_test_options").input_fixture, mode },
+        .argv = &.{ test_options.input_fixture, mode },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
 }
@@ -108,7 +109,7 @@ test "input for a child with no input pipe is refused, and the child is reaped" 
     try watchdog.start(io);
     defer watchdog.deinit(io);
     var child = try Child.spawn(io, gpa, .{
-        .argv = &.{ @import("conduit_test_options").input_fixture, "stall" },
+        .argv = &.{ test_options.input_fixture, "stall" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.release(io) catch unreachable;

@@ -55,13 +55,15 @@ const testing_hook = @import("tree.zig").testing_hook;
 const NoForks = access.NoForks;
 const Members = @import("tree.zig").Members;
 const members = @import("tree.zig").members;
+const Watchdog = @import("testing/support.zig").Watchdog;
+const test_options = @import("conduit_test_options");
 const membersLinux = access.membersLinux;
 const membersDarwin = access.membersDarwin;
 test "a descendant snapshot cannot authorize a signal to an unrelated captured identity" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
@@ -294,7 +296,7 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
-        .argv = &.{@import("conduit_test_options").tree_fixture},
+        .argv = &.{test_options.tree_fixture},
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(testing.io);
@@ -331,7 +333,7 @@ test "a failed tree fixture releases the descendant it still owns" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
-        .argv = &.{ @import("conduit_test_options").tree_fixture, "--fail-report" },
+        .argv = &.{ test_options.tree_fixture, "--fail-report" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .pipe } },
     });
     defer child.deinit(testing.io);
@@ -387,7 +389,7 @@ test "a captured process keeps its identity across exec" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
@@ -419,7 +421,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;

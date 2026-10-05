@@ -22,6 +22,7 @@ const untilAny = Expect.untilAny;
 const testing = std.testing;
 const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
+const Deadline = @import("deadline.zig").Deadline;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;
@@ -414,7 +415,7 @@ test "a buffer that fills says so, and discard makes room" {
 /// Waits for the child to end, and kills it if it will not within the budget,
 /// so a misbehaving child fails a test rather than stopping the run.
 fn waitWithin(io: std.Io, child: *Child) !Child.Term {
-    const deadline: @import("deadline.zig").Deadline = .in(io, budget_ms);
+    const deadline: Deadline = .in(io, budget_ms);
     while (true) {
         if (try child.tryWait()) |term| return term;
         if (deadline.remainingMs(io) == 0) break;

@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("child/state.zig");
 const access = @import("handles.zig").test_access;
 const file = @import("handles.zig").file;
 const setCloseOnExec = @import("handles.zig").setCloseOnExec;
@@ -17,16 +16,19 @@ const opening_is_two_calls = @import("handles.zig").opening_is_two_calls;
 const ForkGap = @import("handles.zig").ForkGap;
 const PipeError = @import("handles.zig").PipeError;
 const pipe = @import("handles.zig").pipe;
+const Child = @import("child.zig").Child;
+const Watchdog = @import("testing/support.zig").Watchdog;
+const test_options = @import("conduit_test_options");
 const pipePosix = access.pipePosix;
 test "Windows a closed pipe is a broken write and a file keeps its unexpected error" {
     if (!is_windows) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try @import("child.zig").Child.spawn(io, testing.allocator, .{
-        .argv = &.{ @import("conduit_test_options").input_fixture, "exit" },
+    var child = try Child.spawn(io, testing.allocator, .{
+        .argv = &.{ test_options.input_fixture, "exit" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer {

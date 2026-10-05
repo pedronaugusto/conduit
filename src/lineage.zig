@@ -7,7 +7,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const c = std.c;
 const posix = std.posix;
-const tree = if (builtin.os.tag == .windows) struct {} else @import("tree.zig");
+const tree = @import("tree.zig");
+const handles = @import("handles.zig");
 
 /// Test-only observer delay exposes the window without changing the fixture.
 pub const testing_hook = struct {
@@ -53,7 +54,7 @@ const Darwin = struct {
         const queue = c.kqueue();
         if (queue < 0) return error.SystemResources;
         errdefer _ = c.close(queue);
-        const wake = @import("handles.zig").pipe() catch return error.SystemResources;
+        const wake = handles.pipe() catch return error.SystemResources;
         errdefer {
             _ = c.close(wake[0]);
             _ = c.close(wake[1]);
@@ -189,7 +190,7 @@ const Darwin = struct {
     }
 };
 
-pub const test_access = if (@import("builtin").is_test) struct {
+pub const test_access = if (builtin.is_test) struct {
     pub const tree = fixture_tree;
     pub const Darwin = fixture_Darwin;
 } else struct {};

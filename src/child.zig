@@ -39,32 +39,40 @@ const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
 const Expect = @import("expect.zig").Expect;
-pub const InputWriter = @import("input_writer.zig").Writer(Child).InputWriter;
+pub const InputWriter = input_writer.Writer(Child).InputWriter;
 const Pty = @import("pty.zig").Pty;
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
-const tree = if (is_windows) struct {} else @import("tree.zig");
-const cgroups = if (is_windows) struct {} else @import("cgroup.zig");
-const wait_for = if (is_windows) struct {} else @import("wait.zig");
+const win32 = @import("win32.zig");
+const tree = @import("tree.zig");
+const cgroups = @import("cgroup.zig");
+const wait_for = @import("wait.zig");
 const orphans = @import("orphans.zig").Orphans;
+const Deadline = @import("deadline.zig").Deadline;
+const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
+const Watchdog = @import("testing/support.zig").Watchdog;
+const input_writer = @import("input_writer.zig");
+const completion = @import("child/windows/completion.zig");
+const contract = @import("child/contract.zig");
+const child_posix = @import("child/posix.zig");
+const child_windows = @import("child/windows.zig");
 
 /// Owns the lifecycle and created pipes. Move before sharing; never copy an owner.
 pub const Child = enum(usize) {
     _,
 
     /// A numeric process id on either platform, never a Windows handle.
-    pub const Id = @import("child/contract.zig").Id;
+    pub const Id = contract.Id;
 
     /// A process group. The process group id on POSIX; on Windows the id of the
     /// group `CREATE_NEW_PROCESS_GROUP` made, which is the child's process id.
-    pub const ProcessGroupId = @import("child/contract.zig").ProcessGroupId;
+    pub const ProcessGroupId = contract.ProcessGroupId;
 
     /// How a child process ended. Exit codes retain all 32 bits on Windows;
     /// POSIX exit codes occupy the low byte. Signals are POSIX-only, and stopped
     /// is never produced because these waits do not request stop notifications.
-    pub const Term = @import("child/contract.zig").Term;
+    pub const Term = contract.Term;
 
     /// Whether the child ended the way a program that did its job ends: exited,
     /// with a status of zero.
@@ -135,26 +143,26 @@ pub const Child = enum(usize) {
     ///
     /// A stream that is not piped is inherited from the parent, on both systems.
     /// Piping only what is read avoids the deadlock of a full pipe nobody drains.
-    pub const PipeOptions = @import("child/contract.zig").PipeOptions;
+    pub const PipeOptions = contract.PipeOptions;
 
     /// What one of the child's three standard streams is connected to.
     ///
     /// The five are the standard library's — `std.process.SpawnOptions.StdIo` has
     /// the same ones under the same names — because a caller who already knows
     /// that vocabulary should not have to learn a second one here.
-    pub const Stream = @import("child/contract.zig").Stream;
+    pub const Stream = contract.Stream;
 
     /// The child's three standard streams, each named on its own.
-    pub const Streams = @import("child/contract.zig").Streams;
+    pub const Streams = contract.Streams;
 
     /// What the child's standard input, output and error are connected to.
-    pub const Stdio = @import("child/contract.zig").Stdio;
+    pub const Stdio = contract.Stdio;
 
     /// Everything `spawn` needs.
-    pub const SpawnOptions = @import("child/contract.zig").SpawnOptions;
+    pub const SpawnOptions = contract.SpawnOptions;
 
     /// One policy for the descendants a child starts, on every platform.
-    pub const Descendants = @import("child/contract.zig").Descendants;
+    pub const Descendants = contract.Descendants;
 
     /// What the job object holding the child and its tree may use. Windows only.
     ///
@@ -171,7 +179,7 @@ pub const Child = enum(usize) {
     ///
     /// A `JobLimits` with anything set is `error.Unsupported` on POSIX, where
     /// `resource_limits` is the option that exists.
-    pub const JobLimits = @import("child/contract.zig").JobLimits;
+    pub const JobLimits = contract.JobLimits;
 
     /// What a child is given of the descriptors above 2 that the parent holds.
     ///
@@ -185,7 +193,7 @@ pub const Child = enum(usize) {
     /// On Windows there is no choice to make. A child is given the handles named
     /// in an attribute list and nothing else, which is `close_all` already; both
     /// values mean the same thing there.
-    pub const FdPolicy = @import("child/contract.zig").FdPolicy;
+    pub const FdPolicy = contract.FdPolicy;
 
     /// The user, group and file-creation mask a child starts with. POSIX only.
     ///
@@ -205,7 +213,7 @@ pub const Child = enum(usize) {
     /// user without lowering the groups that user was in here, and a caller who
     /// needs those dropped too should start the child through a program that does
     /// it — `su`, or one of their own.
-    pub const Credentials = @import("child/contract.zig").Credentials;
+    pub const Credentials = contract.Credentials;
 
     /// One resource limit to set in the child before `execve`. POSIX only.
     ///
@@ -220,22 +228,22 @@ pub const Child = enum(usize) {
     /// `.AS` and whatever else the target has; `std.posix.rlimit` is the soft and
     /// hard pair `setrlimit` takes. Neither exists as anything but `void` on
     /// Windows, where a non-empty list is `error.Unsupported`.
-    pub const ResourceLimit = @import("child/contract.zig").ResourceLimit;
+    pub const ResourceLimit = contract.ResourceLimit;
 
     /// Where the `PATH` that resolves a bare `argv[0]` comes from.
     ///
     /// On Windows the package resolves `.child_environ` before `CreateProcessW`,
     /// because that call otherwise searches the parent's PATH even when given a
     /// different environment. The other two remain `error.Unsupported` there.
-    pub const PathSearch = @import("child/contract.zig").PathSearch;
+    pub const PathSearch = contract.PathSearch;
 
-    pub const SpawnError = @import("child/contract.zig").SpawnError;
+    pub const SpawnError = contract.SpawnError;
 
     /// What an `execve` that failed means, as one of `SpawnError`.
     ///
     /// Both spawn paths on POSIX end here: the fork child reports the number it
     /// got back over its pipe, and `posix_spawn` returns it.
-    pub const execError = @import("child/contract.zig").execError;
+    pub const execError = contract.execError;
 
     /// Starts `options.argv` as a child process.
     ///
@@ -276,14 +284,14 @@ pub const Child = enum(usize) {
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
         state.allocator = allocator;
-        if (is_windows) return State.owner(Child, try @import("child/windows.zig").spawn(io, allocator, configured, state));
+        if (is_windows) return State.owner(Child, try child_windows.spawn(io, allocator, configured, state));
         // A job object is what these bound, and POSIX has no such container.
         // `resource_limits` is the option that exists here.
         if (options.job_limits.any()) return error.Unsupported;
-        return State.owner(Child, try @import("child/posix.zig").spawn(io, allocator, configured, state));
+        return State.owner(Child, try child_posix.spawn(io, allocator, configured, state));
     }
 
-    pub const ReleaseError = @import("child/contract.zig").ReleaseError;
+    pub const ReleaseError = contract.ReleaseError;
 
     /// Ends an unfinished contained scope, confirms completion, then closes
     /// the streams and lifecycle. Failure retains the Child and its scope for
@@ -376,11 +384,11 @@ pub const Child = enum(usize) {
     /// Containment facts for a survivor record, with no owned handles.
     /// The cgroup path borrows the buffer passed to containment; everything else
     /// is copied. Keep that buffer with the record, independently of this Child.
-    pub const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
+    pub const SupervisorRecord = contract.SupervisorRecord;
 
-    pub const Containment = @import("child/contract.zig").Containment;
+    pub const Containment = contract.Containment;
 
-    pub const ContainmentError = @import("child/contract.zig").ContainmentError;
+    pub const ContainmentError = contract.ContainmentError;
 
     /// Copies the detached group and, on Linux, the cgroup path, directory inode
     /// boot id and private supervisor identity. Available through retirement, until transfer or deinit. No cgroup is null;
@@ -419,7 +427,7 @@ pub const Child = enum(usize) {
         return null;
     }
 
-    pub const WaitError = @import("child/contract.zig").WaitError;
+    pub const WaitError = contract.WaitError;
 
     /// Blocks until the child ends, and returns how.
     ///
@@ -529,7 +537,7 @@ pub const Child = enum(usize) {
         }
     };
 
-    pub const WaitTimeoutError = @import("child/contract.zig").WaitTimeoutError;
+    pub const WaitTimeoutError = contract.WaitTimeoutError;
 
     /// Reaps the child if it ends within `timeout_ms`, and returns `null` if it
     /// does not.
@@ -563,8 +571,6 @@ pub const Child = enum(usize) {
         defer child.releaseReap();
         return child.reapWithin(io, deadline);
     }
-
-    const Deadline = @import("deadline.zig").Deadline;
 
     /// How long one wait on the child's process handle lasts before the caller is
     /// given a chance to notice it has been cancelled. `wait.zig` keeps the same
@@ -725,7 +731,7 @@ pub const Child = enum(usize) {
         }
     }
 
-    pub const TryWaitError = @import("child/contract.zig").TryWaitError;
+    pub const TryWaitError = contract.TryWaitError;
 
     /// Reaps the child if it has already ended, and returns `null` if it has not.
     ///
@@ -844,9 +850,9 @@ pub const Child = enum(usize) {
     /// What `kill` sends: the three requests to end that mean the same thing on
     /// both systems, the common POSIX signals by name, and any POSIX signal by
     /// number. `child_types.zig` says what each is on each system.
-    pub const Signal = @import("child/contract.zig").Signal;
+    pub const Signal = contract.Signal;
 
-    pub const KillError = @import("child/contract.zig").KillError;
+    pub const KillError = contract.KillError;
 
     /// Sends `signal` to the child and what it started: asks it to stop, or —
     /// with a signal that is not one of the three requests to end — to reload,
@@ -1096,7 +1102,7 @@ pub const Child = enum(usize) {
         try std.testing.expectError(error.PermissionDenied, signalOwnedTarget(Denied, 123, -123, .TERM));
     }
 
-    pub const KillWaitError = @import("child/contract.zig").KillWaitError;
+    pub const KillWaitError = contract.KillWaitError;
 
     /// Asks the child to end, insists after `grace_ms`, and reaps it.
     ///
@@ -1138,7 +1144,7 @@ pub const Child = enum(usize) {
         return child.wait(io);
     }
 
-    pub const WaitTreeError = @import("child/contract.zig").WaitTreeError;
+    pub const WaitTreeError = contract.WaitTreeError;
 
     /// Waits up to `timeout_ms` for everything the child started to end, and says
     /// whether it did. **Windows, and Linux for a child in a cgroup of its own.**
@@ -1426,9 +1432,9 @@ pub const Child = enum(usize) {
         }
     };
 
-    pub const OutputOptions = @import("child/contract.zig").OutputOptions;
+    pub const OutputOptions = contract.OutputOptions;
 
-    pub const OutputError = @import("child/contract.zig").OutputError;
+    pub const OutputError = contract.OutputError;
 
     /// Runs the child to the end and collects what it wrote.
     ///
@@ -1482,9 +1488,9 @@ pub const Child = enum(usize) {
         return child.outputOnTasks(io, allocator, options, until);
     }
 
-    pub const ExchangeOptions = @import("child/contract.zig").ExchangeOptions;
+    pub const ExchangeOptions = contract.ExchangeOptions;
 
-    pub const ExchangeError = @import("child/contract.zig").ExchangeError;
+    pub const ExchangeError = contract.ExchangeError;
 
     /// Runs the child to the end with `input` on its standard input, which
     /// then closes, and collects what it wrote: `output` with the input
@@ -1531,7 +1537,7 @@ pub const Child = enum(usize) {
             // The task closes it once written.
             state.stdin = null;
         }
-        var serial: @import("serial_allocator.zig").SerialAllocator = .{ .parent = allocator, .io = io };
+        var serial: SerialAllocator = .{ .parent = allocator, .io = io };
         var collected = try child.outputUntil(io, serial.allocator(), .{
             .max_bytes = options.max_bytes,
             .grace_ms = 0,
@@ -1934,7 +1940,7 @@ pub const Child = enum(usize) {
             .{ .exited = code }
         else
             .{ .unknown = 0 };
-        const completed = try @import("child/windows/completion.zig").poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);
+        const completed = try completion.poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);
         if (completed == null) return null;
         if (State.get(child).descendants == .contain or State.get(child).end_descendants)
             State.get(child).scope_complete = true;
@@ -2118,7 +2124,7 @@ pub const Child = enum(usize) {
         if (!tree.Forks.supported) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+        var watchdog: Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
         var child = try Child.spawn(io, testing.allocator, .{
@@ -2151,7 +2157,7 @@ pub const Child = enum(usize) {
     test "output on tasks bounds draining by elapsed time after a delayed sleep" {
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+        var watchdog: Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
@@ -2204,7 +2210,7 @@ pub const Child = enum(usize) {
         if (is_windows) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+        var watchdog: Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
 

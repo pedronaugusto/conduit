@@ -1,4 +1,5 @@
 //! The nonblocking Windows publication decision, shared by every reap path.
+const std = @import("std");
 const Child = @import("../contract.zig");
 
 pub fn poll(comptime System: type, context: anytype, term: Child.Term, policy: Child.Descendants, ending: bool) Child.TryWaitError!?Child.Term {
@@ -12,7 +13,6 @@ pub fn poll(comptime System: type, context: anytype, term: Child.Term, policy: C
 }
 
 test "Windows completion keeps the root status unpublished while Job members remain" {
-    const std = @import("std");
     const Backend = struct {
         members: usize = 1,
         stops: usize = 0,
@@ -36,7 +36,6 @@ test "Windows completion keeps the root status unpublished while Job members rem
 }
 
 test "Windows completion reports a failed Job stop or accounting query" {
-    const std = @import("std");
     const Backend = struct {
         fail_stop: bool = true,
         fail_query: bool = false,
@@ -63,7 +62,6 @@ test "Windows completion reports a failed Job stop or accounting query" {
 }
 
 test "Windows completion waits for the Job termination notification after accounting reaches zero" {
-    const std = @import("std");
     const Backend = struct {
         notified: bool = false,
         fn releaseSurvivors(_: *@This()) !void {}

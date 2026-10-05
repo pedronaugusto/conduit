@@ -39,6 +39,9 @@ const posix = std.posix;
 const c = std.c;
 const Deadline = @import("deadline.zig").Deadline;
 const wait_for = @import("wait.zig");
+const adoption_record = @import("orphans/adoption_record.zig");
+const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
+const cgroups = @import("cgroup.zig");
 
 // A recycled entry in a process-table snapshot, before it is signalled.
 var snapshot_witness: if (builtin.is_test) ?posix.pid_t else void = if (builtin.is_test) null else {};
@@ -374,7 +377,7 @@ fn parseLinuxStat(text: []const u8) ?LinuxRelation {
 }
 
 /// One procfs snapshot for the adoption owner, checked against its held pidfd afterwards.
-pub fn adoptionRecord(pid: posix.pid_t) ?@import("orphans/adoption_record.zig").Record {
+pub fn adoptionRecord(pid: posix.pid_t) ?adoption_record.Record {
     const relation = processRelationLinux(pid) orelse return null;
     return .{ .pid = pid, .start = relation.start orelse return null, .group = relation.pgrp, .session = relation.session };
 }
@@ -517,10 +520,10 @@ pub const RecordedOptions = struct {
     start: u64,
     group: ?posix.pid_t = null,
     /// A handle returned by `Cgroup.openRecorded`, borrowed for this call.
-    cgroup: ?*@import("cgroup.zig").Cgroup.Recorded = null,
+    cgroup: ?*cgroups.Cgroup.Recorded = null,
     /// Linux: the private adoption owner. It receives TERM as a request to
     /// empty its scope; never kill that owner before it has reaped the tree.
-    supervisor: ?@import("child/contract.zig").SupervisorRecord = null,
+    supervisor: ?SupervisorRecord = null,
     grace_ms: u32,
 };
 
@@ -539,7 +542,7 @@ pub const RecordedOptions = struct {
 pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
     if (options.supervisor) |record| {
         if (builtin.os.tag != .linux) return error.Unsupported;
-        const boot = @import("cgroup.zig").bootIdentity() orelse return error.Unproven;
+        const boot = cgroups.bootIdentity() orelse return error.Unproven;
         if (!std.mem.eql(u8, &boot, &record.boot)) return error.Unproven;
         var ended = false;
         if (try captureStarted(record.pid, record.start)) |captured| {
@@ -1593,7 +1596,7 @@ test "CapturedPid does not expose signal identities as writable fields" {
     try std.testing.expect(@typeInfo(CapturedPid) == .@"enum");
 }
 
-pub const test_access = if (@import("builtin").is_test) struct {
+pub const test_access = if (builtin.is_test) struct {
     pub const current = DarwinProcess.current;
     pub const capture = fixture_Process.capture;
     pub const Deadline = fixture_Deadline;

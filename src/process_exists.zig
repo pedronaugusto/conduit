@@ -6,7 +6,7 @@ const posix = std.posix;
 const Id = @import("child/contract.zig").Id;
 
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
+const win32 = @import("win32.zig");
 
 /// Whether a process has the id `pid` now: `true`, `false`, or `null` where
 /// the system will not say.

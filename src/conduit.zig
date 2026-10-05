@@ -63,6 +63,7 @@ const builtin = @import("builtin");
 const tty = @import("conduit.tty");
 const environ_impl = @import("environ.zig");
 const shell = @import("shell.zig");
+const tree = @import("tree.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -238,7 +239,7 @@ pub const processExists = @import("process_exists.zig").processExists;
 pub const startTime = if (is_windows)
     @compileError("startTime is POSIX-only")
 else
-    @import("tree.zig").startTime;
+    tree.startTime;
 /// A process held by a kernel identity rather than by its number — a pidfd
 /// on Linux, a stable unique process id on Darwin. Darwin checks that id
 /// before refreshing the audit version for delivery, so exec preserves the
@@ -248,7 +249,7 @@ else
 pub const CapturedPid = if (is_windows)
     @compileError("CapturedPid is POSIX-only")
 else
-    @import("tree.zig").CapturedPid;
+    tree.CapturedPid;
 /// Holds the process a pid names if it started when `startTime` said it did,
 /// and `null` if nothing runs there or what does started at another time:
 /// how a program ends what a crashed run of it left, with no window in which
@@ -257,10 +258,10 @@ else
 pub const captureStarted = if (is_windows)
     @compileError("captureStarted is POSIX-only")
 else
-    @import("tree.zig").captureStarted;
+    tree.captureStarted;
 /// End a process recorded by an earlier run, together with its provable
 /// descendants, preferring a verified recorded cgroup when one is available.
 pub const endRecorded = if (is_windows)
     @compileError("endRecorded is POSIX-only")
 else
-    @import("tree.zig").endRecorded;
+    tree.endRecorded;

@@ -20,7 +20,9 @@ const tty = @import("conduit.tty");
 const tree = @import("../tree.zig");
 const cgroup = @import("../cgroup.zig");
 const Orphans = @import("../orphans.zig").Orphans;
-const supervisor = if (builtin.os.tag == .linux) @import("../supervisor.zig") else struct {};
+const supervisor = @import("../supervisor.zig");
+const SpawnCalls = @import("../testing/support.zig").SpawnCalls;
+const lineage = @import("../lineage.zig");
 
 const file = handles.file;
 
@@ -160,7 +162,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     const parent = c.getpid();
 
     handles.ForkGap.startingAChild();
-    if (builtin.is_test) @import("../testing/support.zig").SpawnCalls.forks += 1;
+    if (builtin.is_test) SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
         var root_parent = parent;
@@ -229,9 +231,9 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // The watch, then the word to go on. This end of the pipe's reading side
     // is still open while the byte is written, so the write cannot meet a
     // pipe with no reader however the child has fared.
-    var lineage: ?*@import("../lineage.zig").Tracker = null;
-    if (comptime @import("../lineage.zig").supported) if (options.descendants == .contain) {
-        lineage = @import("../lineage.zig").Tracker.start(pid) catch |err| {
+    var tracker: ?*lineage.Tracker = null;
+    if (comptime lineage.supported) if (options.descendants == .contain) {
+        tracker = lineage.Tracker.start(pid) catch |err| {
             discard(pid);
             file(report[0]).close(io);
             if (go) |ends| {
@@ -241,7 +243,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
             return err;
         };
     };
-    errdefer if (lineage) |tracker| tracker.deinit();
+    errdefer if (tracker) |owned| owned.deinit();
     const scope_record: ?Child.SupervisorRecord = if (supervised) .{
         .pid = pid,
         .start = (tree.startTime(pid) catch null) orelse {
@@ -305,7 +307,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(joined) else .none;
     contained = null;
     const child = started(state, pid, forks, kept, &plan, options);
-    state.lineage = lineage;
+    state.lineage = tracker;
     if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
         state.supervisor = .{ .channel = ends[0], .record = scope_record.? };
         state.process_id = root_pid;

@@ -53,14 +53,16 @@ const c = std.c;
 const Child = @import("child.zig").Child;
 
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
+const win32 = @import("win32.zig");
 const handles = @import("handles.zig");
-const tree = if (is_windows) struct {} else @import("tree.zig");
+const tree = @import("tree.zig");
 const Orphans = @import("orphans.zig").Orphans;
-const wait_for = if (is_windows) struct {} else @import("wait.zig");
+const wait_for = @import("wait.zig");
 
 const Term = Child.Term;
 const Deadline = @import("deadline.zig").Deadline;
+const Cgroup = @import("cgroup.zig").Cgroup;
+const Watchdog = @import("testing/support.zig").Watchdog;
 
 // Published before signalling, and retained until the held reap ends the tree.
 // Only the small deadline snapshot is under this lock; no I/O is done in it.
@@ -520,7 +522,7 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
     const TreeReach = union(enum) {
         group: posix.pid_t,
-        contained: *const @import("cgroup.zig").Cgroup,
+        contained: *const Cgroup,
 
         fn empty(reach: TreeReach, leader: posix.pid_t) bool {
             return switch (reach) {
@@ -534,7 +536,7 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// interrupted poll spends only the time it actually took, and a delayed
     /// wake spends all of it. Neither changes the deadline.
     fn treeGrace(reaper: *Reaper, io: std.Io, wake: posix.fd_t, reach: TreeReach) enum { empty, elapsed, woken } {
-        const deadline: @import("deadline.zig").Deadline = .in(io, reaper.inner().options.tree_grace_ms);
+        const deadline: Deadline = .in(io, reaper.inner().options.tree_grace_ms);
         var slice_ms: u32 = 1;
         while (true) {
             // A stop owns one grace, including cleanup after the root exits.
@@ -599,7 +601,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     var child = try Child.spawn(io, testing.allocator, .{
@@ -699,7 +701,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
     if (is_windows) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     var child = try Child.spawn(io, testing.allocator, .{

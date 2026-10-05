@@ -6,16 +6,19 @@ const Child = @import("contract.zig");
 const posix = std.posix;
 const windows = std.os.windows;
 const is_windows = builtin.os.tag == .windows;
-const tree = if (is_windows) struct {} else @import("../tree.zig");
-const cgroups = if (is_windows) struct {} else @import("../cgroup.zig");
+const tree = @import("../tree.zig");
+const cgroups = @import("../cgroup.zig");
 const Id = std.process.Child.Id;
+const Pty = @import("../pty.zig").Pty;
+const Supervisor = @import("../supervisor.zig").Supervisor;
+const Tracker = @import("../lineage.zig").Tracker;
 const ProcessGroupId = Child.ProcessGroupId;
 const Term = Child.Term;
 
 stdin: ?std.Io.File = null,
 stdout: ?std.Io.File = null,
 stderr: ?std.Io.File = null,
-pty: ?@import("../pty.zig").Pty.Master = null,
+pty: ?Pty.Master = null,
 allocator: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.
 descendants: Child.Descendants = .survive,
@@ -70,9 +73,9 @@ forks: if (is_windows) void else tree.Forks,
 /// none, and `kill` walks. `deinit` removes it.
 cgroup: if (is_windows) void else cgroups.Cgroup,
 /// Linux: private adoption owner, with its root status returned on the channel.
-supervisor: if (builtin.os.tag == .linux) ?@import("../supervisor.zig").Supervisor else void = if (builtin.os.tag == .linux) null else {},
+supervisor: if (builtin.os.tag == .linux) ?Supervisor else void = if (builtin.os.tag == .linux) null else {},
 /// Darwin: lineage observer, started before the root is released to exec.
-lineage: if (is_windows) void else ?*@import("../lineage.zig").Tracker = if (is_windows) {} else null,
+lineage: if (is_windows) void else ?*Tracker = if (is_windows) {} else null,
 /// How the child ended, once it has been reaped. While this is `null` the
 /// child is still a process the operating system knows about.
 ///

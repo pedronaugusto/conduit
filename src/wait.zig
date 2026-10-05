@@ -291,7 +291,7 @@ fn endedOrWokenKqueue(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcom
     return .ended;
 }
 
-pub const test_access = if (@import("builtin").is_test) struct {
+pub const test_access = if (builtin.is_test) struct {
     pub const p_pid = fixture_p_pid;
     pub const WaitId = fixture_WaitId;
     pub const waitid_flags = fixture_waitid_flags;

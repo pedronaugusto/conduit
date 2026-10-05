@@ -11,6 +11,7 @@ const Watch = @import("wait.zig").Watch;
 const Outcome = @import("wait.zig").Outcome;
 const Ended = @import("wait.zig").Ended;
 const endedUnreaped = @import("wait.zig").endedUnreaped;
+const Watchdog = @import("testing/support.zig").Watchdog;
 const p_pid = access.p_pid;
 const WaitId = access.WaitId;
 const waitid_flags = access.waitid_flags;
@@ -95,7 +96,7 @@ test "a watch on a child that is still running says so" {
 test "exit observation keeps the child's identity until its owner reaps it" {
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
+    var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;

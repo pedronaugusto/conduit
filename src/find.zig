@@ -12,7 +12,7 @@ const Allocator = std.mem.Allocator;
 
 const is_windows = builtin.os.tag == .windows;
 const windows_search = @import("child/windows/search.zig");
-const child_windows = if (is_windows) @import("child/windows.zig") else struct {};
+const child_windows = @import("child/windows.zig");
 
 /// Where `name` resolves for a child given `environ`, by the rules
 /// `Child.spawn` uses with `path_search = .child_environ`, or `null` when it

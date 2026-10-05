@@ -30,9 +30,9 @@ const Child = conduit.Child;
 const Deadline = @import("../deadline.zig").Deadline;
 const Pty = conduit.Pty;
 const handles = @import("../handles.zig");
-const wait_for = if (is_windows) struct {} else @import("../wait.zig");
-const tree = if (is_windows) struct {} else @import("../tree.zig");
-const cgroup = if (is_windows) struct {} else @import("../cgroup.zig");
+const wait_for = @import("../wait.zig");
+const tree = @import("../tree.zig");
+const cgroup = @import("../cgroup.zig");
 const trace = @import("../trace.zig");
 const Watchdog = @import("../testing/support.zig").Watchdog;
 
@@ -41,7 +41,9 @@ const gpa = std.testing.allocator;
 const testing = std.testing;
 
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("../win32.zig") else struct {};
+const win32 = @import("../win32.zig");
+const placeMasterForTest = @import("../pty.zig").placeMasterForTest;
+const spawn_path = @import("posix/spawn.zig");
 
 /// How long any one test will wait for a child to say or do something before
 /// it gives up. Generous, because it is a failure budget and not a timing
@@ -75,7 +77,7 @@ const script = if (is_windows) struct {
     /// A native child creates a descendant in a separate console and prints
     /// its id. No shell launch, no inherited pipe, and both belong to the
     /// child's job. Built only for the test module.
-    const detached_grandchild = [_][]const u8{@import("conduit_test_options").tree_fixture};
+    const detached_grandchild = [_][]const u8{test_options.tree_fixture};
     /// Writes a cursor-shape sequence to its terminal and stays there.
     ///
     /// `DECSCUSR` is the one a console host that models what passes through it
@@ -1337,7 +1339,7 @@ test "a child on a terminal opens it as one poll can wait on" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     var child = try Child.spawn(io, gpa, .{
-        .argv = &.{@import("conduit_test_options").tty_fixture},
+        .argv = &.{test_options.tty_fixture},
         .stdio = .{ .pty = &pty },
         .detach = true,
     });
@@ -3552,7 +3554,7 @@ extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 //======================================================================
 
 /// Whether `Child.spawn` has a `posix_spawn` path in this build.
-const fast_path = if (is_windows) false else @import("posix/spawn.zig").available;
+const fast_path = if (is_windows) false else spawn_path.available;
 
 test "both spawn paths start the same child" {
     var watchdog: Watchdog = .init(@src());
@@ -4510,7 +4512,6 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     try watchdog.start(io);
     defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
-    const spawn_path = @import("posix/spawn.zig");
     // A cgroup of the child's own sends any spawn to the fork: this is about
     // the ones that take `posix_spawn`.
     cgroup.testing_hook.off = true;
@@ -4553,7 +4554,6 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
 
 test "a spawn with a parent death signal takes the fork, where the signal is set" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    const spawn_path = @import("posix/spawn.zig");
     try testing.expect(!spawn_path.suits(.{ .argv = &script.greeting, .parent_death_signal = .kill }));
     try testing.expectEqual(spawn_path.available, spawn_path.suits(.{ .argv = &script.greeting }));
 }
@@ -4843,7 +4843,7 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     defer pair.close(io);
     var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
     defer stdin.restore();
-    @import("../pty.zig").placeMasterForTest(&pair, 0);
+    placeMasterForTest(&pair, 0);
     // Close the temporary master before restoring the runner's stdin,
     // including on a failed spawn or assertion.
     defer pair.closeMaster(io);

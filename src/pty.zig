@@ -36,7 +36,8 @@ const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
-const win32 = if (is_windows) @import("win32.zig") else struct {};
+const win32 = @import("win32.zig");
+const Watchdog = @import("testing/support.zig").Watchdog;
 
 const Size = tty.Size;
 const file = handles.file;
@@ -669,7 +670,6 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     //======================================================================
 
     const testing = std.testing;
-    const Watchdog = @import("testing/support.zig").Watchdog;
 
     /// Reads the master and throws it away, on a task of its own.
     ///

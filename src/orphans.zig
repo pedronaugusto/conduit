@@ -96,9 +96,10 @@ const posix = std.posix;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 
-const tree = if (Orphans.supported) @import("tree.zig") else struct {};
-const wait_for = if (Orphans.supported) @import("wait.zig") else struct {};
+const tree = @import("tree.zig");
+const wait_for = @import("wait.zig");
 const linux = std.os.linux;
+const adoption_record = @import("orphans/adoption_record.zig");
 
 const Implementation = struct {
     /// Every list here. Must be safe to use from more than one thread: spawns and
@@ -293,7 +294,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// A copied process identity. Retain both fields; the pid alone is not
     /// authority to signal. Save this boot's identity alongside persistent
     /// records, then use captureStarted or endRecorded within that boot.
-    pub const Record = @import("orphans/adoption_record.zig").Record;
+    pub const Record = adoption_record.Record;
 
     pub const ListError = LookError || error{IdentityUnavailable};
 

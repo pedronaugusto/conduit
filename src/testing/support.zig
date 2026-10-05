@@ -4,6 +4,7 @@
 //! that imports `conduit`.
 
 const std = @import("std");
+const Deadline = @import("../deadline.zig").Deadline;
 
 /// Turns a hang into a failure that says which test hung.
 ///
@@ -59,7 +60,7 @@ pub const Watchdog = struct {
     }
 
     fn watch(watchdog: *Watchdog, io: std.Io) std.Io.Cancelable!void {
-        const deadline: @import("../deadline.zig").Deadline = .in(io, watchdog.limit_ms);
+        const deadline: Deadline = .in(io, watchdog.limit_ms);
         while (deadline.remainingMs(io) > 0) {
             if (watchdog.finished.load(.acquire)) return;
             try std.Io.sleep(io, .fromMilliseconds(@min(50, deadline.remainingMs(io))), .awake);

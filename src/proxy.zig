@@ -53,6 +53,7 @@ const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
+const Deadline = @import("deadline.zig").Deadline;
 
 /// The files to move bytes between, and the buffers to move them in.
 ///
@@ -254,7 +255,7 @@ fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!v
     try std.Io.checkCancel(io);
     const interval_ms = @max(1, resize.interval_ms);
     const ticket = resize.ticket orelse return std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
-    const deadline: @import("deadline.zig").Deadline = .in(io, interval_ms);
+    const deadline: Deadline = .in(io, interval_ms);
     while (true) {
         const now = ticket.load(.acquire);
         if (now != seen_ticket.*) {
@@ -441,7 +442,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     // proxy is reading, exactly as if it had been typed.
     try user.writeFile().writeStreamingAll(io, "\x03");
 
-    const deadline: @import("deadline.zig").Deadline = .in(io, 5000);
+    const deadline: Deadline = .in(io, 5000);
     const term = while (deadline.remainingMs(io) > 0) {
         if (try child.tryWait()) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
@@ -496,7 +497,7 @@ test "the window size is forwarded onto the pair" {
 }
 
 fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
-    const deadline: @import("deadline.zig").Deadline = .in(io, 5000);
+    const deadline: Deadline = .in(io, 5000);
     while (deadline.remainingMs(io) > 0) {
         const now = try pty.size();
         if (now.rows == want.rows and now.cols == want.cols) return;
