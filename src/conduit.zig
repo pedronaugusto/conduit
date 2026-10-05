@@ -98,18 +98,18 @@ comptime {
 }
 
 /// A pseudo-terminal pair.
-pub const Pty = @import("Pty.zig").Pty;
+pub const Pty = @import("pty.zig").Pty;
 /// A child process on a pseudo-terminal, on pipes, or on inherited streams.
-pub const Child = @import("Child.zig").Child;
+pub const Child = @import("child.zig").Child;
 /// Bounded input, queued without waiting for a child to read, on its own task.
-pub const InputWriter = @import("Child.zig").InputWriter;
+pub const InputWriter = @import("child.zig").InputWriter;
 /// A background wait, so a caller can poll for a child's death.
-pub const Reaper = @import("Reaper.zig").Reaper;
+pub const Reaper = @import("reaper.zig").Reaper;
 /// Linux, opt-in: this process as the parent of every orphan below it, the
 /// ended ones reaped whenever this package reaps or spawns a child, and all
 /// of them ended by `end`, for a program that starts every child through
 /// this package. No task, no timer.
-pub const Orphans = @import("Orphans.zig").Orphans;
+pub const Orphans = @import("orphans.zig").Orphans;
 /// A Linux child's cgroup. `Cgroup.openRecorded` returns the separate
 /// `Cgroup.Recorded` handle for a cgroup saved by an earlier run. On other
 /// systems the handles are empty.
@@ -127,10 +127,10 @@ pub const parseBootIdentity = @import("cgroup.zig").parseBootIdentity;
 pub const console = tty.console;
 /// A byte pump, and a window-size forwarder, between a pseudo-terminal master
 /// and a pair of files.
-pub const Proxy = @import("Proxy.zig");
+pub const Proxy = @import("proxy.zig");
 /// A conversation with a child: wait for a byte pattern, for any of several,
 /// or for a byte count, each with a deadline, then send a reply.
-pub const Expect = @import("Expect.zig").Expect;
+pub const Expect = @import("expect.zig").Expect;
 
 /// How a child process ended, including the full Windows exit code.
 pub const Term = Child.Term;

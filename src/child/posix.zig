@@ -19,7 +19,7 @@ const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
 const tree = @import("../tree.zig");
 const cgroup = @import("../cgroup.zig");
-const Orphans = @import("../Orphans.zig").Orphans;
+const Orphans = @import("../orphans.zig").Orphans;
 const supervisor = if (builtin.os.tag == .linux) @import("../supervisor.zig") else struct {};
 
 const file = handles.file;

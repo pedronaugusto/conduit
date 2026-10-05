@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("Child/state.zig");
+const State = @import("child/state.zig");
 const access = @import("handles.zig").test_access;
 const file = @import("handles.zig").file;
 const setCloseOnExec = @import("handles.zig").setCloseOnExec;
@@ -25,7 +25,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try @import("Child.zig").Child.spawn(io, testing.allocator, .{
+    var child = try @import("child.zig").Child.spawn(io, testing.allocator, .{
         .argv = &.{ @import("conduit_test_options").input_fixture, "exit" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });

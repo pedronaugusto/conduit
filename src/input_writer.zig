@@ -36,13 +36,13 @@ pub fn Writer(comptime Child: type) type {
             /// A terminal has no separate input to close and is `error.NoStdinPipe`.
             /// Do not use an earlier copy of the pipe after this succeeds.
             pub fn init(io: std.Io, allocator: std.mem.Allocator, child: *Child, options: Options) StartError!InputWriter {
-                const child_state = @import("Child/state.zig").optional(child) orelse return error.NoStdinPipe;
+                const child_state = @import("child/state.zig").optional(child) orelse return error.NoStdinPipe;
                 const file = child_state.stdin orelse return error.NoStdinPipe;
                 const state = try allocator.create(State);
                 errdefer allocator.destroy(state);
                 state.* = .{ .allocator = allocator, .file = file, .max_backlog = options.max_backlog };
                 try state.group.concurrent(io, run, .{ state, io });
-                @import("Child/state.zig").get(child).stdin = null;
+                @import("child/state.zig").get(child).stdin = null;
                 return @enumFromInt(@intFromPtr(state)); // safe: the owner retains this allocated State until deinit.
             }
 

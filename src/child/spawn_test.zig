@@ -4837,7 +4837,7 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     defer pair.close(io);
     var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
     defer stdin.restore();
-    @import("../Pty.zig").placeMasterForTest(&pair, 0);
+    @import("../pty.zig").placeMasterForTest(&pair, 0);
     // Close the temporary master before restoring the runner's stdin,
     // including on a failed spawn or assertion.
     defer pair.closeMaster(io);

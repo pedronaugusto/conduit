@@ -10,23 +10,23 @@
     "src/testing/*"
   ],
   "function_exceptions": {
-    "src/Child.zig:outputPolled": {
+    "src/child.zig:outputPolled": {
       "lines": 123,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/Child/posix.zig:spawn": {
+    "src/child/posix.zig:spawn": {
       "lines": 270,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/Child/posix.zig:childMain": {
+    "src/child/posix.zig:childMain": {
       "lines": 131,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/Child/windows.zig:spawn": {
+    "src/child/windows.zig:spawn": {
       "lines": 143,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     },
-    "src/InputWriter.zig:Writer": {
+    "src/input_writer.zig:Writer": {
       "lines": 220,
       "reason": "Existing implementation at adoption; this exact bound cannot grow and shrinks when the function is split."
     }

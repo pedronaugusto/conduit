@@ -48,7 +48,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Pty = @import("Pty.zig").Pty;
+const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
@@ -271,7 +271,7 @@ fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!v
 //======================================================================
 
 const testing = std.testing;
-const Child = @import("Child.zig").Child;
+const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 
 test "empty transfer buffers are rejected before either direction starts" {

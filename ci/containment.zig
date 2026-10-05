@@ -25,7 +25,7 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.startsWith(u8, line, "| macOS |") and std.mem.indexOf(u8, line, "lineage") != null) row = line;
     }
     try boundary(a, row orelse return error.MissingDarwinPlatformRow);
-    const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "src/Child/contract.zig", a, .limited(1024 * 1024));
+    const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "src/child/contract.zig", a, .limited(1024 * 1024));
     const start = (std.mem.indexOf(u8, source, "pub const Descendants = enum {") orelse return error.MissingDescendantsPolicy) + "pub const Descendants = enum {".len;
     const end = std.mem.indexOfPos(u8, source, start, "contain,") orelse return error.MissingContainmentPolicy;
     try boundary(a, source[start..end]);

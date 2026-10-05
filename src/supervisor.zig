@@ -5,7 +5,7 @@ const std = @import("std");
 const c = std.c;
 const posix = std.posix;
 const linux = std.os.linux;
-const Child = @import("Child/contract.zig");
+const Child = @import("child/contract.zig");
 
 pub const testing_hook = struct {
     pub var fail_request = false;

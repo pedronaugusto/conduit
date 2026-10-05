@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("Child/state.zig");
+const State = @import("child/state.zig");
 const access = @import("tree.zig").test_access;
 const Deadline = access.Deadline;
 const wait_for = access.wait_for;
@@ -64,7 +64,7 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     const options: Child.SpawnOptions = .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -90,7 +90,7 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
 test "a group member held before KILL is accounted for while still visible" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 30 & echo $!; wait" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
@@ -110,7 +110,7 @@ test "a group member held before KILL is accounted for while still visible" {
 
 test "the descendants of this process include a child it just started" {
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     // The systems that cannot answer answer nothing, which is correct and not
     // something to assert a pid against.
     const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
@@ -143,7 +143,7 @@ test "the descendants of this process include a child it just started" {
 
 test "a group is empty but for its leader once what the leader started has ended" {
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => true,
         else => false,
@@ -177,7 +177,7 @@ test "a group is empty but for its leader once what the leader started has ended
 test "a Linux process with a child of its own is said to have one, and one without is not" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
 
     var leaf = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sleep", "30" },
@@ -213,7 +213,7 @@ test "a process's start time is its own: the same while it runs, gone once it is
     const own = (try startTime(c.getpid())).?;
     try std.testing.expectEqual(own, (try startTime(c.getpid())).?);
 
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -236,7 +236,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -270,7 +270,7 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ "/bin/sleep", "30" },
         .stdio = .ignore,
@@ -292,7 +292,7 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{@import("conduit_test_options").tree_fixture},
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
@@ -329,7 +329,7 @@ test "a failed tree fixture releases the descendant it still owns" {
         else => return error.SkipZigTest,
     }
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.io, testing.allocator, .{
         .argv = &.{ @import("conduit_test_options").tree_fixture, "--fail-report" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .pipe } },
@@ -351,7 +351,7 @@ test "a failed tree fixture releases the descendant it still owns" {
 test "a leaderless Linux group keeps the child its leader started" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     // The leader waits on its input, so it is still running when its start
     // time is read, and ends when that input closes.
     var leader = try Child.spawn(testing.io, testing.allocator, .{
@@ -390,7 +390,7 @@ test "a captured process keeps its identity across exec" {
     var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -422,7 +422,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     var watchdog: @import("testing/support.zig").Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(io, testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -466,7 +466,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
 
 test "Darwin lineage proves the captured birth parent rather than its pid" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
-    const Child = @import("Child.zig").Child;
+    const Child = @import("child.zig").Child;
     var child = try Child.spawn(std.testing.io, std.testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },

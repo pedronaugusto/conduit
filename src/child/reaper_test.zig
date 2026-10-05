@@ -4,14 +4,14 @@ const posix = std.posix;
 const windows = std.os.windows;
 const c = std.c;
 const Allocator = std.mem.Allocator;
-const Pty = @import("../Pty.zig").Pty;
+const Pty = @import("../pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
-const Child = @import("../Child.zig").Child;
+const Child = @import("../child.zig").Child;
 const State = @import("state.zig");
 const win32 = if (is_windows) @import("../win32.zig") else struct {};
-const access = @import("../Child.zig").test_access;
+const access = @import("../child.zig").test_access;
 const Observer = struct {
-    reaper: *@import("../Reaper.zig").Reaper,
+    reaper: *@import("../reaper.zig").Reaper,
     retired: bool = false,
 
     fn observe(context: *anyopaque, child: *Child) void {
@@ -45,7 +45,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         });
         defer child.release(io) catch unreachable;
         defer _ = child.killWait(io, 0) catch {};
-        var reaper: @import("../Reaper.zig").Reaper = .init(&child, .{});
+        var reaper: @import("../reaper.zig").Reaper = .init(&child, .{});
         stage = "starting Reaper";
         try reaper.start(io);
         defer reaper.deinit(io) catch unreachable;

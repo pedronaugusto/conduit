@@ -46,16 +46,16 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const State = @import("Child/state.zig");
+const State = @import("child/state.zig");
 const posix = std.posix;
 const c = std.c;
-const Child = @import("Child.zig").Child;
+const Child = @import("child.zig").Child;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
 const handles = @import("handles.zig");
 const tree = if (is_windows) struct {} else @import("tree.zig");
-const Orphans = @import("Orphans.zig").Orphans;
+const Orphans = @import("orphans.zig").Orphans;
 const wait_for = if (is_windows) struct {} else @import("wait.zig");
 
 const Term = Child.Term;

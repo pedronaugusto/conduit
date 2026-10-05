@@ -1,7 +1,7 @@
 //! One descendant lifetime contract on every host.
 const std = @import("std");
 const builtin = @import("builtin");
-const Child = @import("../Child.zig").Child;
+const Child = @import("../child.zig").Child;
 const State = @import("state.zig");
 const windows = builtin.os.tag == .windows;
 const win32 = if (windows) @import("../win32.zig") else struct {};
@@ -113,7 +113,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
             defer output.deinit(gpa);
             break :term output.term();
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
-            var reaper: @import("../Reaper.zig").Reaper = .init(&fixture.child, .{});
+            var reaper: @import("../reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io) catch unreachable;
             break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
@@ -156,7 +156,7 @@ test "containment ends a daemon after normal completion through every reap" {
             defer output.deinit(gpa);
             try std.testing.expect(Child.succeeded(output.term()));
         } else {
-            var reaper: @import("../Reaper.zig").Reaper = .init(&fixture.child, .{});
+            var reaper: @import("../reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io) catch unreachable;
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
@@ -233,7 +233,7 @@ test "containment ends a double-forked session after normal exit" {
             defer output.deinit(gpa);
             try std.testing.expect(Child.succeeded(output.term()));
         } else if (comptime std.mem.eql(u8, method, "Reaper")) {
-            var reaper: @import("../Reaper.zig").Reaper = .init(&fixture.child, .{});
+            var reaper: @import("../reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io) catch unreachable;
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
@@ -273,7 +273,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    const Reaper = @import("../Reaper.zig").Reaper;
+    const Reaper = @import("../reaper.zig").Reaper;
     const cgroups = @import("../cgroup.zig");
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
@@ -315,7 +315,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var fixture: Fixture = undefined;
-    var reaper: @import("../Reaper.zig").Reaper = .init(&fixture.child, .{});
+    var reaper: @import("../reaper.zig").Reaper = .init(&fixture.child, .{});
     try reaper.enableSubreaper();
     errdefer reaper.deinit(io) catch unreachable;
     fixture = try Fixture.start(.survive, "--race");
@@ -527,7 +527,7 @@ test "a contained Windows wait confirms every Job member ended before returning"
             defer output.deinit(gpa);
             break :term output.term();
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
-            var reaper: @import("../Reaper.zig").Reaper = .init(&fixture.child, .{});
+            var reaper: @import("../reaper.zig").Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io) catch unreachable;
             break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;

@@ -50,7 +50,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const Pty = @import("Pty.zig").Pty;
+const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 
 const is_windows = builtin.os.tag == .windows;

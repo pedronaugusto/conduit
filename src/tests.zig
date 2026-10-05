@@ -51,8 +51,8 @@ const captureStarted = conduit.captureStarted;
 const endRecorded = conduit.endRecorded;
 test {
     _ = @import("testing/support.zig");
-    _ = @import("InputWriter_test.zig");
-    _ = @import("Child/exchange_test.zig");
+    _ = @import("input_writer_test.zig");
+    _ = @import("child/exchange_test.zig");
     _ = Pty;
     _ = Child;
     _ = Reaper;
@@ -67,21 +67,21 @@ test {
     _ = environ_impl;
     _ = shell;
     _ = @import("find.zig");
-    _ = @import("Child/windows/search.zig");
-    _ = @import("Child/spawn_test.zig");
-    _ = @import("Child/descendants_test.zig");
-    _ = @import("Child/windows/completion.zig");
+    _ = @import("child/windows/search.zig");
+    _ = @import("child/spawn_test.zig");
+    _ = @import("child/descendants_test.zig");
+    _ = @import("child/windows/completion.zig");
     if (builtin.os.tag == .linux) _ = @import("supervisor.zig");
     _ = @import("lineage.zig");
 }
 
 test {
-    _ = @import("Child/reaper_test.zig");
+    _ = @import("child/reaper_test.zig");
     if (comptime !is_windows) _ = @import("tree_test.zig");
     if (comptime !is_windows) _ = @import("wait_test.zig");
     _ = @import("handles_test.zig");
     _ = @import("lineage_test.zig");
-    _ = @import("Expect_test.zig");
+    _ = @import("expect_test.zig");
 }
 
 test "the process's own terminal opens as a terminal, or says there is none" {
@@ -98,8 +98,8 @@ test "the process's own terminal opens as a terminal, or says there is none" {
 }
 
 test {
-    _ = @import("InputWriter.zig");
-    _ = @import("Orphans.zig");
-    _ = @import("Proxy.zig");
+    _ = @import("input_writer.zig");
+    _ = @import("orphans.zig");
+    _ = @import("proxy.zig");
     _ = tty.console;
 }

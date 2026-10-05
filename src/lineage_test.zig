@@ -4,7 +4,7 @@ const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
 const testing = std.testing;
-const State = @import("Child/state.zig");
+const State = @import("child/state.zig");
 const access = @import("lineage.zig").test_access;
 const tree = access.tree;
 const testing_hook = @import("lineage.zig").testing_hook;
@@ -18,7 +18,7 @@ test "a contained wait reports lost observation after reaping its held root" {
     defer watchdog.deinit(std.testing.io);
     testing_hook.fail_enumeration.store(true, .release);
     defer testing_hook.fail_enumeration.store(false, .release);
-    var child = try @import("Child.zig").Child.spawn(std.testing.io, std.testing.allocator, .{
+    var child = try @import("child.zig").Child.spawn(std.testing.io, std.testing.allocator, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .descendants = .contain,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },

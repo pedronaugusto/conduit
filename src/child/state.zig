@@ -15,7 +15,7 @@ const Term = Child.Term;
 stdin: ?std.Io.File = null,
 stdout: ?std.Io.File = null,
 stderr: ?std.Io.File = null,
-pty: ?@import("../Pty.zig").Pty.Master = null,
+pty: ?@import("../pty.zig").Pty.Master = null,
 allocator: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.
 descendants: Child.Descendants = .survive,

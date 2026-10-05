@@ -2,7 +2,7 @@
   {
     "rule": "Z013",
     "path": "src/lineage_test.zig",
-    "source": "const State = @import(\"Child/state.zig\");",
+    "source": "const State = @import(\"child/state.zig\");",
     "detail": "unused import 'State'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
@@ -16,7 +16,7 @@
   {
     "rule": "Z028",
     "path": "src/lineage_test.zig",
-    "source": "var child = try @import(\"Child.zig\").Child.spawn(std.testing.io, std.testing.allocator, .{",
+    "source": "var child = try @import(\"child.zig\").Child.spawn(std.testing.io, std.testing.allocator, .{",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -37,7 +37,7 @@
   {
     "rule": "Z013",
     "path": "src/handles_test.zig",
-    "source": "const State = @import(\"Child/state.zig\");",
+    "source": "const State = @import(\"child/state.zig\");",
     "detail": "unused import 'State'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
@@ -51,7 +51,7 @@
   {
     "rule": "Z028",
     "path": "src/handles_test.zig",
-    "source": "var child = try @import(\"Child.zig\").Child.spawn(io, testing.allocator, .{",
+    "source": "var child = try @import(\"child.zig\").Child.spawn(io, testing.allocator, .{",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -274,21 +274,21 @@
   },
   {
     "rule": "Z030",
-    "path": "src/Expect.zig",
+    "path": "src/expect.zig",
     "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",
     "detail": "deinit should set expect.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z011",
-    "path": "src/Expect.zig",
+    "path": "src/expect.zig",
     "source": "std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);",
     "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Expect.zig",
+    "path": "src/expect.zig",
     "source": "pub fn compact(value: anytype, io: std.Io) void {",
     "detail": "'Io' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -456,532 +456,532 @@
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z030",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn deinit(child: *Child, io: std.Io) void {",
     "detail": "deinit should set child.* = undefined (has early return before invalidation)",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn inputWriter(child: *Child, io: std.Io, allocator: Allocator, options: InputWriter.Options) InputWriter.StartError!InputWriter {",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z015",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "public function exposes private error set 'WaitError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "public function exposes private type 'Term'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "public function exposes private type 'HeldReap'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "'Io' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn release(held: HeldReap) void {",
     "detail": "public function exposes private type 'HeldReap'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub const waitTree = if (is_windows)",
     "detail": "variable 'waitTree' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn term(collected: *const Output) Term {",
     "detail": "public function exposes private type 'Term'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn deinit(collected: *Output, allocator: Allocator) void {",
     "detail": "'Allocator' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z030",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn deinit(collected: *Output, allocator: Allocator) void {",
     "detail": "deinit should set collected.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "fn run(feed: *Feed, io: std.Io, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {",
     "detail": "'Io' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "allocator: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z015",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn releaseSurvivors(child: *Child) TryWaitError!void {",
     "detail": "public function exposes private error set 'TryWaitError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z015",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn end(child: *Child) TryWaitError!void {",
     "detail": "public function exposes private error set 'TryWaitError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z015",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn empty(child: *Child) TryWaitError!bool {",
     "detail": "public function exposes private error set 'TryWaitError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z015",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "pub fn ended(child: *Child) TryWaitError!bool {",
     "detail": "public function exposes private error set 'TryWaitError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "fn beforeSignal(probe: *@This(), child: *Child) void {",
     "detail": "inline @This() in named struct; use 'Child' instead",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const InputWriter = @import(\"InputWriter.zig\").Writer(Child).InputWriter;",
+    "path": "src/child.zig",
+    "source": "pub const InputWriter = @import(\"input_writer.zig\").Writer(Child).InputWriter;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "const tree = if (is_windows) struct {} else @import(\"tree.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "const cgroups = if (is_windows) struct {} else @import(\"cgroup.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "const wait_for = if (is_windows) struct {} else @import(\"wait.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Id = @import(\"Child/contract.zig\").Id;",
+    "path": "src/child.zig",
+    "source": "pub const Id = @import(\"child/contract.zig\").Id;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const ProcessGroupId = @import(\"Child/contract.zig\").ProcessGroupId;",
+    "path": "src/child.zig",
+    "source": "pub const ProcessGroupId = @import(\"child/contract.zig\").ProcessGroupId;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Term = @import(\"Child/contract.zig\").Term;",
+    "path": "src/child.zig",
+    "source": "pub const Term = @import(\"child/contract.zig\").Term;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const PipeOptions = @import(\"Child/contract.zig\").PipeOptions;",
+    "path": "src/child.zig",
+    "source": "pub const PipeOptions = @import(\"child/contract.zig\").PipeOptions;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Stream = @import(\"Child/contract.zig\").Stream;",
+    "path": "src/child.zig",
+    "source": "pub const Stream = @import(\"child/contract.zig\").Stream;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Streams = @import(\"Child/contract.zig\").Streams;",
+    "path": "src/child.zig",
+    "source": "pub const Streams = @import(\"child/contract.zig\").Streams;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Stdio = @import(\"Child/contract.zig\").Stdio;",
+    "path": "src/child.zig",
+    "source": "pub const Stdio = @import(\"child/contract.zig\").Stdio;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const SpawnOptions = @import(\"Child/contract.zig\").SpawnOptions;",
+    "path": "src/child.zig",
+    "source": "pub const SpawnOptions = @import(\"child/contract.zig\").SpawnOptions;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Descendants = @import(\"Child/contract.zig\").Descendants;",
+    "path": "src/child.zig",
+    "source": "pub const Descendants = @import(\"child/contract.zig\").Descendants;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const JobLimits = @import(\"Child/contract.zig\").JobLimits;",
+    "path": "src/child.zig",
+    "source": "pub const JobLimits = @import(\"child/contract.zig\").JobLimits;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const FdPolicy = @import(\"Child/contract.zig\").FdPolicy;",
+    "path": "src/child.zig",
+    "source": "pub const FdPolicy = @import(\"child/contract.zig\").FdPolicy;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Credentials = @import(\"Child/contract.zig\").Credentials;",
+    "path": "src/child.zig",
+    "source": "pub const Credentials = @import(\"child/contract.zig\").Credentials;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const ResourceLimit = @import(\"Child/contract.zig\").ResourceLimit;",
+    "path": "src/child.zig",
+    "source": "pub const ResourceLimit = @import(\"child/contract.zig\").ResourceLimit;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const PathSearch = @import(\"Child/contract.zig\").PathSearch;",
+    "path": "src/child.zig",
+    "source": "pub const PathSearch = @import(\"child/contract.zig\").PathSearch;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const SpawnError = @import(\"Child/contract.zig\").SpawnError;",
+    "path": "src/child.zig",
+    "source": "pub const SpawnError = @import(\"child/contract.zig\").SpawnError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const execError = @import(\"Child/contract.zig\").execError;",
+    "path": "src/child.zig",
+    "source": "pub const execError = @import(\"child/contract.zig\").execError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "if (is_windows) return State.owner(Child, try @import(\"Child/windows.zig\").spawn(io, allocator, configured, state));",
+    "path": "src/child.zig",
+    "source": "if (is_windows) return State.owner(Child, try @import(\"child/windows.zig\").spawn(io, allocator, configured, state));",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "return State.owner(Child, try @import(\"Child/posix.zig\").spawn(io, allocator, configured, state));",
+    "path": "src/child.zig",
+    "source": "return State.owner(Child, try @import(\"child/posix.zig\").spawn(io, allocator, configured, state));",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const ReleaseError = @import(\"Child/contract.zig\").ReleaseError;",
+    "path": "src/child.zig",
+    "source": "pub const ReleaseError = @import(\"child/contract.zig\").ReleaseError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const SupervisorRecord = @import(\"Child/contract.zig\").SupervisorRecord;",
+    "path": "src/child.zig",
+    "source": "pub const SupervisorRecord = @import(\"child/contract.zig\").SupervisorRecord;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Containment = @import(\"Child/contract.zig\").Containment;",
+    "path": "src/child.zig",
+    "source": "pub const Containment = @import(\"child/contract.zig\").Containment;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const ContainmentError = @import(\"Child/contract.zig\").ContainmentError;",
+    "path": "src/child.zig",
+    "source": "pub const ContainmentError = @import(\"child/contract.zig\").ContainmentError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const WaitError = @import(\"Child/contract.zig\").WaitError;",
+    "path": "src/child.zig",
+    "source": "pub const WaitError = @import(\"child/contract.zig\").WaitError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const WaitTimeoutError = @import(\"Child/contract.zig\").WaitTimeoutError;",
+    "path": "src/child.zig",
+    "source": "pub const WaitTimeoutError = @import(\"child/contract.zig\").WaitTimeoutError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "const Deadline = @import(\"deadline.zig\").Deadline;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const TryWaitError = @import(\"Child/contract.zig\").TryWaitError;",
+    "path": "src/child.zig",
+    "source": "pub const TryWaitError = @import(\"child/contract.zig\").TryWaitError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const Signal = @import(\"Child/contract.zig\").Signal;",
+    "path": "src/child.zig",
+    "source": "pub const Signal = @import(\"child/contract.zig\").Signal;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const KillError = @import(\"Child/contract.zig\").KillError;",
+    "path": "src/child.zig",
+    "source": "pub const KillError = @import(\"child/contract.zig\").KillError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const KillWaitError = @import(\"Child/contract.zig\").KillWaitError;",
+    "path": "src/child.zig",
+    "source": "pub const KillWaitError = @import(\"child/contract.zig\").KillWaitError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const WaitTreeError = @import(\"Child/contract.zig\").WaitTreeError;",
+    "path": "src/child.zig",
+    "source": "pub const WaitTreeError = @import(\"child/contract.zig\").WaitTreeError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const OutputOptions = @import(\"Child/contract.zig\").OutputOptions;",
+    "path": "src/child.zig",
+    "source": "pub const OutputOptions = @import(\"child/contract.zig\").OutputOptions;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const OutputError = @import(\"Child/contract.zig\").OutputError;",
+    "path": "src/child.zig",
+    "source": "pub const OutputError = @import(\"child/contract.zig\").OutputError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const ExchangeOptions = @import(\"Child/contract.zig\").ExchangeOptions;",
+    "path": "src/child.zig",
+    "source": "pub const ExchangeOptions = @import(\"child/contract.zig\").ExchangeOptions;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "pub const ExchangeError = @import(\"Child/contract.zig\").ExchangeError;",
+    "path": "src/child.zig",
+    "source": "pub const ExchangeError = @import(\"child/contract.zig\").ExchangeError;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "var serial: @import(\"serial_allocator.zig\").SerialAllocator = .{ .parent = allocator, .io = io };",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
-    "source": "const completed = try @import(\"Child/windows/completion.zig\").poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);",
+    "path": "src/child.zig",
+    "source": "const completed = try @import(\"child/windows/completion.zig\").poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "var watchdog: @import(\"testing/support.zig\").Watchdog = .init(@src());",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "var watchdog: @import(\"testing/support.zig\").Watchdog = .init(@src());",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "var watchdog: @import(\"testing/support.zig\").Watchdog = .init(@src());",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "while (!state.identity.tryLock()) std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "while (!state.identity.tryLock()) std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "if (tries < 8) std.Thread.yield() catch {} else try std.Io.sleep(io, .fromMilliseconds(1), .awake);",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "while (!State.get(child).identity.tryLock()) std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "child.kill(.terminate) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child.zig",
+    "path": "src/child.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -1058,329 +1058,329 @@
   },
   {
     "rule": "Z030",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {",
     "detail": "deinit should set reaper.* = undefined (has early return before invalidation)",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const reject: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const tree = if (is_windows) struct {} else @import(\"tree.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const wait_for = if (is_windows) struct {} else @import(\"wait.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "contained: *const @import(\"cgroup.zig\").Cgroup,",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, reaper.inner().options.tree_grace_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "var watchdog: @import(\"testing/support.zig\").Watchdog = .init(@src());",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "var watchdog: @import(\"testing/support.zig\").Watchdog = .init(@src());",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z026",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "while (!stop.mutex.tryLock()) std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "reaper.inner().child.kill(.kill) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "reaper.inner().child.kill(.terminate) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Reaper.zig",
+    "path": "src/reaper.zig",
     "source": "_ = contained.signalMembers(.TERM, State.get(reaper.inner().child).id, null) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z026",
-    "path": "src/Expect_test.zig",
+    "path": "src/expect_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/InputWriter.zig",
+    "path": "src/input_writer.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/InputWriter.zig",
+    "path": "src/input_writer.zig",
     "source": "const std = @import(\"std\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/InputWriter.zig",
+    "path": "src/input_writer.zig",
     "source": "const handles = @import(\"handles.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/InputWriter.zig",
-    "source": "const child_state = @import(\"Child/state.zig\").optional(child) orelse return error.NoStdinPipe;",
+    "path": "src/input_writer.zig",
+    "source": "const child_state = @import(\"child/state.zig\").optional(child) orelse return error.NoStdinPipe;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/InputWriter.zig",
-    "source": "@import(\"Child/state.zig\").get(child).stdin = null;",
+    "path": "src/input_writer.zig",
+    "source": "@import(\"child/state.zig\").get(child).stdin = null;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z015",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "pub fn run(io: std.Io, options: Options) RunError!void {",
     "detail": "public function exposes private error set 'RunError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, interval_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, 5000);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, 5000);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Proxy.zig",
+    "path": "src/proxy.zig",
     "source": "resize.pty.resize(now) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "pub fn resize(pty: *Pty, new_size: Size) ResizeError!void {",
     "detail": "public function exposes private type 'Size'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "pub fn size(pty: *const Pty) SizeError!Size {",
     "detail": "public function exposes private type 'Size'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "pub const slaveFile = if (is_windows)",
     "detail": "variable 'slaveFile' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "fn start(drain: *Drain, io: std.Io, f: std.Io.File) !void {",
     "detail": "'Io' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "fn deinit(drain: *Drain, io: std.Io) void {",
     "detail": "'Io' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z030",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "fn deinit(drain: *Drain, io: std.Io) void {",
     "detail": "deinit should set drain.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "const FD_CLOEXEC: c_int = c.FD_CLOEXEC;",
     "detail": "variable 'FD_CLOEXEC' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "const Watchdog = @import(\"testing/support.zig\").Watchdog;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z026",
-    "path": "src/Pty.zig",
+    "path": "src/pty.zig",
     "source": "while (!geometry.mutex.tryLock()) std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -1724,7 +1724,7 @@
   {
     "rule": "Z028",
     "path": "src/tree.zig",
-    "source": "pub fn adoptionRecord(pid: posix.pid_t) ?@import(\"Orphans/adoption_record.zig\").Record {",
+    "source": "pub fn adoptionRecord(pid: posix.pid_t) ?@import(\"orphans/adoption_record.zig\").Record {",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
@@ -1738,7 +1738,7 @@
   {
     "rule": "Z028",
     "path": "src/tree.zig",
-    "source": "supervisor: ?@import(\"Child/contract.zig\").SupervisorRecord = null,",
+    "source": "supervisor: ?@import(\"child/contract.zig\").SupervisorRecord = null,",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
@@ -2192,105 +2192,105 @@
   },
   {
     "rule": "Z030",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "pub fn deinit(orphans: *Orphans) DeinitError!void {",
     "detail": "deinit should set orphans.* = undefined (has early return before invalidation)",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z012",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "pub fn begin() Spawn {",
     "detail": "public function exposes private type 'Spawn'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z015",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "pub fn started(spawn: *Spawn, pid: posix.pid_t) OwnError!void {",
     "detail": "public function exposes private error set 'OwnError'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "fn openAdoptedWith(pid: posix.pid_t, comptime System: type) OpenError!Held {",
     "detail": "'type' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "fn isChildWith(held: Held, comptime System: type) LookError!bool {",
     "detail": "'type' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z011",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/self/task/{d}/children\", .{linux.gettid()}) catch return error.Unsupported;",
     "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z011",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "const file = std.fmt.bufPrintZ(&file_buffer, \"{s}/children\", .{name}) catch continue;",
     "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "comptime each: fn (*Orphans, posix.pid_t) LookError!void,",
     "detail": "'comptime' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "const tree = if (Orphans.supported) @import(\"tree.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "const wait_for = if (Orphans.supported) @import(\"wait.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Orphans.zig",
-    "source": "pub const Record = @import(\"Orphans/adoption_record.zig\").Record;",
+    "path": "src/orphans.zig",
+    "source": "pub const Record = @import(\"orphans/adoption_record.zig\").Record;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "orphans.look() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Orphans.zig",
+    "path": "src/orphans.zig",
     "source": "std.Thread.yield() catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
@@ -2340,699 +2340,699 @@
   {
     "rule": "Z028",
     "path": "src/find.zig",
-    "source": "const child_windows = if (is_windows) @import(\"Child/windows.zig\") else struct {};",
+    "source": "const child_windows = if (is_windows) @import(\"child/windows.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z017",
-    "path": "src/Child/posix/spawn.zig",
+    "path": "src/child/posix/spawn.zig",
     "source": "if (rc == 0) return try started(pid);",
     "detail": "avoid try in return; hoist it to preserve payload coercion: `const value = try started(pid); return value;`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/posix/spawn.zig",
+    "path": "src/child/posix/spawn.zig",
     "source": "if (builtin.is_test) @import(\"../../testing/support.zig\").SpawnCalls.file_actions += 1;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z030",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn deinit(fixture: *Fixture) void {",
     "detail": "deinit should set fixture.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const cgroups = @import(\"../cgroup.zig\");",
     "detail": "duplicate import '\"../cgroup.zig\"'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const cgroups = @import(\"../cgroup.zig\");",
     "detail": "duplicate import '\"../cgroup.zig\"'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const cgroups = @import(\"../cgroup.zig\");",
     "detail": "duplicate import '\"../cgroup.zig\"'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const cgroups = @import(\"../cgroup.zig\");",
     "detail": "duplicate import '\"../cgroup.zig\"'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn capture(id: Child.Id) !@This() {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn alive(process: *const @This()) bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn end(process: *@This()) void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn capture(id: Child.Id) !@This() {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn alive(process: *const @This()) bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "fn end(process: *@This()) void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const win32 = if (windows) @import(\"../win32.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const tree = if (windows) struct {} else @import(\"../tree.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const program = try std.Io.Dir.cwd().realPathFileAlloc(io, @import(\"conduit_test_options\").tree_fixture, gpa);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
-    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "path": "src/child/descendants_test.zig",
+    "source": "var reaper: @import(\"../reaper.zig\").Reaper = .init(&fixture.child, .{});",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
-    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "path": "src/child/descendants_test.zig",
+    "source": "var reaper: @import(\"../reaper.zig\").Reaper = .init(&fixture.child, .{});",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
-    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "path": "src/child/descendants_test.zig",
+    "source": "var reaper: @import(\"../reaper.zig\").Reaper = .init(&fixture.child, .{});",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const hook = &@import(\"../lineage.zig\").testing_hook.delay_ms;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
-    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "path": "src/child/descendants_test.zig",
+    "source": "var reaper: @import(\"../reaper.zig\").Reaper = .init(&fixture.child, .{});",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/descendants_test.zig",
-    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&fixture.child, .{});",
+    "path": "src/child/descendants_test.zig",
+    "source": "var reaper: @import(\"../reaper.zig\").Reaper = .init(&fixture.child, .{});",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "_ = process.held.wait(io, budget_ms) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/descendants_test.zig",
+    "path": "src/child/descendants_test.zig",
     "source": "_ = fixture.child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z006",
-    "path": "src/Child/contract.zig",
+    "path": "src/child/contract.zig",
     "source": "pub const toPosix = if (is_windows)",
     "detail": "variable 'toPosix' should be snake_case",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z012",
-    "path": "src/Child/contract.zig",
+    "path": "src/child/contract.zig",
     "source": "pub fn execError(err: posix.E) SpawnError {",
     "detail": "public function exposes private type 'SpawnError'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z030",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "fn deinit(sink: *Sink) void {",
     "detail": "deinit should set sink.* = undefined",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z011",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
     "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z011",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
     "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const spawn_path = @import(\"posix/spawn.zig\");",
     "detail": "duplicate import '\"posix/spawn.zig\"'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "fn run(s: *@This()) void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const wait_for = if (is_windows) struct {} else @import(\"../wait.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const tree = if (is_windows) struct {} else @import(\"../tree.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const cgroup = if (is_windows) struct {} else @import(\"../cgroup.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const win32 = if (is_windows) @import(\"../win32.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const detached_grandchild = [_][]const u8{@import(\"conduit_test_options\").tree_fixture};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": ".argv = &.{@import(\"conduit_test_options\").tty_fixture},",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "const fast_path = if (is_windows) false else @import(\"posix/spawn.zig\").available;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/spawn_test.zig",
-    "source": "@import(\"../Pty.zig\").placeMasterForTest(&pair, 0);",
+    "path": "src/child/spawn_test.zig",
+    "source": "@import(\"../pty.zig\").placeMasterForTest(&pair, 0);",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/spawn_test.zig",
+    "path": "src/child/spawn_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
-    "path": "src/Child/windows.zig",
+    "path": "src/child/windows.zig",
     "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z023",
-    "path": "src/Child/windows.zig",
+    "path": "src/child/windows.zig",
     "source": "arena: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z023",
-    "path": "src/Child/windows.zig",
+    "path": "src/child/windows.zig",
     "source": "arena: Allocator,",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z030",
-    "path": "src/Child/windows.zig",
+    "path": "src/child/windows.zig",
     "source": "fn deinit(handles: *ChildHandles) void {",
     "detail": "deinit should set handles.* = undefined",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z023",
-    "path": "src/Child/windows.zig",
+    "path": "src/child/windows.zig",
     "source": "fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {",
     "detail": "'Allocator' parameter should come before 'other'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z030",
-    "path": "src/Child/windows.zig",
+    "path": "src/child/windows.zig",
     "source": "fn deinit(list: *AttributeList) void {",
     "detail": "deinit should set list.* = undefined",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z023",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
     "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z032",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "const SIG = posix.SIG;",
     "detail": "acronym in 'SIG' should use standard casing: 'Sig'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z006",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "const setrlimitSym = if (posix.lfs64_abi) c.setrlimit64 else c.setrlimit;",
     "detail": "variable 'setrlimitSym' should be snake_case",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z032",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "const SIG = enum(u32) {",
     "detail": "acronym in 'SIG' should use standard casing: 'Sig'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z006",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "const IGN: Handler = .ignored;",
     "detail": "variable 'IGN' should be snake_case",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z006",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "const DFL: Handler = .default;",
     "detail": "variable 'DFL' should be snake_case",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "const supervisor = if (builtin.os.tag == .linux) @import(\"../supervisor.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "if (builtin.is_test) @import(\"../testing/support.zig\").SpawnCalls.forks += 1;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "var lineage: ?*@import(\"../lineage.zig\").Tracker = null;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "if (comptime @import(\"../lineage.zig\").supported) if (options.descendants == .contain) {",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/posix.zig",
+    "path": "src/child/posix.zig",
     "source": "lineage = @import(\"../lineage.zig\").Tracker.start(pid) catch |err| {",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "const std = @import(\"std\");",
     "detail": "duplicate import '\"std\"'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z007",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "const std = @import(\"std\");",
     "detail": "duplicate import '\"std\"'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn releaseSurvivors(_: *@This()) !void {}",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn end(self: *@This()) !void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn ended(_: *@This()) !bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn empty(self: *@This()) !bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn releaseSurvivors(_: *@This()) !void {}",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn end(self: *@This()) !void {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn ended(_: *@This()) !bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn empty(self: *@This()) !bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn releaseSurvivors(_: *@This()) !void {}",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn end(_: *@This()) !void {}",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn empty(_: *@This()) !bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z020",
-    "path": "src/Child/windows/completion.zig",
+    "path": "src/child/windows/completion.zig",
     "source": "fn ended(self: *@This()) !bool {",
     "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/exchange_test.zig",
+    "path": "src/child/exchange_test.zig",
     "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, mode },",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/exchange_test.zig",
+    "path": "src/child/exchange_test.zig",
     "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, \"stall\" },",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z009",
-    "path": "src/Child/state.zig",
+    "path": "src/child/state.zig",
     "source": "//! The child lifecycle, shared only by the process implementation and Reaper.",
     "detail": "file 'state.zig' has top-level fields and should be PascalCase",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/state.zig",
+    "path": "src/child/state.zig",
     "source": "const tree = if (is_windows) struct {} else @import(\"../tree.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/state.zig",
+    "path": "src/child/state.zig",
     "source": "const cgroups = if (is_windows) struct {} else @import(\"../cgroup.zig\");",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/state.zig",
-    "source": "pty: ?@import(\"../Pty.zig\").Pty.Master = null,",
+    "path": "src/child/state.zig",
+    "source": "pty: ?@import(\"../pty.zig\").Pty.Master = null,",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/state.zig",
+    "path": "src/child/state.zig",
     "source": "supervisor: if (builtin.os.tag == .linux) ?@import(\"../supervisor.zig\").Supervisor else void = if (builtin.os.tag == .linux) null else {},",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/state.zig",
+    "path": "src/child/state.zig",
     "source": "lineage: if (is_windows) void else ?*@import(\"../lineage.zig\").Tracker = if (is_windows) {} else null,",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/reaper_test.zig",
+    "path": "src/child/reaper_test.zig",
     "source": "const win32 = if (is_windows) @import(\"../win32.zig\") else struct {};",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/reaper_test.zig",
-    "source": "reaper: *@import(\"../Reaper.zig\").Reaper,",
+    "path": "src/child/reaper_test.zig",
+    "source": "reaper: *@import(\"../reaper.zig\").Reaper,",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/reaper_test.zig",
+    "path": "src/child/reaper_test.zig",
     "source": "var watchdog: @import(\"../testing/support.zig\").Watchdog = .init(@src());",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/Child/reaper_test.zig",
-    "source": "var reaper: @import(\"../Reaper.zig\").Reaper = .init(&child, .{});",
+    "path": "src/child/reaper_test.zig",
+    "source": "var reaper: @import(\"../reaper.zig\").Reaper = .init(&child, .{});",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z026",
-    "path": "src/Child/reaper_test.zig",
+    "path": "src/child/reaper_test.zig",
     "source": "_ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z028",
-    "path": "src/InputWriter_test.zig",
+    "path": "src/input_writer_test.zig",
     "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, mode },",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z026",
-    "path": "src/InputWriter_test.zig",
+    "path": "src/input_writer_test.zig",
     "source": "_ = child.killWait(io, 0) catch {};",
     "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."

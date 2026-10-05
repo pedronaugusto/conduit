@@ -374,7 +374,7 @@ fn parseLinuxStat(text: []const u8) ?LinuxRelation {
 }
 
 /// One procfs snapshot for the adoption owner, checked against its held pidfd afterwards.
-pub fn adoptionRecord(pid: posix.pid_t) ?@import("Orphans/adoption_record.zig").Record {
+pub fn adoptionRecord(pid: posix.pid_t) ?@import("orphans/adoption_record.zig").Record {
     const relation = processRelationLinux(pid) orelse return null;
     return .{ .pid = pid, .start = relation.start orelse return null, .group = relation.pgrp, .session = relation.session };
 }
@@ -520,7 +520,7 @@ pub const RecordedOptions = struct {
     cgroup: ?*@import("cgroup.zig").Cgroup.Recorded = null,
     /// Linux: the private adoption owner. It receives TERM as a request to
     /// empty its scope; never kill that owner before it has reaped the tree.
-    supervisor: ?@import("Child/contract.zig").SupervisorRecord = null,
+    supervisor: ?@import("child/contract.zig").SupervisorRecord = null,
     grace_ms: u32,
 };
 

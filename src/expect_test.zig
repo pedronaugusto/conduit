@@ -1,10 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const is_windows = builtin.os.tag == .windows;
-const Pty = @import("Pty.zig").Pty;
+const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
-const Expect = @import("Expect.zig").Expect;
-const access = @import("Expect.zig").test_access;
+const Expect = @import("expect.zig").Expect;
+const access = @import("expect.zig").test_access;
 const Search = access.Search;
 const Match = Expect.Match;
 const SendError = Expect.SendError;
@@ -20,7 +20,7 @@ const start = Expect.start;
 const until = Expect.until;
 const untilAny = Expect.untilAny;
 const testing = std.testing;
-const Child = @import("Child.zig").Child;
+const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 
 /// Generous: it is a failure budget, not a timing assertion.
