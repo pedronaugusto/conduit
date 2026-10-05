@@ -658,15 +658,16 @@ fn killHeld(comptime Held: type, process: *const Held) error{UnableToEnd}!void {
 
 test "a held process is ended when KILL is delivered before exit is observable" {
     const Fake = struct {
+        const Self = @This();
         live: bool = true,
         deliver: bool,
         sent: *bool,
 
-        fn alive(self: *const @This()) bool {
+        fn alive(self: *const Self) bool {
             return self.live;
         }
 
-        fn signal(self: *const @This(), sig: posix.SIG) bool {
+        fn signal(self: *const Self, sig: posix.SIG) bool {
             std.debug.assert(sig == .KILL);
             self.sent.* = true;
             return self.deliver;

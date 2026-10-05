@@ -30,10 +30,11 @@ const budget_ms = 5000;
 test "a canceled reading task publishes that it finished" {
     const io = testing.io;
     const CancelRead = struct {
+        const Self = @This();
         base: std.Io,
 
         fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            const state: *Self = @ptrCast(@alignCast(userdata.?));
             if (operation == .file_read_streaming) return error.Canceled;
             return state.base.vtable.operate(state.base.userdata, operation);
         }
@@ -515,15 +516,16 @@ test "Expect refuses a start after deinit before its first reader" {
 
 test "a full Expect buffer waits for its consumer without interval sleeps" {
     const Backend = struct {
+        const Self = @This();
         sleeps: usize = 0,
         waits: usize = 0,
         fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
             backend.sleeps += 1;
             return error.Canceled;
         }
         fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
             backend.waits += 1;
             return error.Canceled;
         }
@@ -545,13 +547,14 @@ test "a full Expect buffer waits for its consumer without interval sleeps" {
 
 test "Expect discard and consumption wake a full reader at the wait boundary" {
     const Backend = struct {
+        const Self = @This();
         expect: *Expect,
         io: std.Io = undefined,
         consume: bool,
         waits: usize = 0,
         reads: usize = 0,
         fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
             backend.waits += 1;
             if (backend.waits != 1) return error.Canceled;
             // The reader has checked that it is full and is entering its
@@ -562,7 +565,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
             } else backend.expect.discard(backend.io);
         }
         fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
             backend.reads += 1;
             operation.file_read_streaming.data[0][0] = 'b';
             return .{ .file_read_streaming = 1 };

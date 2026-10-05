@@ -20,26 +20,26 @@ extern "c" fn getsid(pid: std.posix.pid_t) std.posix.pid_t;
 
 const Process = if (windows) struct {
     handle: win32.HANDLE,
-    fn capture(id: Child.Id) !@This() {
+    fn capture(id: Child.Id) !Process {
         return .{ .handle = win32.OpenProcess(win32.SYNCHRONIZE | win32.PROCESS_QUERY_LIMITED_INFORMATION | win32.PROCESS_TERMINATE, .FALSE, id) orelse return error.TestDaemonNotFound };
     }
-    fn alive(process: *const @This()) bool {
+    fn alive(process: *const Process) bool {
         return win32.WaitForSingleObject(process.handle, 0) == win32.WAIT_TIMEOUT;
     }
-    fn end(process: *@This()) void {
+    fn end(process: *Process) void {
         _ = win32.TerminateProcess(process.handle, 1);
         _ = win32.WaitForSingleObject(process.handle, budget_ms);
         std.os.windows.CloseHandle(process.handle);
     }
 } else struct {
     held: tree.CapturedPid,
-    fn capture(id: Child.Id) !@This() {
+    fn capture(id: Child.Id) !Process {
         return .{ .held = (try tree.captureStarted(id, (try tree.startTime(id)) orelse return error.TestDaemonNotFound)) orelse return error.TestDaemonNotFound };
     }
-    fn alive(process: *const @This()) bool {
+    fn alive(process: *const Process) bool {
         return process.held.alive();
     }
-    fn end(process: *@This()) void {
+    fn end(process: *Process) void {
         _ = process.held.signal(.KILL);
         // ziglint-ignore: Z026 cleanup after SIGKILL; what the test asserts was asserted before it
         _ = process.held.wait(io, budget_ms) catch {};

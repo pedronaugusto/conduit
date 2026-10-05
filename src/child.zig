@@ -2114,7 +2114,7 @@ pub const Child = enum(usize) {
     const SignalProbe = if (builtin.is_test) struct {
         context: *anyopaque,
         observe: *const fn (*anyopaque, *Child) void,
-        fn beforeSignal(probe: *@This(), child: *Child) void {
+        fn beforeSignal(probe: *SignalProbe, child: *Child) void {
             probe.observe(probe.context, child);
         }
     } else struct {};

@@ -673,11 +673,12 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io) catch unreachable;
     const Reject = struct {
+        const Self = @This();
         reaper: *Reaper,
         ends: ?[2]posix.fd_t = null,
 
         fn concurrent(userdata: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
-            const reject: *@This() = @ptrCast(@alignCast(userdata.?));
+            const reject: *Self = @ptrCast(@alignCast(userdata.?));
             reject.ends = reject.reaper.inner().wake;
             return error.ConcurrencyUnavailable;
         }
@@ -713,22 +714,23 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io) catch unreachable;
     const Clock = struct {
+        const Self = @This();
         ms: u32 = 0,
         waits: usize = 0,
         sleeps: usize = 0,
         event: ?*const u32 = null,
         fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            const clock: *Self = @ptrCast(@alignCast(userdata.?));
             return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
         }
         fn futexWait(userdata: ?*anyopaque, ptr: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            const clock: *Self = @ptrCast(@alignCast(userdata.?));
             if (clock.event) |event| std.debug.assert(event == ptr) else clock.event = ptr;
             clock.waits += 1;
             clock.ms += 10;
         }
         fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            const clock: *Self = @ptrCast(@alignCast(userdata.?));
             clock.sleeps += 1;
             return error.Canceled;
         }

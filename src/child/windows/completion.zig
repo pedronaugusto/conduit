@@ -14,16 +14,17 @@ pub fn poll(comptime System: type, context: anytype, term: Child.Term, policy: C
 
 test "Windows completion keeps the root status unpublished while Job members remain" {
     const Backend = struct {
+        const Self = @This();
         members: usize = 1,
         stops: usize = 0,
-        fn releaseSurvivors(_: *@This()) !void {}
-        fn end(self: *@This()) !void {
+        fn releaseSurvivors(_: *Self) !void {}
+        fn end(self: *Self) !void {
             self.stops += 1;
         }
-        fn ended(_: *@This()) !bool {
+        fn ended(_: *Self) !bool {
             return true;
         }
-        fn empty(self: *@This()) !bool {
+        fn empty(self: *Self) !bool {
             return self.members == 0;
         }
     };
@@ -37,16 +38,17 @@ test "Windows completion keeps the root status unpublished while Job members rem
 
 test "Windows completion reports a failed Job stop or accounting query" {
     const Backend = struct {
+        const Self = @This();
         fail_stop: bool = true,
         fail_query: bool = false,
-        fn releaseSurvivors(_: *@This()) !void {}
-        fn end(self: *@This()) !void {
+        fn releaseSurvivors(_: *Self) !void {}
+        fn end(self: *Self) !void {
             if (self.fail_stop) return error.Unexpected;
         }
-        fn ended(_: *@This()) !bool {
+        fn ended(_: *Self) !bool {
             return true;
         }
-        fn empty(self: *@This()) !bool {
+        fn empty(self: *Self) !bool {
             if (self.fail_query) return error.Unexpected;
             return true;
         }
@@ -63,13 +65,14 @@ test "Windows completion reports a failed Job stop or accounting query" {
 
 test "Windows completion waits for the Job termination notification after accounting reaches zero" {
     const Backend = struct {
+        const Self = @This();
         notified: bool = false,
-        fn releaseSurvivors(_: *@This()) !void {}
-        fn end(_: *@This()) !void {}
-        fn empty(_: *@This()) !bool {
+        fn releaseSurvivors(_: *Self) !void {}
+        fn end(_: *Self) !void {}
+        fn empty(_: *Self) !bool {
             return true;
         }
-        fn ended(self: *@This()) !bool {
+        fn ended(self: *Self) !bool {
             return self.notified;
         }
     };

@@ -4484,9 +4484,10 @@ test "a child given a parent death signal ends with the thread that started it" 
     // this test's own that spawns and ends stands in for a program that
     // crashes, since the test runner itself has to live on.
     const Spawner = struct {
+        const Self = @This();
         child: ?Child = null,
         failed: ?anyerror = null,
-        fn run(s: *@This()) void {
+        fn run(s: *Self) void {
             s.child = Child.spawn(io, gpa, .{
                 .argv = &.{ "/bin/sh", "-c", "sleep 30" },
                 .stdio = .ignore,
@@ -4672,16 +4673,17 @@ test "the Windows PID fixture keeps reading after a successful empty read" {
     const source = try tmp.dir.openFile(io, "pid", .{});
     defer source.close(io);
     const EmptyOnce = struct {
+        const Self = @This();
         base: std.Io,
         empty: bool = true,
 
         fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
-            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            const state: *Self = @ptrCast(@alignCast(userdata.?));
             return state.base.vtable.checkCancel(state.base.userdata);
         }
 
         fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            const state: *Self = @ptrCast(@alignCast(userdata.?));
             if (operation == .file_read_streaming and state.empty) {
                 state.empty = false;
                 return .{ .file_read_streaming = 0 };

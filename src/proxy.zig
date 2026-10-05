@@ -509,18 +509,19 @@ fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
 test "Proxy resize waits remain cancelable with a zero interval or a changing ticket" {
     const io = testing.io;
     const Backend = struct {
+        const Self = @This();
         sleeps: usize = 0,
         checks: usize = 0,
         fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
             return .{ .nanoseconds = 0 };
         }
         fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *@This() = @ptrCast(@alignCast(userdata.?));
+            const backend: *Self = @ptrCast(@alignCast(userdata.?));
             backend.sleeps += 1;
             return error.Canceled;
         }
         fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
-            const backend: *@This() = @ptrCast(@alignCast(userdata.?));
+            const backend: *Self = @ptrCast(@alignCast(userdata.?));
             backend.checks += 1;
             return if (backend.checks > 1) error.Canceled else {};
         }
@@ -545,14 +546,15 @@ test "Proxy resize waits remain cancelable with a zero interval or a changing ti
 test "Proxy resize intervals count delayed sleeps once" {
     const io = testing.io;
     const Clock = struct {
+        const Self = @This();
         ms: u32 = 0,
         sleeps: usize = 0,
         fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            const clock: *Self = @ptrCast(@alignCast(userdata.?));
             return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
         }
         fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const clock: *@This() = @ptrCast(@alignCast(userdata.?));
+            const clock: *Self = @ptrCast(@alignCast(userdata.?));
             clock.ms += 30;
             clock.sleeps += 1;
         }

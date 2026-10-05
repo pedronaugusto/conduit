@@ -285,11 +285,12 @@ test "readStreaming retries a permitted zero-byte result" {
     defer f.close(io);
 
     const ZeroOnce = struct {
+        const Self = @This();
         base: std.Io,
         returned_zero: bool = false,
 
         fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *@This() = @ptrCast(@alignCast(userdata.?));
+            const state: *Self = @ptrCast(@alignCast(userdata.?));
             if (operation == .file_read_streaming and !state.returned_zero) {
                 state.returned_zero = true;
                 return .{ .file_read_streaming = 0 };

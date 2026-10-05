@@ -63,13 +63,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z020",
-    "path": "src/handles.zig",
-    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z015",
     "path": "src/shell.zig",
     "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
@@ -343,13 +336,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z020",
-    "path": "src/child.zig",
-    "source": "fn beforeSignal(probe: *@This(), child: *Child) void {",
-    "detail": "inline @This() in named struct; use 'Child' instead",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/lineage.zig",
     "source": "pub fn deinit(tracker: *Darwin) void {",
@@ -371,108 +357,10 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z020",
-    "path": "src/reaper.zig",
-    "source": "const reject: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/reaper.zig",
-    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/reaper.zig",
-    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/reaper.zig",
-    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/expect_test.zig",
-    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/expect_test.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/expect_test.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/expect_test.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/expect_test.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/input_writer.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z015",
     "path": "src/proxy.zig",
     "source": "pub fn run(io: std.Io, options: Options) RunError!void {",
     "detail": "public function exposes private error set 'RunError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/proxy.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/proxy.zig",
-    "source": "const backend: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/proxy.zig",
-    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/proxy.zig",
-    "source": "const clock: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -760,20 +648,6 @@
     "path": "src/tree.zig",
     "source": "pub const membersDarwin = fixture_membersDarwin;",
     "detail": "variable 'membersDarwin' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/tree.zig",
-    "source": "fn alive(self: *const @This()) bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/tree.zig",
-    "source": "fn signal(self: *const @This(), sig: posix.SIG) bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -1218,48 +1092,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z020",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn capture(id: Child.Id) !@This() {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn alive(process: *const @This()) bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn end(process: *@This()) void {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn capture(id: Child.Id) !@This() {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn alive(process: *const @This()) bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/descendants_test.zig",
-    "source": "fn end(process: *@This()) void {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/child/contract.zig",
     "source": "pub const toPosix = if (is_windows)",
@@ -1272,27 +1104,6 @@
     "source": "pub fn execError(err: posix.E) SpawnError {",
     "detail": "public function exposes private type 'SpawnError'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/spawn_test.zig",
-    "source": "fn run(s: *@This()) void {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/spawn_test.zig",
-    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/spawn_test.zig",
-    "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
@@ -1362,90 +1173,6 @@
     "path": "src/child/posix.zig",
     "source": "const DFL: Handler = .default;",
     "detail": "variable 'DFL' should be snake_case",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn releaseSurvivors(_: *@This()) !void {}",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn end(self: *@This()) !void {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn ended(_: *@This()) !bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn empty(self: *@This()) !bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn releaseSurvivors(_: *@This()) !void {}",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn end(self: *@This()) !void {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn ended(_: *@This()) !bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn empty(self: *@This()) !bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn releaseSurvivors(_: *@This()) !void {}",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn end(_: *@This()) !void {}",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn empty(_: *@This()) !bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z020",
-    "path": "src/child/windows/completion.zig",
-    "source": "fn ended(self: *@This()) !bool {",
-    "detail": "inline @This(); assign it to `const Self = @This();`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {

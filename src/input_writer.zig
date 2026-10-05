@@ -206,10 +206,11 @@ pub fn Writer(comptime Child: type) type {
 
             test "InputWriter isOpen takes a contended mutex without cancellation" {
                 const Backend = struct {
+                    const Self = @This();
                     mutex: *std.Io.Mutex,
                     waits: usize = 0,
                     fn wait(userdata: ?*anyopaque, _: *const u32, _: u32) void {
-                        const backend: *@This() = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+                        const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
                         backend.waits += 1;
                         backend.mutex.state.store(.unlocked, .release);
                     }
