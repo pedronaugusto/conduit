@@ -48,24 +48,8 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     var child_handles = try ChildHandles.init(childHandles(&plan));
     defer child_handles.deinit();
     const given = child_handles.given;
-    // `extra_fds` as private inheritable copies, but for a console handle,
-    // which the child reaches through the console it shares and which no
-    // handle list may name.
-    const extras = try arena.alloc(windows.HANDLE, options.extra_fds.len);
-    var extras_made: usize = 0;
-    var extra_duplicates: usize = 0;
-    defer for (options.extra_fds[0..extras_made], extras[0..extras_made]) |extra, handle| {
-        if (handle != extra.handle) windows.CloseHandle(handle);
-    };
-    for (options.extra_fds, extras) |extra, *slot| {
-        if (isConsole(extra.handle)) {
-            slot.* = extra.handle;
-        } else {
-            slot.* = try inheritableCopy(extra.handle);
-            extra_duplicates += 1;
-        }
-        extras_made += 1;
-    }
+    var extras: Extras = try .init(arena, options.extra_fds);
+    defer extras.deinit(options.extra_fds);
 
     var startup: win32.StartupInfoExW = std.mem.zeroes(win32.StartupInfoExW);
     var flags: windows.CreateProcessFlags = .{
@@ -78,24 +62,9 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     // handles and a list of what may be inherited.
     var attributes: ?AttributeList = null;
     defer if (attributes) |*list| list.deinit();
-    try describeChild(arena, options, given, extras, &startup, &flags, &attributes);
+    try describeChild(arena, options, given, extras.handles, &startup, &flags, &attributes);
 
-    // A console handle is already meaningful to a child sharing this
-    // process's console and is not inherited through the handle table. Every
-    // other handle is named in the restrictive attribute list below. With no
-    // such handle there is nothing to inherit, so passing FALSE is what keeps
-    // unrelated inheritable handles out of the child.
-    const inherit_handles: windows.BOOL = switch (options.stdio) {
-        .pty => .FALSE,
-        else => inherit: {
-            for (given) |slot| {
-                const handle = slot orelse continue;
-                if (!isConsole(handle)) break :inherit .TRUE;
-            }
-            if (extra_duplicates != 0) break :inherit .TRUE;
-            break :inherit .FALSE;
-        },
-    };
+    const inherit_handles = inheritHandles(options, given, extras.duplicates);
 
     traceSpawn(options, &startup, flags, inherit_handles);
 
@@ -138,7 +107,17 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     }
 
     plan.closeChildSide(io);
+    return started(state, options, information, job, &plan);
+}
 
+/// The `Child` a started process is.
+fn started(
+    state: *State,
+    options: SpawnOptions,
+    information: windows.PROCESS.INFORMATION,
+    job: Job,
+    plan: *const Plan,
+) *State {
     state.* = .{
         .allocator = state.allocator,
         .descendants = options.descendants,
@@ -164,6 +143,56 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
         },
     };
     return state;
+}
+
+/// `extra_fds` as private inheritable copies, but for a console handle,
+/// which the child reaches through the console it shares and which no
+/// handle list may name.
+const Extras = struct {
+    handles: []windows.HANDLE,
+    /// How many of `handles` are copies made here, to be closed by `deinit`.
+    duplicates: usize,
+
+    fn init(arena: Allocator, extra_fds: []const std.Io.File) SpawnError!Extras {
+        const handles = try arena.alloc(windows.HANDLE, extra_fds.len);
+        var extras: Extras = .{ .handles = handles[0..0], .duplicates = 0 };
+        errdefer extras.deinit(extra_fds);
+        for (extra_fds, handles) |extra, *slot| {
+            if (isConsole(extra.handle)) {
+                slot.* = extra.handle;
+            } else {
+                slot.* = try inheritableCopy(extra.handle);
+                extras.duplicates += 1;
+            }
+            extras.handles = handles[0 .. extras.handles.len + 1];
+        }
+        std.debug.assert(extras.handles.len == extra_fds.len);
+        return extras;
+    }
+
+    /// Closes the copies; the caller's own handles stay open.
+    fn deinit(extras: *Extras, extra_fds: []const std.Io.File) void {
+        std.debug.assert(extras.handles.len <= extra_fds.len);
+        for (extra_fds[0..extras.handles.len], extras.handles) |extra, handle| {
+            if (handle != extra.handle) windows.CloseHandle(handle);
+        }
+        extras.* = undefined;
+    }
+};
+
+/// What `bInheritHandles` is for this child. A console handle is already
+/// meaningful to a child sharing this process's console and is not
+/// inherited through the handle table. Every other handle is named in the
+/// restrictive attribute list. With no such handle there is nothing to
+/// inherit, so passing FALSE is what keeps unrelated inheritable handles out
+/// of the child.
+fn inheritHandles(options: SpawnOptions, given: [3]?windows.HANDLE, extra_duplicates: usize) windows.BOOL {
+    if (options.stdio == .pty) return .FALSE;
+    for (given) |slot| {
+        const handle = slot orelse continue;
+        if (!isConsole(handle)) return .TRUE;
+    }
+    return if (extra_duplicates != 0) .TRUE else .FALSE;
 }
 
 /// Says what the child is attached to or handed, in the two records
