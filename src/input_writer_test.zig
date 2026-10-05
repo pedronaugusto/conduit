@@ -18,6 +18,7 @@ fn spawn(mode: []const u8) !Child {
 }
 
 fn reap(child: *Child) void {
+    // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
     _ = child.killWait(io, 0) catch {};
     child.release(io) catch unreachable;
 }

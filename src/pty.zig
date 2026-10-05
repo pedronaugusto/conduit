@@ -27,6 +27,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
@@ -441,7 +442,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         allocator: std.mem.Allocator,
 
         fn lock(geometry: *Geometry) void {
-            while (!geometry.mutex.tryLock()) std.Thread.yield() catch {};
+            spin.lock(&geometry.mutex);
         }
     };
 

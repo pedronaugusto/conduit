@@ -140,13 +140,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z026",
-    "path": "src/handles.zig",
-    "source": "std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/shell.zig",
     "source": "pub fn deinit(shell: *Shell, io: std.Io) void {",
@@ -259,20 +252,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z026",
-    "path": "src/cgroup.zig",
-    "source": ".finding => std.Thread.yield() catch {},",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/cgroup.zig",
-    "source": "while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/expect.zig",
     "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",
@@ -305,13 +284,6 @@
     "path": "src/testing/support.zig",
     "source": "const deadline: @import(\"../deadline.zig\").Deadline = .in(io, watchdog.limit_ms);",
     "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/testing/support.zig",
-    "source": "while (true) std.Io.sleep(std.testing.io, .fromSeconds(1), .awake) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
@@ -938,55 +910,6 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "while (!state.identity.tryLock()) std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "while (!state.identity.tryLock()) std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "if (tries < 8) std.Thread.yield() catch {} else try std.Io.sleep(io, .fromMilliseconds(1), .awake);",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "while (!State.get(child).identity.tryLock()) std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "child.kill(.terminate) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/lineage.zig",
     "source": "pub fn deinit(_: *@This()) void {}",
@@ -1141,34 +1064,6 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z026",
-    "path": "src/reaper.zig",
-    "source": "while (!stop.mutex.tryLock()) std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/reaper.zig",
-    "source": "reaper.inner().child.kill(.kill) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/reaper.zig",
-    "source": "reaper.inner().child.kill(.terminate) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/reaper.zig",
-    "source": "_ = contained.signalMembers(.TERM, State.get(reaper.inner().child).id, null) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z020",
     "path": "src/expect_test.zig",
     "source": "const state: *@This() = @ptrCast(@alignCast(userdata.?));",
@@ -1208,13 +1103,6 @@
     "path": "src/expect_test.zig",
     "source": "const deadline: @import(\"deadline.zig\").Deadline = .in(io, budget_ms);",
     "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/expect_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
@@ -1309,13 +1197,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z026",
-    "path": "src/proxy.zig",
-    "source": "resize.pty.resize(now) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z012",
     "path": "src/pty.zig",
     "source": "pub fn resize(pty: *Pty, new_size: Size) ResizeError!void {",
@@ -1377,13 +1258,6 @@
     "source": "const Watchdog = @import(\"testing/support.zig\").Watchdog;",
     "detail": "inline @import; assign to a top-level const",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/pty.zig",
-    "source": "while (!geometry.mutex.tryLock()) std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z023",
@@ -2268,34 +2142,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z026",
-    "path": "src/orphans.zig",
-    "source": "orphans.look() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/orphans.zig",
-    "source": "std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/orphans.zig",
-    "source": "std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/orphans.zig",
-    "source": "std.Thread.yield() catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z028",
     "path": "src/trace.zig",
     "source": "const win32 = if (is_windows) @import(\"win32.zig\") else struct {};",
@@ -2548,20 +2394,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z026",
-    "path": "src/child/descendants_test.zig",
-    "source": "_ = process.held.wait(io, budget_ms) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child/descendants_test.zig",
-    "source": "_ = fixture.child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/child/contract.zig",
     "source": "pub const toPosix = if (is_windows)",
@@ -2678,41 +2510,6 @@
     "path": "src/child/spawn_test.zig",
     "source": "@import(\"../pty.zig\").placeMasterForTest(&pair, 0);",
     "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child/spawn_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child/spawn_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child/spawn_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child/spawn_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/child/spawn_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -3017,24 +2814,10 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z026",
-    "path": "src/child/reaper_test.zig",
-    "source": "_ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z028",
     "path": "src/input_writer_test.zig",
     "source": ".argv = &.{ @import(\"conduit_test_options\").input_fixture, mode },",
     "detail": "inline @import; assign to a top-level const",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z026",
-    "path": "src/input_writer_test.zig",
-    "source": "_ = child.killWait(io, 0) catch {};",
-    "detail": "empty catch block suppresses errors: `catch {}`",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {

@@ -58,6 +58,7 @@ test {
     _ = Reaper;
     _ = Orphans;
     _ = @import("deadline.zig");
+    _ = @import("spin.zig");
     _ = console;
     _ = Proxy;
     _ = Expect;

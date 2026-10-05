@@ -32,6 +32,7 @@ const State = @import("child/state.zig");
 
 const builtin = @import("builtin");
 const std = @import("std");
+const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
@@ -366,7 +367,7 @@ pub const Child = enum(usize) {
     pub fn processId(child: *const Child) ?Id {
         if (State.optional(child) == null) return null;
         const state = State.get(child);
-        while (!state.identity.tryLock()) std.Thread.yield() catch {};
+        spin.lock(&state.identity);
         defer state.identity.unlock();
         if (state.reaped.load(.acquire) or state.identity_retired) return null;
         return state.process_id;
@@ -411,7 +412,7 @@ pub const Child = enum(usize) {
     pub fn result(child: *const Child) TryWaitError!?Term {
         if (State.optional(child) == null) return null;
         const state = State.get(child);
-        while (!state.identity.tryLock()) std.Thread.yield() catch {};
+        spin.lock(&state.identity);
         defer state.identity.unlock();
         if (child.settled()) |term| return term;
         if (state.identity_retired) return error.ReapedElsewhere;
@@ -665,7 +666,7 @@ pub const Child = enum(usize) {
                 const until: Deadline = .in(testing.io, 5000);
                 while (wait_for.endedUnreaped(State.get(owner).id) == .running) {
                     if (until.remainingMs(testing.io) == 0) @panic("fixture did not exit");
-                    std.Thread.yield() catch {};
+                    spin.yield();
                 }
                 // A fork check may consume NOTE_EXIT before the waiter runs.
                 _ = State.get(owner).forks.any();
@@ -834,7 +835,7 @@ pub const Child = enum(usize) {
             if (left == 0) return null;
             // The first few asks give the kernel the scheduler tick it needs
             // without sleeping; after that, a millisecond at a time.
-            if (tries < 8) std.Thread.yield() catch {} else try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+            if (tries < 8) spin.yield() else try std.Io.sleep(io, .fromMilliseconds(1), .awake);
             tries += 1;
             try std.Io.checkCancel(io);
         }
@@ -925,7 +926,7 @@ pub const Child = enum(usize) {
         if (State.optional(child) == null) return;
         // Never wait for an exit here. Whoever holds identity is only delivering
         // a signal or doing the final nonblocking reap, not waiting on the child.
-        while (!State.get(child).identity.tryLock()) std.Thread.yield() catch {};
+        spin.lock(&State.get(child).identity);
         defer State.get(child).identity.unlock();
         if (child.settled() != null or State.get(child).identity_retired) return;
         if (!signal.valid()) return error.Unsupported;
@@ -1128,6 +1129,7 @@ pub const Child = enum(usize) {
         if (try child.tryWait()) |term| return term;
 
         if (grace_ms > 0) {
+            // ziglint-ignore: Z026 a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
             child.kill(.terminate) catch {};
             if (try child.waitTimeout(io, grace_ms)) |term| return term;
         }
@@ -1572,6 +1574,7 @@ pub const Child = enum(usize) {
                 if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
             } else if (state.cgroup.active()) _ = state.cgroup.kill();
         }
+        // ziglint-ignore: Z026 the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
         _ = child.killWait(io, 0) catch {};
     }
 

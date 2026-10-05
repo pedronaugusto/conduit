@@ -36,6 +36,7 @@ const Process = if (windows) struct {
     }
     fn end(process: *@This()) void {
         _ = process.held.signal(.KILL);
+        // ziglint-ignore: Z026 cleanup after SIGKILL; what the test asserts was asserted before it
         _ = process.held.wait(io, budget_ms) catch {};
         process.held.deinit();
     }
@@ -79,6 +80,7 @@ const Fixture = struct {
     }
 
     fn deinit(fixture: *Fixture) void {
+        // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
         _ = fixture.child.killWait(io, 0) catch {};
         fixture.child.release(io) catch unreachable;
         fixture.daemon.end();

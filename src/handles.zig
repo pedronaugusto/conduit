@@ -5,6 +5,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 
@@ -232,7 +233,7 @@ pub const ForkGap = struct {
         while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
             // Both sections are a few system calls long, so the wait is short
             // and the scheduler is the right place to spend it.
-            std.Thread.yield() catch {};
+            spin.yield();
         }
     }
 };

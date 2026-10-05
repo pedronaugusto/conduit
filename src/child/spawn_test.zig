@@ -268,6 +268,7 @@ fn waitWithin(child: *Child) !Child.Term {
         if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
+    // ziglint-ignore: Z026 the test fails either way; the kill only keeps the child from outliving it
     _ = child.killWait(io, 0) catch {};
     return error.TestChildDidNotExit;
 }
@@ -2195,6 +2196,7 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
             },
         } orelse {
             _ = failures.fetchAdd(1, .monotonic);
+            // ziglint-ignore: Z026 the failure is counted; the kill only keeps the child from outliving the test
             _ = child.killWait(io, 0) catch {};
             continue;
         };
@@ -3785,6 +3787,7 @@ fn spawnWithSharedHandle(sink: std.Io.File, changed: *std.atomic.Value(bool)) st
             return;
         };
         _ = child.wait(io) catch {
+            // ziglint-ignore: Z026 the change is flagged below; the kill only keeps the child from outliving the test
             _ = child.killWait(io, 0) catch {};
             child.release(io) catch unreachable;
             changed.store(true, .release);
@@ -4054,6 +4057,7 @@ fn spawnAndList(each: usize, control: u64, strangers: *std.atomic.Value(u32)) st
         defer child.release(io) catch unreachable;
 
         var result = child.output(io, gpa, .{ .timeout_ms = budget_ms }) catch {
+            // ziglint-ignore: Z026 a child that gave no list adds no stranger; the kill only keeps it from outliving the test
             _ = child.killWait(io, 0) catch {};
             return;
         };
@@ -4448,6 +4452,7 @@ test "a fork spawn reports exec failure even when all standard descriptors were 
         var child = started;
         // An unexpected child can own a watch on a low descriptor too.
         // Close it before restoring the test runner's standard descriptors.
+        // ziglint-ignore: Z026 the unexpected child fails the test below; release asserts it is reaped
         _ = child.killWait(io, 0) catch {};
         child.release(io) catch unreachable;
         break :ended null;

@@ -91,6 +91,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 const Allocator = std.mem.Allocator;
@@ -377,6 +378,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         const orphans = current orelse return;
         orphans.inner().lock.lock();
         defer orphans.inner().lock.unlock();
+        // ziglint-ignore: Z026 an event has no caller to tell; what this look missed the next one, or `count` or `end`, finds
         orphans.look() catch {};
         orphans.reapEnded();
     }
@@ -471,14 +473,14 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     const SpinLock = struct {
         held: std.atomic.Value(bool) = .init(false),
 
-        fn lock(spin: *SpinLock) void {
-            while (spin.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
-                std.Thread.yield() catch {};
+        fn lock(spin_lock: *SpinLock) void {
+            while (spin_lock.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
+                spin.yield();
             }
         }
 
-        fn unlock(spin: *SpinLock) void {
-            spin.held.store(false, .release);
+        fn unlock(spin_lock: *SpinLock) void {
+            spin_lock.held.store(false, .release);
         }
     };
 
@@ -497,7 +499,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 const state = gate_lock.state.load(.monotonic);
                 if (state & (writing | waiting) == 0 and
                     gate_lock.state.cmpxchgWeak(state, state + 1, .acquire, .monotonic) == null) return;
-                std.Thread.yield() catch {};
+                spin.yield();
             }
         }
 
@@ -519,7 +521,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                         _ = gate_lock.state.cmpxchgWeak(state, state | waiting, .monotonic, .monotonic);
                     }
                 }
-                std.Thread.yield() catch {};
+                spin.yield();
             }
         }
 

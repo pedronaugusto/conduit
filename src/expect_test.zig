@@ -420,6 +420,7 @@ fn waitWithin(io: std.Io, child: *Child) !Child.Term {
         if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
+    // ziglint-ignore: Z026 the test fails either way; the kill only keeps the child from outliving it
     _ = child.killWait(io, 0) catch {};
     return error.TestChildDidNotExit;
 }

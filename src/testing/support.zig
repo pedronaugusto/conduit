@@ -83,7 +83,11 @@ test "runner teardown probe" {
     if (!try std.testing.environ.contains(std.testing.allocator, "CONDUIT_TEARDOWN_PROBE")) return error.SkipZigTest;
     const Task = struct {
         fn run() void {
-            while (true) std.Io.sleep(std.testing.io, .fromSeconds(1), .awake) catch {};
+            // The probe is a task that outlives teardown, so it outlives
+            // cancelation too.
+            while (true) std.Io.sleep(std.testing.io, .fromSeconds(1), .awake) catch |err| switch (err) {
+                error.Canceled => {},
+            };
         }
     };
     // Intentionally leave a backend task alive after the test body returns.

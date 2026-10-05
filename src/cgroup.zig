@@ -50,6 +50,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 const Deadline = @import("deadline.zig").Deadline;
@@ -137,7 +138,7 @@ const Place = struct {
         while (true) switch (found.load(.acquire)) {
             .found => return path_buffer[0..path_len :0],
             .none => return null,
-            .finding => std.Thread.yield() catch {},
+            .finding => spin.yield(),
             .unknown => {
                 if (found.cmpxchgStrong(.unknown, .finding, .acquire, .monotonic) != null) continue;
                 const ok = find();
@@ -563,7 +564,7 @@ const Leftovers = struct {
     var held: std.atomic.Value(bool) = .init(false);
 
     fn lock() void {
-        while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.Thread.yield() catch {};
+        while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) spin.yield();
     }
 
     fn unlock() void {

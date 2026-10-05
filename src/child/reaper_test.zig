@@ -21,6 +21,7 @@ const Observer = struct {
         // Give the Reaper the chance to finish the reap while delivery is
         // paused. With a held identity it must leave the status and handles
         // alone until delivery resumes.
+        // ziglint-ignore: Z026 only a pause for the Reaper; the assertion is what it did meanwhile, read below
         _ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};
         probe.retired = State.get(child).reaped.load(.acquire) or if (is_windows) retired: {
             var code: win32.DWORD = undefined;

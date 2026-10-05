@@ -46,6 +46,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const spin = @import("spin.zig");
 const State = @import("child/state.zig");
 const posix = std.posix;
 const c = std.c;
@@ -68,7 +69,7 @@ const Stop = struct {
     deadline: ?Deadline = null,
 
     fn lock(stop: *Stop) void {
-        while (!stop.mutex.tryLock()) std.Thread.yield() catch {};
+        spin.lock(&stop.mutex);
     }
 
     fn request(stop: *Stop, io: std.Io, grace_ms: u32) bool {
@@ -308,9 +309,11 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     pub fn stop(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
         if (!reaper.inner().stop.request(io, grace_ms)) return;
         if (grace_ms == 0) {
+            // ziglint-ignore: Z026 undelivered means ended or ending, as documented above; the term says how
             reaper.inner().child.kill(.kill) catch {};
             return;
         }
+        // ziglint-ignore: Z026 undelivered means ended or ending, as documented above; the term says how
         reaper.inner().child.kill(.terminate) catch {};
         reaper.inner().group.concurrent(io, insist, .{ reaper, io, grace_ms }) catch {
             // No task to wait out the grace on: insisting now is the one answer
@@ -474,6 +477,7 @@ pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         switch (contained.populated()) {
             .none => return true,
             .others => {
+                // ziglint-ignore: Z026 a member the request misses is still ended by the kill once the grace has passed
                 _ = contained.signalMembers(.TERM, State.get(reaper.inner().child).id, null) catch {};
                 switch (reaper.treeGrace(io, wake, .{ .contained = contained })) {
                     .empty => return true,
