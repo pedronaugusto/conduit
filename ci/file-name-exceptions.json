@@ -1,0 +1,9 @@
+[
+  {
+    "rule": "file-name-case",
+    "path": "src/child/state.zig",
+    "source": "top-level fields",
+    "detail": "struct file must use TitleCase",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  }
+]

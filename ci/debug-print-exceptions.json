@@ -1,0 +1,51 @@
+[
+  {
+    "rule": "debug-print",
+    "path": "src/console.zig",
+    "source": "std.debug.print(\"conduit: error.Unexpected: GetLastError({d})\\n\", .{@intFromEnum(err)});",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "debug-print",
+    "path": "src/trace.zig",
+    "source": "std.debug.print(\"conduit: \" ++ format ++ \"\\n\", args);",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "debug-print",
+    "path": "ci/containment.zig",
+    "source": "std.debug.print(\"containment docs: missing '{s}' in the measured observation boundary\\n\", .{term});",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "debug-print",
+    "path": "ci/containment.zig",
+    "source": "defer std.Io.Dir.cwd().deleteTree(io, scratch) catch |err| std.debug.print(\"runner scratch cleanup: {t}\\n\", .{err});",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "debug-print",
+    "path": "ci/containment.zig",
+    "source": "std.debug.print(\"runner probe did not compile:\\n{s}{s}\\n\", .{ compiled.stdout, compiled.stderr });",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "debug-print",
+    "path": "ci/containment.zig",
+    "source": "std.debug.print(\"runner probe did not identify backend teardown:\\n{s}\\n\", .{output});",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  },
+  {
+    "rule": "debug-print",
+    "path": "ci/containment.zig",
+    "source": "std.debug.print(\"runner probe: stuck backend teardown names its test and source\\n\", .{});",
+    "detail": "std.debug.print outside tests and src/testing/",
+    "reason": "existing at gate adoption; burned down in the cleanup pass"
+  }
+]

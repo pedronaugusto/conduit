@@ -100,6 +100,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
         "conduit_test_options",
         "standard_test_runner",
         "preflight_timings",
+        "preflight_order",
         "std",
     } },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },

@@ -5,6 +5,7 @@ const testing = std.testing;
 const upstream = @import("standard_test_runner");
 const options = @import("conduit_runner_options");
 const timings = @import("preflight_timings");
+const shuffle = @import("preflight_order");
 const io = std.Io.Threaded.global_single_threaded.io();
 
 pub const std_options: std.Options = .{ .logFn = if (builtin.fuzz) upstream.log else log };
@@ -44,7 +45,7 @@ const Watchdog = struct {
                 const directory = if (std.mem.startsWith(u8, watchdog.name, "child.")) "child/" else if (std.mem.startsWith(u8, watchdog.name, "testing.")) "testing/" else "";
                 const name = watchdog.name[directory.len..];
                 const file = name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len];
-                std.debug.print("\nconduit: watchdog: src/{s}{s}.zig: {s}; phase={t}\n", .{ directory, file, watchdog.name, watchdog.phase.load(.acquire) });
+                std.debug.print("\nconduit: watchdog: src/{s}{s}.zig: {s}; phase={t}; seed={d}\n", .{ directory, file, watchdog.name, watchdog.phase.load(.acquire), testing.random_seed });
                 std.process.exit(1);
             }
             // Independent of testing.io: even its teardown must stay observable.
@@ -74,7 +75,8 @@ fn serverMain(init: std.process.Init.Minimal) !void {
         if (std.mem.eql(u8, arg, "--listen=-")) listen = true;
         if (std.mem.startsWith(u8, arg, "--seed=")) testing.random_seed = try std.fmt.parseUnsigned(u32, arg[7..], 0);
     }
-    if (!listen) return upstream.main(init);
+    const order = try shuffle.init(io, init, args, builtin.test_functions.len);
+    if (!listen) return terminal(init, order);
     var in_buffer: [4096]u8 = undefined;
     var out_buffer: [4096]u8 = undefined;
     var reader = std.Io.File.stdin().readerStreaming(io, &in_buffer);
@@ -95,7 +97,8 @@ fn serverMain(init: std.process.Init.Minimal) !void {
                 const panics = try std.heap.page_allocator.alloc(u32, builtin.test_functions.len);
                 defer std.heap.page_allocator.free(panics);
                 @memset(panics, 0);
-                for (builtin.test_functions, names) |test_fn, *name| {
+                for (order, names) |original_index, *name| {
+                    const test_fn = builtin.test_functions[original_index];
                     name.* = @intCast(bytes.items.len);
                     try bytes.appendSlice(std.heap.page_allocator, test_fn.name);
                     try bytes.append(std.heap.page_allocator, 0);
@@ -104,7 +107,7 @@ fn serverMain(init: std.process.Init.Minimal) !void {
             },
             .run_test => {
                 const index = try server.receiveBody_u32();
-                const test_fn = builtin.test_functions[index];
+                const test_fn = builtin.test_functions[order[index]];
                 var watchdog: Watchdog = .{ .name = test_fn.name };
                 try watchdog.start();
                 defer watchdog.stop();
@@ -119,7 +122,7 @@ fn serverMain(init: std.process.Init.Minimal) !void {
                 const status: std.zig.Server.Message.TestResults.Status = if (test_fn.func()) |_| .pass else |err| switch (err) {
                     error.SkipZigTest => .skip,
                     else => fail: {
-                        std.debug.print("conduit: {s}: {t}\n", .{ test_fn.name, err });
+                        std.debug.print("conduit: {s}: {t}; seed={d}\n", .{ test_fn.name, err, testing.random_seed });
                         break :fail .fail;
                     },
                 };
@@ -127,6 +130,7 @@ fn serverMain(init: std.process.Init.Minimal) !void {
                 testing.io_instance.deinit();
                 const leaks = testing.allocator_instance.detectLeaks();
                 testing.allocator_instance.deinitWithoutLeakChecks();
+                if (leaks != 0 or errors.load(.monotonic) != 0) std.debug.print("conduit: failed test {s}; seed={d}\n", .{ test_fn.name, testing.random_seed });
                 watchdog.phase.store(.reporting, .release);
                 if (options.record_timings) try recorder.record(test_fn.name, @intCast(started.untilNow(io).raw.nanoseconds), @tagName(status));
                 try server.serveTestResults(.{ .index = index, .flags = .{
@@ -138,5 +142,40 @@ fn serverMain(init: std.process.Init.Minimal) !void {
             },
             else => return error.UnexpectedRunnerMessage,
         }
+    }
+}
+
+fn terminal(init: std.process.Init.Minimal, order: []const usize) !void {
+    var failures: usize = 0;
+    const recorder = if (options.record_timings) try timings.Recorder.init(io, init.environ) else {};
+    defer if (options.record_timings) recorder.deinit();
+    for (order) |index| {
+        const test_fn = builtin.test_functions[index];
+        var watchdog: Watchdog = .{ .name = test_fn.name };
+        try watchdog.start();
+        defer watchdog.stop();
+        testing.environ = init.environ;
+        testing.allocator_instance = .{};
+        testing.io_instance = .init(testing.allocator, .{ .argv0 = .init(init.args), .environ = init.environ });
+        errors.store(0, .monotonic);
+        const start: std.Io.Clock.Timestamp = .now(io, .awake);
+        const status = if (test_fn.func()) |_| "pass" else |err| switch (err) {
+            error.SkipZigTest => "skip",
+            else => failed: {
+                std.debug.print("conduit: {s}: {t}; seed={d}\n", .{ test_fn.name, err, testing.random_seed });
+                break :failed "fail";
+            },
+        };
+        watchdog.phase.store(.io_teardown, .release);
+        testing.io_instance.deinit();
+        const leaks = testing.allocator_instance.detectLeaks();
+        testing.allocator_instance.deinitWithoutLeakChecks();
+        watchdog.phase.store(.reporting, .release);
+        if (options.record_timings) try recorder.record(test_fn.name, @intCast(start.untilNow(io).raw.nanoseconds), status);
+        if (std.mem.eql(u8, status, "fail") or leaks != 0 or errors.load(.monotonic) != 0) failures += 1;
+    }
+    if (failures != 0) {
+        std.debug.print("conduit: {d} failed tests; seed={d}\n", .{ failures, testing.random_seed });
+        std.process.exit(1);
     }
 }
