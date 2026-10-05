@@ -130,6 +130,13 @@ const Implementation = struct {
 pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     _,
 
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(Orphans) >= @sizeOf(Implementation));
+        std.debug.assert(@alignOf(Orphans) >= @alignOf(Implementation));
+    }
+
     /// Whether this system has what `start` needs. Linux: the subreaper attribute
     /// (3.4), `pidfd_open` (5.3), `waitid` on a pidfd (5.4), and the `children`
     /// files in `/proc`; `start` finds out whether the running kernel has them.
@@ -404,6 +411,13 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
     pub const Spawn = enum(@Int(.unsigned, @sizeOf(SpawnState) * 8)) {
         _,
+
+        // The state lives in the value's own bits and `inner` casts to it: the
+        // bits must hold it and be at least as aligned.
+        comptime {
+            std.debug.assert(@sizeOf(Spawn) >= @sizeOf(SpawnState));
+            std.debug.assert(@alignOf(Spawn) >= @alignOf(SpawnState));
+        }
         fn inner(spawn: *Spawn) *SpawnState {
             return @ptrCast(@alignCast(spawn)); // safe: begin initializes inline storage of this size and alignment.
         }
@@ -481,6 +495,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
 
         fn unlock(spin_lock: *SpinLock) void {
+            std.debug.assert(spin_lock.held.load(.monotonic));
             spin_lock.held.store(false, .release);
         }
     };
@@ -505,7 +520,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
 
         fn unlockShared(gate_lock: *GateLock) void {
-            _ = gate_lock.state.fetchSub(1, .release);
+            const before = gate_lock.state.fetchSub(1, .release);
+            // A spawn was counted in, and no look can hold the gate meanwhile.
+            std.debug.assert(before & readers != 0);
+            std.debug.assert(before & writing == 0);
         }
 
         fn lock(gate_lock: *GateLock) void {
@@ -527,7 +545,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
 
         fn unlock(gate_lock: *GateLock) void {
-            _ = gate_lock.state.fetchAnd(~writing, .release);
+            const before = gate_lock.state.fetchAnd(~writing, .release);
+            // The look held the gate, and no spawn got in while it did.
+            std.debug.assert(before & writing != 0);
+            std.debug.assert(before & readers == 0);
         }
     };
 

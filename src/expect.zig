@@ -100,6 +100,13 @@ const Implementation = struct {
 pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     _,
 
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(Expect) >= @sizeOf(Implementation));
+        std.debug.assert(@alignOf(Expect) >= @alignOf(Implementation));
+    }
+
     fn inner(expect: *Expect) *Implementation {
         return @ptrCast(@alignCast(expect)); // safe: init writes inline state; the enum holds its size and alignment.
     }
@@ -466,6 +473,9 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             {
                 expect.inner().mutex.lockUncancelable(io);
                 defer expect.inner().mutex.unlock(io);
+                // Only this reader grows `filled`, and the room it saw can
+                // only have grown since: a consumer frees space, never takes it.
+                std.debug.assert(n <= expect.inner().buffer.len - expect.inner().filled);
                 @memcpy(expect.inner().buffer[expect.inner().filled..][0..n], chunk[0..n]);
                 expect.inner().filled += n;
             }
@@ -527,6 +537,8 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         expect.inner().mutex.lockUncancelable(io);
         defer expect.inner().mutex.unlock(io);
         if (expect.inner().consumed == 0) return;
+        std.debug.assert(expect.inner().consumed <= expect.inner().filled);
+        std.debug.assert(expect.inner().filled <= expect.inner().buffer.len);
         const rest = expect.inner().filled - expect.inner().consumed;
         @memmove(expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);
         expect.inner().filled = rest;

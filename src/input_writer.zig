@@ -76,6 +76,7 @@ pub fn Writer(comptime Child: type) type {
                 if (state.tail) |tail| tail.next = node else state.head = node;
                 state.tail = node;
                 state.backlog += bytes.len;
+                std.debug.assert(state.backlog <= state.max_backlog);
                 state.more.signal(io);
             }
 
@@ -165,9 +166,13 @@ const State = struct {
         while (state.head == null and !state.ending and state.failed == null)
             try state.more.wait(io, &state.mutex);
         if (state.failed != null) return null;
-        const node = state.head orelse return null;
+        const node = state.head orelse {
+            std.debug.assert(state.tail == null);
+            return null;
+        };
         state.head = node.next;
         if (state.head == null) state.tail = null;
+        std.debug.assert(node.bytes.len > 0);
         return node;
     }
 
@@ -204,6 +209,8 @@ const State = struct {
                 return;
             };
             state.mutex.lockUncancelable(io);
+            // Charged by `queue` when the batch was taken in.
+            std.debug.assert(state.backlog >= node.bytes.len);
             state.backlog -= node.bytes.len;
             state.free(node);
             state.mutex.unlock(io);

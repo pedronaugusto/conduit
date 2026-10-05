@@ -228,7 +228,9 @@ pub const ForkGap = struct {
     }
 
     pub fn release() void {
-        if (opening_is_two_calls) held.store(false, .release);
+        if (!opening_is_two_calls) return;
+        std.debug.assert(held.load(.monotonic));
+        held.store(false, .release);
     }
 
     fn take() void {

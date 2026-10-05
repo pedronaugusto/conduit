@@ -393,7 +393,9 @@ const Report = struct {
 /// `spawn` returns it, and there is no point in between at which it would be
 /// safe to stop.
 fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
-    comptime std.debug.assert(@sizeOf(Failure) <= 512); // POSIX's floor for PIPE_BUF
+    // One record is one `write`, which a pipe keeps whole below `PIPE_BUF`,
+    // whose floor is 512.
+    comptime std.debug.assert(@sizeOf(Failure) == 8);
     var record: Failure = undefined;
     var n = readAll(fd, std.mem.asBytes(&record));
     var outcome: Report = .{ .failure = null, .root_pid = pid, .joined = true };

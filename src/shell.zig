@@ -34,6 +34,13 @@ const ShellState = struct { pty: Pty, child: Child };
 pub const Shell = enum(@Int(.unsigned, @sizeOf(ShellState) * 8)) {
     _,
 
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(Shell) >= @sizeOf(ShellState));
+        std.debug.assert(@alignOf(Shell) >= @alignOf(ShellState));
+    }
+
     /// What `spawnShell` fails with: the pair, the spawn, or the environment.
     pub const SpawnError = Pty.OpenError || Child.SpawnError || environ.InheritError;
     fn inner(shell: *Shell) *ShellState {

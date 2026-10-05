@@ -120,6 +120,13 @@ const Implementation = struct {
 pub const Reaper = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     _,
 
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(Reaper) >= @sizeOf(Implementation));
+        std.debug.assert(@alignOf(Reaper) >= @alignOf(Implementation));
+    }
+
     fn inner(reaper: *Reaper) *Implementation {
         return @ptrCast(@alignCast(reaper)); // safe: init writes this inline state; enum size and alignment hold the implementation.
     }

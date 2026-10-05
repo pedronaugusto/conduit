@@ -53,6 +53,13 @@ const Implementation = struct {
 pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     _,
 
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(Pty) >= @sizeOf(Implementation));
+        std.debug.assert(@alignOf(Pty) >= @alignOf(Implementation));
+    }
+
     fn inner(pty: *Pty) *Implementation {
         return @ptrCast(@alignCast(pty)); // safe: open initializes inline storage of the same size and alignment.
     }

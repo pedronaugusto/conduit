@@ -484,11 +484,17 @@ pub const Child = enum(usize) {
     /// that sees a term sees every field the reaper wrote before it.
     fn settled(child: *const Child) ?Term {
         if (!State.get(child).reaped.load(.acquire)) return null;
+        // Published only after it was written.
+        std.debug.assert(State.get(child).term != null);
         return State.get(child).term;
     }
 
     /// Records how the child ended and lets everyone else read it.
     fn publish(child: *Child, term: Term) void {
+        // One reap, so one term: whoever publishes holds the identity, and a
+        // second reap would be of a process this child no longer names.
+        std.debug.assert(!State.get(child).reaped.load(.monotonic));
+        std.debug.assert(State.get(child).term == null);
         State.get(child).term = term;
         State.get(child).reaped.store(true, .release);
     }
@@ -499,6 +505,8 @@ pub const Child = enum(usize) {
     }
 
     fn releaseReap(child: *Child) void {
+        // Only the task that claimed the reap gives it back.
+        std.debug.assert(State.get(child).reaping.load(.monotonic));
         State.get(child).reaping.store(false, .release);
     }
 
@@ -1373,6 +1381,13 @@ pub const Child = enum(usize) {
     /// Owns collected bytes; move before sharing and never copy an owner.
     pub const Output = enum(@Int(.unsigned, @sizeOf(OutputState) * 8)) {
         _,
+
+        // The state lives in the value's own bits and `inner` casts to it: the
+        // bits must hold it and be at least as aligned.
+        comptime {
+            std.debug.assert(@sizeOf(Output) >= @sizeOf(OutputState));
+            std.debug.assert(@alignOf(Output) >= @alignOf(OutputState));
+        }
         fn inner(collected: *Output) *OutputState {
             return @ptrCast(@alignCast(collected)); // safe: collection initializes inline storage of the same size and alignment.
         }

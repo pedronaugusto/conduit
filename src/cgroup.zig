@@ -569,6 +569,7 @@ const Leftovers = struct {
     }
 
     fn unlock() void {
+        std.debug.assert(held.load(.monotonic));
         held.store(false, .release);
     }
 
@@ -615,6 +616,13 @@ const CgroupState = struct {
 
 const LinuxCgroup = enum(@Int(.unsigned, @sizeOf(CgroupState) * 8)) {
     _,
+
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(LinuxCgroup) >= @sizeOf(CgroupState));
+        std.debug.assert(@alignOf(LinuxCgroup) >= @alignOf(CgroupState));
+    }
 
     fn inner(value: *LinuxCgroup) *CgroupState {
         return @ptrCast(@alignCast(value)); // safe: construction writes inline state; the enum holds its size and alignment.
@@ -795,6 +803,13 @@ const RecordedState = struct {
 
 const LinuxRecorded = enum(@Int(.unsigned, @sizeOf(RecordedState) * 8)) {
     _,
+
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(LinuxRecorded) >= @sizeOf(RecordedState));
+        std.debug.assert(@alignOf(LinuxRecorded) >= @alignOf(RecordedState));
+    }
 
     fn inner(value: *LinuxRecorded) *RecordedState {
         return @ptrCast(@alignCast(value)); // safe: construction writes inline state; the enum holds its size and alignment.
@@ -998,6 +1013,8 @@ const MemberOps = struct {
                 const pid = std.fmt.parseInt(posix.pid_t, word, 10) catch continue;
                 try into.append(allocator, pid);
             }
+            std.debug.assert(complete <= held);
+            std.debug.assert(held <= window.len);
             @memmove(window[0 .. held - complete], window[complete..held]);
             held -= complete;
             if (n == 0) return true;
@@ -1092,6 +1109,13 @@ const PendingState = struct {
 
 pub const Pending = enum(@Int(.unsigned, @sizeOf(PendingState) * 8)) {
     _,
+
+    // The state lives in the value's own bits and `inner` casts to it: the
+    // bits must hold it and be at least as aligned.
+    comptime {
+        std.debug.assert(@sizeOf(Pending) >= @sizeOf(PendingState));
+        std.debug.assert(@alignOf(Pending) >= @alignOf(PendingState));
+    }
 
     fn inner(pending: *Pending) *PendingState {
         return @ptrCast(@alignCast(pending)); // safe: prepare initializes inline storage of this size and alignment.
