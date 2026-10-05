@@ -1646,21 +1646,7 @@ pub const Child = enum(usize) {
         // Joins the tasks, so the lists below are this task's alone again.
         group.cancel(io);
 
-        const out_failure = out.failure.load(.acquire);
-        const err_failure = err.failure.load(.acquire);
-        if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
-        if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
-        const stdout_bytes = try out.list.toOwnedSlice(allocator);
-        errdefer allocator.free(stdout_bytes);
-        const stderr_bytes = try err.list.toOwnedSlice(allocator);
-        return Output.init(.{
-            .stdout = stdout_bytes,
-            .stderr = stderr_bytes,
-            .stdout_truncated = out.truncated or !out.done.load(.acquire),
-            .stderr_truncated = err.truncated or !err.done.load(.acquire),
-            .term = term,
-            .timed_out = timed_out,
-        });
+        return Collector.output(allocator, &out, &err, term, timed_out);
     }
 
     /// One stream's worth of collected bytes, shared between the task reading it
@@ -1683,6 +1669,66 @@ pub const Child = enum(usize) {
 
         fn readFailed(collector: *const Collector) bool {
             return collector.failure.load(.acquire) == .read_failed;
+        }
+
+        /// What the two collectors hold, as the `Output` of a run that ended
+        /// with `term`: theirs no longer, and the first failure either met.
+        fn output(allocator: Allocator, out: *Collector, err: *Collector, term: Term, timed_out: bool) OutputError!Output {
+            const out_failure = out.failure.load(.acquire);
+            const err_failure = err.failure.load(.acquire);
+            if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
+            if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
+            const stdout_bytes = try out.list.toOwnedSlice(allocator);
+            errdefer allocator.free(stdout_bytes);
+            const stderr_bytes = try err.list.toOwnedSlice(allocator);
+            return Output.init(.{
+                .stdout = stdout_bytes,
+                .stderr = stderr_bytes,
+                .stdout_truncated = out.truncated or !out.done.load(.acquire),
+                .stderr_truncated = err.truncated or !err.done.load(.acquire),
+                .term = term,
+                .timed_out = timed_out,
+            });
+        }
+    };
+
+    /// What one round of `outputPolled` waits on: each stream still open, and
+    /// the child's exit while it is still to come. `which` says what each
+    /// descriptor is, 0 and 1 for the streams and 2 for the exit.
+    const PollSet = struct {
+        fds: [3]posix.pollfd,
+        which: [3]u8,
+        count: usize,
+
+        /// A stream whose descriptor is not one is not something `poll`
+        /// reports on: it is read here, directly, so that the read says what
+        /// is wrong.
+        fn init(
+            allocator: Allocator,
+            io: std.Io,
+            streams: [2]?std.Io.File,
+            collectors: [2]*Collector,
+            max_bytes: usize,
+            exit: ?posix.fd_t,
+        ) OutputError!PollSet {
+            var set: PollSet = .{ .fds = undefined, .which = undefined, .count = 0 };
+            for (streams, collectors, 0..) |stream, collector, i| {
+                if (collector.done.load(.acquire)) continue;
+                if (stream.?.handle < 0) {
+                    _ = try collectOnce(allocator, io, stream.?, max_bytes, collector);
+                    continue;
+                }
+                set.add(stream.?.handle, @intCast(i));
+            }
+            if (exit) |fd| set.add(fd, 2);
+            return set;
+        }
+
+        fn add(set: *PollSet, fd: posix.fd_t, what: u8) void {
+            std.debug.assert(set.count < set.fds.len);
+            set.fds[set.count] = .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 };
+            set.which[set.count] = what;
+            set.count += 1;
         }
     };
 
@@ -1830,26 +1876,10 @@ pub const Child = enum(usize) {
             }
             if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
 
-            var fds: [3]posix.pollfd = undefined;
-            var which: [3]u8 = undefined;
-            var count: usize = 0;
-            for (streams, 0..) |stream, i| {
-                if (collectors[i].done.load(.acquire)) continue;
-                // A descriptor that is not one is not something `poll` reports
-                // on: it is read directly, so that the read says what is wrong.
-                if (stream.?.handle < 0) {
-                    _ = try collectOnce(allocator, io, stream.?, options.max_bytes, collectors[i]);
-                    continue;
-                }
-                fds[count] = .{ .fd = stream.?.handle, .events = posix.POLL.IN, .revents = 0 };
-                which[count] = @intCast(i);
-                count += 1;
-            }
-            if (term == null and !ended) {
-                fds[count] = .{ .fd = watch.?.handle, .events = posix.POLL.IN, .revents = 0 };
-                which[count] = 2;
-                count += 1;
-            }
+            var set = try PollSet.init(allocator, io, streams, collectors, options.max_bytes, if (term == null and !ended) watch.?.handle else null);
+            const fds = set.fds[0..set.count];
+            const which = set.which[0..set.count];
+            const count = set.count;
             var slice: u32 = output_wait_slice_ms;
             if (term == null) {
                 if (deadline) |run_end| slice = @min(slice, run_end.remainingMs(io));
@@ -1864,9 +1894,9 @@ pub const Child = enum(usize) {
                 continue;
             }
             // A poll that cannot be made is a stream that cannot be read.
-            const ready = posix.poll(fds[0..count], @intCast(slice)) catch return error.ReadFailed;
+            const ready = posix.poll(fds, @intCast(slice)) catch return error.ReadFailed;
             if (ready == 0) continue;
-            for (fds[0..count], which[0..count]) |fd, i| {
+            for (fds, which) |fd, i| {
                 if (fd.revents == 0) continue;
                 if (i == 2) {
                     // The child has ended, or is a moment from being waitable:
@@ -1885,21 +1915,7 @@ pub const Child = enum(usize) {
             }
         }
 
-        const out_failure = out.failure.load(.acquire);
-        const err_failure = err.failure.load(.acquire);
-        if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
-        if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
-        const stdout_bytes = try out.list.toOwnedSlice(allocator);
-        errdefer allocator.free(stdout_bytes);
-        const stderr_bytes = try err.list.toOwnedSlice(allocator);
-        return Output.init(.{
-            .stdout = stdout_bytes,
-            .stderr = stderr_bytes,
-            .stdout_truncated = out.truncated or !out.done.load(.acquire),
-            .stderr_truncated = err.truncated or !err.done.load(.acquire),
-            .term = term.?,
-            .timed_out = timed_out,
-        });
+        return Collector.output(allocator, &out, &err, term.?, timed_out);
     }
 
     //======================================================================
