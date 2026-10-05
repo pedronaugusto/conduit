@@ -42,7 +42,7 @@ pub fn Writer(comptime Child: type) type {
                 const state = try allocator.create(State);
                 errdefer allocator.destroy(state);
                 state.* = .{ .allocator = allocator, .file = file, .max_backlog = options.max_backlog };
-                try state.group.concurrent(io, run, .{ state, io });
+                try state.group.concurrent(io, State.run, .{ state, io });
                 ChildState.get(child).stdin = null;
                 return @enumFromInt(@intFromPtr(state)); // safe: the owner retains this allocated State until deinit.
             }
@@ -127,110 +127,118 @@ pub fn Writer(comptime Child: type) type {
             fn get(writer: *const InputWriter) *State {
                 return @ptrFromInt(@intFromEnum(writer.*)); // safe: init allocated a State; deinit alone destroys it.
             }
-
-            const Node = struct {
-                next: ?*Node = null,
-                bytes: []u8,
-            };
-
-            const State = struct {
-                allocator: std.mem.Allocator,
-                file: std.Io.File,
-                max_backlog: usize,
-                mutex: std.Io.Mutex = .init,
-                more: std.Io.Condition = .init,
-                head: ?*Node = null,
-                tail: ?*Node = null,
-                backlog: usize = 0,
-                ending: bool = false,
-                failed: ?WriteError = null,
-                finished: bool = false,
-                closed: std.Io.Event = .unset,
-                group: std.Io.Group = .init,
-
-                fn free(state: *State, node: *Node) void {
-                    state.allocator.free(node.bytes);
-                    state.allocator.destroy(node);
-                }
-
-                fn next(state: *State, io: std.Io) std.Io.Cancelable!?*Node {
-                    try state.mutex.lock(io);
-                    defer state.mutex.unlock(io);
-                    while (state.head == null and !state.ending and state.failed == null)
-                        try state.more.wait(io, &state.mutex);
-                    if (state.failed != null) return null;
-                    const node = state.head orelse return null;
-                    state.head = node.next;
-                    if (state.head == null) state.tail = null;
-                    return node;
-                }
-            };
-
-            fn run(state: *State, io: std.Io) void {
-                var failure: ?WriteError = null;
-                defer {
-                    // Only this task ever uses or closes the transferred pipe.
-                    state.file.close(io);
-                    state.mutex.lockUncancelable(io);
-                    defer state.mutex.unlock(io);
-                    if (state.failed == null) state.failed = failure;
-                    while (state.head) |node| {
-                        state.head = node.next;
-                        state.free(node);
-                    }
-                    state.tail = null;
-                    state.backlog = 0;
-                    state.ending = true;
-                    state.finished = true;
-                    state.closed.set(io);
-                }
-                while (true) {
-                    const node = state.next(io) catch |err| {
-                        failure = err;
-                        return;
-                    } orelse return;
-                    handles.writeStreamingAll(io, state.file, node.bytes) catch |err| {
-                        state.mutex.lockUncancelable(io);
-                        defer state.mutex.unlock(io);
-                        // Publish the failure before releasing the batch's backlog.
-                        if (state.failed == null) state.failed = err;
-                        state.free(node);
-                        return;
-                    };
-                    state.mutex.lockUncancelable(io);
-                    state.backlog -= node.bytes.len;
-                    state.free(node);
-                    state.mutex.unlock(io);
-                }
-            }
-
-            test "InputWriter isOpen takes a contended mutex without cancellation" {
-                const Backend = struct {
-                    const Self = @This();
-                    mutex: *std.Io.Mutex,
-                    waits: usize = 0,
-                    fn wait(userdata: ?*anyopaque, _: *const u32, _: u32) void {
-                        const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
-                        backend.waits += 1;
-                        backend.mutex.state.store(.unlocked, .release);
-                    }
-                    fn canceled(_: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-                        return error.Canceled;
-                    }
-                    fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
-                };
-                var state: State = .{ .allocator = std.testing.allocator, .file = undefined, .max_backlog = 0 };
-                var writer: InputWriter = @enumFromInt(@intFromPtr(&state)); // safe: this synthetic writer borrows the State for this test only.
-                var backend: Backend = .{ .mutex = &state.mutex };
-                var vtable = std.testing.io.vtable.*;
-                vtable.futexWait = Backend.canceled;
-                vtable.futexWaitUncancelable = Backend.wait;
-                vtable.futexWake = Backend.wake;
-                const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
-                state.mutex.state.store(.locked_once, .release);
-                try std.testing.expect(writer.isOpen(observed_io));
-                try std.testing.expectEqual(@as(usize, 1), backend.waits);
-            }
         };
     };
+}
+
+/// One batch of queued bytes.
+const Node = struct {
+    next: ?*Node = null,
+    bytes: []u8,
+};
+
+/// What an `InputWriter` and its writing task share. `mutex` guards every
+/// field but the file, which only the task uses once it has started.
+const State = struct {
+    allocator: std.mem.Allocator,
+    file: std.Io.File,
+    max_backlog: usize,
+    mutex: std.Io.Mutex = .init,
+    more: std.Io.Condition = .init,
+    head: ?*Node = null,
+    tail: ?*Node = null,
+    backlog: usize = 0,
+    ending: bool = false,
+    failed: ?std.Io.File.Writer.Error = null,
+    finished: bool = false,
+    closed: std.Io.Event = .unset,
+    group: std.Io.Group = .init,
+
+    fn free(state: *State, node: *Node) void {
+        state.allocator.free(node.bytes);
+        state.allocator.destroy(node);
+    }
+
+    fn next(state: *State, io: std.Io) std.Io.Cancelable!?*Node {
+        try state.mutex.lock(io);
+        defer state.mutex.unlock(io);
+        while (state.head == null and !state.ending and state.failed == null)
+            try state.more.wait(io, &state.mutex);
+        if (state.failed != null) return null;
+        const node = state.head orelse return null;
+        state.head = node.next;
+        if (state.head == null) state.tail = null;
+        return node;
+    }
+
+    /// The writing task: each batch in order, then the pipe closed.
+    fn run(state: *State, io: std.Io) void {
+        var failure: ?std.Io.File.Writer.Error = null;
+        defer {
+            // Only this task ever uses or closes the transferred pipe.
+            state.file.close(io);
+            state.mutex.lockUncancelable(io);
+            defer state.mutex.unlock(io);
+            if (state.failed == null) state.failed = failure;
+            while (state.head) |node| {
+                state.head = node.next;
+                state.free(node);
+            }
+            state.tail = null;
+            state.backlog = 0;
+            state.ending = true;
+            state.finished = true;
+            state.closed.set(io);
+        }
+        while (true) {
+            const node = state.next(io) catch |err| {
+                failure = err;
+                return;
+            } orelse return;
+            handles.writeStreamingAll(io, state.file, node.bytes) catch |err| {
+                state.mutex.lockUncancelable(io);
+                defer state.mutex.unlock(io);
+                // Publish the failure before releasing the batch's backlog.
+                if (state.failed == null) state.failed = err;
+                state.free(node);
+                return;
+            };
+            state.mutex.lockUncancelable(io);
+            state.backlog -= node.bytes.len;
+            state.free(node);
+            state.mutex.unlock(io);
+        }
+    }
+};
+
+/// A writer over a `Child` that is never spawned: what the tests below need
+/// is the queue, not the pipe.
+const TestWriter = Writer(enum(usize) { _ }).InputWriter;
+
+test "InputWriter isOpen takes a contended mutex without cancellation" {
+    const Backend = struct {
+        const Self = @This();
+        mutex: *std.Io.Mutex,
+        waits: usize = 0,
+        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32) void {
+            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
+            backend.waits += 1;
+            backend.mutex.state.store(.unlocked, .release);
+        }
+        fn canceled(_: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            return error.Canceled;
+        }
+        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
+    };
+    var state: State = .{ .allocator = std.testing.allocator, .file = undefined, .max_backlog = 0 };
+    var writer: TestWriter = @enumFromInt(@intFromPtr(&state)); // safe: this synthetic writer borrows the State for this test only.
+    var backend: Backend = .{ .mutex = &state.mutex };
+    var vtable = std.testing.io.vtable.*;
+    vtable.futexWait = Backend.canceled;
+    vtable.futexWaitUncancelable = Backend.wait;
+    vtable.futexWake = Backend.wake;
+    const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    state.mutex.state.store(.locked_once, .release);
+    try std.testing.expect(writer.isOpen(observed_io));
+    try std.testing.expectEqual(@as(usize, 1), backend.waits);
 }
