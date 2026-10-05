@@ -70,41 +70,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z023",
-    "path": "src/orphans.zig",
-    "source": "fn isChildWith(held: Held, comptime System: type) LookError!bool {",
-    "detail": "'type' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z032",
-    "path": "src/child/posix.zig",
-    "source": "const SIG = posix.SIG;",
-    "detail": "acronym in 'SIG' should use standard casing: 'Sig'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z032",
-    "path": "src/child/posix.zig",
-    "source": "const SIG = enum(u32) {",
-    "detail": "acronym in 'SIG' should use standard casing: 'Sig'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/child/posix.zig",
-    "source": "const IGN: Handler = .ignored;",
-    "detail": "variable 'IGN' should be snake_case",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/child/posix.zig",
-    "source": "const DFL: Handler = .default;",
-    "detail": "variable 'DFL' should be snake_case",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z030",
     "path": "src/expect.zig",
     "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",

@@ -687,8 +687,13 @@ fn clearSignals() void {
     clearDispositions(SpawnSignals);
 }
 
+/// What `clearDispositions` asks of the system: the signal type, the
+/// action ignoring one and the default action, `sigaction`, and how many
+/// signals there are.
 const SpawnSignals = struct {
-    const SIG = posix.SIG;
+    const Signal = posix.SIG;
+    const ignored = posix.SIG.IGN;
+    const default_action = posix.SIG.DFL;
     const Sigaction = posix.Sigaction;
     const sigaction = c.sigaction;
     const limit = if (@hasDecl(c.SIG, "RTMAX")) @max(c.NSIG, c.SIG.RTMAX + 1) else c.NSIG;
@@ -697,15 +702,15 @@ const SpawnSignals = struct {
 fn clearDispositions(comptime system: type) void {
     var number: u32 = 1;
     while (number < system.limit) : (number += 1) {
-        const signal: system.SIG = @enumFromInt(number);
+        const signal: system.Signal = @enumFromInt(number);
         // The two that cannot be caught cannot be reset either.
         if (signal == .KILL or signal == .STOP) continue;
         var current: system.Sigaction = undefined;
         // Reserved numbers cannot carry a caller's disposition. In
         // particular, libc refuses its threading signals on Linux.
         if (system.sigaction(signal, null, &current) != 0) continue;
-        if (current.handler.handler != system.SIG.IGN) continue;
-        current.handler = .{ .handler = system.SIG.DFL };
+        if (current.handler.handler != system.ignored) continue;
+        current.handler = .{ .handler = system.default_action };
         current.flags = 0;
         _ = system.sigaction(signal, &current, null);
     }
@@ -965,13 +970,13 @@ fn readAll(fd: posix.fd_t, buffer: []u8) usize {
 test "fork signal defaults include ignored real-time signals and leave reserved numbers alone" {
     const System = struct {
         const Handler = enum { default, ignored, caught };
-        const SIG = enum(u32) {
+        const Signal = enum(u32) {
             KILL = 9,
             STOP = 19,
             _,
-            const IGN: Handler = .ignored;
-            const DFL: Handler = .default;
         };
+        const ignored: Handler = .ignored;
+        const default_action: Handler = .default;
         const Sigaction = struct {
             handler: union(enum) { handler: Handler },
             flags: u32 = 0,
@@ -980,7 +985,7 @@ test "fork signal defaults include ignored real-time signals and leave reserved 
         var actions: [limit]Sigaction = undefined;
         var reserved_writes: usize = 0;
 
-        fn sigaction(signal: SIG, action: ?*const Sigaction, previous: ?*Sigaction) c_int {
+        fn sigaction(signal: Signal, action: ?*const Sigaction, previous: ?*Sigaction) c_int {
             const number = @intFromEnum(signal);
             if (number == 32 or number == 33) {
                 if (action != null) reserved_writes += 1;

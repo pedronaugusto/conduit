@@ -576,12 +576,12 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         fn openAdoptedWith(comptime System: type, pid: posix.pid_t) OpenError!Held {
             var held = try System.open(pid);
             errdefer System.close(held.pidfd);
-            if (!try held.isChildWith(System)) return error.Gone;
+            if (!try isChildWith(System, held)) return error.Gone;
             held.record = System.record(pid);
             // A by-number lookup may have met a replacement if another
             // reaper broke the contract. The pidfd must still prove that
             // this owner holds the original identity after that lookup.
-            if (!try held.isChildWith(System)) return error.Gone;
+            if (!try isChildWith(System, held)) return error.Gone;
             return held;
         }
 
@@ -592,7 +592,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// Whether the process is a child of this one, reaped by nobody yet. Asked
         /// of the pidfd, so it is about this process and no other given its pid.
         fn isChild(held: Held) LookError!bool {
-            return held.isChildWith(PidfdWait);
+            return isChildWith(PidfdWait, held);
         }
 
         const PidfdWait = struct {
@@ -613,7 +613,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             }
         };
 
-        fn isChildWith(held: Held, comptime System: type) LookError!bool {
+        fn isChildWith(comptime System: type, held: Held) LookError!bool {
             var info = std.mem.zeroes(linux.siginfo_t);
             while (true) {
                 switch (System.child(held.pidfd, &info)) {
@@ -858,7 +858,7 @@ test "an unknown pidfd wait does not prove reap ownership" {
         }
     };
     const held: Orphans.Held = .{ .pid = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 1, .pidfd = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1 };
-    try std.testing.expectError(error.Unexpected, held.isChildWith(Refused));
+    try std.testing.expectError(error.Unexpected, Orphans.Held.isChildWith(Refused, held));
 }
 
 test "orphan identity capture refuses a pid recycled during its start-time lookup" {
