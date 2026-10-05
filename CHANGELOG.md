@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `CONDUIT_TRACE` lines go through `std.log` at the info level under the `conduit` scope, and the `GetLastError` number behind an `error.Unexpected` on Windows at the warning level, so the program's log function and level decide where they go, instead of standard error.
+
 - Use the native terminal fixture for the Windows cursor passthrough comparison.
 
 - Share the Zig CI gate through preflight, with requested fast runs and full merge checks.

@@ -418,7 +418,8 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
         // The kernel names the device a descriptor is open on in /proc,
         // which is what the C library's ttyname reads too.
         var path_buf: [32]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buf, "/proc/self/fd/{d}", .{handle}) catch unreachable;
+        // unreachable: 14 bytes of prefix, at most 11 for an i32 and the NUL fit in 32
+        const path = std.fmt.bufPrintSentinel(&path_buf, "/proc/self/fd/{d}", .{handle}, 0) catch unreachable;
         const rc = system.readlink(path.ptr, buffer.ptr, buffer.len);
         switch (posix.errno(rc)) {
             .SUCCESS => {},

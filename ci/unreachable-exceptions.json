@@ -1,9 +1,1 @@
-[
-  {
-    "rule": "catch-unreachable",
-    "path": "src/tty.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buf, \"/proc/self/fd/{d}\", .{handle}) catch unreachable;",
-    "detail": "catch unreachable needs // unreachable: <why> on the same or previous line",
-    "reason": "existing at gate adoption; burned down in the cleanup pass"
-  }
-]
+[]

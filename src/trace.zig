@@ -18,6 +18,7 @@ const std = @import("std");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = if (is_windows) @import("win32.zig") else struct {};
+const log = std.log.scoped(.conduit);
 
 /// `0` not looked up yet, `1` off, `2` on.
 var state: std.atomic.Value(u8) = .init(0);
@@ -35,8 +36,10 @@ pub fn enabled() bool {
     return on;
 }
 
-/// One line, when the trace is on. The prefix says where it came from, because
-/// it lands in a log beside everything else the run printed.
+/// One line, when the trace is on: `std.log` at the info level, scoped
+/// `conduit`, so the scope says where it came from in a log beside everything
+/// else the run printed, and the program's own log function and level decide
+/// where it goes.
 ///
 /// **Guard the call with `enabled` when an argument has to be computed.** Zig
 /// evaluates a call's arguments before the call, so anything a trace line
@@ -47,7 +50,7 @@ pub fn enabled() bool {
 /// name to give and asking for one is illegal behaviour.
 pub fn print(comptime format: []const u8, args: anytype) void {
     if (!enabled()) return;
-    std.debug.print("conduit: " ++ format ++ "\n", args);
+    log.info(format, args);
 }
 
 fn look() bool {

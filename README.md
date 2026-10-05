@@ -844,8 +844,9 @@ keeps a corpus of its own under `.zig-cache/f`. The test module is built with
 error return traces off, which is what lets the fuzzing test runner compile.
 
 `zig build unit` is the suite without the examples, `-Dtest-filter` runs part
-of it, and `CONDUIT_TRACE` in the environment prints what this package asked
-the operating system for.
+of it, and `CONDUIT_TRACE` in the environment logs what this package asked
+the operating system for, through `std.log` at the info level under the
+`conduit` scope.
 
 ## Requirements
 

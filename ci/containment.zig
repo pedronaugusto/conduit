@@ -1,14 +1,23 @@
 //! Keep the containment promise and the test runner's teardown diagnostic explicit.
 const std = @import("std");
 
-fn boundary(a: std.mem.Allocator, text: []const u8) !void {
+const log = std.log.scoped(.containment);
+
+/// The first term of the Darwin containment promise `text` leaves out, or
+/// `null` when it says all of them.
+fn missingTerm(a: std.mem.Allocator, text: []const u8) !?[]const u8 {
     const lower = try std.ascii.allocLowerString(a, text);
     defer a.free(lower);
     for ([_][]const u8{ "observation", "kernel", "measured", "registration", "escape" }) |term| {
-        if (std.mem.indexOf(u8, lower, term) == null) {
-            std.debug.print("containment docs: missing '{s}' in the measured observation boundary\n", .{term});
-            return error.MissingContainmentBoundary;
-        }
+        if (std.mem.indexOf(u8, lower, term) == null) return term;
+    }
+    return null;
+}
+
+fn boundary(a: std.mem.Allocator, text: []const u8) !void {
+    if (try missingTerm(a, text)) |term| {
+        log.err("missing '{s}' in the measured observation boundary", .{term});
+        return error.MissingContainmentBoundary;
     }
 }
 
@@ -37,7 +46,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
     const stamp = std.Io.Clock.awake.now(io).nanoseconds;
     const scratch = try std.fmt.allocPrint(a, ".zig-cache/runner-probe-{d}", .{stamp});
     try std.Io.Dir.cwd().createDirPath(io, scratch);
-    defer std.Io.Dir.cwd().deleteTree(io, scratch) catch |err| std.debug.print("runner scratch cleanup: {t}\n", .{err});
+    defer std.Io.Dir.cwd().deleteTree(io, scratch) catch |err| log.warn("runner scratch cleanup: {t}", .{err});
     var env = try init.environ_map.clone(a);
     defer env.deinit();
     for ([_][]const u8{ "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO" }) |key| _ = env.swapRemove(key);
@@ -55,7 +64,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
         .environ_map = &env,
     });
     if (compiled.term != .exited or compiled.term.exited != 0) {
-        std.debug.print("runner probe did not compile:\n{s}{s}\n", .{ compiled.stdout, compiled.stderr });
+        log.err("runner probe did not compile:\n{s}{s}", .{ compiled.stdout, compiled.stderr });
         return error.RunnerProbeCompileFailed;
     }
     const result = try std.process.run(a, io, .{
@@ -66,13 +75,13 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
     const output = try std.mem.concat(a, u8, &.{ result.stdout, result.stderr });
     const expected = "conduit: watchdog: src/testing/support.zig: testing.support.test.runner teardown probe; phase=io_teardown";
     if ((result.term == .exited and result.term.exited == 0) or std.mem.indexOf(u8, output, expected) == null) {
-        std.debug.print("runner probe did not identify backend teardown:\n{s}\n", .{output});
+        log.err("runner probe did not identify backend teardown:\n{s}", .{output});
         return error.RunnerProbeFailed;
     }
-    std.debug.print("runner probe: stuck backend teardown names its test and source\n", .{});
+    log.info("runner probe: stuck backend teardown names its test and source", .{});
 }
 
 test "the boundary needs every term in the Darwin containment promise" {
-    try boundary(std.testing.allocator, "MEASURED observation of registration; a kernel escape remains possible");
-    try std.testing.expectError(error.MissingContainmentBoundary, boundary(std.testing.allocator, "kernel enforcement"));
+    try std.testing.expectEqual(null, try missingTerm(std.testing.allocator, "MEASURED observation of registration; a kernel escape remains possible"));
+    try std.testing.expectEqualStrings("observation", (try missingTerm(std.testing.allocator, "kernel enforcement")).?);
 }

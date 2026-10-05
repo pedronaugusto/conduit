@@ -2779,13 +2779,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z011",
-    "path": "src/tty.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buf, \"/proc/self/fd/{d}\", .{handle}) catch unreachable;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z006",
     "path": "src/tty.zig",
     "source": "pub const foregroundGroup = if (is_windows)",

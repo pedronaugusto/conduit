@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const windows = std.os.windows;
+const log = std.log.scoped(.conduit);
 
 pub const DWORD = windows.DWORD;
 pub const HANDLE = windows.HANDLE;
@@ -27,7 +28,7 @@ pub const COORD = windows.COORD;
 pub fn unexpected(err: windows.Win32Error) std.Io.UnexpectedError {
     @branchHint(.cold);
     if (std.options.unexpected_error_tracing) {
-        std.debug.print("conduit: error.Unexpected: GetLastError({d})\n", .{@intFromEnum(err)});
+        log.warn("error.Unexpected: GetLastError({d})", .{@intFromEnum(err)});
         std.debug.dumpCurrentStackTrace(.{ .first_address = @returnAddress() });
     }
     return error.Unexpected;

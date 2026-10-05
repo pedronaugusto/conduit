@@ -8,7 +8,8 @@ const timings = @import("preflight_timings");
 const shuffle = @import("preflight_order");
 const io = std.Io.Threaded.global_single_threaded.io();
 
-pub const std_options: std.Options = .{ .logFn = if (builtin.fuzz) upstream.log else log };
+// Info, so `CONDUIT_TRACE` lines reach the log in every optimization mode.
+pub const std_options: std.Options = .{ .logFn = if (builtin.fuzz) upstream.log else log, .log_level = .info };
 var errors: std.atomic.Value(usize) = .init(0);
 var fuzz_test: bool = false;
 
