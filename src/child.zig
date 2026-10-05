@@ -1191,16 +1191,15 @@ pub const Child = enum(usize) {
     /// children only through the whole process table, it would mean neither. So
     /// this is a compile error there rather than an answer that is right on one
     /// system and wrong on three.
-    pub const waitTree = if (is_windows)
-        waitTreeWindows
-    else if (builtin.os.tag == .linux)
-        waitTreeLinux
-    else
-        @compileError(
+    pub fn waitTree(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
+        if (is_windows) return child.waitTreeWindows(io, timeout_ms);
+        if (builtin.os.tag != .linux) @compileError(
             "Child.waitTree is Windows and Linux only: a job object and a cgroup " ++
                 "are containers the system accounts for, and this system has no " ++
                 "such thing to ask. See Child.kill for what a signal reaches there.",
         );
+        return child.waitTreeLinux(io, timeout_ms);
+    }
 
     fn waitTreeLinux(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
         const contained = &State.get(child).cgroup;

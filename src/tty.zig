@@ -131,7 +131,9 @@ pub const RawModeError = error{
     /// POSIX only: this process is in an orphaned background process group and
     /// may not change the attributes of its controlling terminal.
     ProcessOrphaned,
-} || UnexpectedError;
+    /// See `UnexpectedError`.
+    Unexpected,
+};
 
 /// Puts the terminal into raw mode and returns the attributes it had before,
 /// which `restore` puts back.
@@ -226,7 +228,9 @@ pub const WinSizeError = error{
     /// The handle is not a terminal. On Windows this is also what an input
     /// handle gets: the geometry belongs to the screen buffer.
     NotATerminal,
-} || UnexpectedError;
+    /// See `UnexpectedError`.
+    Unexpected,
+};
 
 /// Reads the terminal's window size.
 ///
@@ -264,14 +268,14 @@ pub const SetWinSizeError = WinSizeError;
 /// redraw; that signal only reaches a child that has the terminal as its
 /// controlling terminal (see `Child.SpawnOptions.detach`).
 ///
-/// Referring to this declaration on Windows is a compile error. A
+/// Calling this on Windows is a compile error. A
 /// pseudoconsole is resized with `Pty.resize`, which is the portable call; a
 /// real console's window belongs to the terminal hosting it, not to the
 /// program running inside.
-pub const setWinSize = if (is_windows)
-    @compileError("setWinSize is POSIX-only: resize a pseudoconsole with Pty.resize")
-else
-    setWinSizePosix;
+pub fn setWinSize(handle: Handle, size: Size) SetWinSizeError!void {
+    if (is_windows) @compileError("setWinSize is POSIX-only: resize a pseudoconsole with Pty.resize");
+    return setWinSizePosix(handle, size);
+}
 
 fn setWinSizePosix(handle: Handle, size: Size) SetWinSizeError!void {
     const ws = size.toWinsize();
@@ -396,7 +400,9 @@ pub const TtyNameError = error{
     NotATerminal,
     /// `buffer` is too short for the name and its terminating byte.
     NameTooLong,
-} || UnexpectedError;
+    /// See `UnexpectedError`.
+    Unexpected,
+};
 
 /// Writes the pathname of the terminal into `buffer` and returns the part of
 /// it that was used. POSIX only.
@@ -404,12 +410,12 @@ pub const TtyNameError = error{
 /// The result is a `/dev` path such as `/dev/pts/3` or `/dev/ttys004`. A
 /// buffer of `std.fs.max_path_bytes` is always enough.
 ///
-/// Referring to this declaration on Windows is a compile error: a console is
+/// Calling this on Windows is a compile error: a console is
 /// an object, not an entry in a namespace, and has no pathname to report.
-pub const ttyName = if (is_windows)
-    @compileError("ttyName is POSIX-only: a Windows console has no pathname")
-else
-    ttyNamePosix;
+pub fn ttyName(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
+    if (is_windows) @compileError("ttyName is POSIX-only: a Windows console has no pathname");
+    return ttyNamePosix(handle, buffer);
+}
 
 fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
     if (buffer.len == 0) return error.NameTooLong;
@@ -455,7 +461,9 @@ pub const ForegroundGroupError = error{
     /// The terminal has no foreground process group: nothing has claimed it as
     /// a controlling terminal, or the session that had it is gone.
     NoForegroundGroup,
-} || UnexpectedError;
+    /// See `UnexpectedError`.
+    Unexpected,
+};
 
 /// The process group the terminal will send its generated signals to. POSIX
 /// only.
@@ -471,14 +479,14 @@ pub const ForegroundGroupError = error{
 /// in the foreground, which is not always the child it started: a shell moves
 /// that group around as it runs jobs.
 ///
-/// Referring to this declaration on Windows is a compile error: a console has
+/// Calling this on Windows is a compile error: a console has
 /// no foreground process group, and the nearest thing -- which process gets a
 /// Ctrl-C -- is decided per process group by `CREATE_NEW_PROCESS_GROUP` rather
 /// than held by the console.
-pub const foregroundGroup = if (is_windows)
-    @compileError("foregroundGroup is POSIX-only: a console has no foreground process group")
-else
-    foregroundGroupPosix;
+pub fn foregroundGroup(handle: Handle) ForegroundGroupError!posix.pid_t {
+    if (is_windows) @compileError("foregroundGroup is POSIX-only: a console has no foreground process group");
+    return foregroundGroupPosix(handle);
+}
 
 fn foregroundGroupPosix(handle: Handle) ForegroundGroupError!posix.pid_t {
     var group: posix.pid_t = 0;

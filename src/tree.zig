@@ -395,6 +395,7 @@ pub fn adoptionRecord(pid: posix.pid_t) ?adoption_record.Record {
 /// reaped: a zombie runs nothing. `error.Unsupported` on every other system,
 /// where there is no cheap way to ask.
 pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
+    if (builtin.os.tag == .windows) @compileError("startTime is POSIX-only");
     switch (builtin.os.tag) {
         .linux => {
             const relation = processRelationLinux(pid) orelse return null;
@@ -491,6 +492,7 @@ pub const CapturedPid = enum(u128) {
 /// refreshes the audit version only while that unique id matches, so exec
 /// preserves the capture and PID reuse cannot authorize a signal. `error.Unsupported` elsewhere.
 pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?CapturedPid {
+    if (builtin.os.tag == .windows) @compileError("captureStarted is POSIX-only");
     return CapturedPid.wrap((try captureStartedProcess(pid, since)) orelse return null);
 }
 
@@ -540,6 +542,7 @@ pub const RecordedOptions = struct {
 /// was something to end. A held identity cannot survive a delivered SIGKILL,
 /// even when the kernel has not yet made its exit observable to a waiter.
 pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
+    if (builtin.os.tag == .windows) @compileError("endRecorded is POSIX-only");
     if (options.supervisor) |record| {
         if (builtin.os.tag != .linux) return error.Unsupported;
         const boot = cgroups.bootIdentity() orelse return error.Unproven;
@@ -781,7 +784,7 @@ fn captureChildren(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     const first = descendants.items.len;
-    try childrenOf(parent, descendants, allocator);
+    try childrenOf(allocator, parent, descendants);
     for (descendants.items[first..]) |pid| {
         // The group signal is already a stable address for this process. Only
         // an escapee needs a separate identity retained for the later signal.
@@ -1048,20 +1051,22 @@ extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *anyopaq
 extern "c" fn proc_signal_with_audittoken(token: *AuditToken, sig: c_int) c_int;
 
 /// The immediate children of `pid`.
-const childrenOf = switch (builtin.os.tag) {
-    .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => childrenOfDarwin,
-    // No cheap way to ask, so the process group is the whole of the reach.
-    else => childrenOfNobody,
-};
+fn childrenOf(allocator: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
+    return switch (builtin.os.tag) {
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => childrenOfDarwin(allocator, pid, into),
+        // No cheap way to ask, so the process group is the whole of the reach.
+        else => childrenOfNobody(allocator, pid, into),
+    };
+}
 
 fn childrenOfNobody(
+    allocator: std.mem.Allocator,
     pid: posix.pid_t,
     into: *std.ArrayList(posix.pid_t),
-    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
+    _ = allocator;
     _ = pid;
     _ = into;
-    _ = allocator;
 }
 
 //======================================================================
@@ -1073,8 +1078,8 @@ fn childrenOfNobody(
 /// number.
 extern "c" fn proc_listchildpids(ppid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
-fn childrenOfDarwin(pid: posix.pid_t, into: *std.ArrayList(posix.pid_t), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
-    observedChildrenOfDarwin(pid, into, allocator) catch |err| switch (err) {
+fn childrenOfDarwin(allocator: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
+    observedChildrenOfDarwin(allocator, pid, into) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.SystemResources => return,
     };
@@ -1082,9 +1087,9 @@ fn childrenOfDarwin(pid: posix.pid_t, into: *std.ArrayList(posix.pid_t), allocat
 
 /// An observer must distinguish an unreadable list from an empty one.
 pub fn observedChildrenOfDarwin(
+    allocator: std.mem.Allocator,
     pid: posix.pid_t,
     into: *std.ArrayList(posix.pid_t),
-    allocator: std.mem.Allocator,
 ) error{ OutOfMemory, SystemResources }!void {
     // One call for the ordinary case. Asking for an estimate first doubles
     // the system calls for every leaf in the tree; only a full buffer needs
@@ -1599,41 +1604,41 @@ test "CapturedPid does not expose signal identities as writable fields" {
 
 pub const test_access = if (builtin.is_test) struct {
     pub const current = DarwinProcess.current;
-    pub const capture = fixture_Process.capture;
-    pub const Deadline = fixture_Deadline;
+    pub const capture = FixtureProcess.capture;
+    pub const Deadline = FixtureDeadline;
     pub const wait_for = fixture_wait_for;
-    pub const signalDescendantsGuarded = fixture_signalDescendantsGuarded;
-    pub const waitCaptured = fixture_waitCaptured;
-    pub const provenBelow = fixture_provenBelow;
-    pub const parentOf = fixture_parentOf;
+    pub const signalDescendantsGuarded = fixtureSignalDescendantsGuarded;
+    pub const waitCaptured = fixtureWaitCaptured;
+    pub const provenBelow = fixtureProvenBelow;
+    pub const parentOf = fixtureParentOf;
     pub const collect = fixture_collect;
-    pub const collectLinux = fixture_collectLinux;
-    pub const LinuxRelation = fixture_LinuxRelation;
-    pub const processRelationLinux = fixture_processRelationLinux;
-    pub const parseLinuxStat = fixture_parseLinuxStat;
-    pub const captureStartedProcess = fixture_captureStartedProcess;
-    pub const killHeld = fixture_killHeld;
-    pub const Started = fixture_Started;
-    pub const signalGroupSinceImpl = fixture_signalGroupSinceImpl;
-    pub const ProcBsdInfo = fixture_ProcBsdInfo;
+    pub const collectLinux = fixtureCollectLinux;
+    pub const LinuxRelation = FixtureLinuxRelation;
+    pub const processRelationLinux = fixtureProcessRelationLinux;
+    pub const parseLinuxStat = fixtureParseLinuxStat;
+    pub const captureStartedProcess = fixtureCaptureStartedProcess;
+    pub const killHeld = fixtureKillHeld;
+    pub const Started = FixtureStarted;
+    pub const signalGroupSinceImpl = fixtureSignalGroupSinceImpl;
+    pub const ProcBsdInfo = FixtureProcBsdInfo;
     pub const proc_pidtbsdinfo = fixture_proc_pidtbsdinfo;
     pub const proc_status_zombie = fixture_proc_status_zombie;
-    pub const captureChildren = fixture_captureChildren;
-    pub const Process = fixture_Process;
-    pub const LinuxProcess = fixture_LinuxProcess;
-    pub const AuditToken = fixture_AuditToken;
-    pub const BsdInfoWithUniqueId = fixture_BsdInfoWithUniqueId;
+    pub const captureChildren = fixtureCaptureChildren;
+    pub const Process = FixtureProcess;
+    pub const LinuxProcess = FixtureLinuxProcess;
+    pub const AuditToken = FixtureAuditToken;
+    pub const BsdInfoWithUniqueId = FixtureBsdInfoWithUniqueId;
     pub const proc_pidt_bsdinfowithuniqid = fixture_proc_pidt_bsdinfowithuniqid;
-    pub const ProcUniqueInfo = fixture_ProcUniqueInfo;
-    pub const NoProcess = fixture_NoProcess;
+    pub const ProcUniqueInfo = FixtureProcUniqueInfo;
+    pub const NoProcess = FixtureNoProcess;
     pub const proc_pid_unique_info = fixture_proc_pid_unique_info;
-    pub const childrenOf = fixture_childrenOf;
-    pub const childrenOfNobody = fixture_childrenOfNobody;
-    pub const childrenOfDarwin = fixture_childrenOfDarwin;
-    pub const DarwinForks = fixture_DarwinForks;
-    pub const NoForks = fixture_NoForks;
-    pub const membersLinux = fixture_membersLinux;
-    pub const membersDarwin = fixture_membersDarwin;
+    pub const childrenOf = fixtureChildrenOf;
+    pub const childrenOfNobody = fixtureChildrenOfNobody;
+    pub const childrenOfDarwin = fixtureChildrenOfDarwin;
+    pub const DarwinForks = FixtureDarwinForks;
+    pub const NoForks = FixtureNoForks;
+    pub const membersLinux = fixtureMembersLinux;
+    pub const membersDarwin = fixtureMembersDarwin;
 
     pub fn snapshot(pid: ?posix.pid_t) void {
         snapshot_witness = pid;
@@ -1642,37 +1647,37 @@ pub const test_access = if (builtin.is_test) struct {
         before_token_delivery = callback;
     }
 } else struct {};
-const fixture_Deadline = Deadline;
+const FixtureDeadline = Deadline;
 const fixture_wait_for = wait_for;
-const fixture_signalDescendantsGuarded = signalDescendantsGuarded;
-const fixture_waitCaptured = waitCaptured;
-const fixture_provenBelow = provenBelow;
-const fixture_parentOf = parentOf;
+const fixtureSignalDescendantsGuarded = signalDescendantsGuarded;
+const fixtureWaitCaptured = waitCaptured;
+const fixtureProvenBelow = provenBelow;
+const fixtureParentOf = parentOf;
 const fixture_collect = collect;
-const fixture_collectLinux = collectLinux;
-const fixture_LinuxRelation = LinuxRelation;
-const fixture_processRelationLinux = processRelationLinux;
-const fixture_parseLinuxStat = parseLinuxStat;
-const fixture_captureStartedProcess = captureStartedProcess;
-const fixture_killHeld = killHeld;
-const fixture_Started = Started;
-const fixture_signalGroupSinceImpl = signalGroupSinceImpl;
-const fixture_ProcBsdInfo = ProcBsdInfo;
+const fixtureCollectLinux = collectLinux;
+const FixtureLinuxRelation = LinuxRelation;
+const fixtureProcessRelationLinux = processRelationLinux;
+const fixtureParseLinuxStat = parseLinuxStat;
+const fixtureCaptureStartedProcess = captureStartedProcess;
+const fixtureKillHeld = killHeld;
+const FixtureStarted = Started;
+const fixtureSignalGroupSinceImpl = signalGroupSinceImpl;
+const FixtureProcBsdInfo = ProcBsdInfo;
 const fixture_proc_pidtbsdinfo = proc_pidtbsdinfo;
 const fixture_proc_status_zombie = proc_status_zombie;
-const fixture_captureChildren = captureChildren;
-const fixture_Process = Process;
-const fixture_LinuxProcess = LinuxProcess;
-const fixture_AuditToken = AuditToken;
-const fixture_BsdInfoWithUniqueId = BsdInfoWithUniqueId;
+const fixtureCaptureChildren = captureChildren;
+const FixtureProcess = Process;
+const FixtureLinuxProcess = LinuxProcess;
+const FixtureAuditToken = AuditToken;
+const FixtureBsdInfoWithUniqueId = BsdInfoWithUniqueId;
 const fixture_proc_pidt_bsdinfowithuniqid = proc_pidt_bsdinfowithuniqid;
-const fixture_ProcUniqueInfo = ProcUniqueInfo;
-const fixture_NoProcess = NoProcess;
+const FixtureProcUniqueInfo = ProcUniqueInfo;
+const FixtureNoProcess = NoProcess;
 const fixture_proc_pid_unique_info = proc_pid_unique_info;
-const fixture_childrenOf = childrenOf;
-const fixture_childrenOfNobody = childrenOfNobody;
-const fixture_childrenOfDarwin = childrenOfDarwin;
-const fixture_DarwinForks = DarwinForks;
-const fixture_NoForks = NoForks;
-const fixture_membersLinux = membersLinux;
-const fixture_membersDarwin = membersDarwin;
+const fixtureChildrenOf = childrenOf;
+const fixtureChildrenOfNobody = childrenOfNobody;
+const fixtureChildrenOfDarwin = childrenOfDarwin;
+const FixtureDarwinForks = DarwinForks;
+const FixtureNoForks = NoForks;
+const fixtureMembersLinux = membersLinux;
+const fixtureMembersDarwin = membersDarwin;

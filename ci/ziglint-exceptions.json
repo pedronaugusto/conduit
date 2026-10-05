@@ -1,12 +1,5 @@
 [
   {
-    "rule": "Z006",
-    "path": "src/handles.zig",
-    "source": "pub const setCloseOnExec = if (is_windows)",
-    "detail": "variable 'setCloseOnExec' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z015",
     "path": "src/handles.zig",
     "source": "pub fn readStreaming(",
@@ -39,27 +32,6 @@
     "path": "src/handles.zig",
     "source": "pub fn writeStreamingAll(f: std.Io.File, io: std.Io, bytes: []const u8) std.Io.File.Writer.Error!void {",
     "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/handles.zig",
-    "source": "pub const setCloseOnExecPosix = fixture_setCloseOnExecPosix;",
-    "detail": "variable 'setCloseOnExecPosix' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/handles.zig",
-    "source": "pub const windowsPipeClosed = fixture_windowsPipeClosed;",
-    "detail": "variable 'windowsPipeClosed' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/handles.zig",
-    "source": "pub const pipePosix = fixture_pipePosix;",
-    "detail": "variable 'pipePosix' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -112,104 +84,6 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z006",
-    "path": "src/conduit.zig",
-    "source": "pub const setWinSize = if (is_windows)",
-    "detail": "variable 'setWinSize' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/conduit.zig",
-    "source": "pub const foregroundGroup = if (is_windows)",
-    "detail": "variable 'foregroundGroup' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/conduit.zig",
-    "source": "pub const ttyName = if (is_windows)",
-    "detail": "variable 'ttyName' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/conduit.zig",
-    "source": "pub const startTime = if (is_windows)",
-    "detail": "variable 'startTime' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/conduit.zig",
-    "source": "pub const captureStarted = if (is_windows)",
-    "detail": "variable 'captureStarted' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/conduit.zig",
-    "source": "pub const endRecorded = if (is_windows)",
-    "detail": "variable 'endRecorded' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const WaitId = fixture_WaitId;",
-    "detail": "variable 'WaitId' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const infoPid = fixture_infoPid;",
-    "detail": "variable 'infoPid' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const openPidfd = fixture_openPidfd;",
-    "detail": "variable 'openPidfd' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const endedPidfd = fixture_endedPidfd;",
-    "detail": "variable 'endedPidfd' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const endedOrWokenPidfd = fixture_endedOrWokenPidfd;",
-    "detail": "variable 'endedOrWokenPidfd' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const openKqueue = fixture_openKqueue;",
-    "detail": "variable 'openKqueue' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const endedKqueue = fixture_endedKqueue;",
-    "detail": "variable 'endedKqueue' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/wait.zig",
-    "source": "pub const endedOrWokenKqueue = fixture_endedOrWokenKqueue;",
-    "detail": "variable 'endedOrWokenKqueue' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/child.zig",
     "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {",
@@ -256,13 +130,6 @@
     "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/child.zig",
-    "source": "pub const waitTree = if (is_windows)",
-    "detail": "variable 'waitTree' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -343,31 +210,10 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z006",
-    "path": "src/lineage.zig",
-    "source": "pub const Darwin = fixture_Darwin;",
-    "detail": "variable 'Darwin' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/reaper.zig",
     "source": "pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {",
     "detail": "deinit should set reaper.* = undefined (has early return before invalidation)",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/proxy.zig",
-    "source": "pub fn run(io: std.Io, options: Options) RunError!void {",
-    "detail": "public function exposes private error set 'RunError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/pty.zig",
-    "source": "pub const slaveFile = if (is_windows)",
-    "detail": "variable 'slaveFile' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -382,13 +228,6 @@
     "path": "src/pty.zig",
     "source": "fn deinit(drain: *Drain, io: std.Io) void {",
     "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/pty.zig",
-    "source": "const FD_CLOEXEC: c_int = c.FD_CLOEXEC;",
-    "detail": "variable 'FD_CLOEXEC' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -424,230 +263,6 @@
     "path": "src/tree.zig",
     "source": "allocator: std.mem.Allocator,",
     "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "const childrenOf = switch (builtin.os.tag) {",
-    "detail": "variable 'childrenOf' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "allocator: std.mem.Allocator,",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "fn childrenOfDarwin(pid: posix.pid_t, into: *std.ArrayList(posix.pid_t), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "allocator: std.mem.Allocator,",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const Deadline = fixture_Deadline;",
-    "detail": "variable 'Deadline' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const signalDescendantsGuarded = fixture_signalDescendantsGuarded;",
-    "detail": "variable 'signalDescendantsGuarded' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const waitCaptured = fixture_waitCaptured;",
-    "detail": "variable 'waitCaptured' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const provenBelow = fixture_provenBelow;",
-    "detail": "variable 'provenBelow' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const parentOf = fixture_parentOf;",
-    "detail": "variable 'parentOf' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const collectLinux = fixture_collectLinux;",
-    "detail": "variable 'collectLinux' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const LinuxRelation = fixture_LinuxRelation;",
-    "detail": "variable 'LinuxRelation' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const processRelationLinux = fixture_processRelationLinux;",
-    "detail": "variable 'processRelationLinux' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const parseLinuxStat = fixture_parseLinuxStat;",
-    "detail": "variable 'parseLinuxStat' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const captureStartedProcess = fixture_captureStartedProcess;",
-    "detail": "variable 'captureStartedProcess' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const killHeld = fixture_killHeld;",
-    "detail": "variable 'killHeld' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const Started = fixture_Started;",
-    "detail": "variable 'Started' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const signalGroupSinceImpl = fixture_signalGroupSinceImpl;",
-    "detail": "variable 'signalGroupSinceImpl' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const ProcBsdInfo = fixture_ProcBsdInfo;",
-    "detail": "variable 'ProcBsdInfo' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const captureChildren = fixture_captureChildren;",
-    "detail": "variable 'captureChildren' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const Process = fixture_Process;",
-    "detail": "variable 'Process' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const LinuxProcess = fixture_LinuxProcess;",
-    "detail": "variable 'LinuxProcess' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const AuditToken = fixture_AuditToken;",
-    "detail": "variable 'AuditToken' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const BsdInfoWithUniqueId = fixture_BsdInfoWithUniqueId;",
-    "detail": "variable 'BsdInfoWithUniqueId' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const ProcUniqueInfo = fixture_ProcUniqueInfo;",
-    "detail": "variable 'ProcUniqueInfo' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const NoProcess = fixture_NoProcess;",
-    "detail": "variable 'NoProcess' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const childrenOf = fixture_childrenOf;",
-    "detail": "variable 'childrenOf' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const childrenOfNobody = fixture_childrenOfNobody;",
-    "detail": "variable 'childrenOfNobody' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const childrenOfDarwin = fixture_childrenOfDarwin;",
-    "detail": "variable 'childrenOfDarwin' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const DarwinForks = fixture_DarwinForks;",
-    "detail": "variable 'DarwinForks' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const NoForks = fixture_NoForks;",
-    "detail": "variable 'NoForks' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const membersLinux = fixture_membersLinux;",
-    "detail": "variable 'membersLinux' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tree.zig",
-    "source": "pub const membersDarwin = fixture_membersDarwin;",
-    "detail": "variable 'membersDarwin' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -1092,20 +707,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z006",
-    "path": "src/child/contract.zig",
-    "source": "pub const toPosix = if (is_windows)",
-    "detail": "variable 'toPosix' should be snake_case",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/child/contract.zig",
-    "source": "pub fn execError(err: posix.E) SpawnError {",
-    "detail": "public function exposes private type 'SpawnError'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z023",
     "path": "src/child/windows.zig",
     "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
@@ -1148,13 +749,6 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z006",
-    "path": "src/child/posix.zig",
-    "source": "const setrlimitSym = if (posix.lfs64_abi) c.setrlimit64 else c.setrlimit;",
-    "detail": "variable 'setrlimitSym' should be snake_case",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
     "rule": "Z032",
     "path": "src/child/posix.zig",
     "source": "const SIG = enum(u32) {",
@@ -1185,43 +779,8 @@
   {
     "rule": "Z015",
     "path": "src/tty.zig",
-    "source": "pub fn rawMode(handle: Handle) RawModeError!Saved {",
-    "detail": "public function exposes private error set 'RawModeError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/tty.zig",
-    "source": "pub fn winSize(handle: Handle) WinSizeError!Size {",
-    "detail": "public function exposes private error set 'WinSizeError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tty.zig",
-    "source": "pub const setWinSize = if (is_windows)",
-    "detail": "variable 'setWinSize' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/tty.zig",
     "source": "pub fn openControlling(io: std.Io) OpenControllingError!Controlling {",
     "detail": "public function exposes private error set 'OpenControllingError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tty.zig",
-    "source": "pub const ttyName = if (is_windows)",
-    "detail": "variable 'ttyName' should be snake_case",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z006",
-    "path": "src/tty.zig",
-    "source": "pub const foregroundGroup = if (is_windows)",
-    "detail": "variable 'foregroundGroup' should be snake_case",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {

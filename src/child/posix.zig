@@ -520,7 +520,7 @@ fn childMain(
     // limit for a child it is about to hand to somebody else, and after
     // `setuid` it could not.
     for (options.resource_limits) |entry| {
-        if (setrlimitSym(entry.resource, &entry.limit) != 0) bail(report, .resource_limits);
+        if (setResourceLimit(entry.resource, &entry.limit) != 0) bail(report, .resource_limits);
     }
 
     // Last of the things that change what this process is, and before the
@@ -774,7 +774,9 @@ fn environPath() ?[]const u8 {
 /// to choose between them. This file calls the symbol directly rather than
 /// going through `std.posix.setrlimit`, because it runs in a fork child, where
 /// what is legal is a system call and not a wrapper.
-const setrlimitSym = if (posix.lfs64_abi) c.setrlimit64 else c.setrlimit;
+inline fn setResourceLimit(resource: posix.rlimit_resource, limit: *const posix.rlimit) c_int {
+    return if (posix.lfs64_abi) c.setrlimit64(resource, limit) else c.setrlimit(resource, limit);
+}
 
 /// The null device, opened for both directions so one descriptor can serve any
 /// of the three streams, and close-on-exec so the copy `dup2` makes is the only

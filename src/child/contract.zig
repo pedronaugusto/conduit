@@ -505,7 +505,9 @@ pub const SpawnError = error{
     /// Windows: `job_limits.cpu_rate` was outside its inclusive 1–10,000
     /// range. No child was started.
     InvalidJobLimit,
-} || std.Io.UnexpectedError;
+    /// The system answered in a way this package does not expect.
+    Unexpected,
+};
 
 pub const ReleaseError = KillWaitError || WaitTreeError;
 
@@ -544,7 +546,9 @@ pub const TryWaitError = error{
     /// This package has to be the one that reaps, and once it is not, the
     /// child is gone and how it ended cannot be recovered.
     ReapedElsewhere,
-} || std.Io.UnexpectedError;
+    /// The system answered in a way this package does not expect.
+    Unexpected,
+};
 
 /// A signal for `Child.kill`: the three requests to end that mean the same
 /// thing on both systems, the POSIX signals programs are commonly sent for
@@ -613,10 +617,10 @@ pub const Signal = union(enum) {
 
     /// The POSIX signal number this stands for. POSIX only: Windows has no
     /// `SIGKILL` to name.
-    pub const toPosix = if (is_windows)
-        @compileError("Signal.toPosix is POSIX-only")
-    else
-        toPosixImpl;
+    pub fn toPosix(signal: Signal) posix.SIG {
+        if (is_windows) @compileError("Signal.toPosix is POSIX-only");
+        return toPosixImpl(signal);
+    }
 
     fn toPosixImpl(signal: Signal) posix.SIG {
         return switch (signal) {
@@ -674,7 +678,9 @@ pub const KillError = error{
     /// one), or a signal other than the three it has an equivalent for. POSIX:
     /// a `.posix` number this system does not define.
     Unsupported,
-} || std.Io.UnexpectedError;
+    /// The system answered in a way this package does not expect.
+    Unexpected,
+};
 
 pub const KillWaitError = KillError || WaitError || TryWaitError || std.Io.Cancelable;
 

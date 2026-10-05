@@ -29,10 +29,10 @@ pub fn file(handle: std.Io.File.Handle) std.Io.File {
 /// should — `pipe2`, `O_CLOEXEC`, `F_DUPFD_CLOEXEC` — because the gap between
 /// an open and a second call is a gap another thread can `fork` through. This
 /// is for the descriptors whose opening call takes no such flag.
-pub const setCloseOnExec = if (is_windows)
-    @compileError("handles.setCloseOnExec is POSIX-only")
-else
-    setCloseOnExecPosix;
+pub fn setCloseOnExec(fd: posix.fd_t) void {
+    if (is_windows) @compileError("handles.setCloseOnExec is POSIX-only");
+    setCloseOnExecPosix(fd);
+}
 
 fn setCloseOnExecPosix(fd: posix.fd_t) void {
     _ = c.fcntl(fd, c.F.SETFD, @as(c_int, c.FD_CLOEXEC));
@@ -337,10 +337,10 @@ test "writeStreamingAll retains short writes after zero progress" {
 }
 
 pub const test_access = if (builtin.is_test) struct {
-    pub const setCloseOnExecPosix = fixture_setCloseOnExecPosix;
-    pub const windowsPipeClosed = fixture_windowsPipeClosed;
-    pub const pipePosix = fixture_pipePosix;
+    pub const setCloseOnExecPosix = fixtureSetCloseOnExecPosix;
+    pub const windowsPipeClosed = fixtureWindowsPipeClosed;
+    pub const pipePosix = fixturePipePosix;
 } else struct {};
-const fixture_setCloseOnExecPosix = setCloseOnExecPosix;
-const fixture_windowsPipeClosed = windowsPipeClosed;
-const fixture_pipePosix = pipePosix;
+const fixtureSetCloseOnExecPosix = setCloseOnExecPosix;
+const fixtureWindowsPipeClosed = windowsPipeClosed;
+const fixturePipePosix = pipePosix;

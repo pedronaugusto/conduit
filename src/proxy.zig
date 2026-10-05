@@ -116,7 +116,9 @@ pub const RunError = error{
     /// One of the two transfer buffers is empty, so its direction cannot make
     /// progress.
     BufferTooSmall,
-} || std.Io.Cancelable;
+    /// The task running `run` was cancelled.
+    Canceled,
+};
 
 /// Pumps both directions, and forwards the window size, until the child's end
 /// of the terminal closes.

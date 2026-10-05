@@ -277,13 +277,13 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// The same sharing rule as `master` applies. A parent that has spawned a
     /// child on this pair rarely wants this file; it wants `closeSlave`.
     ///
-    /// Referring to this declaration on Windows is a compile error: a
+    /// Calling this on Windows is a compile error: a
     /// pseudoconsole is an object a process is attached to, not a stream anything
     /// reads or writes.
-    pub const slaveFile = if (is_windows)
-        @compileError("Pty.slaveFile is POSIX-only: a pseudoconsole is not a stream")
-    else
-        slaveFilePosix;
+    pub fn slaveFile(pty: Pty) std.Io.File {
+        if (is_windows) @compileError("Pty.slaveFile is POSIX-only: a pseudoconsole is not a stream");
+        return slaveFilePosix(pty);
+    }
 
     fn slaveFilePosix(pty: Pty) std.Io.File {
         return file(pty.value().slave.?);
@@ -826,9 +826,9 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var pty = try Pty.open(std.testing.allocator, .{});
         defer pty.close(io);
 
-        const FD_CLOEXEC: c_int = c.FD_CLOEXEC;
-        try testing.expectEqual(FD_CLOEXEC, c.fcntl(pty.inner().read.?, c.F.GETFD, @as(c_int, 0)) & FD_CLOEXEC);
-        try testing.expectEqual(FD_CLOEXEC, c.fcntl(pty.inner().slave.?, c.F.GETFD, @as(c_int, 0)) & FD_CLOEXEC);
+        const cloexec: c_int = c.FD_CLOEXEC;
+        try testing.expectEqual(cloexec, c.fcntl(pty.inner().read.?, c.F.GETFD, @as(c_int, 0)) & cloexec);
+        try testing.expectEqual(cloexec, c.fcntl(pty.inner().slave.?, c.F.GETFD, @as(c_int, 0)) & cloexec);
     }
 
     test "a pseudoconsole is opened with the console options this system will take" {

@@ -53,7 +53,7 @@
 //! Three declarations exist only on POSIX, because what they name exists only
 //! there: `setWinSize` (a console's window belongs to its host), `ttyName` (a
 //! console has no pathname) and `Pty.slaveFile` (a pseudoconsole is not a
-//! stream). Referring to one on Windows is a compile error that says so.
+//! stream). Calling one on Windows is a compile error that says so.
 //!
 //! `Child.SpawnOptions.detach` and `Child.Signal` are the two places where the
 //! same call means less on Windows than on POSIX, and both say exactly how
@@ -192,26 +192,17 @@ pub const winSize = tty.winSize;
 pub const WinSizeError = tty.WinSizeError;
 /// Sets a terminal's window size. POSIX only; on Windows resize the pair with
 /// `Pty.resize` instead.
-pub const setWinSize = if (is_windows)
-    @compileError("setWinSize is POSIX-only: resize a pseudoconsole with Pty.resize")
-else
-    tty.setWinSize;
+pub const setWinSize = tty.setWinSize;
 pub const SetWinSizeError = tty.SetWinSizeError;
 /// Whether a handle is a terminal.
 pub const isTty = tty.isTty;
 /// The process group a terminal sends its generated signals to. POSIX only,
 /// and the way to tell a child that merely *sees* a terminal from one that is
 /// running on it.
-pub const foregroundGroup = if (is_windows)
-    @compileError("foregroundGroup is POSIX-only: a console has no foreground process group")
-else
-    tty.foregroundGroup;
+pub const foregroundGroup = tty.foregroundGroup;
 pub const ForegroundGroupError = tty.ForegroundGroupError;
 /// The `/dev` pathname of a terminal descriptor. POSIX only.
-pub const ttyName = if (is_windows)
-    @compileError("ttyName is POSIX-only: a Windows console has no pathname")
-else
-    tty.ttyName;
+pub const ttyName = tty.ttyName;
 pub const TtyNameError = tty.TtyNameError;
 
 /// Reads what a pipe holds now, without waiting for more: 0 once nothing is
@@ -236,10 +227,7 @@ pub const processExists = @import("process_exists.zig").processExists;
 /// with no `parent_death_signal`: it writes down each child's pid and start
 /// time, and the next time it runs it ends each that still runs as the same
 /// process.
-pub const startTime = if (is_windows)
-    @compileError("startTime is POSIX-only")
-else
-    tree.startTime;
+pub const startTime = tree.startTime;
 /// A process held by a kernel identity rather than by its number — a pidfd
 /// on Linux, a stable unique process id on Darwin. Darwin checks that id
 /// before refreshing the audit version for delivery, so exec preserves the
@@ -255,13 +243,7 @@ else
 /// how a program ends what a crashed run of it left, with no window in which
 /// the number could be someone else's. Linux and Darwin; `error.Unsupported`
 /// elsewhere. POSIX only.
-pub const captureStarted = if (is_windows)
-    @compileError("captureStarted is POSIX-only")
-else
-    tree.captureStarted;
+pub const captureStarted = tree.captureStarted;
 /// End a process recorded by an earlier run, together with its provable
 /// descendants, preferring a verified recorded cgroup when one is available.
-pub const endRecorded = if (is_windows)
-    @compileError("endRecorded is POSIX-only")
-else
-    tree.endRecorded;
+pub const endRecorded = tree.endRecorded;

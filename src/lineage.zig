@@ -96,7 +96,7 @@ const Darwin = struct {
         }
         var children: std.ArrayList(posix.pid_t) = .empty;
         defer children.deinit(tracker.allocator);
-        try tree.observedChildrenOfDarwin(parent.pid, &children, tracker.allocator);
+        try tree.observedChildrenOfDarwin(tracker.allocator, parent.pid, &children);
         for (children.items) |pid| {
             const child = tree.DarwinProcess.capture(pid) orelse continue;
             if (!child.childOf(&parent)) continue;
@@ -192,7 +192,7 @@ const Darwin = struct {
 
 pub const test_access = if (builtin.is_test) struct {
     pub const tree = fixture_tree;
-    pub const Darwin = fixture_Darwin;
+    pub const Darwin = FixtureDarwin;
 } else struct {};
 const fixture_tree = tree;
-const fixture_Darwin = Darwin;
+const FixtureDarwin = Darwin;

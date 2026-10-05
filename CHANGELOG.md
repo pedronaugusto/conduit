@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `setWinSize`, `ttyName`, `foregroundGroup`, `Pty.slaveFile`, `Child.Signal.toPosix`, `Child.waitTree`, `startTime`, `captureStarted` and `endRecorded` are functions rather than constants chosen per system. On a system without them, calling one is the compile error that says why; naming one without calling it no longer is.
+
 - `CONDUIT_TRACE` lines go through `std.log` at the info level under the `conduit` scope, and the `GetLastError` number behind an `error.Unexpected` on Windows at the warning level, so the program's log function and level decide where they go, instead of standard error.
 
 - Use the native terminal fixture for the Windows cursor passthrough comparison.
