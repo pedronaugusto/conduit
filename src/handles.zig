@@ -5,6 +5,8 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+/// This file, so a signature can name its error sets as callers do.
+const handles = @This();
 const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
@@ -63,10 +65,10 @@ pub const ReadStreamingError = std.Io.File.ReadStreamingError || error{
 /// stopping a proxy. An all-empty destination is rejected separately so a
 /// backend that correctly returns zero for it cannot make this loop spin.
 pub fn readStreaming(
-    f: std.Io.File,
     io: std.Io,
+    f: std.Io.File,
     buffers: []const []u8,
-) ReadStreamingError!usize {
+) handles.ReadStreamingError!usize {
     var has_room = false;
     for (buffers) |buffer| has_room = has_room or buffer.len != 0;
     if (!has_room) return error.EmptyBuffer;
@@ -94,7 +96,7 @@ pub const ReadAvailableError = std.Io.File.ReadStreamingError || error{
 /// inherited the other end, an ssh ControlMaster or a credential daemon,
 /// for as long as that runs. `f` is a pipe this process reads, as `Child`
 /// hands out; on Windows one opened for synchronous reads, as `Child`'s are.
-pub fn readAvailable(f: std.Io.File, io: std.Io, buffer: []u8) ReadAvailableError!usize {
+pub fn readAvailable(io: std.Io, f: std.Io.File, buffer: []u8) handles.ReadAvailableError!usize {
     if (buffer.len == 0) return error.EmptyBuffer;
     const ready = if (is_windows) windowsPipeAvailable(f) else posixReadable(f.handle);
     if (ready == 0) return 0;
@@ -146,7 +148,7 @@ fn windowsPipeAvailable(f: std.Io.File) usize {
 /// when a backend reports zero progress. File.writeStreamingAll retries that
 /// zero without a cancellation point, so a task could otherwise spin past a
 /// request to stop. The same rule belongs to every writer in this package.
-pub fn writeStreamingAll(f: std.Io.File, io: std.Io, bytes: []const u8) std.Io.File.Writer.Error!void {
+pub fn writeStreamingAll(io: std.Io, f: std.Io.File, bytes: []const u8) std.Io.File.Writer.Error!void {
     // Zig 0.16 maps STATUS_PIPE_CLOSING to Unexpected. Ask the pipe before
     // writing so this ordinary peer closure does not emit an unexpected-error
     // trace; check again on failure for a reader that closed during the write.
@@ -304,7 +306,7 @@ test "readStreaming retries a permitted zero-byte result" {
     const zero_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
 
     var buffer: [32]u8 = undefined;
-    const n = try readStreaming(f, zero_io, &.{&buffer});
+    const n = try readStreaming(zero_io, f, &.{&buffer});
     try std.testing.expect(state.returned_zero);
     try std.testing.expectEqualStrings("after zero", buffer[0..n]);
 }
@@ -331,7 +333,7 @@ test "writeStreamingAll retains short writes after zero progress" {
     var vtable = std.testing.io.vtable.*;
     vtable.operate = ShortWrites.operate;
     const io: std.Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
-    try writeStreamingAll(std.Io.File.stdout(), io, "abcdef");
+    try writeStreamingAll(io, std.Io.File.stdout(), "abcdef");
     try std.testing.expectEqual(4, ShortWrites.calls);
     try std.testing.expectEqualStrings("abcdef", &ShortWrites.bytes);
 }

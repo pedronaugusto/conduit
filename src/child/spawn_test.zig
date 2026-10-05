@@ -166,7 +166,7 @@ const Sink = struct {
         var buffer: [512]u8 = undefined;
         while (true) {
             if (sink.stopping.load(.acquire)) return sink.stop(null);
-            const n = handles.readStreaming(file, sink.source_io, &.{&buffer}) catch |err| switch (err) {
+            const n = handles.readStreaming(sink.source_io, file, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return sink.stop(if (handles.finished(err)) null else err),
             };
@@ -312,14 +312,14 @@ test "a child on pipes: its output is collected and its exit code is seen" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.greeting,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expect(std.mem.find(u8, result.stdout(), "hello from the child") != null);
@@ -332,7 +332,7 @@ test "a child on pipes can be written to" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.echo_stdin,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -342,7 +342,7 @@ test "a child on pipes can be written to" {
     try child.stdinFile().?.writeStreamingAll(io, "a line\n");
     child.closeStdin(io);
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expect(std.mem.find(u8, result.stdout(), "a line") != null);
@@ -353,14 +353,14 @@ test "output stops at max_bytes and says it did" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.greeting,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .max_bytes = 5, .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .max_bytes = 5, .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expectEqualStrings("hello", result.stdout());
@@ -378,7 +378,7 @@ test "output keeps draining after allocation failure and reports out of memory" 
 
     // Much more than a pipe holds: a collector that stops at its first failed
     // allocation leaves this child blocked in write and reaches the timeout.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "dd if=/dev/zero bs=65536 count=4 2>/dev/null" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
@@ -386,7 +386,7 @@ test "output keeps draining after allocation failure and reports out of memory" 
     errdefer _ = child.killWait(io, 0) catch {};
 
     var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
-    try testing.expectError(error.OutOfMemory, child.output(io, failing.allocator(), .{
+    try testing.expectError(error.OutOfMemory, child.output(failing.allocator(), io, .{
         .timeout_ms = budget_ms,
     }));
     try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
@@ -398,7 +398,7 @@ test "output ends a silent child when its stream cannot be read" {
     defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
@@ -408,7 +408,7 @@ test "output ends a silent child when its stream cannot be read" {
     child.stdoutFile().?.close(io);
     State.get(&child).stdout.?.handle = -1;
     defer _ = child.takeStdout();
-    try testing.expectError(error.ReadFailed, child.output(io, gpa, .{}));
+    try testing.expectError(error.ReadFailed, child.output(gpa, io, .{}));
     try testing.expect((try child.tryWait()) != null);
 }
 
@@ -416,13 +416,13 @@ test "output gives up on a child that will not end, and ends it" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .{ .pipes = .{ .stdin = false } },
     });
     defer child.release(io) catch unreachable;
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = 50, .grace_ms = 50 });
+    var result = try child.output(gpa, io, .{ .timeout_ms = 50, .grace_ms = 50 });
     defer result.deinit(gpa);
 
     try testing.expect(result.timedOut());
@@ -434,7 +434,7 @@ test "tryWait is null while the child runs and a term once it has ended" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_7,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -454,7 +454,7 @@ test "Reaper.exit becomes non-null once the child has ended" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -486,7 +486,7 @@ test "a Reaper started after reaping never watches a reused identity" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         .detach = true,
@@ -496,7 +496,7 @@ test "a Reaper started after reaping never watches a reused identity" {
     child.closeStdin(io);
     const term = try waitWithin(&child);
 
-    var witness = try Child.spawn(io, gpa, .{
+    var witness = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         .detach = true,
@@ -525,7 +525,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     // the owner deciding the child has had long enough. Two reaps of one child
     // are one status and one error about a child nobody can account for, so
     // what this asserts is that only one of them happened.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -568,7 +568,7 @@ test "a wait whose Reaper was cancelled is still a wait" {
     // unreaped, and whoever asked for the wait while it held it has to end up
     // doing the wait itself rather than waiting forever for a publish that is
     // never coming.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -591,7 +591,7 @@ test "Reaper.wait blocks until the child has ended, and answers everyone who ask
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -623,7 +623,7 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     // The shell and the `sleep` it starts both ignore `SIGTERM` — an ignored
     // signal is inherited across `execve` — and the `sleep` is the grandchild
     // the tree kill has to reach.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 100 & printf 'pid %d.' \"$!\"; wait" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .detach = true,
@@ -678,7 +678,7 @@ test "Reaper.stop is over the moment a child that honours the request ends" {
     defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -704,7 +704,7 @@ test "Reaper.stop with no grace is the force, now" {
 
     // The shell says so once it ignores the request, so the request cannot
     // arrive before it does.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .detach = true,
@@ -737,7 +737,7 @@ test "killWait retires a forced group only after closing its late fork's pipe" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     for (0..16) |_| {
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
             .detach = true,
@@ -767,7 +767,7 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     // Two left behind: one that goes when asked, and one that ignores the
     // request and has to be made to. The child's own end is an ordinary
     // exit, and that is the term published.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{
             "/bin/sh", "-c",
             "sleep 100 & a=$!; (trap '' TERM; sleep 100) & b=$!; " ++
@@ -831,7 +831,7 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     // Reaper used to take that as "nothing to watch" and reap it without
     // touching its group -- which a slow start of the task, as under
     // ThreadSanitizer, made happen to the test above one run in a few.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 100 & printf 'pid %d.' \"$!\"; exit 4" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .detach = true,
@@ -872,7 +872,7 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
     // with it the job is ended when the child is reaped.
     if (!is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.detached_grandchild,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
@@ -913,7 +913,7 @@ test "end_tree: a child that leaves nothing is reaped without waiting on its gro
     defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
         .detach = true,
@@ -935,7 +935,7 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
         .detach = !is_windows,
@@ -964,7 +964,7 @@ test "output abandoned by a cancelation ends the child and reaps it" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .detach = !is_windows,
@@ -974,7 +974,7 @@ test "output abandoned by a cancelation ends the child and reaps it" {
 
     const Run = struct {
         fn run(ch: *Child) void {
-            var result = ch.output(io, gpa, .{}) catch return;
+            var result = ch.output(gpa, io, .{}) catch return;
             result.deinit(gpa);
         }
     };
@@ -992,7 +992,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.echo_stdin,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -1008,7 +1008,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     // The same file the reader would come from, so the two agree.
     try testing.expectEqual(State.get(&child).stdout.?.handle, child.stdoutFile().?.handle);
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
     try testing.expect(std.mem.find(u8, result.stdout(), "a line") != null);
 }
@@ -1017,7 +1017,7 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.drain_then_exit_7,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -1041,7 +1041,7 @@ test "waitTimeout uses the native exit wait without interval sleeps" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -1072,7 +1072,7 @@ test "waitTimeout gives up without ending the child" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -1093,7 +1093,7 @@ test "succeeded, exitCode and signalName say how a child ended" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var ok_child = try Child.spawn(io, gpa, .{
+    var ok_child = try Child.spawn(gpa, io, .{
         .argv = &script.drain_then_exit_7,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -1111,7 +1111,7 @@ test "succeeded, exitCode and signalName say how a child ended" {
 
     // A signal is not a status, and this is where the two systems part: only
     // POSIX has a name to give.
-    var killed = try Child.spawn(io, gpa, .{
+    var killed = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -1149,7 +1149,7 @@ test "shellStatus says an end as a shell's $? does, and signalNumber names every
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var killed = try Child.spawn(io, gpa, .{
+    var killed = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -1171,7 +1171,7 @@ test "processExists says whether a process has an id, until it is reaped" {
         try testing.expectEqual(@as(?bool, false), conduit.processExists(-1));
     }
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
     });
@@ -1195,7 +1195,7 @@ test "killWait ends a child that would otherwise outlive the test, and says how"
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -1226,7 +1226,7 @@ test "killWait reaches what the child started, not only the child" {
         // would leave no grandchild to lose.
         &.{ "/bin/sh", "-c", "sleep 30; :" };
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         // On POSIX a signal is addressed to a process group and `detach` is
@@ -1274,7 +1274,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf 'pid %d.' \"$!\"; wait" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -1320,7 +1320,7 @@ test "a child that has never forked is stopped by its signal alone, without the 
     for ([_]bool{ false, true }) |on_pty| for ([_]bool{ false, true }) |detach| {
         var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sleep", "100" },
             .stdio = if (on_pty) .{ .pty = &pty } else .ignore,
             .detach = detach,
@@ -1339,7 +1339,7 @@ test "a child on a terminal opens it as one poll can wait on" {
     if (is_windows) return error.SkipZigTest;
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{test_options.tty_fixture},
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -1399,7 +1399,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
         defer pty.close(io);
         if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
         defer tree.testing_hook.hold_ms = 0;
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = if (on_pty)
                 &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf 'pid %d.' \"$!\"; wait" }
             else
@@ -1466,7 +1466,7 @@ test "a signal other than the three reaches a detached child and what it started
     // Windows has none of these, and refuses them: the test below.
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", trapping_tree },
         .stdio = shell_reports,
         .detach = true,
@@ -1506,7 +1506,7 @@ test "stop suspends a child and what it started, and continue resumes them" {
     defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", trapping_tree },
         .stdio = shell_reports,
         .detach = true,
@@ -1558,7 +1558,7 @@ test "a signal that is not a request to end leaves what the child started to its
             \\printf 'pid %d.' "$!"
             \\while :; do wait; done
         , .{entry[1]});
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", text },
             .stdio = shell_reports,
             .detach = true,
@@ -1589,7 +1589,7 @@ test "a signal with no meaning on this system is refused by name" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
     });
@@ -1677,7 +1677,7 @@ fn setsidProgram() ?[]const u8 {
 fn cgroupsHere() !bool {
     if (is_windows or !cgroup.supported) return false;
     if (setsidProgram() == null) return false;
-    var looked = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
+    var looked = try Child.spawn(gpa, io, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
     defer looked.release(io) catch unreachable;
     _ = try looked.wait(io);
     return State.get(&looked).cgroup.active();
@@ -1698,7 +1698,7 @@ fn cgroupExists(path: [:0]const u8) bool {
 
 test "a recorded cgroup opens only at its original directory identity and removes when empty" {
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
-    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
+    var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
@@ -1718,7 +1718,7 @@ test "a recorded cgroup opens only at its original directory identity and remove
 
 test "a recorded cgroup whose name now holds another is not removed through it" {
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
-    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
+    var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
@@ -1738,7 +1738,7 @@ test "a recorded cgroup whose name now holds another is not removed through it" 
 
 test "a recorded cgroup waits on population changes" {
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
-    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
+    var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     var where: [std.fs.max_path_bytes + 64]u8 = undefined;
@@ -1751,7 +1751,7 @@ test "a recorded cgroup waits on population changes" {
 
 test "endRecorded ends a verified Linux cgroup and its detached grandchild" {
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 30 & wait" },
         .stdio = .ignore,
         .detach = true,
@@ -1785,7 +1785,7 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
     // grace) reaches each member on its own. Both with and without a group,
     // since a member in the child's group is left to the group signal.
     for ([_]u32{ 0, 2000 }) |grace_ms| for ([_]bool{ false, true }) |detach| {
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", orphan_in_own_session ++ "; exec sleep 100" },
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
             .detach = detach,
@@ -1840,7 +1840,7 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
 
     // Not detached: there is no group to end, and before the cgroup a child
     // like this one left its tree running.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", orphan_in_own_session ++ "; read x; exit 3" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
@@ -1871,7 +1871,7 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     defer watchdog.deinit(io);
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", orphan_in_own_session },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
@@ -1903,7 +1903,7 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     _ = c.kill(orphan, .KILL);
     try expectGone(orphan);
     // The next spawn here looks, and removes it.
-    var next = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
+    var next = try Child.spawn(gpa, io, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
     defer next.release(io) catch unreachable;
     _ = try next.wait(io);
     try testing.expect(!cgroupExists(path));
@@ -2015,7 +2015,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try testing.expect(subreaperNow());
 
     // One that stays until `end`, left by a child that is still running.
-    var keeper = try Child.spawn(io, gpa, .{
+    var keeper = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x; exit 3" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
@@ -2038,7 +2038,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     // One that has ended by the time the child that left it is reaped: the
     // reap is the event, and takes it with it.
     {
-        var leaver = try Child.spawn(io, gpa, .{
+        var leaver = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x; exit 0" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         });
@@ -2060,7 +2060,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     // One that ends while nothing of conduit's happens stays a zombie, and a
     // spawn, the next event, reaps it.
     {
-        var leaver = try Child.spawn(io, gpa, .{
+        var leaver = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", leaves_an_orphan },
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
         });
@@ -2078,7 +2078,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
         try std.Io.sleep(io, .fromMilliseconds(100), .awake);
         try testing.expectEqual(@as(u8, 'Z'), stateOf(orphan));
 
-        var next = try Child.spawn(io, gpa, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
+        var next = try Child.spawn(gpa, io, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
         defer next.release(io) catch unreachable;
         try testing.expect(!alive(orphan));
         _ = try next.wait(io);
@@ -2113,7 +2113,7 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
     };
 
     // An adopted orphan running, and nothing of conduit's happening.
-    var leaver = try Child.spawn(io, gpa, .{
+    var leaver = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
@@ -2141,7 +2141,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
     if (is_windows or !Orphans.supported) return error.SkipZigTest;
 
     // A child this process had before `start` is somebody's too.
-    var before = try Child.spawn(io, gpa, .{
+    var before = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 4" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -2186,7 +2186,7 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
         const status: u8 = @intCast(task * race_children + i + 1);
         var line: [64]u8 = undefined;
         const said = std.fmt.bufPrint(&line, "(sleep 0 &); exit {d}", .{status}) catch unreachable;
-        var child = Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", said }, .stdio = .ignore }) catch {
+        var child = Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", said }, .stdio = .ignore }) catch {
             _ = failures.fetchAdd(1, .monotonic);
             continue;
         };
@@ -2216,7 +2216,7 @@ test "with Orphans not started, an orphan goes where it always went" {
     if (setsidProgram() == null) return error.SkipZigTest;
     try testing.expect(!subreaperNow());
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; exit 5" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
@@ -2354,7 +2354,7 @@ test "waitTree says the tree has ended, and does not say it early" {
     // to send signals to, not a container the system accounts for.
     if (!is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.detached_grandchild,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
     });
@@ -2422,7 +2422,7 @@ test "waitTree on Linux says the child's cgroup has emptied, and does not say it
     // The child leaves an orphan in a session of its own and ends normally,
     // and the survival policy leaves the orphan running: nothing but the
     // cgroup still relates it to the child.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", orphan_in_own_session ++ "; exit 0" },
         .stdio = .{ .streams = .{ .stdout = .pipe, .stderr = .ignore } },
     });
@@ -2455,7 +2455,7 @@ test "waitTree on Linux refuses a child with no cgroup of its own" {
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
 
-    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
+    var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
@@ -2469,7 +2469,7 @@ test "a contained wait ends a grandchild before lifecycle release" {
     // Windows only: contained completion confirms the whole Job.
     if (!is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.detached_grandchild,
         .descendants = .contain,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = true } },
@@ -2515,7 +2515,7 @@ test "a detached child has a process group of its own and an attached one does n
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var detached = try Child.spawn(io, gpa, .{
+    var detached = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -2524,7 +2524,7 @@ test "a detached child has a process group of its own and an attached one does n
     defer _ = detached.killWait(io, 0) catch {};
     try testing.expect(State.get(&detached).pgid != null);
 
-    var attached = try Child.spawn(io, gpa, .{
+    var attached = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = false,
@@ -2543,7 +2543,7 @@ test "a detached child's process group is the one the operating system reports" 
     // read back.
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = true,
@@ -2564,7 +2564,7 @@ test "an attached child shares the parent's process group" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .detach = false,
@@ -2583,7 +2583,7 @@ test "killWait with no grace goes straight to the signal nothing survives" {
     // and Windows has no polite request for a process to ignore.
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 100" },
         .stdio = .ignore,
         .detach = true,
@@ -2617,7 +2617,7 @@ test "what a child writes to its terminal reaches the master" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.say_on_terminal,
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
@@ -2672,7 +2672,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
         return error.SkipZigTest;
     }
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.cursor_shape,
         .stdio = .{ .pty = &pty },
     });
@@ -2701,7 +2701,7 @@ test "a child on a pty sees a terminal" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "test -t 0 && test -t 1 && test -t 2" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -2725,7 +2725,7 @@ test "a child on a pty reports the window size it was given, and the one it is r
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         // Reports the size, waits for a byte, and reports it again: the second
         // report is taken after the resize below.
         .argv = &.{ "/bin/sh", "-c", "stty size; read ignored; stty size" },
@@ -2762,7 +2762,7 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
     defer pty.close(io);
 
     // `exec` so the shell is replaced and the signal has one process to reach.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -2789,7 +2789,7 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
         .stdio = .{ .pty = &pty },
         .detach = false,
@@ -2817,7 +2817,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -2837,7 +2837,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     var quiet = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer quiet.close(io);
 
-    var attached = try Child.spawn(io, gpa, .{
+    var attached = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
         .stdio = .{ .pty = &quiet },
         .detach = false,
@@ -2864,7 +2864,7 @@ test "closing the master hangs the terminal up, and a detached child gets SIGHUP
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -2895,7 +2895,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     var sink_pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer sink_pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'to stderr' 1>&2" },
         .stdio = .{ .pipes = .{ .stdin = false } },
         .stderr_to = sink_pty.slaveFile(),
@@ -2926,7 +2926,7 @@ test "each stream is chosen on its own" {
     // the combination `.pipes` cannot say: it pipes a stream or leaves it the
     // parent's, and leaving standard error the parent's puts the child's
     // complaints on the test runner's own terminal.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.out_and_err,
         .stdio = .{ .streams = .{
             .stdin = .ignore,
@@ -2942,7 +2942,7 @@ test "each stream is chosen on its own" {
     try testing.expect(child.stdoutFile() != null);
     try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expect(std.mem.find(u8, result.stdout(), "to stdout") != null);
@@ -2966,7 +2966,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // Standard output is the terminal; standard error is a pipe. The child
     // reports which of the two it thinks is one, so the answer comes from the
     // child rather than from this process looking at its own descriptors.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{
             "/bin/sh",                                                                                "-c",
             "test -t 1 && printf 'stdout is a terminal\n'; test -t 2 || printf 'stderr is not' 1>&2",
@@ -3006,7 +3006,7 @@ test "a stream can be closed rather than connected to anything" {
     // With nothing on descriptor 1, the write fails and the shell says so with
     // its status. The same program with the null device there succeeds, which
     // is what makes this about `.close` and not about the program.
-    var closed = try Child.spawn(io, gpa, .{
+    var closed = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'x'" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .close, .stderr = .ignore } },
     });
@@ -3014,7 +3014,7 @@ test "a stream can be closed rather than connected to anything" {
     errdefer _ = closed.killWait(io, 0) catch {};
     try testing.expect(!conduit.succeeded(try waitWithin(&closed)));
 
-    var ignored = try Child.spawn(io, gpa, .{
+    var ignored = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'x'" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -3066,14 +3066,14 @@ test "a signal this process ignores is back at its default action in the child" 
 
     // The shell sends itself the signal. With the disposition reset it dies of
     // it; with the parent's ignore inherited it carries on and says so.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "kill -INT $$; printf 'SURVIVED'" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expectEqualStrings("", result.stdout());
@@ -3094,7 +3094,7 @@ test "a child's file-creation mask is the one it was given" {
 
     // `umask` with no argument prints the mask, and 0077 is not a default
     // anywhere, so seeing it means this package set it and not the shell.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "umask" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .credentials = .{ .umask = 0o077 },
@@ -3102,7 +3102,7 @@ test "a child's file-creation mask is the one it was given" {
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expect(std.mem.find(u8, result.stdout(), "77") != null);
@@ -3122,7 +3122,7 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     const uid = std.c.getuid();
     const gid = std.c.getgid();
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "id -u; id -g" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .credentials = .{ .uid = uid, .gid = gid },
@@ -3130,7 +3130,7 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     var wanted: [64]u8 = undefined;
@@ -3145,7 +3145,7 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     // `spawn`, not a child that started anyway with the credentials it had.
     // Only asked where it is true: a suite running as root may become anyone.
     if (uid != 0) {
-        try testing.expectError(error.CredentialsFailed, Child.spawn(io, gpa, .{
+        try testing.expectError(error.CredentialsFailed, Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", "exit 0" },
             .stdio = .ignore,
             .credentials = .{ .uid = 0 },
@@ -3166,7 +3166,7 @@ test "a resource limit set at spawn is the child's own" {
     // child cannot raise a hard limit back, so lowering it would be a
     // different claim.
     const current = try posix.getrlimit(.NOFILE);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "ulimit -n" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .resource_limits = &.{.{
@@ -3177,7 +3177,7 @@ test "a resource limit set at spawn is the child's own" {
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expect(std.mem.find(u8, result.stdout(), "64") != null);
@@ -3191,7 +3191,7 @@ test "a resource limit set at spawn is the child's own" {
     // A limit the operating system refuses -- a soft limit above its hard one
     // is refused for anybody, privileged or not -- is an error from `spawn`
     // rather than a child that started without it.
-    try testing.expectError(error.ResourceLimitsFailed, Child.spawn(io, gpa, .{
+    try testing.expectError(error.ResourceLimitsFailed, Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exit 0" },
         .stdio = .ignore,
         .resource_limits = &.{.{
@@ -3214,24 +3214,24 @@ test "a job limit bounds what the child's tree may do" {
     // what makes this about the limit rather than about `cmd.exe`.
     const argv: []const []const u8 = &.{ "cmd.exe", "/c", "cmd.exe /c echo NESTED" };
 
-    var free = try Child.spawn(io, gpa, .{
+    var free = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer free.release(io) catch unreachable;
     errdefer _ = free.killWait(io, 0) catch {};
-    var without = try free.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var without = try free.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer without.deinit(gpa);
     try testing.expect(std.mem.find(u8, without.stdout(), "NESTED") != null);
 
-    var bounded = try Child.spawn(io, gpa, .{
+    var bounded = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
         .job_limits = .{ .active_processes = 1 },
     });
     defer bounded.release(io) catch unreachable;
     errdefer _ = bounded.killWait(io, 0) catch {};
-    var with = try bounded.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var with = try bounded.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer with.deinit(gpa);
     try testing.expect(std.mem.find(u8, with.stdout(), "NESTED") == null);
 }
@@ -3240,7 +3240,7 @@ test "Windows CPU job limits reject values outside a whole-system percentage" {
     if (!is_windows) return error.SkipZigTest;
 
     inline for (.{ @as(u32, 0), @as(u32, 10_001) }) |rate| {
-        try testing.expectError(error.InvalidJobLimit, Child.spawn(io, gpa, .{
+        try testing.expectError(error.InvalidJobLimit, Child.spawn(gpa, io, .{
             .argv = &.{ "cmd.exe", "/c", "exit 0" },
             .stdio = .ignore,
             .job_limits = .{ .cpu_rate = rate },
@@ -3250,7 +3250,7 @@ test "Windows CPU job limits reject values outside a whole-system percentage" {
 
 test "job limits are refused on POSIX rather than quietly not applied" {
     if (is_windows) return error.SkipZigTest;
-    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+    try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .job_limits = .{ .active_processes = 1 },
@@ -3259,7 +3259,7 @@ test "job limits are refused on POSIX rather than quietly not applied" {
 
 test "resource limits are refused on Windows rather than quietly not applied" {
     if (!is_windows) return error.SkipZigTest;
-    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+    try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .resource_limits = &.{.{ .resource = {}, .limit = {} }},
@@ -3271,7 +3271,7 @@ test "credentials are refused on Windows rather than quietly not applied" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+    try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
         .credentials = .{ .umask = 0o077 },
@@ -3291,7 +3291,7 @@ test "the child's environment and working directory are the ones asked for" {
     });
     defer environ.deinit();
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.report_environment,
         .cwd = script.working_directory,
         .environ = &environ,
@@ -3300,7 +3300,7 @@ test "the child's environment and working directory are the ones asked for" {
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     try testing.expect(std.mem.find(u8, result.stdout(), "present") != null);
@@ -3327,7 +3327,7 @@ test "a scrubbed environment is the only thing the child sees" {
     // a `HOME`.
     try testing.expect(std.c.getenv("HOME") != null);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "sh", "-c", "printf '%s|%s' \"$CONDUIT_TEST_VALUE\" \"$HOME\"" },
         .environ = &environ,
         // The child has no PATH, so the program has to be looked up in this
@@ -3339,7 +3339,7 @@ test "a scrubbed environment is the only thing the child sees" {
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
     // The variable that was asked for, and nothing else: not this process's
@@ -3375,7 +3375,7 @@ test "path_search decides which PATH a bare program name is looked up in" {
             .value = path_buffer[0..path_len],
         }});
 
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "conduit-child-path", "/c", "exit 0" },
             .environ = &environment,
             .stdio = .ignore,
@@ -3394,7 +3394,7 @@ test "path_search decides which PATH a bare program name is looked up in" {
     // The child's PATH, which is the default and what a shell does: the
     // program is looked for where the child would look for it, and it is not
     // there.
-    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+    try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"sh"},
         .environ = &empty_path,
         .stdio = .ignore,
@@ -3402,7 +3402,7 @@ test "path_search decides which PATH a bare program name is looked up in" {
 
     // This process's PATH, whatever the child is being handed. Same arguments,
     // different answer, which is the whole reason the option is written down.
-    var found = try Child.spawn(io, gpa, .{
+    var found = try Child.spawn(gpa, io, .{
         .argv = &.{ "sh", "-c", "exit 0" },
         .environ = &empty_path,
         .path_search = .parent_environ,
@@ -3414,14 +3414,14 @@ test "path_search decides which PATH a bare program name is looked up in" {
 
     // And no search at all: a bare name is not a path, so there is nothing to
     // execute.
-    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+    try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"sh"},
         .path_search = .none,
         .stdio = .ignore,
     }));
 
     // A full path is still a full path under that setting.
-    var direct = try Child.spawn(io, gpa, .{
+    var direct = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exit 0" },
         .path_search = .none,
         .stdio = .ignore,
@@ -3435,21 +3435,21 @@ test "a program that is not there is an error, not a child that exits 127" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+    try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"conduit-no-such-program-anywhere"},
         .stdio = .ignore,
     }));
-    try testing.expectError(error.InvalidArgv, Child.spawn(io, gpa, .{
+    try testing.expectError(error.InvalidArgv, Child.spawn(gpa, io, .{
         .argv = &.{},
         .stdio = .ignore,
     }));
     // A NUL would end the argument where it stands, on either system.
-    try testing.expectError(error.InvalidArgv, Child.spawn(io, gpa, .{
+    try testing.expectError(error.InvalidArgv, Child.spawn(gpa, io, .{
         .argv = &.{ "conduit-no-such-program-anywhere", "a\x00b" },
         .stdio = .ignore,
     }));
     if (!is_windows) {
-        try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+        try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
             .argv = &.{"conduit-no-such-program-anywhere"},
             .stdio = .ignore,
             .fd_policy = .close_all,
@@ -3465,7 +3465,7 @@ test "a working directory that is not there is an error" {
         "C:\\conduit-no-such-directory\\at-all"
     else
         "/nonexistent/conduit-no-such-directory";
-    try testing.expectError(error.BadWorkingDirectory, Child.spawn(io, gpa, .{
+    try testing.expectError(error.BadWorkingDirectory, Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .cwd = missing,
         .stdio = .ignore,
@@ -3483,7 +3483,7 @@ test "a program at a path that is not there is an error" {
         "C:\\conduit-no-such-directory\\program.exe"
     else
         "/nonexistent/conduit-no-such-program";
-    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+    try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{missing},
         .stdio = .ignore,
     }));
@@ -3494,7 +3494,7 @@ test "a batch file is refused rather than handed to cmd.exe" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    try testing.expectError(error.UnsupportedBatchFile, Child.spawn(io, gpa, .{
+    try testing.expectError(error.UnsupportedBatchFile, Child.spawn(gpa, io, .{
         .argv = &.{ "C:\\conduit-no-such-script.bat", "arg" },
         .stdio = .ignore,
     }));
@@ -3517,7 +3517,7 @@ test "spawnShell starts the user's shell on a pair" {
     // after it and stopped before it.
 
     trace.print("shell: opening a pair and starting the shell", .{});
-    var shell = try conduit.spawnShell(io, gpa, .{
+    var shell = try conduit.spawnShell(gpa, io, .{
         .args = &script.shell_arguments,
         .size = .{ .rows = 40, .cols = 132 },
     });
@@ -3572,7 +3572,7 @@ test "both spawn paths start the same child" {
     // directory that means the same thing on both systems -- and `/` is a
     // directory every one of them has.
     for ([_]?[]const u8{ null, "/" }) |cwd| {
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", "printf 'out'; printf 'err' 1>&2; exit 3" },
             .cwd = cwd,
             .stdio = .{ .pipes = .{ .stdin = false } },
@@ -3585,7 +3585,7 @@ test "both spawn paths start the same child" {
         try testing.expectEqual(State.get(&child).id, State.get(&child).pgid.?);
         try testing.expectEqual(State.get(&child).id, getpgid(State.get(&child).id));
 
-        var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+        var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("out", result.stdout());
         try testing.expectEqualStrings("err", result.stderr());
@@ -3614,14 +3614,14 @@ test "a child on the posix_spawn path starts with the same clean slate" {
     posix.sigaction(.INT, &ignored, &previous);
     defer posix.sigaction(.INT, &previous, null);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "kill -INT $$; printf 'SURVIVED'" },
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
     });
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
     try testing.expectEqualStrings("", result.stdout());
     try testing.expectEqual(Child.Term{ .signal = .INT }, result.term());
@@ -3637,7 +3637,7 @@ test "a spawn expressible by file actions makes no fork call" {
     const calls = @import("../testing/support.zig").SpawnCalls;
     calls.forks = 0;
     calls.file_actions = 0;
-    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
+    var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
@@ -3645,7 +3645,7 @@ test "a spawn expressible by file actions makes no fork call" {
     try testing.expectEqual(@as(usize, 1), calls.file_actions);
 
     // cwd cannot be expressed by this implementation's file actions.
-    var forked = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
+    var forked = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
     defer forked.release(io) catch unreachable;
     defer _ = forked.killWait(io, 0) catch {};
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&forked));
@@ -3682,20 +3682,20 @@ test "fd_policy close_all leaves the child its three streams and nothing else" {
         .stderr = .ignore,
     } };
 
-    var without = try Child.spawn(io, gpa, .{ .argv = &list_descriptors, .stdio = streams });
+    var without = try Child.spawn(gpa, io, .{ .argv = &list_descriptors, .stdio = streams });
     defer without.release(io) catch unreachable;
     errdefer _ = without.killWait(io, 0) catch {};
-    var inherited = try without.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var inherited = try without.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer inherited.deinit(gpa);
 
-    var with = try Child.spawn(io, gpa, .{
+    var with = try Child.spawn(gpa, io, .{
         .argv = &list_descriptors,
         .stdio = streams,
         .fd_policy = .close_all,
     });
     defer with.release(io) catch unreachable;
     errdefer _ = with.killWait(io, 0) catch {};
-    var closed = try with.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var closed = try with.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer closed.deinit(gpa);
 
     // The default hands it on, whichever path started the child; the policy
@@ -3726,7 +3726,7 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
     try testing.expect(win32.GetHandleInformation(sink.handle, &before) != .FALSE);
     try testing.expectEqual(@as(u32, 0), before & win32.handle_flag_inherit);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "cmd.exe", "/c", "echo to the caller's file" },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
@@ -3779,7 +3779,7 @@ test "concurrent Windows spawns never change a caller handle's inheritance flag"
 fn spawnWithSharedHandle(sink: std.Io.File, changed: *std.atomic.Value(bool)) std.Io.Cancelable!void {
     var iteration: usize = 0;
     while (iteration < 8) : (iteration += 1) {
-        var child = Child.spawn(io, gpa, .{
+        var child = Child.spawn(gpa, io, .{
             .argv = &.{ "cmd.exe", "/c", "exit 0" },
             .stdio = .{ .streams = .{
                 .stdin = .ignore,
@@ -3846,7 +3846,7 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
         "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30",
     };
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &sleep,
         .stdio = .{ .streams = .{ .stdin = .close, .stdout = .close, .stderr = .close } },
     });
@@ -4002,7 +4002,7 @@ test "a child gets no descriptor of this process's but its own three" {
 
 /// The descriptors one child, started with nothing else going on, was given.
 fn descriptorsOfAChild() !u64 {
-    var child = try Child.spawn(io, gpa, .{ .argv = &list_descriptors, .stdio = .{ .streams = .{
+    var child = try Child.spawn(gpa, io, .{ .argv = &list_descriptors, .stdio = .{ .streams = .{
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .ignore,
@@ -4010,7 +4010,7 @@ fn descriptorsOfAChild() !u64 {
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
 
-    var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
     return descriptorSet(result.stdout());
 }
@@ -4050,14 +4050,14 @@ fn openAndClose(stopping: *std.atomic.Value(bool)) std.Io.Cancelable!void {
 fn spawnAndList(each: usize, control: u64, strangers: *std.atomic.Value(u32)) std.Io.Cancelable!void {
     var spawned: usize = 0;
     while (spawned < each) : (spawned += 1) {
-        var child = Child.spawn(io, gpa, .{ .argv = &list_descriptors, .stdio = .{ .streams = .{
+        var child = Child.spawn(gpa, io, .{ .argv = &list_descriptors, .stdio = .{ .streams = .{
             .stdin = .ignore,
             .stdout = .pipe,
             .stderr = .ignore,
         } } }) catch return;
         defer child.release(io) catch unreachable;
 
-        var result = child.output(io, gpa, .{ .timeout_ms = budget_ms }) catch {
+        var result = child.output(gpa, io, .{ .timeout_ms = budget_ms }) catch {
             // ziglint-ignore: Z026 a child that gave no list adds no stranger; the kill only keeps it from outliving the test
             _ = child.killWait(io, 0) catch {};
             return;
@@ -4100,7 +4100,7 @@ test "a stream whose file is a descriptor an earlier stream overwrites still get
     var borrowed: BorrowedDescriptor = try .take(0, sink);
     defer borrowed.restore();
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'on the caller-supplied file'" },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
@@ -4140,7 +4140,7 @@ test "two streams whose files are each other's descriptors are not crossed" {
     var borrowed_err: BorrowedDescriptor = try .take(2, second);
     defer borrowed_err.restore();
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'out' >&1; printf 'err' >&2" },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
@@ -4207,7 +4207,7 @@ test "extra files arrive at descriptor 3 and up, in order" {
 
         const calls = @import("../testing/support.zig").SpawnCalls;
         calls.file_actions = 0;
-        var child = try Child.spawn(io, gpa, .{
+        var child = try Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "inherited", "3" },
             .stdio = .ignore,
             .fd_policy = policy,
@@ -4263,7 +4263,7 @@ test "extra files cross over correctly, however their numbers fall" {
             defer if (borrowed) |*b| b.restore();
             if (at_zero) extras[count - 1] = .{ .handle = 0, .flags = .{ .nonblocking = false } };
 
-            var child = try Child.spawn(io, gpa, .{
+            var child = try Child.spawn(gpa, io, .{
                 .argv = &.{ inherited_fixture, "inherited", std.fmt.comptimePrint("{d}", .{count}) },
                 .stdio = .ignore,
                 .fd_policy = policy,
@@ -4300,7 +4300,7 @@ test "a program that cannot run is still reported when extra files cover the rep
     // among these slots. Placed over, the report would go into the file and
     // the spawn would come back as a child exiting 127.
     const extras: [64]std.Io.File = @splat(f);
-    try testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+    try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"/nonexistent/conduit-no-such-program"},
         .stdio = .ignore,
         .fd_policy = .close_all,
@@ -4322,7 +4322,7 @@ test "a child on a terminal gets its extra files above the terminal's three" {
 
     // Windows names no handles beside a pseudoconsole: refused by name.
     if (is_windows) {
-        try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+        try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "inherited", "1" },
             .stdio = .{ .pty = &pty },
             .extra_fds = &.{f},
@@ -4334,7 +4334,7 @@ test "a child on a terminal gets its extra files above the terminal's three" {
     // closing those after placement would close an extra file instead.
     const count = 32;
     const extras: [count]std.Io.File = @splat(f);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ inherited_fixture, "inherited", std.fmt.comptimePrint("{d}", .{count}) },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -4367,7 +4367,7 @@ test "a child on the C runtime finds extra handles at descriptor 3" {
 
     // `cmd.exe` redirects to a descriptor through its C runtime, which read
     // the table in the startup record when it started.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "cmd.exe", "/c", "echo through the runtime>&3" },
         .stdio = .ignore,
         .extra_fds = &.{f},
@@ -4416,7 +4416,7 @@ test "a fork spawn resets an ignored real-time signal in the child" {
     };
     posix.sigaction(signal, &ignored, &saved);
     defer posix.sigaction(signal, &saved, null);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sleep", "30" },
         .cwd = ".", // takes the fork path
         .stdio = .ignore,
@@ -4445,7 +4445,7 @@ test "a fork spawn reports exec failure even when all standard descriptors were 
     _ = c.close(0);
     _ = c.close(1);
     _ = c.close(2);
-    const spawn_error: ?Child.SpawnError = if (Child.spawn(io, gpa, .{
+    const spawn_error: ?Child.SpawnError = if (Child.spawn(gpa, io, .{
         .argv = &.{"/conduit-test/no-such-executable"},
         .cwd = ".", // takes the fork path
         .stdio = .ignore,
@@ -4467,7 +4467,7 @@ test "a fork spawn reports exec failure even when all standard descriptors were 
 
 test "a parent death signal is refused where the system has none" {
     if (builtin.os.tag == .linux) return error.SkipZigTest;
-    try testing.expectError(error.Unsupported, Child.spawn(io, gpa, .{
+    try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
         .argv = &script.greeting,
         .parent_death_signal = .kill,
     }));
@@ -4486,7 +4486,7 @@ test "a child given a parent death signal ends with the thread that started it" 
         child: ?Child = null,
         failed: ?anyerror = null,
         fn run(s: *Self) void {
-            s.child = Child.spawn(io, gpa, .{
+            s.child = Child.spawn(gpa, io, .{
                 .argv = &.{ "/bin/sh", "-c", "sleep 30" },
                 .stdio = .ignore,
                 .parent_death_signal = .kill,
@@ -4529,7 +4529,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     // ioctl only code between a fork and an exec can make.
     try testing.expectEqual(spawn_path.session_terminal, spawn_path.suits(options));
 
-    var child = try Child.spawn(io, gpa, options);
+    var child = try Child.spawn(gpa, io, options);
     defer child.release(io) catch unreachable;
     errdefer _ = child.killWait(io, 0) catch {};
     pty.closeSlave(io);
@@ -4563,7 +4563,7 @@ test "blocking waits and Reaper report status reaped elsewhere" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     for ([_]bool{ false, true }) |background| {
-        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
+        var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
         defer child.release(io) catch unreachable;
         var status: c_int = undefined;
         while (c.waitpid(State.get(&child).id, &status, 0) < 0) {
@@ -4586,7 +4586,7 @@ test "Windows wait and Reaper preserve the control exit status" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     for ([_]bool{ false, true }) |background| {
-        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "cmd.exe", "/c", "exit -1073741510" }, .stdio = .ignore });
+        var child = try Child.spawn(gpa, io, .{ .argv = &.{ "cmd.exe", "/c", "exit -1073741510" }, .stdio = .ignore });
         defer child.release(io) catch unreachable;
         defer _ = child.killWait(io, 0) catch {};
         const term = if (background) blk: {
@@ -4604,7 +4604,7 @@ test "Child identity and result access share the Reaper's retirement" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{ .argv = &script.read_then_exit_7, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } } });
+    var child = try Child.spawn(gpa, io, .{ .argv = &script.read_then_exit_7, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } } });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     try testing.expect(child.processId() != null);
@@ -4640,14 +4640,14 @@ test "a Reaper started after status loss never watches a reused identity" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
+    var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     var status: c_int = undefined;
     while (c.waitpid(State.get(&child).id, &status, 0) < 0) {
         if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
     }
     try testing.expectError(error.ReapedElsewhere, child.tryWait());
-    var witness = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", "read x" }, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } }, .detach = true });
+    var witness = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "read x" }, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } }, .detach = true });
     defer witness.release(io) catch unreachable;
     defer _ = witness.killWait(io, 0) catch {};
     // Reuse a live witness's number deliberately instead of waiting for PID wrap.
@@ -4704,7 +4704,7 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
         .detach = true,
@@ -4746,7 +4746,7 @@ test "Reaper start cannot replace an active task or restart a joined lifetime" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -4779,14 +4779,14 @@ test "output reads a published result before watching a retired process number" 
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf retained; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
-    var witness = try Child.spawn(io, gpa, .{
+    var witness = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -4795,7 +4795,7 @@ test "output reads a published result before watching a retired process number" 
     // A retired number may already name a live stranger. The published
     // answer must decide the wait before that number can open a watch.
     State.get(&child).id = witness.processId().?;
-    var output = try child.output(io, gpa, .{ .timeout_ms = 20 });
+    var output = try child.output(gpa, io, .{ .timeout_ms = 20 });
     defer output.deinit(gpa);
     try testing.expectEqual(false, output.timedOut());
     try testing.expectEqualStrings("retained", output.stdout());
@@ -4812,7 +4812,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     try orphans.start();
     defer orphans.deinit() catch unreachable;
     defer orphans.end(io, 0) catch {};
-    var keeper = try Child.spawn(io, gpa, .{
+    var keeper = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
@@ -4848,7 +4848,7 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     // including on a failed spawn or assertion.
     defer pair.closeMaster(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read value && test \"$value\" = answer" },
         .stdio = .{ .pty = &pair },
         .detach = true,
@@ -4871,10 +4871,10 @@ test "a pty master in a standard slot cannot close the child's replacement strea
 }
 
 test "collected output transfers bytes before releasing its owner" {
-    var child = try Child.spawn(io, gpa, .{ .argv = &script.out_and_err, .stdio = .{ .pipes = .{ .stdin = false } } });
+    var child = try Child.spawn(gpa, io, .{ .argv = &script.out_and_err, .stdio = .{ .pipes = .{ .stdin = false } } });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
-    var collected = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
+    var collected = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer collected.deinit(gpa);
     const kept = collected.takeStdout();
     defer gpa.free(kept);

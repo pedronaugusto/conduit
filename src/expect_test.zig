@@ -61,7 +61,7 @@ test "start refuses to put a second reader over the buffer" {
         &.{ "cmd.exe", "/c", "echo one reader" }
     else
         &.{ "/bin/sh", "-c", "printf 'one reader'" };
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -90,7 +90,7 @@ test "a conversation over pipes: wait for what the child echoes, then answer" {
     else
         &.{ "/bin/sh", "-c", "read line; printf 'you said %s\\n' \"$line\"" };
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -124,7 +124,7 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{
             "/bin/sh",                                                                                      "-c",
             "printf 'first? '; read a; printf 'second? '; read b; printf 'got %s and %s\\n' \"$a\" \"$b\"",
@@ -174,7 +174,7 @@ test "deinit stops the reader while the terminal is still open" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
@@ -216,7 +216,7 @@ test "untilAny says which of several answers came, and leaves the rest" {
     else
         &.{ "/bin/sh", "-c", "read x; case $x in a) echo GOOD;; *) echo BAD;; esac" };
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = argv,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -247,7 +247,7 @@ test "untilAny takes the earliest match and leaves the later one pending" {
     // one breath, which `printf` says in one word.
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'first SECOND\n'" },
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -284,7 +284,7 @@ test "untilAny with nothing to wait for ends the way a pattern that never comes 
     defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'here\n'; exec sleep 100" },
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -315,7 +315,7 @@ test "bytes waits for a count, and what follows stays pending" {
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'ABCDEFGH'" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -350,7 +350,7 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'here I am\\n'; exec sleep 100" },
         .stdio = .{ .pty = &pty },
         .detach = true,
@@ -384,7 +384,7 @@ test "a buffer that fills says so, and discard makes room" {
     // Pipes rather than a pair, so the byte counts here are the child's alone:
     // a terminal would echo the answer back and turn every newline into two
     // bytes.
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'aaaaaaaa'; read go; printf 'done\n'" },
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
@@ -561,7 +561,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
             // wait. Make room here: this notification must not be lost.
             if (backend.consume) {
                 access.inner(&backend.expect).consumed = 1;
-                access.compact(&backend.expect, backend.io);
+                access.compact(backend.io, &backend.expect);
             } else backend.expect.discard(backend.io);
         }
         fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {

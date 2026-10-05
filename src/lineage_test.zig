@@ -19,7 +19,7 @@ test "a contained wait reports lost observation after reaping its held root" {
     defer watchdog.deinit(std.testing.io);
     testing_hook.fail_enumeration.store(true, .release);
     defer testing_hook.fail_enumeration.store(false, .release);
-    var child = try Child.spawn(std.testing.io, std.testing.allocator, .{
+    var child = try Child.spawn(std.testing.allocator, std.testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .descendants = .contain,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },

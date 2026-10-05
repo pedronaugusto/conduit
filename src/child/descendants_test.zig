@@ -66,7 +66,7 @@ const Fixture = struct {
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         };
         if (policy == .contain) options.descendants = .contain;
-        var child = try Child.spawn(io, gpa, options);
+        var child = try Child.spawn(gpa, io, options);
         errdefer child.release(io) catch unreachable;
         errdefer _ = child.killWait(io, 0) catch {};
         var buffer: [64]u8 = undefined;
@@ -117,7 +117,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
             }
             return error.TestChildDidNotExit;
         } else if (comptime std.mem.eql(u8, method, "output")) term: {
-            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
             defer output.deinit(gpa);
             break :term output.term();
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
@@ -160,7 +160,7 @@ test "containment ends a daemon after normal completion through every reap" {
             } else return error.TestChildDidNotExit;
             try std.testing.expect(Child.succeeded(term));
         } else if (comptime std.mem.eql(u8, method, "output")) {
-            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
             defer output.deinit(gpa);
             try std.testing.expect(Child.succeeded(output.term()));
         } else {
@@ -183,7 +183,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
             var fixture = try Fixture.start(policy, "--escape");
             defer fixture.deinit();
             if (comptime std.mem.eql(u8, operation, "timeout")) {
-                var output = try fixture.child.output(io, gpa, .{ .timeout_ms = 50, .grace_ms = 50 });
+                var output = try fixture.child.output(gpa, io, .{ .timeout_ms = 50, .grace_ms = 50 });
                 defer output.deinit(gpa);
                 try std.testing.expect(output.timedOut());
             } else if (comptime std.mem.eql(u8, operation, "kill")) {
@@ -195,7 +195,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
                 fixture.child.stdoutFile().?.close(io);
                 State.get(&fixture.child).stdout.?.handle = if (windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
                 defer _ = fixture.child.takeStdout();
-                try std.testing.expectError(error.ReadFailed, fixture.child.output(io, gpa, .{}));
+                try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }
             fixture.child.release(io) catch unreachable;
             try fixture.expectEnded();
@@ -237,7 +237,7 @@ test "containment ends a double-forked session after normal exit" {
             } else return error.TestChildDidNotExit;
             try std.testing.expect(Child.succeeded(term));
         } else if (comptime std.mem.eql(u8, method, "output")) {
-            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
             defer output.deinit(gpa);
             try std.testing.expect(Child.succeeded(output.term()));
         } else if (comptime std.mem.eql(u8, method, "Reaper")) {
@@ -291,7 +291,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     fixture = try Fixture.start(.contain, "--double-fork");
     defer fixture.deinit();
     defer reaper.deinit(io) catch unreachable;
-    var unrelated = try Child.spawn(io, gpa, .{
+    var unrelated = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -386,7 +386,7 @@ test "a private supervisor preserves the root exit code and signal" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     inline for (.{ "exit 7", "kill -TERM $$" }, .{ Child.Term{ .exited = 7 }, Child.Term{ .signal = .TERM } }) |script, expected| {
-        var child = try Child.spawn(io, gpa, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
+        var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
         defer child.release(io) catch unreachable;
         try std.testing.expectEqual(expected, (try child.waitTimeout(io, budget_ms)).?);
         try std.testing.expectEqual(expected, (try child.tryWait()).?);
@@ -423,7 +423,7 @@ test "a failed contained exec leaves no private supervisor to wait for" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    try std.testing.expectError(error.FileNotFound, Child.spawn(io, gpa, .{
+    try std.testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"/no-such-conduit-contained-executable"},
         .descendants = .contain,
         .stdio = .ignore,
@@ -439,7 +439,7 @@ test "dropping a contained child ends and reaps its private supervisor" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .descendants = .contain,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -525,7 +525,7 @@ test "a contained Windows wait confirms every Job member ended before returning"
             }
             return error.TestChildDidNotExit;
         } else if (comptime std.mem.eql(u8, method, "output")) term: {
-            var output = try fixture.child.output(io, gpa, .{ .timeout_ms = budget_ms });
+            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
             defer output.deinit(gpa);
             break :term output.term();
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {

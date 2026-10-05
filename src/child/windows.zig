@@ -22,7 +22,7 @@ const SpawnOptions = Child.SpawnOptions;
 const file = @import("../handles.zig").file;
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {
+pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
     var arena_state: std.heap.ArenaAllocator = .init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -34,7 +34,7 @@ pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *St
     // before this call: Windows otherwise searches the parent's PATH even
     // though it installs the supplied block in the child.
     const line = try command_line.serialise(arena, options.argv);
-    const application = try applicationName(io, arena, options);
+    const application = try applicationName(arena, io, options);
 
     const environment: ?[*:0]const u16 = if (options.environ) |map| env: {
         const block = try map.createWindowsBlock(arena, .{});
@@ -229,7 +229,7 @@ fn describeChild(
             // means the child, and anything the child starts, keeps those pipes
             // open for as long as it lives. A handle list says exactly which
             // three the child is being given.
-            if (try inheritList(given, extras, arena)) |inheritable| {
+            if (try inheritList(arena, given, extras)) |inheritable| {
                 var list = try AttributeList.init(arena, 1);
                 try list.setHandleList(inheritable);
                 attributes.* = list;
@@ -279,8 +279,8 @@ fn workingDirectory(arena: Allocator, wanted: ?[]const u8) SpawnError!?[*:0]cons
 /// executable. For a bare name and custom environment the ordinary Windows
 /// directories are searched first, then that environment's PATH.
 fn applicationName(
-    io: std.Io,
     arena: Allocator,
+    io: std.Io,
     options: SpawnOptions,
 ) SpawnError!?[*:0]const u16 {
     const program = options.argv[0];
@@ -291,7 +291,7 @@ fn applicationName(
     // A name with no UTF-16 spelling is refused as such, not as a file that
     // could not be found.
     _ = try std.unicode.wtf8ToWtf16LeAllocZ(arena, program);
-    const found = try findBare(io, arena, program, environment) orelse return error.FileNotFound;
+    const found = try findBare(arena, io, program, environment) orelse return error.FileNotFound;
     return (try std.unicode.wtf8ToWtf16LeAllocZ(arena, found)).ptr;
 }
 
@@ -300,8 +300,8 @@ fn applicationName(
 /// directories, then that environment's `PATH`, with `.exe` supplied when the
 /// name has no extension. `findProgram` asks the same question.
 pub fn findBare(
-    io: std.Io,
     arena: Allocator,
+    io: std.Io,
     program: []const u8,
     environment: *const std.process.Environ.Map,
 ) Allocator.Error!?[]const u8 {
@@ -611,7 +611,7 @@ const ChildHandles = struct {
 ///
 /// Every handle in the list is a private inheritable duplicate made for this
 /// spawn and closed once `CreateProcessW` returns.
-fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {
+fn inheritList(arena: Allocator, given: [3]?windows.HANDLE, extras: []const windows.HANDLE) Allocator.Error!?[]windows.HANDLE {
     var list: std.ArrayList(windows.HANDLE) = .empty;
     for (given) |slot| {
         const handle = slot orelse continue;

@@ -33,6 +33,9 @@ const ShellState = struct { pty: Pty, child: Child };
 
 pub const Shell = enum(@Int(.unsigned, @sizeOf(ShellState) * 8)) {
     _,
+
+    /// What `spawnShell` fails with: the pair, the spawn, or the environment.
+    pub const SpawnError = Pty.OpenError || Child.SpawnError || environ.InheritError;
     fn inner(shell: *Shell) *ShellState {
         return @ptrCast(@alignCast(shell)); // safe: spawnShell initializes inline storage with this size and alignment.
     }
@@ -86,7 +89,7 @@ pub const Options = struct {
     term: ?[]const u8 = "xterm-256color",
 };
 
-pub const SpawnShellError = Pty.OpenError || Child.SpawnError || environ.InheritError;
+pub const SpawnShellError = Shell.SpawnError;
 
 /// Starts the user's shell on a new pseudo-terminal.
 ///
@@ -106,7 +109,7 @@ pub const SpawnShellError = Pty.OpenError || Child.SpawnError || environ.Inherit
 ///
 /// On success the caller owns the `Shell` and must reap the child and call
 /// `Shell.deinit`. On Windows the allocator must outlive the Shell.
-pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {
+pub fn spawnShell(allocator: Allocator, io: std.Io, options: Options) SpawnShellError!Shell {
     var owned_program: ?[]u8 = null;
     defer if (owned_program) |program| allocator.free(program);
     const program = options.program orelse program: {
@@ -139,7 +142,7 @@ pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShell
     });
     errdefer pty.close(io);
 
-    var child = try Child.spawn(io, allocator, .{
+    var child = try Child.spawn(allocator, io, .{
         .argv = argv.items,
         .cwd = options.cwd,
         .environ = environ_map,

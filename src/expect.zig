@@ -402,7 +402,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// a line on `"\n"`, and the end-of-file the line discipline makes is
     /// `"\x04"`.
     pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
-        handles.writeStreamingAll(expect.inner().master.write, io, reply) catch |err| switch (err) {
+        handles.writeStreamingAll(io, expect.inner().master.write, reply) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             error.BrokenPipe => return error.BrokenPipe,
             else => return error.WriteFailed,
@@ -459,7 +459,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 continue;
             }
 
-            const n = handles.readStreaming(expect.inner().master.read, io, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
+            const n = handles.readStreaming(io, expect.inner().master.read, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
             };
@@ -549,7 +549,7 @@ pub const test_access = if (builtin.is_test) struct {
         return Expect.inner(if (@TypeOf(value) == *Expect) value else value.*);
     }
     pub const read = Expect.read;
-    pub fn compact(value: anytype, io: std.Io) void {
+    pub fn compact(io: std.Io, value: anytype) void {
         Expect.compact(if (@TypeOf(value) == *Expect) value else value.*, io);
     }
 } else struct {};

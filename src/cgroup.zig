@@ -328,7 +328,7 @@ fn generateMountPath(smith: *std.testing.Smith, buf: []u8) []u8 {
 
 /// `path` as the kernel writes it into `mountinfo`: a space, a tab, a
 /// newline and a backslash as a backslash and three octal digits.
-fn escapeMountPath(path: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+fn escapeMountPath(gpa: std.mem.Allocator, path: []const u8, out: *std.ArrayList(u8)) !void {
     for (path) |byte| switch (byte) {
         ' ', '\t', '\n', '\\' => try out.print(gpa, "\\{o:0>3}", .{byte}),
         else => try out.append(gpa, byte),
@@ -337,12 +337,12 @@ fn escapeMountPath(path: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Alloc
 
 /// One `mountinfo` line for a mount of `fs_type` at `point` from `root`, with
 /// optional fields between them and the separator.
-fn mountLine(smith: *std.testing.Smith, gpa: std.mem.Allocator, out: *std.ArrayList(u8), root: []const u8, point: []const u8, fs_type: []const u8) !void {
+fn mountLine(gpa: std.mem.Allocator, smith: *std.testing.Smith, out: *std.ArrayList(u8), root: []const u8, point: []const u8, fs_type: []const u8) !void {
     @disableInstrumentation();
     try out.print(gpa, "{d} {d} 0:{d} ", .{ smith.value(u16), smith.value(u16), smith.value(u8) });
-    try escapeMountPath(root, out, gpa);
+    try escapeMountPath(gpa, root, out);
     try out.append(gpa, ' ');
-    try escapeMountPath(point, out, gpa);
+    try escapeMountPath(gpa, point, out);
     try out.appendSlice(gpa, " rw,nosuid");
     const optional = [_][]const u8{ " shared:4", " master:1", " propagate_from:2", " unbindable" };
     while (!smith.eosWeightedSimple(2, 1)) try out.appendSlice(gpa, optional[smith.index(optional.len)]);
@@ -359,7 +359,7 @@ fn mountLinesReadBack(_: void, smith: *std.testing.Smith) anyerror!void {
     const root = generateMountPath(smith, &root_storage);
     const point = generateMountPath(smith, &point_storage);
     const cgroup2 = smith.boolWeighted(1, 3);
-    try mountLine(smith, gpa, &line, root, point, if (cgroup2) "cgroup2" else "tmpfs");
+    try mountLine(gpa, smith, &line, root, point, if (cgroup2) "cgroup2" else "tmpfs");
 
     var point_buffer: [128]u8 = undefined;
     var root_buffer: [128]u8 = undefined;
@@ -407,7 +407,7 @@ fn mountinfoReadsThroughItsWindow(_: void, smith: *std.testing.Smith) anyerror!v
         const root = generateMountPath(smith, &roots[lines]);
         const point = generateMountPath(smith, &points[lines]);
         const cgroup2 = smith.boolWeighted(1, 1);
-        try mountLine(smith, gpa, &file, root, point, if (cgroup2) "cgroup2" else "overlay");
+        try mountLine(gpa, smith, &file, root, point, if (cgroup2) "cgroup2" else "overlay");
         // Long enough to cross the window, or to end exactly at its edge.
         switch (smith.valueRangeAtMost(u8, 0, 3)) {
             0 => try file.appendNTimes(gpa, 'o', mountinfo_window),
@@ -934,7 +934,7 @@ const MemberOps = struct {
 
         var named: std.ArrayList(posix.pid_t) = .empty;
         defer named.deinit(allocator);
-        if (!try cgroup.readMembers(&named, allocator)) return null;
+        if (!try cgroup.readMembers(allocator, &named)) return null;
 
         var captured: std.ArrayList(Held) = .empty;
         defer {
@@ -957,7 +957,7 @@ const MemberOps = struct {
         // process is in the cgroup if the pid is listed now and the process is
         // still there when signalled: it held the number all along.
         named.clearRetainingCapacity();
-        if (!try cgroup.readMembers(&named, allocator)) return null;
+        if (!try cgroup.readMembers(allocator, &named)) return null;
         std.mem.sort(posix.pid_t, named.items, {}, std.sort.asc(posix.pid_t));
         var reached: usize = 0;
         for (captured.items) |held| {
@@ -977,8 +977,8 @@ const MemberOps = struct {
     /// `cgroup.procs`, every pid in it. `false` if it cannot be read.
     fn readMembers(
         cgroup: *const MemberOps,
-        into: *std.ArrayList(posix.pid_t),
         allocator: std.mem.Allocator,
+        into: *std.ArrayList(posix.pid_t),
     ) std.mem.Allocator.Error!bool {
         const fd = c.openat(cgroup.dir, "cgroup.procs", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (fd < 0) return false;

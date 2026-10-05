@@ -604,7 +604,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 30 & echo ready; read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         .detach = true,
@@ -664,7 +664,7 @@ test "every wait error survives the round trip through the atomic" {
 test "a rejected Reaper start releases its wake pipe before returning" {
     if (is_windows) return error.SkipZigTest;
     const io = std.testing.io;
-    var child = try Child.spawn(io, std.testing.allocator, .{
+    var child = try Child.spawn(std.testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -705,7 +705,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the sto
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -817,7 +817,7 @@ test "a subreaper teardown retains ownership until every direct child is reaped"
     var owner: Reaper = .init(&child, .{});
     try owner.enableSubreaper();
     defer owner.deinit(io) catch unreachable;
-    var other = try Child.spawn(io, std.testing.allocator, .{
+    var other = try Child.spawn(std.testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });

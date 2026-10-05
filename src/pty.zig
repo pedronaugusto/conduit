@@ -354,7 +354,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         const f = file(handle);
         var buffer: [4096]u8 = undefined;
         while (true) {
-            _ = handles.readStreaming(f, io, &.{&buffer}) catch return;
+            _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
         }
     }
 
@@ -671,36 +671,6 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
     const testing = std.testing;
 
-    /// Reads the master and throws it away, on a task of its own.
-    ///
-    /// A pseudoconsole's host writes into a pipe this process holds the other end
-    /// of, and a resize is a repaint. With nobody reading, a large enough one
-    /// fills the pipe and the host stops there — taking `ResizePseudoConsole` and
-    /// `ClosePseudoConsole` with it. A program that resizes a pair it is not
-    /// reading is making a mistake; a test that does it hangs, so this is here.
-    const Drain = struct {
-        group: std.Io.Group = .init,
-
-        fn start(drain: *Drain, io: std.Io, f: std.Io.File) !void {
-            try drain.group.concurrent(io, run, .{ io, f });
-        }
-
-        fn deinit(drain: *Drain, io: std.Io) void {
-            drain.group.cancel(io);
-            drain.* = undefined;
-        }
-
-        fn run(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {
-            var buffer: [4096]u8 = undefined;
-            while (true) {
-                _ = handles.readStreaming(f, io, &.{&buffer}) catch |err| switch (err) {
-                    error.Canceled => return error.Canceled,
-                    else => return,
-                };
-            }
-        }
-    };
-
     test "open gives a pair at the requested size, and resize changes it" {
         const io = testing.io;
         var watchdog: Watchdog = .init(@src());
@@ -957,3 +927,33 @@ pub fn placeMasterForTest(pty: *Pty, descriptor: posix.fd_t) void {
     state.read = descriptor;
     state.write = descriptor;
 }
+
+/// Reads the master and throws it away, on a task of its own.
+///
+/// A pseudoconsole's host writes into a pipe this process holds the other end
+/// of, and a resize is a repaint. With nobody reading, a large enough one
+/// fills the pipe and the host stops there — taking `ResizePseudoConsole` and
+/// `ClosePseudoConsole` with it. A program that resizes a pair it is not
+/// reading is making a mistake; a test that does it hangs, so this is here.
+const Drain = struct {
+    group: std.Io.Group = .init,
+
+    fn start(drain: *Drain, io: std.Io, f: std.Io.File) !void {
+        try drain.group.concurrent(io, run, .{ io, f });
+    }
+
+    fn deinit(drain: *Drain, io: std.Io) void {
+        drain.group.cancel(io);
+        drain.* = undefined;
+    }
+
+    fn run(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {
+        var buffer: [4096]u8 = undefined;
+        while (true) {
+            _ = handles.readStreaming(io, f, &.{&buffer}) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                else => return,
+            };
+        }
+    }
+};

@@ -270,7 +270,7 @@ pub const Child = enum(usize) {
     /// nor an ignored one, so without this a program started from, say, a shell's
     /// background job would inherit an ignored `SIGINT` and be deaf to Ctrl-C on
     /// its own terminal.
-    pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {
+    pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions) SpawnError!Child {
         if (options.argv.len == 0) return error.InvalidArgv;
         // An argument is passed on as a string that ends at a NUL: the child
         // would receive less of it than was given, and on Windows none of the
@@ -284,11 +284,11 @@ pub const Child = enum(usize) {
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
         state.allocator = allocator;
-        if (is_windows) return State.owner(Child, try child_windows.spawn(io, allocator, configured, state));
+        if (is_windows) return State.owner(Child, try child_windows.spawn(allocator, io, configured, state));
         // A job object is what these bound, and POSIX has no such container.
         // `resource_limits` is the option that exists here.
         if (options.job_limits.any()) return error.Unsupported;
-        return State.owner(Child, try child_posix.spawn(io, allocator, configured, state));
+        return State.owner(Child, try child_posix.spawn(allocator, io, configured, state));
     }
 
     pub const ReleaseError = contract.ReleaseError;
@@ -365,8 +365,8 @@ pub const Child = enum(usize) {
     /// null: the InputWriter alone writes and closes it, independently of this
     /// Child's lifetime. On error this Child still owns the untouched pipe.
     /// Only a pipe can be transferred; a terminal is error.NoStdinPipe.
-    pub fn inputWriter(child: *Child, io: std.Io, allocator: Allocator, options: InputWriter.Options) InputWriter.StartError!InputWriter {
-        return InputWriter.init(io, allocator, child, options);
+    pub fn inputWriter(child: *Child, allocator: Allocator, io: std.Io, options: InputWriter.Options) InputWriter.StartError!InputWriter {
+        return InputWriter.init(allocator, io, child, options);
     }
 
     /// The live identity as a number, or null after retirement or deinit.
@@ -659,7 +659,7 @@ pub const Child = enum(usize) {
         if (!tree.Forks.supported) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var child = try Child.spawn(io, testing.allocator, .{
+        var child = try Child.spawn(testing.allocator, io, .{
             .argv = &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
             .detach = true,
@@ -696,7 +696,7 @@ pub const Child = enum(usize) {
         if (is_windows) return error.SkipZigTest;
         if (!tree.Forks.supported) return error.SkipZigTest;
         const io = std.testing.io;
-        var child = try Child.spawn(io, std.testing.allocator, .{
+        var child = try Child.spawn(std.testing.allocator, io, .{
             .argv = &.{ "/bin/sleep", "30" },
             .stdio = .ignore,
             .detach = true,
@@ -1452,19 +1452,19 @@ pub const Child = enum(usize) {
     /// can no longer wait for. `deinit` is still the caller's to make.
     pub fn output(
         child: *Child,
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         options: OutputOptions,
     ) OutputError!Output {
-        return child.outputUntil(io, allocator, options, null);
+        return child.outputUntil(allocator, io, options, null);
     }
 
     /// `output`, with `until` a deadline over the whole of it: the run's own
     /// timeout and every drain end by it at the latest.
     fn outputUntil(
         child: *Child,
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
     ) OutputError!Output {
@@ -1477,14 +1477,14 @@ pub const Child = enum(usize) {
         if (!is_windows) {
             // A published term needs only stream draining. Never register an OS
             // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(io, allocator, options, until, null, published, false);
+            if (published != null) return child.outputPolled(allocator, io, options, until, null, published, false);
             if (comptime tree.Forks.supported) {
                 if (State.get(child).forks.queue) |queue|
-                    return child.outputPolled(io, allocator, options, until, .{ .handle = queue }, null, true);
+                    return child.outputPolled(allocator, io, options, until, .{ .handle = queue }, null, true);
             }
-            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(io, allocator, options, until, watch, null, false);
+            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(allocator, io, options, until, watch, null, false);
         }
-        return child.outputOnTasks(io, allocator, options, until);
+        return child.outputOnTasks(allocator, io, options, until);
     }
 
     pub const ExchangeOptions = contract.ExchangeOptions;
@@ -1517,8 +1517,8 @@ pub const Child = enum(usize) {
     /// returns, an error included.
     pub fn exchange(
         child: *Child,
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         input: []const u8,
         options: ExchangeOptions,
     ) ExchangeError!Output {
@@ -1532,12 +1532,12 @@ pub const Child = enum(usize) {
         } else {
             const state = State.optional(child) orelse return error.NoStdinPipe;
             const stdin = state.stdin orelse return error.NoStdinPipe;
-            try group.concurrent(io, Feed.run, .{ &feed, io, stdin, input });
+            try group.concurrent(io, Feed.run, .{ io, &feed, stdin, input });
             // The task closes it once written.
             state.stdin = null;
         }
         var serial: SerialAllocator = .{ .parent = allocator, .io = io };
-        var collected = try child.outputUntil(io, serial.allocator(), .{
+        var collected = try child.outputUntil(serial.allocator(), io, .{
             .max_bytes = options.max_bytes,
             .grace_ms = 0,
             .drain_ms = options.drain_ms,
@@ -1554,10 +1554,10 @@ pub const Child = enum(usize) {
     const Feed = struct {
         failure: ?std.Io.File.Writer.Error = null,
 
-        fn run(feed: *Feed, io: std.Io, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {
+        fn run(io: std.Io, feed: *Feed, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {
             // Only this task uses or closes the pipe once it has started.
             defer file.close(io);
-            handles.writeStreamingAll(file, io, bytes) catch |err| switch (err) {
+            handles.writeStreamingAll(io, file, bytes) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 // The child ended, or closed its input, before taking all of it.
                 error.BrokenPipe => {},
@@ -1585,8 +1585,8 @@ pub const Child = enum(usize) {
 
     fn outputOnTasks(
         child: *Child,
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
     ) OutputError!Output {
@@ -1606,10 +1606,10 @@ pub const Child = enum(usize) {
         // before it starts. Saying so here is what keeps the drain below from
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
-            try group.concurrent(io, collect, .{ io, allocator, f, options.max_bytes, &out });
+            try group.concurrent(io, collect, .{ allocator, io, f, options.max_bytes, &out });
         } else out.done.store(true, .release);
         if (State.get(child).stderr) |f| {
-            try group.concurrent(io, collect, .{ io, allocator, f, options.max_bytes, &err });
+            try group.concurrent(io, collect, .{ allocator, io, f, options.max_bytes, &err });
         } else err.done.store(true, .release);
 
         var timed_out = false;
@@ -1711,20 +1711,20 @@ pub const Child = enum(usize) {
     const output_wait_slice_ms: u32 = 10;
 
     fn collect(
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         f: std.Io.File,
         max_bytes: usize,
         into: *Collector,
     ) std.Io.Cancelable!void {
-        while (!try collectOnce(io, allocator, f, max_bytes, into)) {}
+        while (!try collectOnce(allocator, io, f, max_bytes, into)) {}
     }
 
     /// One read of a stream into its collector. True once the stream is finished,
     /// by its end or by a failure the collector now records; `done` is set then.
     fn collectOnce(
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         f: std.Io.File,
         max_bytes: usize,
         into: *Collector,
@@ -1751,7 +1751,7 @@ pub const Child = enum(usize) {
                 break :buffer into.list.unusedCapacitySlice()[0..@min(room, into.list.capacity - into.list.items.len)];
             } else discard[0..];
 
-            const n = handles.readStreaming(f, io, &.{buffer}) catch |e| switch (e) {
+            const n = handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
                 error.Canceled => return error.Canceled,
                 else => {
                     if (!handles.finished(e)) into.failure.store(.read_failed, .release);
@@ -1780,8 +1780,8 @@ pub const Child = enum(usize) {
     /// the child.
     fn outputPolled(
         child: *Child,
-        io: std.Io,
         allocator: Allocator,
+        io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
         watch: ?wait_for.Watch,
@@ -1838,7 +1838,7 @@ pub const Child = enum(usize) {
                 // A descriptor that is not one is not something `poll` reports
                 // on: it is read directly, so that the read says what is wrong.
                 if (stream.?.handle < 0) {
-                    _ = try collectOnce(io, allocator, stream.?, options.max_bytes, collectors[i]);
+                    _ = try collectOnce(allocator, io, stream.?, options.max_bytes, collectors[i]);
                     continue;
                 }
                 fds[count] = .{ .fd = stream.?.handle, .events = posix.POLL.IN, .revents = 0 };
@@ -1881,7 +1881,7 @@ pub const Child = enum(usize) {
                     ended = true;
                     continue;
                 }
-                _ = try collectOnce(io, allocator, streams[i].?, options.max_bytes, collectors[i]);
+                _ = try collectOnce(allocator, io, streams[i].?, options.max_bytes, collectors[i]);
             }
         }
 
@@ -2126,7 +2126,7 @@ pub const Child = enum(usize) {
         var watchdog: Watchdog = .init(@src());
         try watchdog.start(io);
         defer watchdog.deinit(io);
-        var child = try Child.spawn(io, testing.allocator, .{
+        var child = try Child.spawn(testing.allocator, io, .{
             .argv = &.{ "/bin/echo", "retained" },
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
         });
@@ -2147,7 +2147,7 @@ pub const Child = enum(usize) {
         var vtable = io.vtable.*;
         vtable.groupConcurrent = Refuse.concurrent;
         const no_tasks: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-        var collected = try child.output(no_tasks, testing.allocator, .{});
+        var collected = try child.output(testing.allocator, no_tasks, .{});
         defer collected.deinit(testing.allocator);
         try testing.expectEqualStrings("retained\n", collected.stdout());
         try testing.expect(succeeded(collected.term()));
@@ -2160,7 +2160,7 @@ pub const Child = enum(usize) {
         try watchdog.start(io);
         defer watchdog.deinit(io);
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
-        var child = try spawn(io, testing.allocator, .{
+        var child = try spawn(testing.allocator, io, .{
             .argv = argv,
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
@@ -2171,7 +2171,7 @@ pub const Child = enum(usize) {
 
         // A live writer keeps the output open after the child has ended, as an
         // inherited pipe in a grandchild would, without leaving an orphan behind.
-        var writer = try spawn(io, testing.allocator, .{
+        var writer = try spawn(testing.allocator, io, .{
             .argv = argv,
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         });
@@ -2199,7 +2199,7 @@ pub const Child = enum(usize) {
         vtable.now = Clock.now;
         vtable.sleep = Clock.sleep;
         const delayed_io: std.Io = .{ .vtable = &vtable, .userdata = io.userdata };
-        var collected = try child.outputOnTasks(delayed_io, testing.allocator, .{ .drain_ms = 20 }, null);
+        var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain_ms = 20 }, null);
         defer collected.deinit(testing.allocator);
         try testing.expect(collected.stdoutTruncated());
         try testing.expectEqual(@as(u32, 20), Clock.elapsed.load(.acquire));
@@ -2213,7 +2213,7 @@ pub const Child = enum(usize) {
         try watchdog.start(io);
         defer watchdog.deinit(io);
 
-        var child = try spawn(io, testing.allocator, .{
+        var child = try spawn(testing.allocator, io, .{
             .argv = &.{ "/bin/sh", "-c", "exit 7" },
             .stdio = .ignore,
         });
@@ -2226,7 +2226,7 @@ pub const Child = enum(usize) {
         try testing.expectError(error.ReapedElsewhere, child.result());
         try testing.expectEqual(@as(?Id, null), child.processId());
 
-        var witness = try spawn(io, testing.allocator, .{
+        var witness = try spawn(testing.allocator, io, .{
             .argv = &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });

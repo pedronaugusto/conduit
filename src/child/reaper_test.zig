@@ -41,7 +41,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
     for (0..64) |iteration| {
         var stage: []const u8 = "spawning";
         errdefer |err| std.debug.print("identity fixture: iteration {d}, {s}: {s}\n", .{ iteration, stage, @errorName(err) });
-        var child = try Child.spawn(io, testing.allocator, .{
+        var child = try Child.spawn(testing.allocator, io, .{
             .argv = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
             .detach = iteration % 2 == 0,

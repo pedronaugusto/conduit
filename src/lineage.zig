@@ -185,7 +185,6 @@ const Darwin = struct {
         _ = c.close(tracker.wake[1]);
         const allocator = tracker.allocator;
         tracker.known.deinit(allocator);
-        tracker.* = undefined;
         allocator.destroy(tracker);
     }
 };

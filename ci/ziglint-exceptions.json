@@ -1,82 +1,5 @@
 [
   {
-    "rule": "Z015",
-    "path": "src/handles.zig",
-    "source": "pub fn readStreaming(",
-    "detail": "public function exposes private error set 'ReadStreamingError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/handles.zig",
-    "source": "io: std.Io,",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/handles.zig",
-    "source": "pub fn readAvailable(f: std.Io.File, io: std.Io, buffer: []u8) ReadAvailableError!usize {",
-    "detail": "public function exposes private error set 'ReadAvailableError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/handles.zig",
-    "source": "pub fn readAvailable(f: std.Io.File, io: std.Io, buffer: []u8) ReadAvailableError!usize {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/handles.zig",
-    "source": "pub fn writeStreamingAll(f: std.Io.File, io: std.Io, bytes: []const u8) std.Io.File.Writer.Error!void {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/shell.zig",
-    "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
-    "detail": "public function exposes private error set 'SpawnShellError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/shell.zig",
-    "source": "pub fn spawnShell(io: std.Io, allocator: Allocator, options: Options) SpawnShellError!Shell {",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/cgroup.zig",
-    "source": "fn escapeMountPath(path: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/cgroup.zig",
-    "source": "fn mountLine(smith: *std.testing.Smith, gpa: std.mem.Allocator, out: *std.ArrayList(u8), root: []const u8, point: []const u8, fs_type: []const u8) !void {",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/cgroup.zig",
-    "source": "allocator: std.mem.Allocator,",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/expect.zig",
-    "source": "pub fn compact(value: anytype, io: std.Io) void {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/testing/runner.zig",
     "source": "pub fn fuzz(context: anytype, comptime testOne: fn (@TypeOf(context), *testing.Smith) anyerror!void, input: testing.FuzzInputOptions) anyerror!void {",
@@ -84,24 +7,10 @@
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions) SpawnError!Child {",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/child.zig",
     "source": "pub fn deinit(child: *Child, io: std.Io) void {",
     "detail": "deinit should set child.* = undefined (has early return before invalidation)",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "pub fn inputWriter(child: *Child, io: std.Io, allocator: Allocator, options: InputWriter.Options) InputWriter.StartError!InputWriter {",
-    "detail": "'Allocator' parameter should come before 'Io'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -147,62 +56,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "fn run(feed: *Feed, io: std.Io, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/lineage.zig",
     "source": "pub fn deinit(tracker: *Darwin) void {",
@@ -217,55 +70,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z023",
-    "path": "src/pty.zig",
-    "source": "fn start(drain: *Drain, io: std.Io, f: std.Io.File) !void {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/pty.zig",
-    "source": "fn deinit(drain: *Drain, io: std.Io) void {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "fn provenBelow(root: *const Process, candidate: *const Process, allocator: std.mem.Allocator) std.mem.Allocator.Error!bool {",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "allocator: std.mem.Allocator,",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "allocator: std.mem.Allocator,",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/tree.zig",
-    "source": "allocator: std.mem.Allocator,",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z030",
     "path": "src/orphans.zig",
     "source": "pub fn deinit(orphans: *Orphans) DeinitError!void {",
@@ -275,72 +79,9 @@
   {
     "rule": "Z023",
     "path": "src/orphans.zig",
-    "source": "fn openAdoptedWith(pid: posix.pid_t, comptime System: type) OpenError!Held {",
-    "detail": "'type' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/orphans.zig",
     "source": "fn isChildWith(held: Held, comptime System: type) LookError!bool {",
     "detail": "'type' parameter should come before 'other'",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/orphans.zig",
-    "source": "comptime each: fn (*Orphans, posix.pid_t) LookError!void,",
-    "detail": "'comptime' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/find.zig",
-    "source": "allocator: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/find.zig",
-    "source": "fn directWindowsProgram(io: std.Io, allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child/windows.zig",
-    "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child/windows.zig",
-    "source": "arena: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child/windows.zig",
-    "source": "arena: Allocator,",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child/windows.zig",
-    "source": "fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena: Allocator) Allocator.Error!?[]windows.HANDLE {",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child/posix.zig",
-    "source": "pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {",
-    "detail": "'Allocator' parameter should come before 'Io'",
-    "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
   },
   {
     "rule": "Z032",
@@ -376,13 +117,6 @@
     "source": "//! The child lifecycle, shared only by the process implementation and Reaper.",
     "detail": "file 'state.zig' has top-level fields and should be PascalCase",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/tty.zig",
-    "source": "pub fn openControlling(io: std.Io) OpenControllingError!Controlling {",
-    "detail": "public function exposes private error set 'OpenControllingError'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z030",

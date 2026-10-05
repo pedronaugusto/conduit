@@ -44,6 +44,8 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+/// This file, so a signature can name its error sets as callers do.
+const tty = @This();
 const posix = std.posix;
 const system = posix.system;
 
@@ -343,7 +345,7 @@ pub const OpenControllingError = std.Io.File.OpenError || error{
 /// stream's device name instead, which `poll` does work on.
 ///
 /// The files are the caller's; `Controlling.close` closes them.
-pub fn openControlling(io: std.Io) OpenControllingError!Controlling {
+pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
     if (is_windows) {
         const input = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONIN$"));
         errdefer windows.CloseHandle(input);

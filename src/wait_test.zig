@@ -27,7 +27,7 @@ test "a watch on a child ends when the child does" {
     const Child = @import("child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(testing.io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "exit 0" },
         .stdio = .ignore,
     });
@@ -49,7 +49,7 @@ test "a watch with a wake ends on the wake, then on the child" {
     const handles = @import("handles.zig");
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(testing.io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
@@ -80,7 +80,7 @@ test "a watch on a child that is still running says so" {
     const Child = @import("child.zig").Child;
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = try Child.spawn(testing.io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 30" },
         .stdio = .ignore,
     });
@@ -100,7 +100,7 @@ test "exit observation keeps the child's identity until its owner reaps it" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
-    var child = try Child.spawn(io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 0" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         .descendants = .contain,

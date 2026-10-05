@@ -27,7 +27,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(io, testing.allocator, .{
+    var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ test_options.input_fixture, "exit" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
@@ -36,7 +36,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
         child.release(io) catch unreachable;
     }
     try testing.expect((try child.waitTimeout(io, 5000)) != null);
-    try testing.expectError(error.BrokenPipe, writeStreamingAll(child.stdinFile().?, io, "closed"));
+    try testing.expectError(error.BrokenPipe, writeStreamingAll(io, child.stdinFile().?, "closed"));
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -51,7 +51,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     var vtable = io.vtable.*;
     vtable.operate = FailWrite.operate;
     const failed_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    try testing.expectError(error.Unexpected, writeStreamingAll(f, failed_io, "unchanged"));
+    try testing.expectError(error.Unexpected, writeStreamingAll(failed_io, f, "unchanged"));
 }
 
 test "readAvailable reads what a pipe holds and returns rather than wait for the rest" {
@@ -74,28 +74,28 @@ test "readAvailable reads what a pipe holds and returns rather than wait for the
 
     var buffer: [64]u8 = undefined;
     // Empty, with its writer open: nothing, at once.
-    try testing.expectEqual(@as(usize, 0), try readAvailable(ends[0], io, &buffer));
+    try testing.expectEqual(@as(usize, 0), try readAvailable(io, ends[0], &buffer));
     // What was written, and then nothing, while the writer is still open,
     // as when something a child started still holds it.
-    try writeStreamingAll(ends[1], io, "said before ending\n");
+    try writeStreamingAll(io, ends[1], "said before ending\n");
     var got: usize = 0;
     while (true) {
-        const n = try readAvailable(ends[0], io, buffer[got..]);
+        const n = try readAvailable(io, ends[0], buffer[got..]);
         if (n == 0) break;
         got += n;
     }
     try testing.expectEqualStrings("said before ending\n", buffer[0..got]);
     // The rest after the writer is gone, then the end, as nothing.
-    try writeStreamingAll(ends[1], io, "last");
+    try writeStreamingAll(io, ends[1], "last");
     ends[1].close(io);
     writer_open = false;
     got = 0;
     while (true) {
-        const n = try readAvailable(ends[0], io, buffer[got..]);
+        const n = try readAvailable(io, ends[0], buffer[got..]);
         if (n == 0) break;
         got += n;
     }
     try testing.expectEqualStrings("last", buffer[0..got]);
-    try testing.expectEqual(@as(usize, 0), try readAvailable(ends[0], io, &buffer));
-    try testing.expectError(error.EmptyBuffer, readAvailable(ends[0], io, buffer[0..0]));
+    try testing.expectEqual(@as(usize, 0), try readAvailable(io, ends[0], &buffer));
+    try testing.expectError(error.EmptyBuffer, readAvailable(io, ends[0], buffer[0..0]));
 }

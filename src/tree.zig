@@ -141,7 +141,7 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
         for (found.items) |*process| process.deinit();
         found.deinit(allocator);
     }
-    try collect(root, in_group, &found, allocator);
+    try collect(allocator, root, in_group, &found);
     if (builtin.is_test) if (snapshot_witness) |pid| {
         var process = Process.capture(pid) orelse unreachable;
         found.append(allocator, process) catch |err| {
@@ -160,7 +160,7 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     // delivering anything, so allocation failure cannot send a partial pass.
     var proven: std.ArrayList(bool) = .empty;
     defer proven.deinit(allocator);
-    for (found.items) |*process| try proven.append(allocator, try provenBelow(anchor, process, allocator));
+    for (found.items) |*process| try proven.append(allocator, try provenBelow(allocator, anchor, process));
     if (!anchor.alive()) return 0;
 
     var reached: usize = 0;
@@ -183,7 +183,7 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
 /// pidfd; Darwin registers NOTE_EXIT with kqueue while the unique process id still
 /// matches. If registration is unavailable, a bounded 1–4 ms clock-based
 /// check is used. True means gone; false means the deadline passed.
-fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+fn waitCaptured(io: std.Io, process: *const Process, timeout_ms: u32) std.Io.Cancelable!bool {
     if (!process.alive()) return true;
     const deadline: Deadline = .in(io, timeout_ms);
     const watch: ?wait_for.Watch = if (builtin.os.tag == .linux)
@@ -213,7 +213,7 @@ fn waitCaptured(process: *const Process, io: std.Io, timeout_ms: u32) std.Io.Can
 /// A child list is only a snapshot. Recheck each link through held process
 /// identities so a parent that ended, or a reused pid, cannot turn an entry
 /// in that list into permission to signal a stranger.
-fn provenBelow(root: *const Process, candidate: *const Process, allocator: std.mem.Allocator) std.mem.Allocator.Error!bool {
+fn provenBelow(allocator: std.mem.Allocator, root: *const Process, candidate: *const Process) std.mem.Allocator.Error!bool {
     var chain: std.ArrayList(Process) = .empty;
     defer {
         for (chain.items) |*held| held.deinit();
@@ -256,22 +256,22 @@ fn parentOf(pid: posix.pid_t) ?posix.pid_t {
 /// Breadth first so that the order in the array is by generation, which makes
 /// walking it backwards the deepest-first order `signalDescendants` sends in.
 fn collect(
+    allocator: std.mem.Allocator,
     root: posix.pid_t,
     in_group: ?posix.pid_t,
     into: *std.ArrayList(Process),
-    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     if (comptime builtin.os.tag == .linux) {
-        return collectLinux(root, in_group, into, allocator);
+        return collectLinux(allocator, root, in_group, into);
     }
 
     var descendants: std.ArrayList(posix.pid_t) = .empty;
     defer descendants.deinit(allocator);
 
-    try captureChildren(root, in_group, &descendants, into, allocator);
+    try captureChildren(allocator, root, in_group, &descendants, into);
     var expanded: usize = 0;
     while (expanded < descendants.items.len) : (expanded += 1) {
-        try captureChildren(descendants.items[expanded], in_group, &descendants, into, allocator);
+        try captureChildren(allocator, descendants.items[expanded], in_group, &descendants, into);
     }
 }
 
@@ -279,10 +279,10 @@ fn collect(
 /// Read the process directory once, then walk the resulting relationships in
 /// memory instead of opening every thread's `children` file at every level.
 fn collectLinux(
+    allocator: std.mem.Allocator,
     root: posix.pid_t,
     in_group: ?posix.pid_t,
     into: *std.ArrayList(Process),
-    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     const Record = struct {
         pid: posix.pid_t,
@@ -603,7 +603,7 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
         for (found.items) |*process| process.deinit();
         found.deinit(allocator);
     }
-    try collect(root.pid, null, &found, allocator);
+    try collect(allocator, root.pid, null, &found);
     if (!root.alive()) return error.Unproven;
 
     var verified: std.ArrayList(bool) = .empty;
@@ -612,7 +612,7 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Erro
     defer accounted.deinit(allocator);
     var unproven = false;
     for (found.items) |*process| {
-        const holds = try provenBelow(&root, process, allocator);
+        const holds = try provenBelow(allocator, &root, process);
         try verified.append(allocator, holds);
         if (!holds and process.alive()) unproven = true;
         if (holds and builtin.os.tag == .linux and options.group != null) {
@@ -777,11 +777,11 @@ const proc_pidtbsdinfo = 3;
 const proc_status_zombie = 5;
 
 fn captureChildren(
+    allocator: std.mem.Allocator,
     parent: posix.pid_t,
     in_group: ?posix.pid_t,
     descendants: *std.ArrayList(posix.pid_t),
     into: *std.ArrayList(Process),
-    allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     const first = descendants.items.len;
     try childrenOf(allocator, parent, descendants);
@@ -829,7 +829,7 @@ const LinuxProcess = struct {
     }
 
     pub fn wait(process: *const LinuxProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return waitCaptured(process, io, timeout_ms);
+        return waitCaptured(io, process, timeout_ms);
     }
 
     /// Whether the process has not ended. A pidfd becomes readable when its
@@ -954,7 +954,7 @@ pub const DarwinProcess = struct {
     }
 
     pub fn wait(process: *const DarwinProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return waitCaptured(process, io, timeout_ms);
+        return waitCaptured(io, process, timeout_ms);
     }
 
     /// Look up the current executable only while the stable process identity

@@ -36,7 +36,7 @@ pub fn Writer(comptime Child: type) type {
             /// the same operation. On error the pipe remains the child's, untouched.
             /// A terminal has no separate input to close and is `error.NoStdinPipe`.
             /// Do not use an earlier copy of the pipe after this succeeds.
-            pub fn init(io: std.Io, allocator: std.mem.Allocator, child: *Child, options: Options) StartError!InputWriter {
+            pub fn init(allocator: std.mem.Allocator, io: std.Io, child: *Child, options: Options) StartError!InputWriter {
                 const child_state = ChildState.optional(child) orelse return error.NoStdinPipe;
                 const file = child_state.stdin orelse return error.NoStdinPipe;
                 const state = try allocator.create(State);
@@ -189,7 +189,7 @@ pub fn Writer(comptime Child: type) type {
                         failure = err;
                         return;
                     } orelse return;
-                    handles.writeStreamingAll(state.file, io, node.bytes) catch |err| {
+                    handles.writeStreamingAll(io, state.file, node.bytes) catch |err| {
                         state.mutex.lockUncancelable(io);
                         defer state.mutex.unlock(io);
                         // Publish the failure before releasing the batch's backlog.

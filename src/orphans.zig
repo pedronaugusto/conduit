@@ -570,10 +570,10 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
 
         fn openAdopted(pid: posix.pid_t) OpenError!Held {
-            return openAdoptedWith(pid, PidfdWait);
+            return openAdoptedWith(PidfdWait, pid);
         }
 
-        fn openAdoptedWith(pid: posix.pid_t, comptime System: type) OpenError!Held {
+        fn openAdoptedWith(comptime System: type, pid: posix.pid_t) OpenError!Held {
             var held = try System.open(pid);
             errdefer System.close(held.pidfd);
             if (!try held.isChildWith(System)) return error.Gone;
@@ -804,7 +804,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
                 if (fd < 0) continue;
                 defer _ = c.close(fd);
-                try eachListed(orphans, fd, each);
+                try eachListed(orphans, each, fd);
             }
         }
     }
@@ -812,8 +812,8 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// The pids a `children` file lists, space-separated, each handed to `each`.
     fn eachListed(
         orphans: *Orphans,
-        fd: posix.fd_t,
         comptime each: fn (*Orphans, posix.pid_t) LookError!void,
+        fd: posix.fd_t,
     ) LookError!void {
         var buffer: [4096]u8 = undefined;
         var number: posix.pid_t = 0;
@@ -892,7 +892,7 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
     Reuse.retired = false;
     Reuse.closes = 0;
     Reuse.checks = 0;
-    try std.testing.expectError(error.Gone, Orphans.Held.openAdoptedWith(if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 123, Reuse));
+    try std.testing.expectError(error.Gone, Orphans.Held.openAdoptedWith(Reuse, if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 123));
     try std.testing.expectEqual(@as(usize, 2), Reuse.checks);
     try std.testing.expectEqual(@as(usize, 1), Reuse.closes);
 }

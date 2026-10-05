@@ -34,7 +34,7 @@ pub fn main() !void {
     // The user's shell on a new pseudo-terminal, 24 rows by 80 columns, with
     // `TERM` set and — on POSIX — the pair as its controlling terminal, so a
     // Ctrl-C written to the master would arrive as `SIGINT`.
-    var shell = try conduit.spawnShell(io, gpa, .{
+    var shell = try conduit.spawnShell(gpa, io, .{
         .size = .{ .rows = 24, .cols = 80 },
         .args = shell_arguments,
     });
@@ -43,7 +43,7 @@ pub fn main() !void {
     // Everything it writes to its terminal, and how it ends, with a bound on
     // the whole thing. A terminal is one stream, so a child on a pair has no
     // separate standard error to collect.
-    var result = try shell.child().output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
+    var result = try shell.child().output(gpa, io, .{ .timeout_ms = 5000, .drain_ms = 250 });
     defer result.deinit(gpa);
 
     // --- README:usage ---

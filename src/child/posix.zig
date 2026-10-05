@@ -45,7 +45,7 @@ const Plan = stdio_plan.Plan(struct {
 });
 
 /// See `Child.spawn`.
-pub fn spawn(io: std.Io, allocator: Allocator, options: SpawnOptions, state: *State) SpawnError!*State {
+pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.

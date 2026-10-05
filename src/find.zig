@@ -32,8 +32,8 @@ const child_windows = @import("child/windows.zig");
 ///
 /// The path is allocated with `allocator` and is the caller's.
 pub fn findProgram(
-    io: std.Io,
     allocator: Allocator,
+    io: std.Io,
     environ: *const std.process.Environ.Map,
     name: []const u8,
 ) Allocator.Error!?[]u8 {
@@ -42,10 +42,10 @@ pub fn findProgram(
         var arena_state: std.heap.ArenaAllocator = .init(allocator);
         defer arena_state.deinit();
         if (!child_windows.isBareProgram(name)) {
-            return directWindowsProgram(io, allocator, name);
+            return directWindowsProgram(allocator, io, name);
         }
         if (windows_search.isBatchFile(name)) return null;
-        const found = try child_windows.findBare(io, arena_state.allocator(), name, environ) orelse return null;
+        const found = try child_windows.findBare(arena_state.allocator(), io, name, environ) orelse return null;
         const program = try allocator.dupe(u8, found);
         return program;
     }
@@ -71,7 +71,7 @@ pub fn findProgram(
 
 /// A program that already names a Windows path still has to be a file.
 /// This check uses the Io filesystem, so it is exercised on every host.
-fn directWindowsProgram(io: std.Io, allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {
+fn directWindowsProgram(allocator: Allocator, io: std.Io, name: []const u8) Allocator.Error!?[]u8 {
     if (windows_search.isBatchFile(name)) return null;
     const stat = std.Io.Dir.cwd().statFile(io, name, .{}) catch return null;
     if (stat.kind == .directory) return null;
@@ -114,17 +114,17 @@ test "a program on PATH is found where the search finds it, and a missing one is
     defer testing.allocator.free(path);
     try environ.put("PATH", path);
 
-    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "prog") == null);
+    try testing.expect(try findProgram(testing.allocator, testing.io, &environ, "prog") == null);
     try tmp.dir.setFilePermissions(testing.io, "late/prog", .fromMode(0o755), .{});
-    const found = (try findProgram(testing.io, testing.allocator, &environ, "prog")).?;
+    const found = (try findProgram(testing.allocator, testing.io, &environ, "prog")).?;
     defer testing.allocator.free(found);
     const expected = try std.fmt.allocPrint(testing.allocator, "{s}/late/prog", .{dir});
     defer testing.allocator.free(expected);
     try testing.expectEqualStrings(expected, found);
 
-    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "no-such-program") == null);
+    try testing.expect(try findProgram(testing.allocator, testing.io, &environ, "no-such-program") == null);
     // A name that is a path is itself, when it can be run.
-    const direct = (try findProgram(testing.io, testing.allocator, &environ, expected)).?;
+    const direct = (try findProgram(testing.allocator, testing.io, &environ, expected)).?;
     defer testing.allocator.free(direct);
     try testing.expectEqualStrings(expected, direct);
 }
@@ -154,16 +154,16 @@ test "on Windows a bare name is found on PATH with .exe supplied, and a director
     const expected = try std.fmt.allocPrint(testing.allocator, "{s}\\late\\conduit-find-probe.exe", .{dir});
     defer testing.allocator.free(expected);
     for ([_][]const u8{ "conduit-find-probe", "conduit-find-probe.exe" }) |name| {
-        const found = (try findProgram(testing.io, testing.allocator, &environ, name)).?;
+        const found = (try findProgram(testing.allocator, testing.io, &environ, name)).?;
         defer testing.allocator.free(found);
         try testing.expectEqualStrings(expected, found);
     }
-    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "conduit-no-such-program") == null);
+    try testing.expect(try findProgram(testing.allocator, testing.io, &environ, "conduit-no-such-program") == null);
     // A name that is a path is itself when it is there, and nothing when not.
-    const direct = (try findProgram(testing.io, testing.allocator, &environ, expected)).?;
+    const direct = (try findProgram(testing.allocator, testing.io, &environ, expected)).?;
     defer testing.allocator.free(direct);
     try testing.expectEqualStrings(expected, direct);
-    try testing.expect(try findProgram(testing.io, testing.allocator, &environ, "C:\\conduit\\no\\such.exe") == null);
+    try testing.expect(try findProgram(testing.allocator, testing.io, &environ, "C:\\conduit\\no\\such.exe") == null);
 }
 
 test "a Windows program path refuses directories and batch files" {
@@ -179,9 +179,9 @@ test "a Windows program path refuses directories and batch files" {
     for ([_][]const u8{ "directory.exe", "program.CMD" }) |name| {
         const path = try std.fs.path.join(testing.allocator, &.{ directory, name });
         defer testing.allocator.free(path);
-        const found = try directWindowsProgram(io, testing.allocator, path);
+        const found = try directWindowsProgram(testing.allocator, io, path);
         defer if (found) |owned| testing.allocator.free(owned);
         try testing.expect(found == null);
-        if (is_windows) try testing.expect(try findProgram(io, testing.allocator, &.init(testing.allocator), path) == null);
+        if (is_windows) try testing.expect(try findProgram(testing.allocator, io, &.init(testing.allocator), path) == null);
     }
 }

@@ -20,7 +20,7 @@ const conduit = @import("conduit");
 // The user's shell on a new pseudo-terminal, 24 rows by 80 columns, with
 // `TERM` set and — on POSIX — the pair as its controlling terminal, so a
 // Ctrl-C written to the master would arrive as `SIGINT`.
-var shell = try conduit.spawnShell(io, gpa, .{
+var shell = try conduit.spawnShell(gpa, io, .{
     .size = .{ .rows = 24, .cols = 80 },
     .args = shell_arguments,
 });
@@ -29,7 +29,7 @@ defer shell.deinit(io);
 // Everything it writes to its terminal, and how it ends, with a bound on
 // the whole thing. A terminal is one stream, so a child on a pair has no
 // separate standard error to collect.
-var result = try shell.child().output(io, gpa, .{ .timeout_ms = 5000, .drain_ms = 250 });
+var result = try shell.child().output(gpa, io, .{ .timeout_ms = 5000, .drain_ms = 250 });
 defer result.deinit(gpa);
 ```
 <!-- END GENERATED zig build docs -- usage -->
@@ -76,19 +76,19 @@ to read while a wait or Reaper runs.
 
 | | |
 |---|---|
-| `Child.spawn(io, allocator, options)` | Start it. The allocator owns the lifecycle until `deinit` and must outlive the child. |
+| `Child.spawn(allocator, io, options)` | Start it. The allocator owns the lifecycle until `deinit` and must outlive the child. |
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
 | `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Borrowed `std.Io.File`s; the created pipes remain owned by the `Child`. |
 | `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller, who closes it. A pair has no pipe to transfer. |
-| `conduit.readAvailable(file, io, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
+| `conduit.readAvailable(io, file, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
-| `child.inputWriter(io, allocator, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
+| `child.inputWriter(allocator, io, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
 | `child.terminalMaster()` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
 | `child.stdinFile()`, `child.stdoutFile()` | The child's input and output wherever they are: the pipes, or the master. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
-| `child.output(io, allocator, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
-| `child.exchange(io, allocator, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
+| `child.output(allocator, io, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
+| `child.exchange(allocator, io, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
@@ -311,13 +311,13 @@ machine's processor time, from 1 through 10,000; an out-of-range value is
 accepted, even when the backlog is full. A later `queue` checks again.
 
 ```zig
-var input = try child.inputWriter(io, gpa, .{ .max_backlog = 1024 * 1024 });
+var input = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 * 1024 });
 defer input.deinit(io);
 try input.queue(io, "first\n");
 try input.queue(io, "second\n");
 try input.end(io);
 // Read output while the input task writes, so neither pipe waits on the other.
-var result = try child.output(io, gpa, .{ .timeout_ms = 5000 });
+var result = try child.output(gpa, io, .{ .timeout_ms = 5000 });
 defer result.deinit(gpa);
 try input.wait(io);
 ```
@@ -425,7 +425,7 @@ alone and reported as `error.Unproven` on Linux; Darwin reports
 `error.Unsupported` for a requested group after ending provable processes,
 since a member cannot be held after the leader's exit by this call.
 
-`conduit.findProgram(io, allocator, environ, name)` is where `spawn` would
+`conduit.findProgram(allocator, io, environ, name)` is where `spawn` would
 find `name` for a child given `environ`, by the same rules, or `null`: for a
 program that asks whether something is installed, to say so. `spawn` does not
 need it and searches for itself — resolving a name and then starting what it
@@ -433,7 +433,7 @@ resolved to is two steps, with room between them for the answer to change.
 
 ### `spawnShell`, `Reaper`, `Proxy`
 
-`spawnShell(io, allocator, options)` returns a `Shell`: a `Pty` and a `Child`,
+`spawnShell(allocator, io, options)` returns a `Shell`: a `Pty` and a `Child`,
 with a terminal emulator's defaults — `$SHELL` or `%COMSPEC%`, 24×80, `TERM`
 set, a controlling terminal on POSIX — absorbing the `closeSlave` timing
 difference below.

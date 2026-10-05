@@ -215,11 +215,11 @@ fn pumpTask(
 /// One direction. Ends at the first sign that `from` has no more to give.
 fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!void {
     while (true) {
-        const n = handles.readStreaming(from, io, &.{buffer}) catch |err| switch (err) {
+        const n = handles.readStreaming(io, from, &.{buffer}) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => if (handles.finished(err)) return else return error.ReadFailed,
         };
-        handles.writeStreamingAll(to, io, buffer[0..n]) catch |err| switch (err) {
+        handles.writeStreamingAll(io, to, buffer[0..n]) catch |err| switch (err) {
             error.BrokenPipe => return,
             error.Canceled => return error.Canceled,
             else => return error.WriteFailed,
@@ -342,7 +342,7 @@ fn expectWithin(io: std.Io, file: std.Io.File, seen: []u8, want: []const u8) !vo
             .revents = 0,
         }};
         if (try std.posix.poll(&fds, 5000) == 0) return error.TestPumpDeliveredNothing;
-        filled += try handles.readStreaming(file, io, &.{seen[filled..]});
+        filled += try handles.readStreaming(io, file, &.{seen[filled..]});
     }
     try testing.expectEqualStrings(want, seen[0..filled]);
 }
@@ -371,7 +371,7 @@ test "bytes written to one terminal reach the program on the other, and back" {
     defer terminal.close(io);
     _ = try tty.rawMode(terminal.slaveHandle().?);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "cat" },
         .stdio = .{ .pty = &terminal },
         .detach = true,
@@ -419,7 +419,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
-    var child = try Child.spawn(io, gpa, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exec sleep 100" },
         .stdio = .{ .pty = &terminal },
         .detach = true,
