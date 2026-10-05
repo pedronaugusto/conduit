@@ -211,7 +211,7 @@ test "the default shell is a program that exists" {
     const program = try defaultShell(std.testing.allocator);
     defer std.testing.allocator.free(program);
     try std.testing.expect(program.len > 0);
-    if (!is_windows) try std.testing.expect(std.mem.indexOfScalar(u8, program, '/') != null);
+    if (!is_windows) try std.testing.expect(std.mem.findScalar(u8, program, '/') != null);
 }
 
 test "default shell calls retain independent values" {

@@ -32,7 +32,7 @@ pub const Error = error{
 /// whenever it is empty or holds a space, a control character or a quote, with
 /// backslashes doubled where they precede a quote.
 pub fn serialise(arena: Allocator, argv: []const []const u8) Error![:0]u16 {
-    for (argv) |argument| if (std.mem.indexOfScalar(u8, argument, 0) != null) return error.InvalidArgv;
+    for (argv) |argument| if (std.mem.findScalar(u8, argument, 0) != null) return error.InvalidArgv;
     var buffer: std.ArrayList(u8) = .empty;
 
     const program = argv[0];
@@ -172,7 +172,7 @@ fn argvSurvivesTheRoundTrip(_: void, smith: *std.testing.Smith) !void {
         // The one argument list with no command line: a first argument
         // holding a quote, which is refused rather than mangled.
         error.InvalidArgv => {
-            try testing.expect(std.mem.indexOfScalar(u8, wanted[0], '"') != null);
+            try testing.expect(std.mem.findScalar(u8, wanted[0], '"') != null);
             return;
         },
         else => |e| return e,
@@ -218,9 +218,9 @@ fn checkRoundTrip(wanted: []const []const u8) !void {
     const arena = arena_state.allocator();
     const line = serialise(arena, wanted) catch |err| switch (err) {
         error.InvalidArgv => {
-            const quote = std.mem.indexOfScalar(u8, wanted[0], '"') != null;
+            const quote = std.mem.findScalar(u8, wanted[0], '"') != null;
             const nul = for (wanted) |argument| {
-                if (std.mem.indexOfScalar(u8, argument, 0) != null) break true;
+                if (std.mem.findScalar(u8, argument, 0) != null) break true;
             } else false;
             try testing.expect(quote or nul);
             return;
@@ -228,7 +228,7 @@ fn checkRoundTrip(wanted: []const []const u8) !void {
         else => |e| return e,
     };
     // `CreateProcessW` reads the line as a string that ends at its first NUL.
-    const read = line[0 .. std.mem.indexOfScalar(u16, line, 0) orelse line.len];
+    const read = line[0 .. std.mem.findScalar(u16, line, 0) orelse line.len];
     const parsed = try parse(arena, try std.unicode.wtf16LeToWtf8Alloc(arena, read));
     try testing.expectEqual(wanted.len, parsed.len);
     for (wanted, parsed) |expected, actual| try testing.expectEqualStrings(expected, actual);

@@ -198,7 +198,7 @@ const Sink = struct {
     fn contains(sink: *Sink, needle: []const u8) bool {
         sink.mutex.lockUncancelable(io);
         defer sink.mutex.unlock(io);
-        return std.mem.indexOf(u8, sink.bytes.items, needle) != null;
+        return std.mem.find(u8, sink.bytes.items, needle) != null;
     }
 
     /// Waits for `needle` to arrive, and fails the test if it does not.
@@ -321,7 +321,7 @@ test "a child on pipes: its output is collected and its exit code is seen" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "hello from the child") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "hello from the child") != null);
     try testing.expect(!result.stdoutTruncated());
     try testing.expect(!result.timedOut());
     try testing.expectEqual(Child.Term{ .exited = 3 }, result.term());
@@ -344,7 +344,7 @@ test "a child on pipes can be written to" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "a line") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "a line") != null);
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
@@ -1009,7 +1009,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
 
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "a line") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "a line") != null);
 }
 
 test "closeStdin is the half-close a child reading to end of file waits for" {
@@ -1355,9 +1355,9 @@ test "a child on a terminal opens it as one poll can wait on" {
         const said = said: {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
-            const at = std.mem.indexOf(u8, sink.bytes.items, "terminal ") orelse break :said null;
+            const at = std.mem.find(u8, sink.bytes.items, "terminal ") orelse break :said null;
             const rest = sink.bytes.items[at + "terminal ".len ..];
-            const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :said null;
+            const end = std.mem.findScalar(u8, rest, '.') orelse break :said null;
             break :said try gpa.dupe(u8, rest[0..end]);
         };
         if (said) |word| {
@@ -1933,7 +1933,7 @@ fn waitSaid(sink: *Sink, said: []const u8) !void {
         const found = found: {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
-            break :found std.mem.indexOf(u8, sink.bytes.items, said) != null;
+            break :found std.mem.find(u8, sink.bytes.items, said) != null;
         };
         if (found) return;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
@@ -1974,14 +1974,14 @@ fn orphanOf(child: *Child) !posix.pid_t {
 /// when there is no such process.
 fn stateOf(pid: posix.pid_t) u8 {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/stat", .{pid}) catch return 0;
+    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return 0;
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return 0;
     defer _ = c.close(fd);
     var text: [512]u8 = undefined;
     const n = c.read(fd, &text, text.len);
     if (n <= 0) return 0;
-    const close = std.mem.lastIndexOfScalar(u8, text[0..@intCast(n)], ')') orelse return 0;
+    const close = std.mem.findScalarLast(u8, text[0..@intCast(n)], ')') orelse return 0;
     if (close + 2 >= @as(usize, @intCast(n))) return 0;
     return text[close + 2];
 }
@@ -2238,14 +2238,14 @@ test "with Orphans not started, an orphan goes where it always went" {
 /// The parent a Linux process has now, from `/proc`.
 fn parentOf(pid: posix.pid_t) posix.pid_t {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/stat", .{pid}) catch return 0;
+    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return 0;
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return 0;
     defer _ = c.close(fd);
     var text: [512]u8 = undefined;
     const n = c.read(fd, &text, text.len);
     if (n <= 0) return 0;
-    const close = std.mem.lastIndexOfScalar(u8, text[0..@intCast(n)], ')') orelse return 0;
+    const close = std.mem.findScalarLast(u8, text[0..@intCast(n)], ')') orelse return 0;
     var fields = std.mem.tokenizeScalar(u8, text[close + 1 .. @intCast(n)], ' ');
     _ = fields.next();
     return std.fmt.parseInt(posix.pid_t, fields.next() orelse return 0, 10) catch 0;
@@ -2270,9 +2270,9 @@ fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
             sink.mutex.lockUncancelable(io);
             defer sink.mutex.unlock(io);
             const said = sink.bytes.items;
-            const at = std.mem.indexOf(u8, said, "pid ") orelse break :found null;
+            const at = std.mem.find(u8, said, "pid ") orelse break :found null;
             const rest = said[at + "pid ".len ..];
-            const end = std.mem.indexOfScalar(u8, rest, '.') orelse break :found null;
+            const end = std.mem.findScalar(u8, rest, '.') orelse break :found null;
             const number = std.fmt.parseInt(Number, rest[0..end], 10) catch break :found @as(Number, 0);
             break :found number;
         };
@@ -2944,8 +2944,8 @@ test "each stream is chosen on its own" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "to stdout") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "to stderr") == null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "to stdout") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "to stderr") == null);
     try testing.expectEqualStrings("", result.stderr());
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
@@ -3104,7 +3104,7 @@ test "a child's file-creation mask is the one it was given" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "77") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "77") != null);
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
@@ -3133,7 +3133,7 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     defer result.deinit(gpa);
 
     var wanted: [64]u8 = undefined;
-    try testing.expect(std.mem.indexOf(
+    try testing.expect(std.mem.find(
         u8,
         result.stdout(),
         try std.fmt.bufPrint(&wanted, "{d}", .{uid}),
@@ -3179,7 +3179,7 @@ test "a resource limit set at spawn is the child's own" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "64") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "64") != null);
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 
     // This process is not the one that was limited, which is the whole reason
@@ -3221,7 +3221,7 @@ test "a job limit bounds what the child's tree may do" {
     errdefer _ = free.killWait(io, 0) catch {};
     var without = try free.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer without.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, without.stdout(), "NESTED") != null);
+    try testing.expect(std.mem.find(u8, without.stdout(), "NESTED") != null);
 
     var bounded = try Child.spawn(io, gpa, .{
         .argv = argv,
@@ -3232,7 +3232,7 @@ test "a job limit bounds what the child's tree may do" {
     errdefer _ = bounded.killWait(io, 0) catch {};
     var with = try bounded.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer with.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, with.stdout(), "NESTED") == null);
+    try testing.expect(std.mem.find(u8, with.stdout(), "NESTED") == null);
 }
 
 test "Windows CPU job limits reject values outside a whole-system percentage" {
@@ -3302,8 +3302,8 @@ test "the child's environment and working directory are the ones asked for" {
     var result = try child.output(io, gpa, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
 
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), "present") != null);
-    try testing.expect(std.mem.indexOf(u8, result.stdout(), script.working_directory_mark) != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "present") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), script.working_directory_mark) != null);
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
@@ -3744,7 +3744,7 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
 
     var contents: [64]u8 = undefined;
     const written = try tmp.dir.readFile(io, "out", &contents);
-    try testing.expect(std.mem.indexOf(u8, written, "to the caller's file") != null);
+    try testing.expect(std.mem.find(u8, written, "to the caller's file") != null);
 }
 
 test "concurrent Windows spawns never change a caller handle's inheritance flag" {
@@ -4880,5 +4880,5 @@ test "collected output transfers bytes before releasing its owner" {
     defer gpa.free(kept);
     try testing.expectEqual(@as(usize, 0), collected.stdout().len);
     collected.deinit(gpa);
-    try testing.expect(std.mem.indexOf(u8, kept, "to stdout") != null);
+    try testing.expect(std.mem.find(u8, kept, "to stdout") != null);
 }

@@ -480,7 +480,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // is what is read, and the return value is only tested against zero.
         var name_buffer: [std.fs.max_path_bytes]u8 = undefined;
         if (ptsname_r(master_fd, &name_buffer, name_buffer.len) != 0) return openErrno();
-        const name_len = std.mem.indexOfScalar(u8, &name_buffer, 0) orelse return error.Unexpected;
+        const name_len = std.mem.findScalar(u8, &name_buffer, 0) orelse return error.Unexpected;
         const name = name_buffer[0..name_len :0];
 
         // NOCTTY: opening the slave here must not make it this process's

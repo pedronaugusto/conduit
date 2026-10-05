@@ -9,7 +9,7 @@ fn missingTerm(a: std.mem.Allocator, text: []const u8) !?[]const u8 {
     const lower = try std.ascii.allocLowerString(a, text);
     defer a.free(lower);
     for ([_][]const u8{ "observation", "kernel", "measured", "registration", "escape" }) |term| {
-        if (std.mem.indexOf(u8, lower, term) == null) return term;
+        if (std.mem.find(u8, lower, term) == null) return term;
     }
     return null;
 }
@@ -31,12 +31,12 @@ pub fn main(init: std.process.Init) !void {
     var lines = std.mem.splitScalar(u8, readme, '\n');
     var row: ?[]const u8 = null;
     while (lines.next()) |line| {
-        if (std.mem.startsWith(u8, line, "| macOS |") and std.mem.indexOf(u8, line, "lineage") != null) row = line;
+        if (std.mem.startsWith(u8, line, "| macOS |") and std.mem.find(u8, line, "lineage") != null) row = line;
     }
     try boundary(a, row orelse return error.MissingDarwinPlatformRow);
     const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "src/child/contract.zig", a, .limited(1024 * 1024));
-    const start = (std.mem.indexOf(u8, source, "pub const Descendants = enum {") orelse return error.MissingDescendantsPolicy) + "pub const Descendants = enum {".len;
-    const end = std.mem.indexOfPos(u8, source, start, "contain,") orelse return error.MissingContainmentPolicy;
+    const start = (std.mem.find(u8, source, "pub const Descendants = enum {") orelse return error.MissingDescendantsPolicy) + "pub const Descendants = enum {".len;
+    const end = std.mem.findPos(u8, source, start, "contain,") orelse return error.MissingContainmentPolicy;
     try boundary(a, source[start..end]);
 }
 
@@ -74,7 +74,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
     });
     const output = try std.mem.concat(a, u8, &.{ result.stdout, result.stderr });
     const expected = "conduit: watchdog: src/testing/support.zig: testing.support.test.runner teardown probe; phase=io_teardown";
-    if ((result.term == .exited and result.term.exited == 0) or std.mem.indexOf(u8, output, expected) == null) {
+    if ((result.term == .exited and result.term.exited == 0) or std.mem.find(u8, output, expected) == null) {
         log.err("runner probe did not identify backend teardown:\n{s}", .{output});
         return error.RunnerProbeFailed;
     }

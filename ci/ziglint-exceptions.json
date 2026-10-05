@@ -84,27 +84,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z011",
-    "path": "src/cgroup.zig",
-    "source": "const joined = std.fmt.bufPrintZ(&path_buffer, \"{s}{s}\", .{",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/cgroup.zig",
-    "source": "const kill_path = std.fmt.bufPrintZ(&kill_buffer, \"{s}/cgroup.kill\", .{joined}) catch return false;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/cgroup.zig",
-    "source": "std.mem.copyForwards(u8, window[0 .. held - newline - 1], window[newline + 1 .. held]);",
-    "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/cgroup.zig",
     "source": "fn escapeMountPath(path: []const u8, out: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {",
@@ -119,38 +98,10 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z011",
-    "path": "src/cgroup.zig",
-    "source": "while (std.mem.indexOfScalarPos(u8, bytes, at, '\\n')) |newline| : (at = newline + 1) {",
-    "detail": "'indexOfScalarPos' is deprecated: Deprecated in favor of `findScalarPos`.",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/cgroup.zig",
     "source": "allocator: std.mem.Allocator,",
     "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/cgroup.zig",
-    "source": "const last = std.mem.lastIndexOfScalar(u8, window[0..held], '\\n');",
-    "detail": "'lastIndexOfScalar' is deprecated: Deprecated in favor of `findScalarLast`.",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/cgroup.zig",
-    "source": "std.mem.copyForwards(u8, window[0 .. held - complete], window[complete..held]);",
-    "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/expect.zig",
-    "source": "std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);",
-    "detail": "'copyForwards' is deprecated: Copy all of source into dest at position 0.\ndest.len must be >= source.len.\nIf the slices overlap, dest.ptr must be <= src.ptr.\nThis function is deprecated; use @memmove instead.",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -581,13 +532,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z011",
-    "path": "src/tree.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return null;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/tree.zig",
     "source": "allocator: std.mem.Allocator,",
@@ -620,27 +564,6 @@
     "path": "src/tree.zig",
     "source": "allocator: std.mem.Allocator,",
     "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/tree.zig",
-    "source": "const main_path = std.fmt.bufPrintZ(&main_buffer, \"/proc/{d}/task/{d}/children\", .{ pid, pid }) catch return true;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/tree.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/task\", .{pid}) catch return true;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/tree.zig",
-    "source": "const file = std.fmt.bufPrintZ(&file_buffer, \"{s}/children\", .{name}) catch return true;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
@@ -1274,20 +1197,6 @@
     "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
-    "rule": "Z011",
-    "path": "src/orphans.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/self/task/{d}/children\", .{linux.gettid()}) catch return error.Unsupported;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/orphans.zig",
-    "source": "const file = std.fmt.bufPrintZ(&file_buffer, \"{s}/children\", .{name}) catch continue;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
     "rule": "Z023",
     "path": "src/orphans.zig",
     "source": "comptime each: fn (*Orphans, posix.pid_t) LookError!void,",
@@ -1363,20 +1272,6 @@
     "source": "pub fn execError(err: posix.E) SpawnError {",
     "detail": "public function exposes private type 'SpawnError'",
     "reason": "Existing declaration on main, moved or retargeted by its layout; this exact finding is retained while landing preflight."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/child/spawn_test.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
-  },
-  {
-    "rule": "Z011",
-    "path": "src/child/spawn_test.zig",
-    "source": "const path = std.fmt.bufPrintZ(&path_buffer, \"/proc/{d}/stat\", .{pid}) catch return 0;",
-    "detail": "'bufPrintZ' is deprecated: Deprecated in favor of `bufPrintSentinel`",
-    "reason": "Existing finding at migration; this exact source and diagnostic are retained until the owning code is revised."
   },
   {
     "rule": "Z020",

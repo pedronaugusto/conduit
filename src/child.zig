@@ -275,7 +275,7 @@ pub const Child = enum(usize) {
         // An argument is passed on as a string that ends at a NUL: the child
         // would receive less of it than was given, and on Windows none of the
         // arguments after it.
-        for (options.argv) |argument| if (std.mem.indexOfScalar(u8, argument, 0) != null) return error.InvalidArgv;
+        for (options.argv) |argument| if (std.mem.findScalar(u8, argument, 0) != null) return error.InvalidArgv;
         if (options.parent_death_signal != null and builtin.os.tag != .linux) return error.Unsupported;
         var configured = options;
         // A private POSIX group belongs to the held child until the reap. It

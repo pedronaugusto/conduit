@@ -111,7 +111,7 @@ fn mapOfBlock(allocator: Allocator, entries: []const [*:0]const u8) Allocator.Er
     errdefer map.deinit();
     for (entries) |pointer| {
         const entry = std.mem.span(pointer);
-        const equals = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
+        const equals = std.mem.findScalar(u8, entry, '=') orelse continue;
         if (equals == 0) continue;
         const name = entry[0..equals];
         if (map.get(name) != null) continue;
@@ -188,7 +188,7 @@ fn readsAsGetenv(_: void, smith: *std.testing.Smith) !void {
     var names: usize = 0;
     for (entries[0..count], 0..) |pointer, i| {
         const entry = std.mem.span(pointer);
-        const equals = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
+        const equals = std.mem.findScalar(u8, entry, '=') orelse continue;
         if (equals == 0) continue;
         const name = entry[0..equals];
         const first = for (entries[0..i]) |earlier| {

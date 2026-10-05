@@ -494,7 +494,7 @@ fn fullScan(said: []const u8, patterns: []const []const u8) ?access.Found {
     @disableInstrumentation();
     var winner: ?access.Found = null;
     for (patterns, 0..) |pattern, index| {
-        const at = std.mem.indexOf(u8, said, pattern) orelse continue;
+        const at = std.mem.find(u8, said, pattern) orelse continue;
         if (winner) |already| if (at >= already.at) continue;
         winner = .{ .index = index, .at = at };
     }

@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 /// Whether `program` names a program to search for rather than a path: no
 /// separator of either kind, and no drive.
 pub fn isBareProgram(program: []const u8) bool {
-    return std.mem.indexOfAny(u8, program, "\\/:") == null;
+    return std.mem.findAny(u8, program, "\\/:") == null;
 }
 
 /// Whether the program is a batch script, which this package refuses to run.

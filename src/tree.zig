@@ -345,7 +345,7 @@ const LinuxRelation = struct {
 
 fn processRelationLinux(pid: posix.pid_t) ?LinuxRelation {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/stat", .{pid}) catch return null;
+    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return null;
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return null;
     defer _ = c.close(fd);
@@ -360,7 +360,7 @@ fn parseLinuxStat(text: []const u8) ?LinuxRelation {
     // The command name is parenthesized and may itself contain spaces or a
     // closing parenthesis. The final one is the separator before the state,
     // parent and process-group fields.
-    const close = std.mem.lastIndexOfScalar(u8, text, ')') orelse return null;
+    const close = std.mem.findScalarLast(u8, text, ')') orelse return null;
     var fields = std.mem.tokenizeScalar(u8, text[close + 1 ..], ' ');
     const state = fields.next() orelse return null;
     if (state.len != 1) return null;
@@ -1153,7 +1153,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
     // The main thread first: a process that forks usually forks from it,
     // and then one read answers without listing the threads.
     var main_buffer: [64]u8 = undefined;
-    const main_path = std.fmt.bufPrintZ(&main_buffer, "/proc/{d}/task/{d}/children", .{ pid, pid }) catch return true;
+    const main_path = std.fmt.bufPrintSentinel(&main_buffer, "/proc/{d}/task/{d}/children", .{ pid, pid }, 0) catch return true;
     const main_fd = c.open(main_path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (main_fd < 0) return true;
     var first: [1]u8 = undefined;
@@ -1162,7 +1162,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
     if (main_n != 0) return true;
 
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buffer, "/proc/{d}/task", .{pid}) catch return true;
+    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/task", .{pid}, 0) catch return true;
     const dir = c.open(path, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
     if (dir < 0) return true;
     defer _ = c.close(dir);
@@ -1180,7 +1180,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
             // Read above.
             if (tid == pid) continue;
             var file_buffer: [32]u8 = undefined;
-            const file = std.fmt.bufPrintZ(&file_buffer, "{s}/children", .{name}) catch return true;
+            const file = std.fmt.bufPrintSentinel(&file_buffer, "{s}/children", .{name}, 0) catch return true;
             const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
             if (fd < 0) return true;
             var byte: [1]u8 = undefined;

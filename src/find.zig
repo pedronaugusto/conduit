@@ -50,7 +50,7 @@ pub fn findProgram(
         return program;
     }
 
-    if (std.mem.indexOfScalar(u8, name, '/') != null) {
+    if (std.mem.findScalar(u8, name, '/') != null) {
         return if (runnable(io, name)) try allocator.dupe(u8, name) else null;
     }
     // As `spawn`'s own search: what `confstr(_CS_PATH)` reports on the

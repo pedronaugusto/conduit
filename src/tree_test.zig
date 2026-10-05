@@ -567,7 +567,7 @@ fn direntsStayInside(_: void, smith: *std.testing.Smith) anyerror!void {
         try std.testing.expect(seen <= end / (name_at + 1));
         try std.testing.expect(@intFromPtr(name.ptr) >= @intFromPtr(&bytes) and
             @intFromPtr(name.ptr) + name.len <= @intFromPtr(&bytes) + end);
-        try std.testing.expect(std.mem.indexOfScalar(u8, name, 0) == null);
+        try std.testing.expect(std.mem.findScalar(u8, name, 0) == null);
     }
 }
 

@@ -616,12 +616,12 @@ fn inheritList(given: [3]?windows.HANDLE, extras: []const windows.HANDLE, arena:
     for (given) |slot| {
         const handle = slot orelse continue;
         if (isConsole(handle)) continue;
-        if (std.mem.indexOfScalar(windows.HANDLE, list.items, handle) != null) continue;
+        if (std.mem.findScalar(windows.HANDLE, list.items, handle) != null) continue;
         try list.append(arena, handle);
     }
     for (extras) |handle| {
         if (isConsole(handle)) continue;
-        if (std.mem.indexOfScalar(windows.HANDLE, list.items, handle) != null) continue;
+        if (std.mem.findScalar(windows.HANDLE, list.items, handle) != null) continue;
         try list.append(arena, handle);
     }
     if (list.items.len == 0) return null;

@@ -735,7 +735,7 @@ fn searchPath(
     path: ?[]const u8,
     search: bool,
 ) Allocator.Error![]const [*:0]const u8 {
-    if (!search or std.mem.indexOfScalar(u8, program, '/') != null) {
+    if (!search or std.mem.findScalar(u8, program, '/') != null) {
         const one = try arena.alloc([*:0]const u8, 1);
         one[0] = (try arena.dupeZ(u8, program)).ptr;
         return one;
@@ -959,7 +959,7 @@ fn candidatesKeepTheirShape(_: void, smith: *std.testing.Smith) !void {
 
     const candidates = try searchPath(arena, program, path, search);
 
-    if (!search or std.mem.indexOfScalar(u8, program, '/') != null) {
+    if (!search or std.mem.findScalar(u8, program, '/') != null) {
         try std.testing.expectEqual(@as(usize, 1), candidates.len);
         try std.testing.expectEqualStrings(program, std.mem.span(candidates[0]));
         return;

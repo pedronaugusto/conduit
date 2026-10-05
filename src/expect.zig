@@ -336,7 +336,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             var winner: ?Found = null;
             var earliest: usize = said.len;
             for (patterns, 0..) |pattern, index| {
-                const at = std.mem.indexOfPos(u8, said, search.from, pattern) orelse continue;
+                const at = std.mem.findPos(u8, said, search.from, pattern) orelse continue;
                 if (at >= earliest) continue;
                 earliest = at;
                 winner = .{ .index = index, .at = at };
@@ -528,7 +528,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer expect.inner().mutex.unlock(io);
         if (expect.inner().consumed == 0) return;
         const rest = expect.inner().filled - expect.inner().consumed;
-        std.mem.copyForwards(u8, expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);
+        @memmove(expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);
         expect.inner().filled = rest;
         expect.inner().consumed = 0;
         expect.inner().space.set(io);

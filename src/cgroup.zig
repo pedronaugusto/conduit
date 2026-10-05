@@ -174,16 +174,16 @@ const Place = struct {
             own[mount.root.len..]
         else
             return false;
-        const joined = std.fmt.bufPrintZ(&path_buffer, "{s}{s}", .{
+        const joined = std.fmt.bufPrintSentinel(&path_buffer, "{s}{s}", .{
             mount.point,
             if (std.mem.eql(u8, below, "/")) "" else below,
-        }) catch return false;
+        }, 0) catch return false;
         path_len = joined.len;
 
         // A kernel with no `cgroup.kill` (before 5.14) has no way to end a
         // cgroup at once, and this file does not pretend otherwise.
         var kill_buffer: [std.fs.max_path_bytes + 16]u8 = undefined;
-        const kill_path = std.fmt.bufPrintZ(&kill_buffer, "{s}/cgroup.kill", .{joined}) catch return false;
+        const kill_path = std.fmt.bufPrintSentinel(&kill_buffer, "{s}/cgroup.kill", .{joined}, 0) catch return false;
         return c.faccessat(c.AT.FDCWD, kill_path, 0, 0) == 0;
     }
 };
@@ -209,7 +209,7 @@ fn ownCgroup(buffer: []u8) ?[]const u8 {
 /// not is the one a full buffer stopped in, whose path is the start of a
 /// longer one.
 fn ownCgroupIn(text: []const u8) ?[]const u8 {
-    const whole = text[0..if (std.mem.lastIndexOfScalar(u8, text, '\n')) |last| last + 1 else 0];
+    const whole = text[0..if (std.mem.findScalarLast(u8, text, '\n')) |last| last + 1 else 0];
     var lines = std.mem.splitScalar(u8, whole, '\n');
     while (lines.next()) |line| {
         if (!std.mem.startsWith(u8, line, "0::")) continue;
@@ -256,7 +256,7 @@ fn cgroup2MountIn(fd: c.fd_t, point_buffer: []u8, root_buffer: []u8) ?Mount {
             const n = c.read(fd, window[held..].ptr, window.len - held);
             if (n <= 0) at_end = true else held += @intCast(n);
         }
-        const newline = std.mem.indexOfScalar(u8, window[0..held], '\n') orelse {
+        const newline = std.mem.findScalar(u8, window[0..held], '\n') orelse {
             if (at_end) return null;
             if (held == window.len) {
                 skipping = true;
@@ -268,7 +268,7 @@ fn cgroup2MountIn(fd: c.fd_t, point_buffer: []u8, root_buffer: []u8) ?Mount {
             if (parseMountLine(window[0..newline], point_buffer, root_buffer)) |mount| return mount;
         }
         skipping = false;
-        std.mem.copyForwards(u8, window[0 .. held - newline - 1], window[newline + 1 .. held]);
+        @memmove(window[0 .. held - newline - 1], window[newline + 1 .. held]);
         held -= newline + 1;
     }
 }
@@ -276,7 +276,7 @@ fn cgroup2MountIn(fd: c.fd_t, point_buffer: []u8, root_buffer: []u8) ?Mount {
 /// One `mountinfo` line, if it is a `cgroup2` mount: fields 4 and 5 are the
 /// root and the mount point, and the file system type follows the ` - `.
 fn parseMountLine(line: []const u8, point_buffer: []u8, root_buffer: []u8) ?Mount {
-    const separator = std.mem.indexOf(u8, line, " - ") orelse return null;
+    const separator = std.mem.find(u8, line, " - ") orelse return null;
     var after = std.mem.tokenizeScalar(u8, line[separator + " - ".len ..], ' ');
     if (!std.mem.eql(u8, after.next() orelse return null, "cgroup2")) return null;
     var fields = std.mem.tokenizeScalar(u8, line[0..separator], ' ');
@@ -464,7 +464,7 @@ fn ownCgroupLines(_: void, smith: *std.testing.Smith) anyerror!void {
     // only when it is one.
     var expected: ?[]const u8 = null;
     var at: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, bytes, at, '\n')) |newline| : (at = newline + 1) {
+    while (std.mem.findScalarPos(u8, bytes, at, '\n')) |newline| : (at = newline + 1) {
         const line = bytes[at..newline];
         if (!std.mem.startsWith(u8, line, "0::")) continue;
         const path = line[3..];
@@ -544,7 +544,7 @@ const Name = struct {
 
     fn path(name: Name, buffer: []u8) ?[:0]const u8 {
         const base = Place.path() orelse return null;
-        return std.fmt.bufPrintZ(buffer, "{s}/conduit-{d}-{d}", .{ base, name.owner, name.sequence }) catch null;
+        return std.fmt.bufPrintSentinel(buffer, "{s}/conduit-{d}-{d}", .{ base, name.owner, name.sequence }, 0) catch null;
     }
 
     /// `true` once the cgroup is gone, whoever removed it.
@@ -806,8 +806,8 @@ const LinuxRecorded = enum(@Int(.unsigned, @sizeOf(RecordedState) * 8)) {
 
     fn open(path_name: []const u8, recorded_id: u64) ?LinuxRecorded {
         if (recorded_id == 0 or path_name.len < 2 or path_name.len >= std.fs.max_path_bytes or path_name[0] != '/' or
-            std.mem.indexOfScalar(u8, path_name, 0) != null) return null;
-        const slash = std.mem.lastIndexOfScalar(u8, path_name, '/') orelse return null;
+            std.mem.findScalar(u8, path_name, 0) != null) return null;
+        const slash = std.mem.findScalarLast(u8, path_name, '/') orelse return null;
         const base = path_name[slash + 1 ..];
         if (base.len == 0 or base.len > std.fs.max_name_bytes or
             std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return null;
@@ -991,14 +991,14 @@ const MemberOps = struct {
             held += @intCast(n);
             // Whole lines only; a number cut by the end of a read waits for
             // the next one.
-            const last = std.mem.lastIndexOfScalar(u8, window[0..held], '\n');
+            const last = std.mem.findScalarLast(u8, window[0..held], '\n');
             const complete = if (last) |at| at + 1 else if (n == 0) held else 0;
             var numbers = std.mem.tokenizeAny(u8, window[0..complete], "\n ");
             while (numbers.next()) |word| {
                 const pid = std.fmt.parseInt(posix.pid_t, word, 10) catch continue;
                 try into.append(allocator, pid);
             }
-            std.mem.copyForwards(u8, window[0 .. held - complete], window[complete..held]);
+            @memmove(window[0 .. held - complete], window[complete..held]);
             held -= complete;
             if (n == 0) return true;
         }

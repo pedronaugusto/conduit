@@ -45,7 +45,7 @@ const Watchdog = struct {
             if (std.Io.Clock.awake.now(io).nanoseconds >= deadline.nanoseconds) {
                 const directory = if (std.mem.startsWith(u8, watchdog.name, "child.")) "child/" else if (std.mem.startsWith(u8, watchdog.name, "testing.")) "testing/" else "";
                 const name = watchdog.name[directory.len..];
-                const file = name[0 .. std.mem.indexOfScalar(u8, name, '.') orelse name.len];
+                const file = name[0 .. std.mem.findScalar(u8, name, '.') orelse name.len];
                 std.debug.print("\nconduit: watchdog: src/{s}{s}.zig: {s}; phase={t}; seed={d}\n", .{ directory, file, watchdog.name, watchdog.phase.load(.acquire), testing.random_seed });
                 std.process.exit(1);
             }

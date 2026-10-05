@@ -750,7 +750,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // says so, and one that cannot (before 5.4) calls the id type invalid.
         if (linux.errno(rc) != .CHILD) return error.Unsupported;
         var path_buffer: [64]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buffer, "/proc/self/task/{d}/children", .{linux.gettid()}) catch return error.Unsupported;
+        const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/self/task/{d}/children", .{linux.gettid()}, 0) catch return error.Unsupported;
         const children = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (children < 0) return error.Unsupported;
         _ = c.close(children);
@@ -800,7 +800,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             while (names.next()) |name| {
                 _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
                 var file_buffer: [32]u8 = undefined;
-                const file = std.fmt.bufPrintZ(&file_buffer, "{s}/children", .{name}) catch continue;
+                const file = std.fmt.bufPrintSentinel(&file_buffer, "{s}/children", .{name}, 0) catch continue;
                 const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
                 if (fd < 0) continue;
                 defer _ = c.close(fd);
