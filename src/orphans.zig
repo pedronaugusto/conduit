@@ -84,13 +84,15 @@
 //! is the per-child reach, and this is the floor beneath it and beneath the
 //! walk.
 //!
-//! Lifetime rules: an `Orphans` must not move once `start` has been called,
+//! Lifetime rules: an `Orphans` must not move once `start` has been called
+//! (safe builds assert it on each call),
 //! and once started it must be stopped before `deinit`. One may run at a
 //! time in a process. POSIX elsewhere has no such attribute, and there
 //! `start` is `error.Unsupported`.
 
 const builtin = @import("builtin");
 const std = @import("std");
+const Pin = @import("pin.zig").Pin;
 const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
@@ -101,7 +103,8 @@ const wait_for = @import("wait.zig");
 const linux = std.os.linux;
 const adoption_record = @import("orphans/adoption_record.zig");
 
-const Implementation = struct {
+pub const Orphans = struct {
+    // Fields are private: read and change them only through the methods.
     /// Every list here. Must be safe to use from more than one thread: spawns and
     /// reaps on any thread add to and look at them.
     allocator: Allocator,
@@ -125,35 +128,17 @@ const Implementation = struct {
     adoptions: std.atomic.Value(u64),
     adoption_event: std.Io.Event,
     adoption_io: ?std.Io,
-};
-
-pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
-    _,
-
-    // The state lives in the value's own bits and `inner` casts to it: the
-    // bits must hold it and be at least as aligned.
-    comptime {
-        std.debug.assert(@sizeOf(Orphans) >= @sizeOf(Implementation));
-        std.debug.assert(@alignOf(Orphans) >= @alignOf(Implementation));
-    }
+    /// Safe builds: where this was when `start` made it the process's scope.
+    pin: Pin = .{},
 
     /// Whether this system has what `start` needs. Linux: the subreaper attribute
     /// (3.4), `pidfd_open` (5.3), `waitid` on a pidfd (5.4), and the `children`
     /// files in `/proc`; `start` finds out whether the running kernel has them.
     pub const supported = builtin.os.tag == .linux;
 
-    fn inner(orphans: *Orphans) *Implementation {
-        return @ptrCast(@alignCast(orphans)); // safe: init writes inline state; the enum holds its size and alignment.
-    }
-
-    fn innerConst(orphans: *const Orphans) *const Implementation {
-        return @ptrCast(@alignCast(orphans)); // safe: observes the same initialized inline state without copying it.
-    }
-
     /// An `Orphans` that is not running. `start` makes it run.
     pub fn init(allocator: Allocator) Orphans {
-        var orphans: Orphans = undefined;
-        orphans.inner().* = .{
+        return .{
             .allocator = allocator,
             .own = .empty,
             .own_lock = .{},
@@ -165,21 +150,22 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .adoption_event = .unset,
             .adoption_io = null,
         };
-        return orphans;
     }
 
     /// Register one owner to be woken when a new orphan is held. The event is
     /// only a notification; call `list` to take the actual snapshot. Register
     /// before starting the owner's wait task.
     pub fn adoptionEvent(orphans: *Orphans, io: std.Io) *std.Io.Event {
-        orphans.inner().lock.lock();
-        defer orphans.inner().lock.unlock();
-        orphans.inner().adoption_io = io;
-        return &orphans.inner().adoption_event;
+        orphans.pin.check(orphans);
+        orphans.lock.lock();
+        defer orphans.lock.unlock();
+        orphans.adoption_io = io;
+        return &orphans.adoption_event;
     }
 
     pub fn adoptionCount(orphans: *const Orphans) u64 {
-        return orphans.innerConst().adoptions.load(.acquire);
+        orphans.pin.check(orphans);
+        return orphans.adoptions.load(.acquire);
     }
 
     pub const LookError = error{
@@ -205,27 +191,28 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// Starts nothing: no task, no timer.
     pub fn start(orphans: *Orphans) StartError!void {
         if (!supported) return error.Unsupported;
-        if (orphans.inner().running) return error.AlreadyStarted;
+        if (orphans.running) return error.AlreadyStarted;
         try probe();
 
         gate.lock();
         defer gate.unlock();
         if (current != null) return error.AlreadyStarted;
 
-        orphans.inner().was_subreaper = subreaper();
-        if (!orphans.inner().was_subreaper) try setSubreaper(true);
-        errdefer if (!orphans.inner().was_subreaper) setSubreaper(false) catch {};
+        orphans.was_subreaper = subreaper();
+        if (!orphans.was_subreaper) try setSubreaper(true);
+        errdefer if (!orphans.was_subreaper) setSubreaper(false) catch {};
 
         // Whatever this process has now was started before the contract: it is
         // somebody's, and not an orphan's.
         errdefer {
             orphans.releaseAll();
-            orphans.inner().own.deinit(orphans.inner().allocator);
-            orphans.inner().own = .empty;
+            orphans.own.deinit(orphans.allocator);
+            orphans.own = .empty;
         }
         try forEachChild(orphans, claim);
 
-        orphans.inner().running = true;
+        orphans.running = true;
+        orphans.pin.set(orphans);
         current = orphans;
         active.store(true, .release);
     }
@@ -247,7 +234,8 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// still leaving orphans keeps this busy; it is the call for the end of a
     /// program. It waits by sleeping between looks, and is a cancelation point.
     pub fn end(orphans: *Orphans, io: std.Io, grace_ms: u32) EndError!void {
-        if (!supported or !orphans.inner().running) return;
+        orphans.pin.check(orphans);
+        if (!supported or !orphans.running) return;
         const deadline: wait_for.Deadline = .in(io, grace_ms);
         var interval_ms: u32 = 1;
         // A `children` file read while a child is being reaped elsewhere may pass
@@ -256,16 +244,16 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         while (true) {
             const left = left: {
                 gate.lock();
-                orphans.inner().lock.lock();
-                defer orphans.inner().lock.unlock();
+                orphans.lock.lock();
+                defer orphans.lock.unlock();
                 {
                     defer gate.unlock();
                     try orphans.look();
                 }
                 orphans.reapEnded();
                 const insisting = grace_ms == 0 or deadline.remainingMs(io) == 0;
-                for (orphans.inner().adopted.items) |*held| held.ask(if (insisting) .kill else .terminate);
-                break :left orphans.inner().adopted.items.len;
+                for (orphans.adopted.items) |*held| held.ask(if (insisting) .kill else .terminate);
+                break :left orphans.adopted.items.len;
             };
             if (left == 0) {
                 empty_looks += 1;
@@ -286,16 +274,17 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// running. The call for a program that wants the zombies gone now rather
     /// than at conduit's next event.
     pub fn count(orphans: *Orphans) LookError!usize {
-        if (!supported or !orphans.inner().running) return 0;
+        orphans.pin.check(orphans);
+        if (!supported or !orphans.running) return 0;
         gate.lock();
-        orphans.inner().lock.lock();
-        defer orphans.inner().lock.unlock();
+        orphans.lock.lock();
+        defer orphans.lock.unlock();
         {
             defer gate.unlock();
             try orphans.look();
         }
         orphans.reapEnded();
-        return orphans.inner().adopted.items.len;
+        return orphans.adopted.items.len;
     }
 
     /// A copied process identity. Retain both fields; the pid alone is not
@@ -313,17 +302,18 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// Empty when this is not running. Records own no handle and remain valid
     /// as saved facts after end or stop; they do not promise liveness.
     pub fn list(orphans: *Orphans, out: []Record) ListError![]Record {
-        if (!supported or !orphans.inner().running) return out[0..0];
+        orphans.pin.check(orphans);
+        if (!supported or !orphans.running) return out[0..0];
         gate.lock();
-        orphans.inner().lock.lock();
-        defer orphans.inner().lock.unlock();
+        orphans.lock.lock();
+        defer orphans.lock.unlock();
         {
             defer gate.unlock();
             try orphans.look();
         }
         orphans.reapEnded();
-        const n = @min(out.len, orphans.inner().adopted.items.len);
-        for (orphans.inner().adopted.items[0..n], out[0..n]) |held, *record| {
+        const n = @min(out.len, orphans.adopted.items.len);
+        for (orphans.adopted.items[0..n], out[0..n]) |held, *record| {
             record.* = held.record orelse return error.IdentityUnavailable;
         }
         return out[0..n];
@@ -337,31 +327,33 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     pub const StopError = LookError || error{ DirectChildrenRemain, OrphansRemain };
 
     pub fn stop(orphans: *Orphans) StopError!void {
-        if (!supported or !orphans.inner().running) return;
+        orphans.pin.check(orphans);
+        if (!supported or !orphans.running) return;
         gate.lock();
         defer gate.unlock();
-        orphans.inner().lock.lock();
-        defer orphans.inner().lock.unlock();
+        orphans.lock.lock();
+        defer orphans.lock.unlock();
         try orphans.look();
         orphans.reapEnded();
-        if (orphans.inner().own.items.len != 0) return error.DirectChildrenRemain;
-        if (orphans.inner().adopted.items.len != 0) return error.OrphansRemain;
-        if (!orphans.inner().was_subreaper) try setSubreaper(false);
+        if (orphans.own.items.len != 0) return error.DirectChildrenRemain;
+        if (orphans.adopted.items.len != 0) return error.OrphansRemain;
+        if (!orphans.was_subreaper) try setSubreaper(false);
         active.store(false, .release);
         current = null;
-        orphans.inner().running = false;
+        orphans.running = false;
         orphans.releaseAll();
-        orphans.inner().own.deinit(orphans.inner().allocator);
-        orphans.inner().adopted.deinit(orphans.inner().allocator);
-        orphans.inner().own = .empty;
-        orphans.inner().adopted = .empty;
+        orphans.own.deinit(orphans.allocator);
+        orphans.adopted.deinit(orphans.allocator);
+        orphans.own = .empty;
+        orphans.adopted = .empty;
     }
 
     /// Leaves the `Orphans` undefined. One that was started must have been
     /// stopped first: the scope is process-wide, and only `stop` can report
     /// what keeps it from ending.
     pub fn deinit(orphans: *Orphans) void {
-        std.debug.assert(!orphans.inner().running);
+        orphans.pin.check(orphans);
+        std.debug.assert(!orphans.running);
         orphans.* = undefined;
     }
 
@@ -393,8 +385,8 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         gate.lock();
         defer gate.unlock();
         const orphans = current orelse return;
-        orphans.inner().lock.lock();
-        defer orphans.inner().lock.unlock();
+        orphans.lock.lock();
+        defer orphans.lock.unlock();
         // ziglint-ignore: Z026 an event has no caller to tell; what this look missed the next one, or `count` or `end`, finds
         orphans.look() catch {};
         orphans.reapEnded();
@@ -407,33 +399,15 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         SystemResources,
     } || std.Io.UnexpectedError;
 
-    /// A spawn, as far as adoption is concerned: `begin` before the `fork`,
-    /// `started` with the child's pid after it, `finish` once that is done or
-    /// there is no child. POSIX spawns go through this; outside Linux it is
-    /// nothing.
-    const SpawnState = struct {
+    pub const Spawn = struct {
+        // Fields are private: read and change them only through the methods.
         orphans: ?*Orphans,
         holding: bool,
         look_after: bool = false,
         lifetime: enum { ready, registered, closed } = .ready,
-    };
 
-    pub const Spawn = enum(@Int(.unsigned, @sizeOf(SpawnState) * 8)) {
-        _,
-
-        // The state lives in the value's own bits and `inner` casts to it: the
-        // bits must hold it and be at least as aligned.
-        comptime {
-            std.debug.assert(@sizeOf(Spawn) >= @sizeOf(SpawnState));
-            std.debug.assert(@alignOf(Spawn) >= @alignOf(SpawnState));
-        }
-        fn inner(spawn: *Spawn) *SpawnState {
-            return @ptrCast(@alignCast(spawn)); // safe: begin initializes inline storage of this size and alignment.
-        }
         fn init(orphans: ?*Orphans, holding: bool) Spawn {
-            var spawn: Spawn = undefined;
-            spawn.inner().* = .{ .orphans = orphans, .holding = holding };
-            return spawn;
+            return .{ .orphans = orphans, .holding = holding };
         }
 
         pub fn begin() Orphans.Spawn {
@@ -447,7 +421,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// conduit cannot tell from an orphan is not one to hand back.
         /// Unexpected after successful registration or finish; failed registration may retry.
         pub fn started(spawn: *Spawn, pid: posix.pid_t) Orphans.OwnError!void {
-            const state = spawn.inner();
+            const state = spawn;
             if (state.lifetime != .ready) return error.Unexpected;
             if (!supported or state.orphans == null) {
                 state.lifetime = .registered;
@@ -459,9 +433,9 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 error.Gone => return error.Unexpected,
                 else => |e| return e,
             };
-            orphans.inner().own_lock.lock();
-            defer orphans.inner().own_lock.unlock();
-            orphans.inner().own.append(orphans.inner().allocator, held) catch {
+            orphans.own_lock.lock();
+            defer orphans.own_lock.unlock();
+            orphans.own.append(orphans.allocator, held) catch {
                 held.close();
                 return error.OutOfMemory;
             };
@@ -473,7 +447,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// has one: the spawn is an event of conduit's, and a moment to take in
         /// what is waiting. Idempotent.
         pub fn finish(spawn: *Spawn) void {
-            const state = spawn.inner();
+            const state = spawn;
             if (state.lifetime == .closed) return;
             state.lifetime = .closed;
             state.orphans = null;
@@ -481,8 +455,8 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 state.holding = false;
                 gate.unlockShared();
             }
-            if (spawn.inner().look_after) {
-                spawn.inner().look_after = false;
+            if (spawn.look_after) {
+                spawn.look_after = false;
                 event();
             }
         }
@@ -706,8 +680,8 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // A child of conduit's own that its owner has reaped is no longer a child
         // at all, and its pid may be given to a process this one should adopt.
         var i: usize = 0;
-        while (i < orphans.inner().own.items.len) {
-            const held = orphans.inner().own.items[i];
+        while (i < orphans.own.items.len) {
+            const held = orphans.own.items[i];
             // Keep an existing hold until the kernel proves it was reaped.
             // Unknown ownership only refuses a new claim; it never releases
             // a pidfd that a later successful look may still need.
@@ -716,24 +690,24 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
                 continue;
             }
             held.close();
-            _ = orphans.inner().own.swapRemove(i);
+            _ = orphans.own.swapRemove(i);
         }
         try forEachChild(orphans, consider);
     }
 
     fn consider(orphans: *Orphans, pid: posix.pid_t) LookError!void {
-        for (orphans.inner().own.items) |held| if (held.pid == pid) return;
-        for (orphans.inner().adopted.items) |held| if (held.pid == pid) return;
+        for (orphans.own.items) |held| if (held.pid == pid) return;
+        for (orphans.adopted.items) |held| if (held.pid == pid) return;
         const held = Held.openAdopted(pid) catch |err| switch (err) {
             error.Gone => return,
             else => |e| return e,
         };
-        orphans.inner().adopted.append(orphans.inner().allocator, held) catch {
+        orphans.adopted.append(orphans.allocator, held) catch {
             held.close();
             return error.OutOfMemory;
         };
-        _ = orphans.inner().adoptions.fetchAdd(1, .release);
-        if (orphans.inner().adoption_io) |io| orphans.inner().adoption_event.set(io);
+        _ = orphans.adoptions.fetchAdd(1, .release);
+        if (orphans.adoption_io) |io| orphans.adoption_event.set(io);
     }
 
     /// `start`'s look: every child there is is somebody's.
@@ -742,7 +716,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             error.Gone => return,
             else => |e| return e,
         };
-        orphans.inner().own.append(orphans.inner().allocator, held) catch {
+        orphans.own.append(orphans.allocator, held) catch {
             held.close();
             return error.OutOfMemory;
         };
@@ -751,23 +725,23 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// Reaps every adopted process that has ended. The caller holds `lock`.
     fn reapEnded(orphans: *Orphans) void {
         var i: usize = 0;
-        while (i < orphans.inner().adopted.items.len) {
-            const held = orphans.inner().adopted.items[i];
+        while (i < orphans.adopted.items.len) {
+            const held = orphans.adopted.items[i];
             switch (held.reap()) {
                 .running => i += 1,
                 .reaped, .gone => {
                     held.close();
-                    _ = orphans.inner().adopted.swapRemove(i);
+                    _ = orphans.adopted.swapRemove(i);
                 },
             }
         }
     }
 
     fn releaseAll(orphans: *Orphans) void {
-        for (orphans.inner().own.items) |held| held.close();
-        for (orphans.inner().adopted.items) |held| held.close();
-        orphans.inner().own.clearRetainingCapacity();
-        orphans.inner().adopted.clearRetainingCapacity();
+        for (orphans.own.items) |held| held.close();
+        for (orphans.adopted.items) |held| held.close();
+        orphans.own.clearRetainingCapacity();
+        orphans.adopted.clearRetainingCapacity();
     }
 
     /// Whether the running kernel has what this needs, asked of this process.
@@ -868,10 +842,6 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         }
         if (digits > 0) try each(orphans, number);
     }
-
-    test "Orphans exposes no writable adoption state" {
-        try std.testing.expect(@typeInfo(Orphans) == .@"enum");
-    }
 };
 
 test "orphan records retain a pid and its captured start time" {
@@ -930,10 +900,6 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
 test "orphan records copy group and session from the held adoption" {
     try std.testing.expect(@hasField(Orphans.Record, "group"));
     try std.testing.expect(@hasField(Orphans.Record, "session"));
-}
-
-test "Orphans Spawn exposes no writable adoption gate ownership" {
-    try std.testing.expect(@typeInfo(Orphans.Spawn) == .@"enum");
 }
 
 test "an adoption spawn refuses registration after releasing its gate" {

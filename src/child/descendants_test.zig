@@ -2,7 +2,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Child = @import("../child.zig").Child;
-const State = @import("State.zig");
 const windows = builtin.os.tag == .windows;
 const win32 = @import("../win32.zig");
 const tree = @import("../tree.zig");
@@ -80,7 +79,7 @@ const Fixture = struct {
         try std.testing.expect(daemon.alive());
         if (windows) {
             var member: std.os.windows.BOOL = .FALSE;
-            try std.testing.expect(win32.IsProcessInJob(daemon.handle, State.get(&child).job.?, &member) != .FALSE);
+            try std.testing.expect(win32.IsProcessInJob(daemon.handle, child.state.job.?, &member) != .FALSE);
             try std.testing.expect(member != .FALSE);
         }
         return .{ .child = child, .daemon = daemon, .tmp = tmp };
@@ -138,7 +137,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
         try std.testing.expectEqual(Child.Term{ .exited = if (comptime std.mem.eql(u8, method, "exit-7")) 7 else 0 }, term);
         if (windows) {
             var limits: win32.JobObjectExtendedLimitInformation = undefined;
-            try std.testing.expect(win32.QueryInformationJobObject(State.get(&fixture.child).job.?, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits)), null) != .FALSE);
+            try std.testing.expect(win32.QueryInformationJobObject(fixture.child.state.job.?, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits)), null) != .FALSE);
             try std.testing.expectEqual(@as(u32, 4), limits.BasicLimitInformation.ActiveProcessLimit);
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_active_process != 0);
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_kill_on_job_close == 0);
@@ -202,7 +201,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
                 _ = try fixture.child.killWait(io, 50);
             } else {
                 fixture.child.stdoutFile().?.close(io);
-                State.get(&fixture.child).stdout.?.handle = if (windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
+                fixture.child.state.stdout.?.handle = if (windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
                 defer _ = fixture.child.takeStdout();
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }
@@ -245,7 +244,7 @@ test "containment ends a double-forked session after normal exit" {
 
         if (!windows) {
             const pid = fixture.daemon.held.processId();
-            try std.testing.expect(getpgid(pid) != State.get(&fixture.child).pgid.?);
+            try std.testing.expect(getpgid(pid) != fixture.child.state.pgid.?);
             try std.testing.expect(getsid(pid) != fixture.child.processId().?);
             try std.testing.expect(getsid(pid) != pid);
         }
@@ -253,7 +252,7 @@ test "containment ends a double-forked session after normal exit" {
         // registrations, so this tests retained lineage under any scheduler;
         // immediate parent exit is measured separately below.
         if (builtin.os.tag == .macos) {
-            const tracker = State.get(&fixture.child).lineage.?;
+            const tracker = fixture.child.state.lineage.?;
             const deadline: Deadline = .in(io, budget_ms);
             while (tracker.observed.load(.acquire) < 3 and deadline.remainingMs(io) > 0)
                 try io.sleep(.fromMilliseconds(2), .awake);
@@ -336,7 +335,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     });
     defer unrelated.release(io) catch unreachable;
     defer _ = unrelated.killWait(io, 0) catch {};
-    try std.testing.expect(!State.get(&fixture.child).cgroup.active());
+    try std.testing.expect(!fixture.child.state.cgroup.active());
     const daemon_id = fixture.daemon.held.processId();
     try reaper.start(io);
     fixture.child.closeStdin(io);
@@ -487,7 +486,7 @@ test "dropping a contained child ends and reaps its private supervisor" {
         .descendants = .contain,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    const scope = State.get(&child).id;
+    const scope = child.state.id;
     var status: c_int = 0;
     defer {
         while (std.c.waitpid(scope, &status, 0) < 0 and std.posix.errno(-1) == .INTR) {}
@@ -501,7 +500,7 @@ test "a private supervisor has its own session and process group" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
-    const scope = State.get(&fixture.child).id;
+    const scope = fixture.child.state.id;
     try std.testing.expectEqual(scope, getsid(scope));
     try std.testing.expectEqual(scope, getpgid(scope));
     try std.testing.expect(getsid(scope) != getsid(0));
@@ -518,7 +517,7 @@ test "every catchable supervisor stop ends and reaps its detached adoptee" {
     inline for (.{ std.posix.SIG.HUP, std.posix.SIG.INT, std.posix.SIG.QUIT, std.posix.SIG.TERM, std.posix.SIG.TSTP }) |signal| {
         var fixture = try Fixture.start(.contain, "--race");
         defer fixture.deinit();
-        try std.testing.expectEqual(@as(c_int, 0), std.c.kill(State.get(&fixture.child).id, signal));
+        try std.testing.expectEqual(@as(c_int, 0), std.c.kill(fixture.child.state.id, signal));
         const term = try fixture.child.waitTimeout(io, budget_ms);
         try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term.?);
         try std.testing.expect(!fixture.daemon.alive());
@@ -533,11 +532,11 @@ test "a failed private scope release keeps ownership for retry" {
     const supervisor = @import("../supervisor.zig");
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
-    const scope = State.get(&fixture.child).id;
+    const scope = fixture.child.state.id;
     supervisor.testing_hook.fail_request = true;
     defer supervisor.testing_hook.fail_request = false;
     try std.testing.expectError(error.Unexpected, fixture.release());
-    try std.testing.expectEqual(scope, State.get(&fixture.child).id);
+    try std.testing.expectEqual(scope, fixture.child.state.id);
     try std.testing.expect(fixture.daemon.alive());
     supervisor.testing_hook.fail_request = false;
     try fixture.release();

@@ -14,12 +14,13 @@
 
 const std = @import("std");
 const handles = @import("handles.zig");
-const ChildState = @import("child/State.zig");
 
 pub fn Writer(comptime Child: type) type {
     return struct {
-        pub const InputWriter = enum(usize) {
-            _,
+        pub const InputWriter = struct {
+            /// Private: the queue and its task, allocated by `init` and freed by
+            /// `deinit`.
+            state: *State,
 
             pub const Options = struct {
                 /// Bytes accepted but not yet written, queued and in flight together.
@@ -37,21 +38,21 @@ pub fn Writer(comptime Child: type) type {
             /// A terminal has no separate input to close and is `error.NoStdinPipe`.
             /// Do not use an earlier copy of the pipe after this succeeds.
             pub fn init(allocator: std.mem.Allocator, io: std.Io, child: *Child, options: Options) StartError!InputWriter {
-                const child_state = ChildState.get(child);
+                const child_state = child.state;
                 const file = child_state.stdin orelse return error.NoStdinPipe;
                 const state = try allocator.create(State);
                 errdefer allocator.destroy(state);
                 state.* = .{ .allocator = allocator, .file = file, .max_backlog = options.max_backlog };
                 try state.group.concurrent(io, State.run, .{ state, io });
-                ChildState.get(child).stdin = null;
-                return @enumFromInt(@intFromPtr(state)); // safe: the owner retains this allocated State until deinit.
+                child.state.stdin = null;
+                return .{ .state = state };
             }
 
             /// Whether input is still accepted, regardless of available backlog space.
             /// An uncancelable snapshot; end, cancellation or failure makes it false.
             /// A later queue call still checks its own acceptance and may fail.
             pub fn isOpen(writer: *const InputWriter, io: std.Io) bool {
-                const state = writer.get();
+                const state = writer.state;
                 state.mutex.lockUncancelable(io);
                 defer state.mutex.unlock(io);
                 return !state.ending and state.failed == null;
@@ -63,7 +64,7 @@ pub fn Writer(comptime Child: type) type {
             /// pipe write. `BacklogFull` is a refusal, not a wait or a partial enqueue.
             /// After a write failure, every call returns that same error.
             pub fn queue(writer: *InputWriter, io: std.Io, bytes: []const u8) QueueError!void {
-                const state = writer.get();
+                const state = writer.state;
                 try state.mutex.lock(io);
                 defer state.mutex.unlock(io);
                 if (state.failed) |err| return err;
@@ -84,7 +85,7 @@ pub fn Writer(comptime Child: type) type {
             /// already queued. Returns at once, and is idempotent. A retained failure is
             /// returned instead. `wait` observes the eventual closure or failure.
             pub fn end(writer: *InputWriter, io: std.Io) WriteError!void {
-                const state = writer.get();
+                const state = writer.state;
                 state.mutex.lockUncancelable(io);
                 defer state.mutex.unlock(io);
                 if (state.failed) |err| return err;
@@ -96,7 +97,7 @@ pub fn Writer(comptime Child: type) type {
             /// `Canceled` if delivery was abandoned. It does not request an end itself.
             /// Canceling a waiting caller leaves delivery running for the other callers.
             pub fn wait(writer: *InputWriter, io: std.Io) WriteError!void {
-                const state = writer.get();
+                const state = writer.state;
                 try state.closed.wait(io);
                 state.mutex.lockUncancelable(io);
                 defer state.mutex.unlock(io);
@@ -108,7 +109,7 @@ pub fn Writer(comptime Child: type) type {
             /// an earlier write failure, or successful closure, stays final. Idempotent.
             /// Only one caller may cancel at a time; queue, end and wait may run alongside.
             pub fn cancel(writer: *InputWriter, io: std.Io) void {
-                const state = writer.get();
+                const state = writer.state;
                 state.mutex.lockUncancelable(io);
                 if (!state.finished and state.failed == null) state.failed = error.Canceled;
                 state.mutex.unlock(io);
@@ -120,13 +121,9 @@ pub fn Writer(comptime Child: type) type {
             /// `cancel` is the call that can be made more than once.
             pub fn deinit(writer: *InputWriter, io: std.Io) void {
                 writer.cancel(io);
-                const state = writer.get();
+                const state = writer.state;
                 state.allocator.destroy(state);
                 writer.* = undefined;
-            }
-
-            fn get(writer: *const InputWriter) *State {
-                return @ptrFromInt(@intFromEnum(writer.*)); // safe: init allocated a State; deinit alone destroys it.
             }
         };
     };
@@ -220,7 +217,7 @@ const State = struct {
 
 /// A writer over a `Child` that is never spawned: what the tests below need
 /// is the queue, not the pipe.
-const TestWriter = Writer(enum(usize) { _ }).InputWriter;
+const TestWriter = Writer(struct {}).InputWriter;
 
 test "InputWriter isOpen takes a contended mutex without cancellation" {
     const Backend = struct {
@@ -238,7 +235,7 @@ test "InputWriter isOpen takes a contended mutex without cancellation" {
         fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
     };
     var state: State = .{ .allocator = std.testing.allocator, .file = undefined, .max_backlog = 0 };
-    var writer: TestWriter = @enumFromInt(@intFromPtr(&state)); // safe: this synthetic writer borrows the State for this test only.
+    var writer: TestWriter = .{ .state = &state };
     var backend: Backend = .{ .mutex = &state.mutex };
     var vtable = std.testing.io.vtable.*;
     vtable.futexWait = Backend.canceled;

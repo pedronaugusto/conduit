@@ -28,42 +28,29 @@ const win32 = @import("win32.zig");
 /// this package declines to run rather than one it truncates.
 const max_program_units = 1024;
 
-/// A shell running on a pseudo-terminal, and the pair it runs on.
-const ShellState = struct { pty: Pty, child: Child };
-
-pub const Shell = enum(@Int(.unsigned, @sizeOf(ShellState) * 8)) {
-    _,
-
-    // The state lives in the value's own bits and `inner` casts to it: the
-    // bits must hold it and be at least as aligned.
-    comptime {
-        std.debug.assert(@sizeOf(Shell) >= @sizeOf(ShellState));
-        std.debug.assert(@alignOf(Shell) >= @alignOf(ShellState));
-    }
+pub const Shell = struct {
+    // Fields are private: read and change them only through the methods.
+    pair: Pty,
+    process: Child,
 
     /// What `spawnShell` fails with: the pair, the spawn, or the environment.
     pub const SpawnError = Pty.OpenError || Child.SpawnError || environ.InheritError;
-    fn inner(shell: *Shell) *ShellState {
-        return @ptrCast(@alignCast(shell)); // safe: spawnShell initializes inline storage with this size and alignment.
-    }
     fn init(pair: Pty, process: Child) Shell {
-        var shell: Shell = undefined;
-        shell.inner().* = .{ .pty = pair, .child = process };
-        return shell;
+        return .{ .pair = pair, .process = process };
     }
     /// Borrows the shell process; it lives until Shell.deinit.
     pub fn child(shell: *Shell) *Child {
-        return &shell.inner().child;
+        return &shell.process;
     }
     /// Borrows the pair; it lives until Shell.deinit.
     pub fn pty(shell: *Shell) *Pty {
-        return &shell.inner().pty;
+        return &shell.pair;
     }
     /// Reap the child first, then close the pair and resources. The Shell is
     /// undefined afterwards.
     pub fn deinit(shell: *Shell, io: std.Io) void {
-        shell.inner().child.deinit(io);
-        shell.inner().pty.close(io);
+        shell.process.deinit(io);
+        shell.pair.close(io);
         shell.* = undefined;
     }
 };
@@ -238,8 +225,4 @@ test "default shell calls retain independent values" {
         first[0] +%= 1;
         try std.testing.expectEqual(second_first, second[0]);
     }
-}
-
-test "Shell exposes no writable child or pair ownership" {
-    try std.testing.expect(@typeInfo(Shell) == .@"enum");
 }

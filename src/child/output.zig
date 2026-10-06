@@ -16,45 +16,29 @@ pub const Parts = struct {
 };
 
 /// Owns collected bytes; move before sharing and never copy an owner.
-pub const Output = enum(@Int(.unsigned, @sizeOf(Parts) * 8)) {
-    _,
-
-    // The state lives in the value's own bits and `inner` casts to it: the
-    // bits must hold it and be at least as aligned.
-    comptime {
-        std.debug.assert(@sizeOf(Output) >= @sizeOf(Parts));
-        std.debug.assert(@alignOf(Output) >= @alignOf(Parts));
-    }
-
-    fn inner(collected: *Output) *Parts {
-        return @ptrCast(@alignCast(collected)); // safe: init writes inline storage of the same size and alignment.
-    }
-
-    fn value(collected: *const Output) *const Parts {
-        return @ptrCast(@alignCast(collected)); // safe: borrows initialized inline state without copying ownership.
-    }
+pub const Output = struct {
+    /// Private: read it through the methods.
+    parts: Parts,
 
     /// Takes ownership of both slices, which `deinit` frees with the
     /// allocator that made them.
     pub fn init(parts: Parts) Output {
-        var collected: Output = undefined;
-        collected.inner().* = parts;
-        return collected;
+        return .{ .parts = parts };
     }
 
     /// Borrows retained standard output until transfer or deinit.
     pub fn stdout(collected: *const Output) []u8 {
-        return collected.value().stdout;
+        return collected.parts.stdout;
     }
 
     /// Borrows retained standard error until transfer or deinit.
     pub fn stderr(collected: *const Output) []u8 {
-        return collected.value().stderr;
+        return collected.parts.stderr;
     }
 
     /// Transfers retained output bytes. The caller frees them with the collecting allocator.
     pub fn takeStdout(collected: *Output) []u8 {
-        const state = collected.inner();
+        const state = &collected.parts;
         const taken = state.stdout;
         state.stdout = &.{};
         return taken;
@@ -62,7 +46,7 @@ pub const Output = enum(@Int(.unsigned, @sizeOf(Parts) * 8)) {
 
     /// Transfers retained error bytes. The caller frees them with the collecting allocator.
     pub fn takeStderr(collected: *Output) []u8 {
-        const state = collected.inner();
+        const state = &collected.parts;
         const taken = state.stderr;
         state.stderr = &.{};
         return taken;
@@ -70,36 +54,32 @@ pub const Output = enum(@Int(.unsigned, @sizeOf(Parts) * 8)) {
 
     /// Whether bytes were dropped or the stream outlived the drain budget.
     pub fn stdoutTruncated(collected: *const Output) bool {
-        return collected.value().stdout_truncated;
+        return collected.parts.stdout_truncated;
     }
 
     pub fn stderrTruncated(collected: *const Output) bool {
-        return collected.value().stderr_truncated;
+        return collected.parts.stderr_truncated;
     }
 
     /// How the child ended.
     pub fn term(collected: *const Output) contract.Term {
-        return collected.value().term;
+        return collected.parts.term;
     }
 
     /// Whether the child was ended after its execution budget elapsed.
     pub fn timedOut(collected: *const Output) bool {
-        return collected.value().timed_out;
+        return collected.parts.timed_out;
     }
 
     /// Frees what is still retained with the collecting allocator. The
     /// `Output` is undefined afterwards.
     pub fn deinit(collected: *Output, allocator: Allocator) void {
-        const state = collected.inner();
+        const state = &collected.parts;
         allocator.free(state.stdout);
         allocator.free(state.stderr);
         collected.* = undefined;
     }
 };
-
-test "Output exposes no writable collection ownership" {
-    try std.testing.expect(@typeInfo(Output) == .@"enum");
-}
 
 test "Output frees what was not taken and hands over what was" {
     const allocator = std.testing.allocator;

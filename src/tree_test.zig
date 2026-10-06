@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const State = @import("child/State.zig");
 const access = @import("tree.zig").test_access;
 const Deadline = access.Deadline;
 const wait_for = access.wait_for;
@@ -81,10 +80,10 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     // A listed descendant could have been reaped and its pid reused before
     // capture. Retain a live witness in that snapshot: its stable identity
     // alone proves nothing about its relation to the root.
-    access.snapshot(State.get(&witness).id);
+    access.snapshot(witness.state.id);
     defer access.snapshot(null);
-    try testing.expectEqual(@as(usize, 0), try signalDescendants(State.get(&root).id, .CONT, null));
-    var captured = access.capture(State.get(&root).id).?;
+    try testing.expectEqual(@as(usize, 0), try signalDescendants(root.state.id, .CONT, null));
+    var captured = access.capture(root.state.id).?;
     defer captured.deinit();
     try testing.expectEqual(@as(usize, 0), try captured.signalDescendants(.CONT, null));
 }
@@ -103,11 +102,11 @@ test "a group member held before KILL is accounted for while still visible" {
     var buffer: [32]u8 = undefined;
     var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
-    const since = (try startTime(State.get(&child).id)).?;
+    const since = (try startTime(child.state.id)).?;
     const descendant_start = (try startTime(descendant)).?;
-    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(State.get(&child).id, State.get(&child).id, since, @enumFromInt(0), &.{}));
-    try testing.expectEqual(@as(usize, 0), try signalGroupSinceImpl(State.get(&child).id, State.get(&child).id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start }}));
-    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(State.get(&child).id, State.get(&child).id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start +% 1 }}));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.state.id, child.state.id, since, @enumFromInt(0), &.{}));
+    try testing.expectEqual(@as(usize, 0), try signalGroupSinceImpl(child.state.id, child.state.id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start }}));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.state.id, child.state.id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start +% 1 }}));
 }
 
 test "the descendants of this process include a child it just started" {
@@ -138,7 +137,7 @@ test "the descendants of this process include a child it just started" {
     }
     try collect(allocator, c.getpid(), null, &found);
     for (found.items) |process| {
-        if (process.pid == State.get(&child).id) return;
+        if (process.pid == child.state.id) return;
     }
     return error.TestChildWasNotFound;
 }
@@ -161,16 +160,16 @@ test "a group is empty but for its leader once what the leader started has ended
     });
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
-    const pgid = State.get(&child).pgid.?;
+    const pgid = child.state.pgid.?;
 
     var deadline: Deadline = .in(testing.io, 5000);
-    while (members(pgid, State.get(&child).id) != .others) {
+    while (members(pgid, child.state.id) != .others) {
         if (deadline.remainingMs(testing.io) == 0) return error.TestMemberNotSeen;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
     child.closeStdin(testing.io);
     deadline = .in(testing.io, 5000);
-    while (members(pgid, State.get(&child).id) != .none) {
+    while (members(pgid, child.state.id) != .none) {
         if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
@@ -187,7 +186,7 @@ test "a Linux process with a child of its own is said to have one, and one witho
     });
     defer leaf.deinit(testing.io);
     defer _ = leaf.killWait(testing.io, 0) catch {};
-    try testing.expect(!hasChildren(State.get(&leaf).id));
+    try testing.expect(!hasChildren(leaf.state.id));
 
     // The `;` keeps the shell from replacing itself with `sleep`.
     var parent = try Child.spawn(testing.allocator, testing.io, .{
@@ -197,7 +196,7 @@ test "a Linux process with a child of its own is said to have one, and one witho
     defer parent.deinit(testing.io);
     defer _ = parent.killWait(testing.io, 0) catch {};
     const deadline: Deadline = .in(testing.io, 5000);
-    while (!hasChildren(State.get(&parent).id)) {
+    while (!hasChildren(parent.state.id)) {
         if (deadline.remainingMs(testing.io) == 0) return error.TestChildNotSeen;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
@@ -221,7 +220,7 @@ test "a process's start time is its own: the same while it runs, gone once it is
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(testing.io);
-    const pid = State.get(&child).id;
+    const pid = child.state.id;
     const started = (try startTime(pid)).?;
     try std.testing.expectEqual(started, (try startTime(pid)).?);
     // a process started after this one did not start before it
@@ -245,15 +244,15 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     });
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
-    const started = (try startTime(State.get(&child).id)).?;
-    try testing.expect((try captureStarted(State.get(&child).id, started + 1)) == null);
-    try testing.expect((try captureStarted(State.get(&child).id, started -% 1)) == null);
-    var captured = (try captureStarted(State.get(&child).id, started)).?;
+    const started = (try startTime(child.state.id)).?;
+    try testing.expect((try captureStarted(child.state.id, started + 1)) == null);
+    try testing.expect((try captureStarted(child.state.id, started -% 1)) == null);
+    var captured = (try captureStarted(child.state.id, started)).?;
     defer captured.deinit();
-    try testing.expectEqual(State.get(&child).id, captured.processId());
+    try testing.expectEqual(child.state.id, captured.processId());
     try testing.expect(captured.alive());
     if (builtin.os.tag == .macos) {
-        try testing.expectError(error.Unsupported, captured.signalGroupSince(State.get(&child).id, started, .CONT));
+        try testing.expectError(error.Unsupported, captured.signalGroupSince(child.state.id, started, .CONT));
     }
     // A signal the shell's default action ignores, sent through the capture.
     try testing.expect(captured.signal(.CONT));
@@ -263,7 +262,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     // Ended and reaped: the capture reaches nothing, whoever has the number.
     try testing.expect(!captured.alive());
     try testing.expect(!captured.signal(.CONT));
-    try testing.expect((try captureStarted(State.get(&child).id, started)) == null);
+    try testing.expect((try captureStarted(child.state.id, started)) == null);
 }
 
 test "a captured pid wait expires while it runs and wakes when it ends" {
@@ -279,8 +278,8 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
     });
     defer child.deinit(testing.io);
     defer _ = child.killWait(testing.io, 0) catch {};
-    const since = (try startTime(State.get(&child).id)).?;
-    var captured = (try captureStarted(State.get(&child).id, since)).?;
+    const since = (try startTime(child.state.id)).?;
+    var captured = (try captureStarted(child.state.id, since)).?;
     defer captured.deinit();
     if (try captured.wait(testing.io, 20)) return error.TestCapturedWaitEndedTooSoon;
     try testing.expect(captured.signal(.TERM));
@@ -304,19 +303,19 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     var buffer: [32]u8 = undefined;
     var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
-    const since = (try startTime(State.get(&child).id)).?;
+    const since = (try startTime(child.state.id)).?;
     var stage: []const u8 = "rejecting a mismatched start time";
     errdefer |err| std.debug.print("recorded tree: {s} failed with {s}; root {d} start {?d}, descendant {d} start {?d}\n", .{
-        stage,      @errorName(err),                  State.get(&child).id, startTime(State.get(&child).id) catch null,
+        stage,      @errorName(err),                  child.state.id, startTime(child.state.id) catch null,
         descendant, startTime(descendant) catch null,
     });
     var captured = (try captureStarted(descendant, (try startTime(descendant)).?)).?;
     defer captured.deinit();
     defer _ = captured.signal(.KILL);
-    try testing.expect(!try endRecorded(testing.io, .{ .pid = State.get(&child).id, .start = since +% 1, .grace_ms = 20 }));
-    try testing.expect((try startTime(State.get(&child).id)) != null);
+    try testing.expect(!try endRecorded(testing.io, .{ .pid = child.state.id, .start = since +% 1, .grace_ms = 20 }));
+    try testing.expect((try startTime(child.state.id)) != null);
     stage = "ending the recorded tree";
-    try testing.expect(try endRecorded(testing.io, .{ .pid = State.get(&child).id, .start = since, .grace_ms = 20 }));
+    try testing.expect(try endRecorded(testing.io, .{ .pid = child.state.id, .start = since, .grace_ms = 20 }));
     stage = "observing the descendant's exit";
     // Cleanup proves delivery of KILL, which may precede observable exit.
     // Keep the same 20 ms budget when waiting on the held identity.
@@ -363,21 +362,21 @@ test "a leaderless Linux group keeps the child its leader started" {
     });
     defer leader.deinit(testing.io);
     defer _ = leader.killWait(testing.io, 0) catch {};
-    const group = State.get(&leader).pgid.?;
-    const since = (try startTime(State.get(&leader).id)).?;
-    var captured = (try captureStarted(State.get(&leader).id, since)).?;
+    const group = leader.state.pgid.?;
+    const since = (try startTime(leader.state.id)).?;
+    var captured = (try captureStarted(leader.state.id, since)).?;
     defer captured.deinit();
     var buffer: [32]u8 = undefined;
     var output = leader.stdoutFile().?.reader(testing.io, &buffer);
     const member = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     try testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(group, since, .CONT));
     errdefer {
-        if (members(group, State.get(&leader).id) == .others) _ = c.kill(-group, .KILL);
+        if (members(group, leader.state.id) == .others) _ = c.kill(-group, .KILL);
     }
     leader.closeStdin(testing.io);
     _ = try leader.wait(testing.io);
-    try testing.expectEqual(Members.others, members(group, State.get(&leader).id));
-    try testing.expectEqual(@as(usize, 1), try signalGroupSince(group, State.get(&leader).id, since, .KILL));
+    try testing.expectEqual(Members.others, members(group, leader.state.id));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSince(group, leader.state.id, since, .KILL));
     const deadline: Deadline = .in(testing.io, 3000);
     while ((try startTime(member)) != null) {
         if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
@@ -475,7 +474,7 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
     });
     defer child.release(std.testing.io) catch unreachable;
     defer _ = child.killWait(std.testing.io, 0) catch {};
-    const held = DarwinProcess.capture(State.get(&child).id).?;
+    const held = DarwinProcess.capture(child.state.id).?;
     var parent = DarwinProcess.capture(c.getpid()).?;
     try std.testing.expect(held.childOf(&parent));
     parent.unique_id +%= 1;

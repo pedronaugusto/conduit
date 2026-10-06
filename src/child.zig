@@ -59,9 +59,11 @@ const child_output = @import("child/output.zig");
 const child_posix = @import("child/posix.zig");
 const child_windows = @import("child/windows.zig");
 
-/// Owns the lifecycle and created pipes. Move before sharing; never copy an owner.
-pub const Child = enum(usize) {
-    _,
+/// Owns the lifecycle and created pipes. A handle: copies name the same
+/// child, and exactly one of them is released or deinited.
+pub const Child = struct {
+    /// Private: the lifecycle, allocated by `spawn` and freed by `deinit`.
+    state: *State,
 
     /// A numeric process id on either platform, never a Windows handle.
     pub const Id = contract.Id;
@@ -285,11 +287,11 @@ pub const Child = enum(usize) {
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
         state.allocator = allocator;
-        if (is_windows) return State.owner(Child, try child_windows.spawn(allocator, io, configured, state));
+        if (is_windows) return .{ .state = try child_windows.spawn(allocator, io, configured, state) };
         // A job object is what these bound, and POSIX has no such container.
         // `resource_limits` is the option that exists here.
         if (options.job_limits.any()) return error.Unsupported;
-        return State.owner(Child, try child_posix.spawn(allocator, io, configured, state));
+        return .{ .state = try child_posix.spawn(allocator, io, configured, state) };
     }
 
     pub const ReleaseError = contract.ReleaseError;
@@ -301,7 +303,7 @@ pub const Child = enum(usize) {
     /// survival-policy child is simply deinited. Join every task borrowing
     /// this Child before releasing it.
     pub fn release(child: *Child, io: std.Io) ReleaseError!void {
-        const state = State.get(child);
+        const state = child.state;
         if (state.descendants == .contain and !state.scope_complete) {
             _ = try child.killWait(io, 0);
         }
@@ -316,7 +318,7 @@ pub const Child = enum(usize) {
     /// cgroups with surviving members remain until empty and a later cleanup
     /// removes them.
     pub fn deinit(child: *Child, io: std.Io) void {
-        const state = State.get(child);
+        const state = child.state;
         std.debug.assert(state.descendants != .contain or state.scope_complete);
         if (state.stdin) |f| f.close(io);
         if (state.stdout) |f| f.close(io);
@@ -351,7 +353,7 @@ pub const Child = enum(usize) {
     ///
     /// Idempotent, and safe after the child has been reaped.
     pub fn closeStdin(child: *Child, io: std.Io) void {
-        const state = State.get(child);
+        const state = child.state;
         const f = state.stdin orelse return;
         state.stdin = null;
         f.close(io);
@@ -370,7 +372,7 @@ pub const Child = enum(usize) {
     /// This is a snapshot, not authority to signal: only kill holds the identity
     /// through delivery. A process that ended but is not reaped still has an id.
     pub fn processId(child: *const Child) ?Id {
-        const state = State.get(child);
+        const state = child.state;
         spin.lock(&state.identity);
         defer state.identity.unlock();
         if (state.reaped.load(.acquire) or state.identity_retired) return null;
@@ -395,7 +397,7 @@ pub const Child = enum(usize) {
     /// Save processId and this record before starting a Reaper. Retain the saved
     /// id as the ledger key through retirement; it is not permission to signal.
     pub fn containment(child: *const Child, buffer: []u8) ContainmentError!Containment {
-        const state = State.get(child);
+        const state = child.state;
         var record: Containment = .{ .group = state.pgid };
         if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| {
             record.supervisor = owner.record;
@@ -412,7 +414,7 @@ pub const Child = enum(usize) {
     /// The published answer without asking the OS to reap. Safe alongside a wait
     /// or Reaper: null before publication, or ReapedElsewhere after status loss.
     pub fn result(child: *const Child) TryWaitError!?Term {
-        const state = State.get(child);
+        const state = child.state;
         spin.lock(&state.identity);
         defer state.identity.unlock();
         if (child.settled()) |term| return term;
@@ -475,31 +477,31 @@ pub const Child = enum(usize) {
     /// The acquire load pairs with the release store in `publish`, so a caller
     /// that sees a term sees every field the reaper wrote before it.
     fn settled(child: *const Child) ?Term {
-        if (!State.get(child).reaped.load(.acquire)) return null;
+        if (!child.state.reaped.load(.acquire)) return null;
         // Published only after it was written.
-        std.debug.assert(State.get(child).term != null);
-        return State.get(child).term;
+        std.debug.assert(child.state.term != null);
+        return child.state.term;
     }
 
     /// Records how the child ended and lets everyone else read it.
     fn publish(child: *Child, term: Term) void {
         // One reap, so one term: whoever publishes holds the identity, and a
         // second reap would be of a process this child no longer names.
-        std.debug.assert(!State.get(child).reaped.load(.monotonic));
-        std.debug.assert(State.get(child).term == null);
-        State.get(child).term = term;
-        State.get(child).reaped.store(true, .release);
+        std.debug.assert(!child.state.reaped.load(.monotonic));
+        std.debug.assert(child.state.term == null);
+        child.state.term = term;
+        child.state.reaped.store(true, .release);
     }
 
     /// Takes the right to be inside the operating system's wait for this child.
     fn claimReap(child: *Child) bool {
-        return State.get(child).reaping.cmpxchgStrong(false, true, .acquire, .monotonic) == null;
+        return child.state.reaping.cmpxchgStrong(false, true, .acquire, .monotonic) == null;
     }
 
     fn releaseReap(child: *Child) void {
         // Only the task that claimed the reap gives it back.
-        std.debug.assert(State.get(child).reaping.load(.monotonic));
-        State.get(child).reaping.store(false, .release);
+        std.debug.assert(child.state.reaping.load(.monotonic));
+        child.state.reaping.store(false, .release);
     }
 
     /// Takes the right to reap the child, for a caller that waits for the child's
@@ -512,29 +514,11 @@ pub const Child = enum(usize) {
     /// the term the holder publishes.
     pub fn holdReap(child: *Child) ?HeldReap {
         if (!child.claimReap()) return null;
-        return @enumFromInt(@intFromPtr(child)); // safe: the claimed guard borrows this Child until release.
+        return .{ .child = child.* };
     }
 
     /// The right to reap a child, held until `release`, including after `wait`.
-    /// Release exactly once and do not copy it. Its Child must outlive the guard.
-    pub const HeldReap = enum(usize) {
-        _,
-
-        fn owner(held: HeldReap) *Child {
-            return @ptrFromInt(@intFromEnum(held)); // safe: holdReap retains the borrowed Child until release.
-        }
-
-        /// Blocks until the child ends, reaps it and publishes the term — or
-        /// answers from the one already published.
-        pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {
-            return held.owner().waitClaimed(io);
-        }
-
-        /// Gives the right back, whether or not the child was reaped.
-        pub fn release(held: Child.HeldReap) void {
-            held.owner().releaseReap();
-        }
-    };
+    pub const HeldReap = ReapHold;
 
     pub const WaitTimeoutError = contract.WaitTimeoutError;
 
@@ -594,7 +578,7 @@ pub const Child = enum(usize) {
                 if (left == 0) break;
                 // A blocking wait on a handle is not a cancelation point, so it is
                 // spent in slices and cancelation is asked about between them.
-                switch (win32.WaitForSingleObject(State.get(child).id, @min(left, windows_slice_ms))) {
+                switch (win32.WaitForSingleObject(child.state.id, @min(left, windows_slice_ms))) {
                     win32.wait_timeout => {},
                     win32.wait_object_0 => return child.reapEnded(io, deadline),
                     // Ended, or a handle that cannot be waited on: either way the
@@ -612,12 +596,12 @@ pub const Child = enum(usize) {
                 while (true) {
                     const left = deadline.remainingMs(io);
                     if (left == 0) return child.tryWaitClaimed();
-                    const ended = State.get(child).forks.ended(@min(left, wait_for.slice_ms)) orelse break;
+                    const ended = child.state.forks.ended(@min(left, wait_for.slice_ms)) orelse break;
                     if (ended) return child.reapEnded(io, deadline);
                     try std.Io.checkCancel(io);
                 }
             }
-            if (wait_for.Watch.open(State.get(child).id)) |watch| {
+            if (wait_for.Watch.open(child.state.id)) |watch| {
                 defer watch.close();
                 while (true) {
                     const left = deadline.remainingMs(io);
@@ -668,12 +652,12 @@ pub const Child = enum(usize) {
             fn beforeWatch(owner: *Child) void {
                 owner.closeStdin(testing.io);
                 const until: Deadline = .in(testing.io, 5000);
-                while (wait_for.endedUnreaped(State.get(owner).id) == .running) {
+                while (wait_for.endedUnreaped(owner.state.id) == .running) {
                     if (until.remainingMs(testing.io) == 0) @panic("fixture did not exit");
                     spin.yield();
                 }
                 // A fork check may consume NOTE_EXIT before the waiter runs.
-                _ = State.get(owner).forks.any();
+                _ = owner.state.forks.any();
             }
             fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
                 return error.Canceled;
@@ -685,9 +669,9 @@ pub const Child = enum(usize) {
         before_exit_watch = Exit.beforeWatch;
         defer before_exit_watch = null;
         // A termination request still owns the final group force before reap.
-        State.get(&child).end_descendants = true;
+        child.state.end_descendants = true;
         _ = try child.wait(no_sleep);
-        try testing.expect(State.get(&child).scope_complete);
+        try testing.expect(child.state.scope_complete);
     }
 
     test "a child that never forked needs no final group enumeration" {
@@ -705,7 +689,7 @@ pub const Child = enum(usize) {
         try child.kill(.kill);
         _ = try child.wait(io);
         try std.testing.expectEqual(before, tree.testing_hook.group_forces.load(.acquire));
-        try std.testing.expect(State.get(&child).scope_complete);
+        try std.testing.expect(child.state.scope_complete);
     }
 
     /// Waits for whoever holds the reap to publish a term, until `deadline`.
@@ -754,56 +738,56 @@ pub const Child = enum(usize) {
     /// `tryWait` for a caller that already holds the reap.
     fn tryWaitClaimed(child: *Child) TryWaitError!?Term {
         // tryWait must stay nonblocking even while a signaller walks a tree.
-        if (!State.get(child).identity.tryLock()) return null;
+        if (!child.state.identity.tryLock()) return null;
         var published = false;
         defer {
-            State.get(child).identity.unlock();
+            child.state.identity.unlock();
             // Adoption belongs to Orphans, after retirement has let go of the
             // identity. Its process-table look must not hold off signalling.
             if (builtin.os.tag == .linux and published) orphans.event();
         }
         if (child.settled()) |term| return term;
-        if (State.get(child).identity_retired) return error.ReapedElsewhere;
+        if (child.state.identity_retired) return error.ReapedElsewhere;
         if (is_windows) {
             const term = try child.tryWaitWindows();
             published = term != null;
             return term;
         }
 
-        const supervised = if (builtin.os.tag == .linux) State.get(child).supervisor != null else false;
-        if (!supervised and (State.get(child).force_tree or State.get(child).end_descendants or State.get(child).descendants == .contain)) {
+        const supervised = if (builtin.os.tag == .linux) child.state.supervisor != null else false;
+        if (!supervised and (child.state.force_tree or child.state.end_descendants or child.state.descendants == .contain)) {
             // Normal containment and every termination request share this
             // final force. Once waitid observes the root ended, its last fork
             // has finished and its group id is still ours until waitpid.
-            switch (wait_for.endedUnreaped(State.get(child).id)) {
+            switch (wait_for.endedUnreaped(child.state.id)) {
                 .running => return null,
                 .ended => {
-                    if (State.get(child).lineage) |tracker| if (!tracker.finish()) return null;
-                    const contained = &State.get(child).cgroup;
+                    if (child.state.lineage) |tracker| if (!tracker.finish()) return null;
+                    const contained = &child.state.cgroup;
                     if (!contained.active() or !contained.kill()) {
                         // Once this root has ended, a watch that saw no fork
                         // proves its private session never had another member.
-                        const could_have_members = if (tree.Forks.supported) State.get(child).forks.any() else true;
-                        if (could_have_members) if (State.get(child).pgid) |pgid| tree.forceHeldGroup(pgid, State.get(child).id);
+                        const could_have_members = if (tree.Forks.supported) child.state.forks.any() else true;
+                        if (could_have_members) if (child.state.pgid) |pgid| tree.forceHeldGroup(pgid, child.state.id);
                     }
-                    State.get(child).force_tree = false;
+                    child.state.force_tree = false;
                 },
                 .unknown => {},
             }
         }
         var status: c_int = undefined;
         while (true) {
-            const rc = c.waitpid(State.get(child).id, &status, c.W.NOHANG);
+            const rc = c.waitpid(child.state.id, &status, c.W.NOHANG);
             if (rc == 0) return null;
             if (rc > 0) {
-                const root_status = if (builtin.os.tag == .linux) if (State.get(child).supervisor) |owner| owner.result() catch |err| {
-                    State.get(child).identity_retired = true;
+                const root_status = if (builtin.os.tag == .linux) if (child.state.supervisor) |owner| owner.result() catch |err| {
+                    child.state.identity_retired = true;
                     return err;
                 } else @as(u32, @bitCast(status)) else @as(u32, @bitCast(status));
-                State.get(child).scope_complete = true;
+                child.state.scope_complete = true;
                 const term = statusToTerm(root_status);
-                if (State.get(child).lineage) |tracker| if (tracker.failedTracking()) {
-                    State.get(child).identity_retired = true;
+                if (child.state.lineage) |tracker| if (tracker.failedTracking()) {
+                    child.state.identity_retired = true;
                     published = true;
                     return error.Unexpected;
                 };
@@ -814,7 +798,7 @@ pub const Child = enum(usize) {
             switch (c.errno(rc)) {
                 .INTR => continue,
                 .CHILD => {
-                    State.get(child).identity_retired = true;
+                    child.state.identity_retired = true;
                     return error.ReapedElsewhere;
                 },
                 else => |err| return posix.unexpectedErrno(err),
@@ -928,24 +912,24 @@ pub const Child = enum(usize) {
     pub fn kill(child: *Child, signal: Signal) KillError!void {
         // Never wait for an exit here. Whoever holds identity is only delivering
         // a signal or doing the final nonblocking reap, not waiting on the child.
-        spin.lock(&State.get(child).identity);
-        defer State.get(child).identity.unlock();
-        if (child.settled() != null or State.get(child).identity_retired) return;
+        spin.lock(&child.state.identity);
+        defer child.state.identity.unlock();
+        if (child.settled() != null or child.state.identity_retired) return;
         if (!signal.valid()) return error.Unsupported;
-        if (signal.ends()) State.get(child).end_descendants = true;
+        if (signal.ends()) child.state.end_descendants = true;
         if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
         if (is_windows) return child.killWindows(signal);
         const sig = signal.toPosix();
 
-        if (comptime builtin.os.tag == .linux) if (State.get(child).supervisor) |owner| {
-            if (sig == .KILL and State.get(child).cgroup.active()) _ = State.get(child).cgroup.kill();
+        if (comptime builtin.os.tag == .linux) if (child.state.supervisor) |owner| {
+            if (sig == .KILL and child.state.cgroup.active()) _ = child.state.cgroup.kill();
             var cgroup_signalled = false;
-            if (sig != .KILL and State.get(child).cgroup.active())
-                cgroup_signalled = (try State.get(child).cgroup.signalMembers(sig, State.get(child).process_id, State.get(child).pgid)) != null;
+            if (sig != .KILL and child.state.cgroup.active())
+                cgroup_signalled = (try child.state.cgroup.signalMembers(sig, child.state.process_id, child.state.pgid)) != null;
             return owner.request(sig, cgroup_signalled);
         };
-        if (sig == .KILL) State.get(child).force_tree = true;
-        const target: posix.pid_t = if (State.get(child).pgid) |pgid| -pgid else State.get(child).id;
+        if (sig == .KILL) child.state.force_tree = true;
+        const target: posix.pid_t = if (child.state.pgid) |pgid| -pgid else child.state.id;
 
         // A child in a cgroup of its own: the cgroup is the tree, whatever the
         // processes in it have done with their groups, sessions and parents.
@@ -953,11 +937,11 @@ pub const Child = enum(usize) {
         // anything else goes to each member not in the group, then to the group
         // or the child, so none of them is asked twice. A cgroup the kernel will
         // not act on leaves the child to the walk below.
-        if (State.get(child).cgroup.active()) contained: {
+        if (child.state.cgroup.active()) contained: {
             if (sig == .KILL) {
-                if (!State.get(child).cgroup.kill()) break :contained;
+                if (!child.state.cgroup.kill()) break :contained;
             } else {
-                _ = (try State.get(child).cgroup.signalMembers(sig, State.get(child).id, State.get(child).pgid)) orelse break :contained;
+                _ = (try child.state.cgroup.signalMembers(sig, child.state.id, child.state.pgid)) orelse break :contained;
             }
             return child.signalTarget(target, sig);
         }
@@ -981,7 +965,7 @@ pub const Child = enum(usize) {
         // it, so the ordinary tree gets the one signal it always did.
         // A walk that cannot hold the tree still leaves the child and its group
         // to be signalled; the incomplete pass is reported after that.
-        const walked = tree.signalDescendants(State.get(child).id, sig, State.get(child).pgid);
+        const walked = tree.signalDescendants(child.state.id, sig, child.state.pgid);
 
         const answer = child.signalTarget(target, sig);
         const passes = if (sig == .KILL) child.killPasses(target, sig) else {};
@@ -1004,8 +988,8 @@ pub const Child = enum(usize) {
     ///
     /// **Elsewhere** it cannot be said, and the answer is the walk.
     fn mayHaveDescendants(child: *Child) bool {
-        if (builtin.os.tag == .linux) return tree.hasChildren(State.get(child).id);
-        return State.get(child).forks.any();
+        if (builtin.os.tag == .linux) return tree.hasChildren(child.state.id);
+        return child.state.forks.any();
     }
 
     /// `.kill` is the one that promises to leave nothing behind, and
@@ -1016,7 +1000,7 @@ pub const Child = enum(usize) {
     fn killPasses(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void {
         var pass: u8 = 0;
         while (pass < kill_passes) : (pass += 1) {
-            const reached = tree.signalDescendants(State.get(child).id, sig, null);
+            const reached = tree.signalDescendants(child.state.id, sig, null);
             _ = c.kill(target, sig);
             if (try reached == 0) break;
         }
@@ -1029,7 +1013,7 @@ pub const Child = enum(usize) {
     const kill_passes: u8 = 2;
 
     fn signalTarget(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void {
-        return signalOwnedTarget(PosixSignals, State.get(child).id, target, sig);
+        return signalOwnedTarget(PosixSignals, child.state.id, target, sig);
     }
 
     const PosixSignals = struct {
@@ -1211,7 +1195,7 @@ pub const Child = enum(usize) {
     }
 
     fn waitTreeLinux(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
-        const contained = &State.get(child).cgroup;
+        const contained = &child.state.cgroup;
         if (!contained.active()) return error.Unsupported;
         return contained.waitEmpty(io, timeout_ms);
     }
@@ -1226,9 +1210,9 @@ pub const Child = enum(usize) {
     const tree_slice_ms: u32 = 5;
 
     fn waitTreeWindows(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
-        if (State.get(child).tree_ended) return true;
-        const port = State.get(child).job_port orelse return false;
-        const job = State.get(child).job orelse return false;
+        if (child.state.tree_ended) return true;
+        const port = child.state.job_port orelse return false;
+        const job = child.state.job orelse return false;
         const deadline: Deadline = .in(io, timeout_ms);
 
         while (true) {
@@ -1247,7 +1231,7 @@ pub const Child = enum(usize) {
                 // process exited, a limit was reached. Only one of them is the
                 // answer, and the rest are taken off the port and dropped.
                 if (key == @intFromPtr(job) and message == win32.job_object_msg_active_process_zero) { // safe: the completion key against the job handle's value, nothing dereferenced
-                    State.get(child).tree_ended = true;
+                    child.state.tree_ended = true;
                     return true;
                 }
                 continue;
@@ -1273,9 +1257,9 @@ pub const Child = enum(usize) {
     /// Borrowed either way. The pipe is closed by `deinit` and the master by the
     /// `Pty`.
     pub fn stdinFile(child: Child) ?std.Io.File {
-        const state = State.get(&child);
+        const state = child.state;
         if (state.stdin) |f| return f;
-        if (State.get(child).pty) |m| return m.write;
+        if (child.state.pty) |m| return m.write;
         return null;
     }
 
@@ -1287,27 +1271,27 @@ pub const Child = enum(usize) {
     /// because a terminal is one stream. That is the terminal's doing, not this
     /// package's.
     pub fn stdoutFile(child: Child) ?std.Io.File {
-        const state = State.get(&child);
+        const state = child.state;
         if (state.stdout) |f| return f;
-        if (State.get(child).pty) |m| return m.read;
+        if (child.state.pty) |m| return m.read;
         return null;
     }
 
     /// The separate standard-error pipe, borrowed until closure or deinit.
     pub fn stderrFile(child: Child) ?std.Io.File {
-        const state = State.get(&child);
+        const state = child.state;
         return state.stderr;
     }
 
     /// The borrowed terminal streams, when spawned on a pair.
     pub fn terminalMaster(child: Child) ?Pty.Master {
-        const state = State.get(&child);
+        const state = child.state;
         return state.pty;
     }
 
     /// Transfers the stdin pipe to the caller, who must close it. Terminal streams stay borrowed.
     pub fn takeStdin(child: *Child) ?std.Io.File {
-        const state = State.get(child);
+        const state = child.state;
         const taken = state.stdin;
         state.stdin = null;
         return taken;
@@ -1315,7 +1299,7 @@ pub const Child = enum(usize) {
 
     /// Transfers the stdout pipe to the caller, who must close it. Terminal streams stay borrowed.
     pub fn takeStdout(child: *Child) ?std.Io.File {
-        const state = State.get(child);
+        const state = child.state;
         const taken = state.stdout;
         state.stdout = null;
         return taken;
@@ -1323,7 +1307,7 @@ pub const Child = enum(usize) {
 
     /// Transfers the stderr pipe to the caller, who must close it. Terminal streams stay borrowed.
     pub fn takeStderr(child: *Child) ?std.Io.File {
-        const state = State.get(child);
+        const state = child.state;
         const taken = state.stderr;
         state.stderr = null;
         return taken;
@@ -1423,10 +1407,10 @@ pub const Child = enum(usize) {
             // watch on the retired number, which may already name a stranger.
             if (published != null) return child.outputPolled(allocator, io, options, until, null, published, false);
             if (comptime tree.Forks.supported) {
-                if (State.get(child).forks.queue) |queue|
+                if (child.state.forks.queue) |queue|
                     return child.outputPolled(allocator, io, options, until, .{ .handle = queue }, null, true);
             }
-            if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(allocator, io, options, until, watch, null, false);
+            if (wait_for.Watch.open(child.state.id)) |watch| return child.outputPolled(allocator, io, options, until, watch, null, false);
         }
         // The readers grow the collected streams on tasks of their own; their
         // allocations are made one at a time, so the caller's allocator need
@@ -1472,7 +1456,7 @@ pub const Child = enum(usize) {
         options: ExchangeOptions,
     ) ExchangeError!Output {
         // A call refused for how it was made leaves the child as it was.
-        const state = State.get(child);
+        const state = child.state;
         if (input.len != 0 and state.stdin == null) return error.NoStdinPipe;
         errdefer child.abandon(io);
         const until: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
@@ -1524,7 +1508,7 @@ pub const Child = enum(usize) {
         // The run may have failed while draining after normal publication.
         // The job or cgroup still belongs to us even then; a retired process
         // or group number never becomes signalling authority again.
-        const state = State.get(child);
+        const state = child.state;
         if (is_windows) {
             if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
         } else if (state.cgroup.active()) _ = state.cgroup.kill();
@@ -1557,7 +1541,7 @@ pub const Child = enum(usize) {
         if (child.stdoutFile()) |f| {
             try group.concurrent(io, collect, .{ allocator, io, f, options.max_bytes, &out });
         } else out.done.store(true, .release);
-        if (State.get(child).stderr) |f| {
+        if (child.state.stderr) |f| {
             try group.concurrent(io, collect, .{ allocator, io, f, options.max_bytes, &err });
         } else err.done.store(true, .release);
 
@@ -1789,7 +1773,7 @@ pub const Child = enum(usize) {
         errdefer out.list.deinit(allocator);
         errdefer err.list.deinit(allocator);
 
-        const streams = [2]?std.Io.File{ child.stdoutFile(), State.get(child).stderr };
+        const streams = [2]?std.Io.File{ child.stdoutFile(), child.state.stderr };
         const collectors = [2]*Collector{ &out, &err };
         // A stream this process does not hold is finished before it starts.
         for (streams, collectors) |stream, collector| {
@@ -1804,7 +1788,7 @@ pub const Child = enum(usize) {
         while (true) {
             try std.Io.checkCancel(io);
             // A fork check or waiter may have consumed the shared exit note.
-            if (comptime tree.Forks.supported) if (borrowed_exit and State.get(child).forks.exited.load(.acquire)) {
+            if (comptime tree.Forks.supported) if (borrowed_exit and child.state.forks.exited.load(.acquire)) {
                 ended = true;
             };
             const out_done = out.done.load(.acquire);
@@ -1855,7 +1839,7 @@ pub const Child = enum(usize) {
                     // it answers.
                     if (comptime tree.Forks.supported) {
                         if (borrowed_exit) {
-                            ended = State.get(child).forks.ended(0) orelse false;
+                            ended = child.state.forks.ended(0) orelse false;
                             continue;
                         }
                     }
@@ -1874,9 +1858,9 @@ pub const Child = enum(usize) {
     //======================================================================
 
     fn closeHandles(child: *Child) void {
-        windows.CloseHandle(State.get(child).id);
-        windows.CloseHandle(State.get(child).thread);
-        State.get(child).handles_open = false;
+        windows.CloseHandle(child.state.id);
+        windows.CloseHandle(child.state.thread);
+        child.state.handles_open = false;
     }
 
     /// Closes the job under the selected lifecycle policy. Idempotent.
@@ -1884,32 +1868,32 @@ pub const Child = enum(usize) {
         // The port goes after the job. A contained job ends its members here
         // and posts that to the port; the job must not report to a handle that
         // has gone, even though nothing reads the final message.
-        defer if (State.get(child).job_port) |port| {
-            State.get(child).job_port = null;
+        defer if (child.state.job_port) |port| {
+            child.state.job_port = null;
             windows.CloseHandle(port);
         };
-        const job = State.get(child).job orelse return;
-        State.get(child).job = null;
+        const job = child.state.job orelse return;
+        child.state.job = null;
         trace.print("child: closing the job", .{});
         windows.CloseHandle(job);
         trace.print("child: job closed", .{});
     }
 
     fn tryWaitWindows(child: *Child) TryWaitError!?Term {
-        switch (win32.WaitForSingleObject(State.get(child).id, 0)) {
+        switch (win32.WaitForSingleObject(child.state.id, 0)) {
             win32.wait_object_0 => {},
             win32.wait_timeout => return null,
             else => return win32.unexpected(windows.GetLastError()),
         }
         var code: windows.DWORD = undefined;
-        const term: Term = if (win32.GetExitCodeProcess(State.get(child).id, &code) != .FALSE)
+        const term: Term = if (win32.GetExitCodeProcess(child.state.id, &code) != .FALSE)
             .{ .exited = code }
         else
             .{ .unknown = 0 };
-        const completed = try completion.poll(WindowsCompletion, child, term, State.get(child).descendants, State.get(child).end_descendants);
+        const completed = try completion.poll(WindowsCompletion, child, term, child.state.descendants, child.state.end_descendants);
         if (completed == null) return null;
-        if (State.get(child).descendants == .contain or State.get(child).end_descendants)
-            State.get(child).scope_complete = true;
+        if (child.state.descendants == .contain or child.state.end_descendants)
+            child.state.scope_complete = true;
         child.closeHandles();
         child.publish(term);
         return term;
@@ -1920,21 +1904,21 @@ pub const Child = enum(usize) {
             try child.releaseJobSurvivors();
         }
         pub fn end(child: *Child) Child.TryWaitError!void {
-            const job = State.get(child).job orelse return error.Unexpected;
+            const job = child.state.job orelse return error.Unexpected;
             if (win32.TerminateJobObject(job, 1) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
         }
         pub fn empty(child: *Child) Child.TryWaitError!bool {
-            const job = State.get(child).job orelse return error.Unexpected;
+            const job = child.state.job orelse return error.Unexpected;
             var counts: win32.JobObjectBasicAccountingInformation = undefined;
             if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
             return counts.ActiveProcesses == 0;
         }
         pub fn ended(child: *Child) Child.TryWaitError!bool {
-            if (State.get(child).tree_ended) return true;
-            const job = State.get(child).job orelse return error.Unexpected;
-            const port = State.get(child).job_port orelse return error.Unexpected;
+            if (child.state.tree_ended) return true;
+            const job = child.state.job orelse return error.Unexpected;
+            const port = child.state.job_port orelse return error.Unexpected;
             while (true) {
                 var message: windows.DWORD = undefined;
                 var key: windows.ULONG_PTR = undefined;
@@ -1945,7 +1929,7 @@ pub const Child = enum(usize) {
                         else => |err| win32.unexpected(err),
                     };
                 if (key == @intFromPtr(job) and message == win32.job_object_msg_active_process_zero) { // safe: the completion key is compared with the job handle, never dereferenced.
-                    State.get(child).tree_ended = true;
+                    child.state.tree_ended = true;
                     return true;
                 }
             }
@@ -1955,7 +1939,7 @@ pub const Child = enum(usize) {
     /// Release only kill-on-close, retaining every resource limit the caller
     /// chose. Failure leaves the process handles and status available to retry.
     fn releaseJobSurvivors(child: *Child) TryWaitError!void {
-        const job = State.get(child).job orelse return;
+        const job = child.state.job orelse return;
         var limits: win32.JobObjectExtendedLimitInformation = undefined;
         if (win32.QueryInformationJobObject(job, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits)), null) == .FALSE)
             return win32.unexpected(windows.GetLastError());
@@ -1972,7 +1956,7 @@ pub const Child = enum(usize) {
             // `Signal` names each of these and why Windows has nothing for it.
             else => return error.Unsupported,
         };
-        const group = State.get(child).pgid orelse switch (signal) {
+        const group = child.state.pgid orelse switch (signal) {
             // There is no console control event that reaches a process outside a
             // group, and no catchable Windows equivalent of `SIGTERM`. `.terminate`
             // falls back to the uncatchable one, which is what it documents;
@@ -1994,16 +1978,16 @@ pub const Child = enum(usize) {
         // The job rather than the process, so what the child started goes with it.
         // `TerminateJobObject` is the same uncatchable end as `TerminateProcess`,
         // applied to the whole set, and the exit code is the same 1.
-        if (State.get(child).job) |job| {
+        if (child.state.job) |job| {
             trace.print("child: TerminateJobObject", .{});
             if (win32.TerminateJobObject(job, 1) != .FALSE) return;
         }
-        if (win32.TerminateProcess(State.get(child).id, 1) != .FALSE) return;
+        if (win32.TerminateProcess(child.state.id, 1) != .FALSE) return;
         return switch (windows.GetLastError()) {
             .ACCESS_DENIED => {
                 // Usually this means the process has already exited. Observe it
                 // without reaping while signal delivery owns the identity.
-                if (win32.WaitForSingleObject(State.get(child).id, 0) == win32.wait_object_0) return;
+                if (win32.WaitForSingleObject(child.state.id, 0) == win32.wait_object_0) return;
                 return error.PermissionDenied;
             },
             .INVALID_HANDLE => {},
@@ -2100,12 +2084,12 @@ pub const Child = enum(usize) {
         defer child.deinit(io);
         defer _ = child.killWait(io, 0) catch {};
         const until: Deadline = .in(io, 5000);
-        while (wait_for.endedUnreaped(State.get(&child).id) == .running) {
+        while (wait_for.endedUnreaped(child.state.id) == .running) {
             if (until.remainingMs(io) == 0) return error.TestChildDidNotExit;
             try std.Io.sleep(io, .fromMilliseconds(1), .awake);
         }
         // Another fork check can consume the queued exit without reaping.
-        _ = State.get(&child).forks.any();
+        _ = child.state.forks.any();
         const Refuse = struct {
             fn concurrent(_: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
                 return error.ConcurrencyUnavailable;
@@ -2144,8 +2128,8 @@ pub const Child = enum(usize) {
         });
         defer writer.deinit(io);
         defer _ = writer.killWait(io, 0) catch {};
-        State.get(child).stdout = State.get(&writer).stdout;
-        State.get(&writer).stdout = null;
+        child.state.stdout = writer.state.stdout;
+        writer.state.stdout = null;
 
         const Clock = struct {
             var elapsed: std.atomic.Value(u32) = .init(0);
@@ -2186,7 +2170,7 @@ pub const Child = enum(usize) {
         });
         defer child.release(io) catch unreachable;
         var status: c_int = undefined;
-        while (c.waitpid(State.get(child).id, &status, 0) < 0) {
+        while (c.waitpid(child.state.id, &status, 0) < 0) {
             if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
         }
         try testing.expectError(error.ReapedElsewhere, child.tryWait());
@@ -2201,7 +2185,7 @@ pub const Child = enum(usize) {
         defer _ = witness.killWait(io, 0) catch {};
         // Substitute an unrelated live process's number for the retired label:
         // exercise PID reuse without relying on the kernel to recycle a pid.
-        State.get(child).id = State.get(&witness).id;
+        child.state.id = witness.state.id;
         try child.kill(.kill);
         try testing.expectEqual(@as(?Term, null), try witness.waitTimeout(io, 20));
     }
@@ -2228,9 +2212,27 @@ pub const Child = enum(usize) {
             try std.testing.expect(!@hasField(Child, name));
         }
     }
+};
 
-    test "Child exposes no writable lifecycle or stream ownership" {
-        try std.testing.expect(@typeInfo(Child) == .@"enum");
+/// `Child.HeldReap`: the right to reap a child, held until `release`,
+/// including after `wait`. Release exactly once. The child must not be
+/// deinited while it is held. Declared here rather than in `Child` only so
+/// that its methods can read as methods; `Child.HeldReap` is its name.
+pub const ReapHold = struct {
+    /// Private: the child whose reap is held.
+    child: Child,
+
+    /// Blocks until the child ends, reaps it and publishes the term — or
+    /// answers from the one already published.
+    pub fn wait(held: ReapHold, io: std.Io) contract.WaitError!contract.Term {
+        var child = held.child;
+        return child.waitClaimed(io);
+    }
+
+    /// Gives the right back, whether or not the child was reaped.
+    pub fn release(held: ReapHold) void {
+        var child = held.child;
+        child.releaseReap();
     }
 };
 

@@ -5,33 +5,5 @@
     "source": "pub fn fuzz(context: anytype, comptime testOne: fn (@TypeOf(context), *testing.Smith) anyerror!void, input: testing.FuzzInputOptions) anyerror!void {",
     "detail": "'comptime' parameter should come before 'other'",
     "reason": "The test runner's fuzz entry point: std.testing.fuzz calls it positionally as root.fuzz(context, testOne, options), so the order is std's."
-  },
-  {
-    "rule": "Z015",
-    "path": "src/child.zig",
-    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
-    "detail": "public function exposes private error set 'WaitError'",
-    "reason": "WaitError is the public Child.WaitError, in scope because HeldReap is nested in Child; ziglint 0.5.3 resolves names in a nested type only against that type and the file's top level. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/child.zig",
-    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
-    "detail": "public function exposes private type 'Term'",
-    "reason": "Term is the public Child.Term, in scope because HeldReap is nested in Child; ziglint 0.5.3 resolves names in a nested type only against that type and the file's top level. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
-  },
-  {
-    "rule": "Z012",
-    "path": "src/child.zig",
-    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
-    "detail": "public function exposes private type 'HeldReap'",
-    "reason": "HeldReap is the public Child.HeldReap and wait is its method; ziglint 0.5.3 looks for a pub declaration only in the enclosing type and at the file's top level. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
-    "detail": "'Io' parameter should come before 'other'",
-    "reason": "held is the receiver of Child.HeldReap.wait, and method syntax needs it first; ziglint 0.5.3 recognizes a receiver only on a file's top-level types. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
   }
 ]

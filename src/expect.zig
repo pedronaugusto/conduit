@@ -43,19 +43,22 @@
 //! the same ones `Reaper` has:
 //!
 //! * the files in `master` must outlive the `Expect`;
-//! * an `Expect` must not be copied or moved once `start` has been called;
+//! * an `Expect` must not be copied or moved once `start` has been called,
+//!   which safe builds assert on each call;
 //! * `deinit` must run before it goes out of scope, including on the path
 //!   where the child never says anything.
 
 const builtin = @import("builtin");
 const std = @import("std");
+const Pin = @import("pin.zig").Pin;
 
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
-const Implementation = struct {
+pub const Expect = struct {
+    // Fields are private: read and change them only through the methods.
     /// What the child says, and where a reply goes.
     ///
     /// `Child.pty` is already this shape, and `Child.expect` builds one for a
@@ -95,21 +98,8 @@ const Implementation = struct {
     /// One claim for initialization, task ownership and stopping. Stop ends
     /// even a lifetime whose task has never been started.
     lifetime: std.atomic.Value(enum(u8) { ready, started, stopped }),
-};
-
-pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
-    _,
-
-    // The state lives in the value's own bits and `inner` casts to it: the
-    // bits must hold it and be at least as aligned.
-    comptime {
-        std.debug.assert(@sizeOf(Expect) >= @sizeOf(Implementation));
-        std.debug.assert(@alignOf(Expect) >= @alignOf(Implementation));
-    }
-
-    fn inner(expect: *Expect) *Implementation {
-        return @ptrCast(@alignCast(expect)); // safe: init writes inline state; the enum holds its size and alignment.
-    }
+    /// Safe builds: where this was when `start` began to hold a pointer to it.
+    pin: Pin = .{},
 
     /// Where a pattern was found, in the bytes that had arrived when it was.
     ///
@@ -135,8 +125,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// waited for plus whatever the child may say before it; a few kilobytes is
     /// generous for a line-oriented conversation.
     pub fn init(master: Pty.Master, buffer: []u8) Expect {
-        var expect: Expect = undefined;
-        expect.inner().* = .{
+        return .{
             .master = master,
             .buffer = buffer,
             .filled = 0,
@@ -150,7 +139,6 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .lifetime = .init(.ready),
             .finished = .init(false),
         };
-        return expect;
     }
 
     pub const StartError = error{
@@ -168,11 +156,12 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// `error.AlreadyStarted`, including after `stop`. A failed task submission
     /// may be retried before `stop`.
     pub fn start(expect: *Expect, io: std.Io) StartError!void {
-        if (expect.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null) {
+        if (expect.lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null) {
             return error.AlreadyStarted;
         }
-        expect.inner().group.concurrent(io, read, .{ expect, io }) catch |err| {
-            _ = expect.inner().lifetime.cmpxchgStrong(.started, .ready, .release, .monotonic);
+        expect.pin.set(expect);
+        expect.group.concurrent(io, read, .{ expect, io }) catch |err| {
+            _ = expect.lifetime.cmpxchgStrong(.started, .ready, .release, .monotonic);
             return err;
         };
     }
@@ -196,12 +185,14 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// issues it again straight away unless its own task was cancelled, so a
     /// reader asked that way never stops.
     pub fn stop(expect: *Expect, io: std.Io) void {
-        expect.inner().lifetime.store(.stopped, .release);
-        expect.inner().group.cancel(io);
+        expect.pin.check(expect);
+        expect.lifetime.store(.stopped, .release);
+        expect.group.cancel(io);
     }
 
     /// Stops reading, as `stop` does, and leaves the `Expect` undefined.
     pub fn deinit(expect: *Expect, io: std.Io) void {
+        expect.pin.check(expect);
         expect.stop(io);
         expect.* = undefined;
     }
@@ -267,45 +258,46 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         patterns: []const []const u8,
         timeout_ms: u32,
     ) WaitError!Match {
+        expect.pin.check(expect);
         expect.compact(io);
 
         for (patterns, 0..) |pattern, index| {
             if (pattern.len == 0) return .{
                 .index = index,
-                .before = expect.inner().buffer[0..0],
-                .found = expect.inner().buffer[0..0],
+                .before = expect.buffer[0..0],
+                .found = expect.buffer[0..0],
             };
-            if (pattern.len > expect.inner().buffer.len) return error.BufferFull;
+            if (pattern.len > expect.buffer.len) return error.BufferFull;
         }
 
         const deadline = deadlineIn(io, timeout_ms);
         var search: Search = .init(patterns);
         while (true) {
-            expect.inner().arrived.reset();
+            expect.arrived.reset();
             // Read before the buffer: a reader seen finished here has appended
             // everything it ever will, so a search that fails now fails for good.
-            const finished = expect.inner().finished.load(.acquire);
+            const finished = expect.finished.load(.acquire);
 
             var winner: ?Match = null;
             var full = false;
             var ended = false;
             var failed = false;
             {
-                expect.inner().mutex.lockUncancelable(io);
-                defer expect.inner().mutex.unlock(io);
+                expect.mutex.lockUncancelable(io);
+                defer expect.mutex.unlock(io);
 
-                if (search.find(expect.inner().buffer[0..expect.inner().filled], patterns)) |found| {
+                if (search.find(expect.buffer[0..expect.filled], patterns)) |found| {
                     const pattern = patterns[found.index];
                     winner = .{
                         .index = found.index,
-                        .before = expect.inner().buffer[0..found.at],
-                        .found = expect.inner().buffer[found.at..][0..pattern.len],
+                        .before = expect.buffer[0..found.at],
+                        .found = expect.buffer[found.at..][0..pattern.len],
                     };
-                    expect.inner().consumed = found.at + pattern.len;
+                    expect.consumed = found.at + pattern.len;
                 } else {
-                    full = expect.inner().filled == expect.inner().buffer.len;
-                    ended = expect.inner().ended;
-                    failed = expect.inner().failed;
+                    full = expect.filled == expect.buffer.len;
+                    ended = expect.ended;
+                    failed = expect.failed;
                 }
             }
 
@@ -374,31 +366,32 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         count: usize,
         timeout_ms: u32,
     ) WaitError![]const u8 {
+        expect.pin.check(expect);
         expect.compact(io);
-        if (count > expect.inner().buffer.len) return error.BufferFull;
+        if (count > expect.buffer.len) return error.BufferFull;
 
         const deadline = deadlineIn(io, timeout_ms);
         while (true) {
-            expect.inner().arrived.reset();
+            expect.arrived.reset();
             // As in `untilAny`: before the buffer.
-            const finished = expect.inner().finished.load(.acquire);
+            const finished = expect.finished.load(.acquire);
 
             var enough = false;
             var ended = false;
             var failed = false;
             {
-                expect.inner().mutex.lockUncancelable(io);
-                defer expect.inner().mutex.unlock(io);
-                enough = expect.inner().filled >= count;
+                expect.mutex.lockUncancelable(io);
+                defer expect.mutex.unlock(io);
+                enough = expect.filled >= count;
                 if (enough) {
-                    expect.inner().consumed = count;
+                    expect.consumed = count;
                 } else {
-                    ended = expect.inner().ended;
-                    failed = expect.inner().failed;
+                    ended = expect.ended;
+                    failed = expect.failed;
                 }
             }
 
-            if (enough) return expect.inner().buffer[0..count];
+            if (enough) return expect.buffer[0..count];
             if (failed) return error.ReadFailed;
             if (ended or finished) return error.EndOfStream;
             try expect.sleepUntil(io, deadline);
@@ -420,7 +413,8 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// a line on `"\n"`, and the end-of-file the line discipline makes is
     /// `"\x04"`.
     pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
-        handles.writeStreamingAll(io, expect.inner().master.write, reply) catch |err| switch (err) {
+        expect.pin.check(expect);
+        handles.writeStreamingAll(io, expect.master.write, reply) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             error.BrokenPipe => return error.BrokenPipe,
             else => return error.WriteFailed,
@@ -434,9 +428,10 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// wait fails — a `Timeout` whose message says what the child said instead is
     /// worth a great deal more than one that does not.
     pub fn pending(expect: *Expect, io: std.Io) []const u8 {
-        expect.inner().mutex.lockUncancelable(io);
-        defer expect.inner().mutex.unlock(io);
-        return expect.inner().buffer[expect.inner().consumed..expect.inner().filled];
+        expect.pin.check(expect);
+        expect.mutex.lockUncancelable(io);
+        defer expect.mutex.unlock(io);
+        return expect.buffer[expect.consumed..expect.filled];
     }
 
     /// Forgets everything pending, and starts the buffer again from empty.
@@ -445,11 +440,12 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// filled it — a child that paints a screen before it asks a question, say.
     /// Reading resumes at once.
     pub fn discard(expect: *Expect, io: std.Io) void {
-        expect.inner().mutex.lockUncancelable(io);
-        defer expect.inner().mutex.unlock(io);
-        expect.inner().filled = 0;
-        expect.inner().consumed = 0;
-        expect.inner().space.set(io);
+        expect.pin.check(expect);
+        expect.mutex.lockUncancelable(io);
+        defer expect.mutex.unlock(io);
+        expect.filled = 0;
+        expect.consumed = 0;
+        expect.space.set(io);
     }
 
     //======================================================================
@@ -462,35 +458,35 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer expect.markFinished(io);
         var chunk: [512]u8 = undefined;
         while (true) {
-            if (expect.inner().lifetime.load(.acquire) == .stopped) return expect.finish(io, .ended);
+            if (expect.lifetime.load(.acquire) == .stopped) return expect.finish(io, .ended);
             // Reset before checking the buffer under the consumer mutex. A
             // consumer before this check leaves room; one after it sets space.
-            expect.inner().space.reset();
+            expect.space.reset();
             const room = room: {
-                expect.inner().mutex.lockUncancelable(io);
-                defer expect.inner().mutex.unlock(io);
-                break :room expect.inner().buffer.len - expect.inner().filled;
+                expect.mutex.lockUncancelable(io);
+                defer expect.mutex.unlock(io);
+                break :room expect.buffer.len - expect.filled;
             };
             if (room == 0) {
                 // Full means backpressure until the consumer makes room.
-                try expect.inner().space.wait(io);
+                try expect.space.wait(io);
                 continue;
             }
 
-            const n = handles.readStreaming(io, expect.inner().master.read, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
+            const n = handles.readStreaming(io, expect.master.read, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
             };
             {
-                expect.inner().mutex.lockUncancelable(io);
-                defer expect.inner().mutex.unlock(io);
+                expect.mutex.lockUncancelable(io);
+                defer expect.mutex.unlock(io);
                 // Only this reader grows `filled`, and the room it saw can
                 // only have grown since: a consumer frees space, never takes it.
-                std.debug.assert(n <= expect.inner().buffer.len - expect.inner().filled);
-                @memcpy(expect.inner().buffer[expect.inner().filled..][0..n], chunk[0..n]);
-                expect.inner().filled += n;
+                std.debug.assert(n <= expect.buffer.len - expect.filled);
+                @memcpy(expect.buffer[expect.filled..][0..n], chunk[0..n]);
+                expect.filled += n;
             }
-            expect.inner().arrived.set(io);
+            expect.arrived.set(io);
         }
     }
 
@@ -498,21 +494,21 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// has finished, including when cancellation bypasses this function.
     fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
         {
-            expect.inner().mutex.lockUncancelable(io);
-            defer expect.inner().mutex.unlock(io);
+            expect.mutex.lockUncancelable(io);
+            defer expect.mutex.unlock(io);
             switch (why) {
-                .ended => expect.inner().ended = true,
-                .failed => expect.inner().failed = true,
+                .ended => expect.ended = true,
+                .failed => expect.failed = true,
             }
         }
-        expect.inner().arrived.set(io);
+        expect.arrived.set(io);
     }
 
     /// Published on every exit from the reading task. Stored outside the mutex so
     /// it can be observed without taking anything the task might hold.
     fn markFinished(expect: *Expect, io: std.Io) void {
-        expect.inner().finished.store(true, .release);
-        expect.inner().arrived.set(io);
+        expect.finished.store(true, .release);
+        expect.arrived.set(io);
     }
 
     //======================================================================
@@ -526,7 +522,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// Waits for the reading task to say something has changed, or for the
     /// deadline.
     fn sleepUntil(expect: *Expect, io: std.Io, deadline: std.Io.Clock.Timestamp) WaitError!void {
-        expect.inner().arrived.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
+        expect.arrived.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             // A wakeup is allowed to be spurious and to report itself as a
             // timeout, so the clock decides whether there is time left rather
@@ -545,16 +541,16 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// which is what keeps a `Match`'s slices readable until the caller asks for
     /// something else.
     fn compact(expect: *Expect, io: std.Io) void {
-        expect.inner().mutex.lockUncancelable(io);
-        defer expect.inner().mutex.unlock(io);
-        if (expect.inner().consumed == 0) return;
-        std.debug.assert(expect.inner().consumed <= expect.inner().filled);
-        std.debug.assert(expect.inner().filled <= expect.inner().buffer.len);
-        const rest = expect.inner().filled - expect.inner().consumed;
-        @memmove(expect.inner().buffer[0..rest], expect.inner().buffer[expect.inner().consumed..expect.inner().filled]);
-        expect.inner().filled = rest;
-        expect.inner().consumed = 0;
-        expect.inner().space.set(io);
+        expect.mutex.lockUncancelable(io);
+        defer expect.mutex.unlock(io);
+        if (expect.consumed == 0) return;
+        std.debug.assert(expect.consumed <= expect.filled);
+        std.debug.assert(expect.filled <= expect.buffer.len);
+        const rest = expect.filled - expect.consumed;
+        @memmove(expect.buffer[0..rest], expect.buffer[expect.consumed..expect.filled]);
+        expect.filled = rest;
+        expect.consumed = 0;
+        expect.space.set(io);
     }
 
     //======================================================================
@@ -568,9 +564,6 @@ pub const test_access = if (builtin.is_test) struct {
     pub const Found = Expect.Search.Found;
     pub const searchInit = Expect.Search.init;
     pub const searchFind = Expect.Search.find;
-    pub fn inner(value: anytype) *Implementation {
-        return Expect.inner(if (@TypeOf(value) == *Expect) value else value.*);
-    }
     pub const read = Expect.read;
     pub fn compact(io: std.Io, value: anytype) void {
         Expect.compact(if (@TypeOf(value) == *Expect) value else value.*, io);

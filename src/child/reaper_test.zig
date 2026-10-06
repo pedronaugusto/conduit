@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 const Pty = @import("../pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
 const Child = @import("../child.zig").Child;
-const State = @import("State.zig");
 const win32 = @import("../win32.zig");
 const access = @import("../child.zig").test_access;
 const Reaper = @import("../reaper.zig").Reaper;
@@ -25,10 +24,10 @@ const Observer = struct {
         // alone until delivery resumes.
         // ziglint-ignore: Z026 only a pause for the Reaper; the assertion is what it did meanwhile, read below
         _ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};
-        probe.retired = State.get(child).reaped.load(.acquire) or if (is_windows) retired: {
+        probe.retired = child.state.reaped.load(.acquire) or if (is_windows) retired: {
             var code: windows.DWORD = undefined;
-            break :retired win32.GetExitCodeProcess(State.get(child).id, &code) == .FALSE;
-        } else c.kill(State.get(child).id, @enumFromInt(0)) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
+            break :retired win32.GetExitCodeProcess(child.state.id, &code) == .FALSE;
+        } else c.kill(child.state.id, @enumFromInt(0)) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
     }
 };
 test "a Reaper cannot retire the identity while kill is delivering a signal" {
@@ -110,7 +109,7 @@ test "output leaves the reap to the task that holds it" {
 
     // The child has long ended; output must still not have reaped it.
     try io.sleep(.fromMilliseconds(300), .awake);
-    try testing.expect(!State.get(&child).reaped.load(.acquire));
+    try testing.expect(!child.state.reaped.load(.acquire));
     try testing.expect(output.result == null);
 
     const term = try held.wait(io);

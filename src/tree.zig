@@ -524,58 +524,42 @@ pub const SignalGroupError = error{
     OutOfMemory,
 };
 
-pub const CapturedPid = enum(u128) {
-    _,
+pub const CapturedPid = struct {
+    /// Private: the held identity.
+    process: Process,
 
-    fn wrap(process: Process) CapturedPid {
-        const identity: u64 = switch (builtin.os.tag) {
-            .linux => @intCast(process.pidfd),
-            .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => process.unique_id,
-            else => 0,
-        };
-        return @enumFromInt(@as(u128, @as(u32, @bitCast(process.pid))) | (@as(u128, identity) << 32));
-    }
-
-    fn unwrap(captured: CapturedPid) Process {
-        const bits = @intFromEnum(captured);
-        const pid: posix.pid_t = @bitCast(@as(u32, @truncate(bits)));
-        const identity: u64 = @truncate(bits >> 32);
-        return switch (builtin.os.tag) {
-            .linux => .{ .pid = pid, .pidfd = @intCast(identity) },
-            .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .{ .pid = pid, .unique_id = identity },
-            else => .{ .pid = pid },
-        };
+    fn init(process: Process) CapturedPid {
+        return .{ .process = process };
     }
 
     /// The captured number for reports, never authority to signal by number.
     pub fn processId(captured: *const CapturedPid) posix.pid_t {
-        return captured.unwrap().pid;
+        return captured.process.pid;
     }
 
     pub fn alive(captured: *const CapturedPid) bool {
-        return captured.unwrap().alive();
+        return captured.process.alive();
     }
 
     pub fn signal(captured: *const CapturedPid, sig: posix.SIG) bool {
-        return captured.unwrap().signal(sig);
+        return captured.process.signal(sig);
     }
 
     pub fn signalDescendants(captured: *const CapturedPid, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
-        return captured.unwrap().signalDescendants(sig, in_group);
+        return captured.process.signalDescendants(sig, in_group);
     }
 
     pub fn signalGroupSince(captured: *const CapturedPid, group: posix.pid_t, since: u64, sig: posix.SIG) SignalGroupError!usize {
-        return captured.unwrap().signalGroupSince(group, since, sig);
+        return captured.process.signalGroupSince(group, since, sig);
     }
 
     pub fn wait(captured: *const CapturedPid, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return captured.unwrap().wait(io, timeout_ms);
+        return captured.process.wait(io, timeout_ms);
     }
 
     /// Release exactly once; do not copy an owning captured identity.
     pub fn deinit(captured: *CapturedPid) void {
-        var process = captured.unwrap();
-        process.deinit();
+        captured.process.deinit();
         captured.* = undefined;
     }
 };
@@ -600,7 +584,7 @@ pub const CaptureError = error{
 
 pub fn captureStarted(pid: posix.pid_t, since: u64) CaptureError!?CapturedPid {
     if (builtin.os.tag == .windows) @compileError("captureStarted is POSIX-only");
-    return CapturedPid.wrap((try captureStartedProcess(pid, since)) orelse return null);
+    return CapturedPid.init((try captureStartedProcess(pid, since)) orelse return null);
 }
 
 fn captureStartedProcess(pid: posix.pid_t, since: u64) error{Unsupported}!?Process {
@@ -1721,10 +1705,6 @@ test "a captured Darwin session leader proves its group's member" {
     defer captured.deinit();
     try std.testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(leader, since, .CONT));
     try std.testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(leader, since, .KILL));
-}
-
-test "CapturedPid does not expose signal identities as writable fields" {
-    try std.testing.expect(@typeInfo(CapturedPid) == .@"enum");
 }
 
 pub const test_access = if (builtin.is_test) struct {

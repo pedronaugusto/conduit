@@ -42,54 +42,29 @@ const Watchdog = @import("testing/support.zig").Watchdog;
 const Size = tty.Size;
 const file = handles.file;
 
-const Implementation = struct {
+pub const Pty = struct {
+    // Fields are private: read and change them only through the methods.
     read: ?std.Io.File.Handle,
     write: ?std.Io.File.Handle,
     slave: ?Pty.Slave,
     geometry: if (is_windows) ?*Pty.Geometry else void,
     console: if (is_windows) Pty.ConsoleOptions else void,
-};
-
-pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
-    _,
-
-    // The state lives in the value's own bits and `inner` casts to it: the
-    // bits must hold it and be at least as aligned.
-    comptime {
-        std.debug.assert(@sizeOf(Pty) >= @sizeOf(Implementation));
-        std.debug.assert(@alignOf(Pty) >= @alignOf(Implementation));
-    }
-
-    fn inner(pty: *Pty) *Implementation {
-        return @ptrCast(@alignCast(pty)); // safe: open initializes inline storage of the same size and alignment.
-    }
-
-    fn value(pty: Pty) Implementation {
-        const state: *const Implementation = @ptrCast(@alignCast(&pty)); // safe: borrows initialized inline state of the same size and alignment.
-        return state.*;
-    }
-
-    fn init(state: Implementation) Pty {
-        var result: Pty = undefined;
-        result.inner().* = state;
-        return result;
-    }
 
     /// Borrows the reading handle, or null after the master closes.
     pub fn readHandle(pty: Pty) ?Handle {
-        return pty.value().read;
+        return pty.read;
     }
     /// Borrows the writing handle, or null after the master closes.
     pub fn writeHandle(pty: Pty) ?Handle {
-        return pty.value().write;
+        return pty.write;
     }
     /// Borrows the terminal end, or null after it closes.
     pub fn slaveHandle(pty: Pty) ?Slave {
-        return pty.value().slave;
+        return pty.slave;
     }
     /// The console options granted on Windows; empty on POSIX.
     pub fn consoleOptions(pty: Pty) ConsoleOptions {
-        return if (is_windows) pty.value().console else .{};
+        return if (is_windows) pty.console else .{};
     }
 
     /// A stream handle. `std.posix.fd_t` on POSIX, `HANDLE` on Windows.
@@ -228,14 +203,14 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
             geometry.lock();
             defer geometry.mutex.unlock();
-            const slave = pty.inner().slave orelse return error.Unexpected;
+            const slave = pty.slave orelse return error.Unexpected;
             if (win32.ResizePseudoConsole(slave, new_size.toCoord()) != win32.ok) {
                 return error.Unexpected;
             }
             geometry.size = new_size;
             return;
         }
-        const read = pty.value().read orelse return error.Unexpected;
+        const read = pty.read orelse return error.Unexpected;
         return tty.setWinSize(read, new_size);
     }
 
@@ -254,7 +229,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             defer geometry.mutex.unlock();
             return geometry.size;
         }
-        const read = pty.value().read orelse return error.Unexpected;
+        const read = pty.read orelse return error.Unexpected;
         return tty.winSize(read);
     }
 
@@ -270,12 +245,12 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
     /// The end to read, as a `std.Io.File`. Asserts it is still open.
     pub fn readFile(pty: Pty) std.Io.File {
-        return file(pty.value().read.?);
+        return file(pty.read.?);
     }
 
     /// The end to write, as a `std.Io.File`. Asserts it is still open.
     pub fn writeFile(pty: Pty) std.Io.File {
-        return file(pty.value().write.?);
+        return file(pty.write.?);
     }
 
     /// The terminal end as a `std.Io.File`. POSIX only, and asserts it is still
@@ -293,7 +268,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     }
 
     fn slaveFilePosix(pty: Pty) std.Io.File {
-        return file(pty.value().slave.?);
+        return file(pty.slave.?);
     }
 
     /// Closes whichever ends are still open.
@@ -327,8 +302,8 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     }
 
     fn closeWindows(pty: *Pty, io: std.Io) void {
-        const read_handle = pty.inner().read;
-        if (pty.inner().slave == null or read_handle == null) {
+        const read_handle = pty.read;
+        if (pty.slave == null or read_handle == null) {
             // Nothing to drain, or nothing to drain it with.
             pty.closeMaster(io);
             pty.closeSlave(io);
@@ -390,8 +365,8 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// is how it is done.
     pub fn closeSlave(pty: *Pty, io: std.Io) void {
         defer if (is_windows) pty.releaseGeometry();
-        const slave = pty.inner().slave orelse return;
-        pty.inner().slave = null;
+        const slave = pty.slave orelse return;
+        pty.slave = null;
         if (is_windows) {
             if (trace.enabled()) {
                 trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)}); // safe: printed, never dereferenced
@@ -432,14 +407,14 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         trace.print("pty: closing the master ends", .{});
         defer trace.print("pty: master ends closed", .{});
         // The same handle twice on POSIX, so it is closed once.
-        const same = pty.inner().read != null and pty.inner().write != null and pty.inner().read.? == pty.inner().write.?;
-        if (pty.inner().read) |handle| {
+        const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
+        if (pty.read) |handle| {
             file(handle).close(io);
-            pty.inner().read = null;
+            pty.read = null;
         }
-        if (pty.inner().write) |handle| {
+        if (pty.write) |handle| {
             if (!same) file(handle).close(io);
-            pty.inner().write = null;
+            pty.write = null;
         }
     }
 
@@ -455,13 +430,13 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     };
 
     fn geometryState(pty: *const Pty) ?*Geometry {
-        return pty.value().geometry;
+        return pty.geometry;
     }
 
     fn releaseGeometry(pty: *Pty) void {
-        if (pty.inner().slave != null or pty.inner().read != null or pty.inner().write != null) return;
+        if (pty.slave != null or pty.read != null or pty.write != null) return;
         const geometry = pty.geometryState() orelse return;
-        pty.inner().geometry = null;
+        pty.geometry = null;
         geometry.allocator.destroy(geometry);
     }
 
@@ -501,13 +476,13 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // open itself failing.
         tty.setWinSize(master_fd, options.size()) catch return error.Unexpected;
 
-        return init(.{
+        return .{
             .read = master_fd,
             .write = master_fd,
             .slave = slave_fd,
             .geometry = {},
             .console = {},
-        });
+        };
     }
 
     /// Opens the master end, close-on-exec from the moment it exists.
@@ -646,13 +621,13 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         windows.CloseHandle(input_read);
         windows.CloseHandle(output_write);
 
-        return init(.{
+        return .{
             .read = output_read,
             .write = input_write,
             .slave = console,
             .geometry = remembered,
             .console = granted,
-        });
+        };
     }
 
     fn consoleFlags(options: ConsoleOptions) windows.DWORD {
@@ -714,10 +689,10 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         // to close on Windows with nothing reading: see `close`.
         pty.closeMaster(io);
         pty.closeSlave(io);
-        try testing.expectEqual(@as(?Slave, null), pty.inner().slave);
+        try testing.expectEqual(@as(?Slave, null), pty.slave);
         pty.close(io);
-        try testing.expectEqual(@as(?Handle, null), pty.inner().read);
-        try testing.expectEqual(@as(?Handle, null), pty.inner().write);
+        try testing.expectEqual(@as(?Handle, null), pty.read);
+        try testing.expectEqual(@as(?Handle, null), pty.write);
         pty.close(io);
     }
 
@@ -727,10 +702,10 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
         defer pty.close(io);
 
-        try testing.expect(tty.isTty(pty.inner().read.?));
-        try testing.expect(tty.isTty(pty.inner().slave.?));
+        try testing.expect(tty.isTty(pty.read.?));
+        try testing.expect(tty.isTty(pty.slave.?));
         // The size belongs to the terminal, so the slave reports the same one.
-        try testing.expectEqual(try pty.size(), try tty.winSize(pty.inner().slave.?));
+        try testing.expectEqual(try pty.size(), try tty.winSize(pty.slave.?));
 
         try pty.resize(.{ .rows = 40, .cols = 132, .x_pixel = 1320, .y_pixel = 800 });
         try testing.expectEqual(Size{
@@ -738,7 +713,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
             .cols = 132,
             .x_pixel = 1320,
             .y_pixel = 800,
-        }, try tty.winSize(pty.inner().slave.?));
+        }, try tty.winSize(pty.slave.?));
     }
 
     test "a pair opened with a pixel size reports it at both ends" {
@@ -751,7 +726,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer pty.close(io);
         const want: Size = .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 };
         try testing.expectEqual(want, try pty.size());
-        try testing.expectEqual(want, try tty.winSize(pty.inner().slave.?));
+        try testing.expectEqual(want, try tty.winSize(pty.slave.?));
     }
 
     test "the terminal end of a POSIX pair has a name under /dev" {
@@ -761,7 +736,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer pty.close(io);
 
         var buffer: [std.fs.max_path_bytes]u8 = undefined;
-        const name = try tty.ttyName(pty.inner().slave.?, &buffer);
+        const name = try tty.ttyName(pty.slave.?, &buffer);
         try testing.expect(std.mem.startsWith(u8, name, "/dev/"));
     }
 
@@ -771,17 +746,17 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var pty = try Pty.open(std.testing.allocator, .{});
         defer pty.close(io);
 
-        const before = try posix.tcgetattr(pty.inner().slave.?);
+        const before = try posix.tcgetattr(pty.slave.?);
         try testing.expect(before.lflag.ECHO);
 
-        const saved = try tty.rawMode(pty.inner().slave.?);
-        const during = try posix.tcgetattr(pty.inner().slave.?);
+        const saved = try tty.rawMode(pty.slave.?);
+        const during = try posix.tcgetattr(pty.slave.?);
         try testing.expect(!during.lflag.ECHO);
         try testing.expect(!during.lflag.ICANON);
         try testing.expect(!during.oflag.OPOST);
 
-        try tty.restore(pty.inner().slave.?, saved);
-        var after = try posix.tcgetattr(pty.inner().slave.?);
+        try tty.restore(pty.slave.?, saved);
+        var after = try posix.tcgetattr(pty.slave.?);
         // A BSD kernel marks input for retyping whenever canonical mode comes
         // back without a flush that waits on the output, which `restore` never
         // does; the mark clears on the next read and is not part of the mode
@@ -804,8 +779,8 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer pty.close(io);
 
         const cloexec: c_int = c.FD_CLOEXEC;
-        try testing.expectEqual(cloexec, c.fcntl(pty.inner().read.?, c.F.GETFD, @as(c_int, 0)) & cloexec);
-        try testing.expectEqual(cloexec, c.fcntl(pty.inner().slave.?, c.F.GETFD, @as(c_int, 0)) & cloexec);
+        try testing.expectEqual(cloexec, c.fcntl(pty.read.?, c.F.GETFD, @as(c_int, 0)) & cloexec);
+        try testing.expectEqual(cloexec, c.fcntl(pty.slave.?, c.F.GETFD, @as(c_int, 0)) & cloexec);
     }
 
     test "a pseudoconsole is opened with the console options this system will take" {
@@ -824,7 +799,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         });
         defer pty.close(io);
 
-        try testing.expect(pty.inner().slave != null);
+        try testing.expect(pty.slave != null);
 
         // And a pair that still works: the size it was given is the size it says.
         try testing.expectEqual(@as(u16, 24), (try pty.size()).rows);
@@ -835,7 +810,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         const io = testing.io;
         var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
-        try testing.expectEqual(ConsoleOptions{}, pty.inner().console);
+        try testing.expectEqual(ConsoleOptions{}, pty.console);
     }
 
     test "restoring a terminal nobody reads does not wait for its output" {
@@ -846,21 +821,21 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         const io = testing.io;
         var pty = try Pty.open(std.testing.allocator, .{});
         defer pty.close(io);
-        const saved = try tty.rawMode(pty.inner().slave.?);
+        const saved = try tty.rawMode(pty.slave.?);
         // Not blocking, so filling the pair cannot hang the test either.
-        const flags = posix.system.fcntl(pty.inner().slave.?, posix.F.GETFL, @as(usize, 0));
+        const flags = posix.system.fcntl(pty.slave.?, posix.F.GETFL, @as(usize, 0));
         try testing.expect(flags >= 0);
         const nonblock: u32 = @bitCast(posix.O{ .NONBLOCK = true });
-        try testing.expectEqual(@as(@TypeOf(flags), 0), posix.system.fcntl(pty.inner().slave.?, posix.F.SETFL, @as(usize, @intCast(flags)) | nonblock));
+        try testing.expectEqual(@as(@TypeOf(flags), 0), posix.system.fcntl(pty.slave.?, posix.F.SETFL, @as(usize, @intCast(flags)) | nonblock));
         const chunk: [4096]u8 = @splat('x');
         var written: usize = 0;
         while (written < 1 << 20) {
-            const rc = posix.system.write(pty.inner().slave.?, &chunk, chunk.len);
+            const rc = posix.system.write(pty.slave.?, &chunk, chunk.len);
             if (posix.errno(rc) != .SUCCESS) break;
             written += @intCast(rc);
         }
         try testing.expect(written > 0);
-        try tty.restore(pty.inner().slave.?, saved);
+        try tty.restore(pty.slave.?, saved);
     }
 
     test "size borrows the pair instead of copying its mutable Windows geometry" {
@@ -893,7 +868,7 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer resizing.cancel(io) catch {};
         for (0..1024) |_| {
             const borrowed = pty.master();
-            try testing.expectEqual(pty.inner().read.?, borrowed.read.handle);
+            try testing.expectEqual(pty.read.?, borrowed.read.handle);
             const got = try pty.size();
             try testing.expect(std.meta.eql(got, a) or std.meta.eql(got, b));
             try std.Io.sleep(io, .fromNanoseconds(1), .awake);
@@ -920,16 +895,12 @@ pub const Pty = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var allocator: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
         try testing.expectError(error.OutOfMemory, Pty.open(allocator.allocator(), .{}));
     }
-
-    test "Pty exposes no writable terminal ownership" {
-        try std.testing.expect(@typeInfo(Pty) == .@"enum");
-    }
 };
 
 /// Test-only placement of an already duplicated POSIX master.
 pub fn placeMasterForTest(pty: *Pty, descriptor: posix.fd_t) void {
     if (!builtin.is_test) @compileError("test-only descriptor placement");
-    const state = pty.inner();
+    const state = pty;
     _ = c.close(state.read.?);
     state.read = descriptor;
     state.write = descriptor;

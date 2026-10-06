@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- The public types are ordinary Zig structs with private fields, no longer integer-backed enums whose state was cast out of their bits: `Child`, `Child.HeldReap`, `Child.Output`, `InputWriter`, `Reaper`, `Expect`, `Orphans`, `Orphans.Spawn`, `Pty`, `Shell`, `Cgroup`, `Cgroup.Recorded` and `CapturedPid`. Their methods are unchanged. A value can no longer be made with `@enumFromInt`; `Child` is a handle whose copies name the same child, released or deinited once. `Reaper`, `Expect` and `Orphans` assert in safe builds that they have not moved since `start`.
+  - `Reaper` copies the `Child` handle at `start`, so the caller's `Child` may move afterwards; it must still not be deinited while the `Reaper` runs. `Child.HeldReap` holds the handle, not a pointer to it.
+
+- Named error sets, the same on every POSIX target: `StartTimeError`, `CaptureError`, `EndRecordedError` and `SignalGroupError`, returned by `startTime`, `captureStarted`, `endRecorded` and `CapturedPid.signalGroupSince`. `Child.ReleaseError` is `Child.KillWaitError`; `release` never returned a `waitTree` error.
+
+- `Child.kill` signals the child, or its group, even when the descendant walk cannot hold the tree, and reports `OutOfMemory` after; `killWait` then reaps the child before returning that error. On Linux the walk holds the tree rather than the whole process table, so it no longer fails on a host with a few thousand processes.
+
+- `Child.output` takes any allocator on every system, as `exchange` does: where it reads on tasks, their allocations are serialized.
+
+- `Child.exchange` refuses input for a child with no stdin pipe (`NoStdinPipe`) before it starts, and leaves the child running instead of killing and reaping it.
+
+- `Expect.until`, `untilAny` and `bytes` return `EndOfStream` once reading has stopped, instead of waiting out their timeout.
+
+- `Proxy.run` keeps carrying the child's output after `input` reaches end of file; only the output ending, or either direction failing, ends the call.
+
+- A spawn with `descendants = .contain` on Linux no longer hangs when the root's note that it could not join its cgroup arrives before its supervisor's report.
+
+- `output` no longer reaps a child whose reap a `Reaper` or `HeldReap` holds.
+
+- A project that depends on conduit builds: build.zig reaches its CI dependency only in conduit's own tree.
+
 - `deinit` cannot fail and leaves its value undefined, everywhere. Teardown that can fail, and be asked again, has its own name:
   - `Reaper.end(io)` ends the task and the adoption scope, returning `Reaper.EndError`, which replaces `Reaper.DeinitError`; a second call does nothing, and a later `start` or `enableSubreaper` is `AlreadyStarted`. `Reaper.deinit(io)` returns nothing and, with `enableSubreaper`, follows a successful `end`.
   - `Orphans.stop()` restores the subreaper setting and releases the scope, returning `Orphans.StopError`, which replaces `Orphans.DeinitError`. `Orphans.deinit()` returns nothing and follows a successful `stop` once started.

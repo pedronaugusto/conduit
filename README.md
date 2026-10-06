@@ -70,8 +70,9 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 
 ### `Child` — a child process
 
-Lifecycle state is opaque. Move a child before sharing it, and do not copy it
-or call `deinit` while another task uses it. `processId` and `result` are safe
+A `Child` is a handle to its lifecycle: its fields are private, copies name
+the same child, and exactly one of them is released or deinited, never while
+another task uses it. `processId` and `result` are safe
 to read while a wait or Reaper runs.
 
 | | |
@@ -109,7 +110,7 @@ frees what was not taken and leaves the value undefined. `Output.init(parts)`
 makes one from bytes the caller allocated.
 
 `conduit.Cgroup` is the cgroup a Linux child holds. Both cgroup handle types
-keep ownership opaque in fixed storage. `cgroup.id()` gives its
+keep their descriptors in private fields and allocate nothing. `cgroup.id()` gives its
 directory identity. `Cgroup.openRecorded(path, id)` returns a separate
 `Cgroup.Recorded` handle only when the saved inode matches. It holds both the
 cgroup and its parent by descriptor, and copies only the final name into a
@@ -356,7 +357,7 @@ without waiting for that CLI to read.
 
 ### `Expect` — a conversation with a child
 
-Conversation state is opaque; create it with `init` and observe bytes through
+Its fields are private; create it with `init` and observe bytes through
 `pending`, `until`, `untilAny` and `bytes`. A lifetime permits one successful
 start; a start after `stop` is `AlreadyStarted`, even if no reader ran.
 
@@ -457,8 +458,9 @@ remaining owned group or cgroup before releasing the root identity, spending
 the remainder of that same grace. `end(io)` and `deinit(io)` end the task; on POSIX
 the wait is on the child's `pidfd` or kqueue registration beside a pipe
 they write to, so it goes at once whether or not the `std.Io` can cancel
-a system call. The `Child` must outlive it, it must not move once started, and
-a wait error is final and returned by every later `exit()`. The state and wake handles are opaque.
+a system call. The `Child` must not be deinited while it runs, the `Reaper` must not move
+once started (safe builds assert it on each call), and a wait error is final
+and returned by every later `exit()`. Its fields are private.
 Only one successful start is allowed per lifetime; another start, including
 after `end`, returns `AlreadyStarted`. A concurrency failure releases
 its resources and may be retried before `end`. Release every HeldReap
@@ -475,8 +477,9 @@ cannot reach a group that has been given the same number since. On Windows the
 job is ended as soon as the child is reaped. The term published is the
 child's own.
 
-`Orphans` keeps its state opaque; `init`, `count`, `list`, `adoptionEvent` and
-`adoptionCount` provide construction and observations.
+`Orphans` keeps its fields private; `init`, `count`, `list`, `adoptionEvent` and
+`adoptionCount` provide construction and observations. It must not move once
+started, which safe builds assert on each call.
 
 `Orphans.init(allocator)` and `start()` make this process, on Linux, the
 parent of every orphan below it (`PR_SET_CHILD_SUBREAPER`): a daemon a
@@ -622,7 +625,7 @@ Whether this process may is found out at the first spawn, from
 assumed; a refusal (a read-only cgroup mount, as in a default container; a
 cgroup owned by root, as in an SSH session; a cgroup v1 system; a kernel
 before 5.14) is remembered, and every child is started as before and reached
-as below. The cgroup is owned by the child's opaque lifecycle; a
+as below. The cgroup is owned by the child's lifecycle; a
 contained spawn always takes the fork, never `posix_spawn`, since joining a
 cgroup is a write and there is no file action for one; this process holds
 one more descriptor per child, and makes and removes one directory per child

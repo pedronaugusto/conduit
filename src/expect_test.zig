@@ -47,7 +47,7 @@ test "a canceled reading task publishes that it finished" {
     var buffer: [32]u8 = undefined;
     var expect: Expect = .init(undefined, &buffer);
     try testing.expectError(error.Canceled, access.read(&expect, cancel_io));
-    try testing.expect(access.inner(&expect).finished.load(.acquire));
+    try testing.expect(expect.finished.load(.acquire));
 }
 
 test "start refuses to put a second reader over the buffer" {
@@ -196,7 +196,7 @@ test "deinit stops the reader while the terminal is still open" {
         defer join_watchdog.deinit(io);
         expect.stop(io);
     }
-    try testing.expect(access.inner(&expect).finished.load(.acquire));
+    try testing.expect(expect.finished.load(.acquire));
     try testing.expectError(error.AlreadyStarted, expect.start(io));
     {
         // Nothing more will arrive once reading has stopped, and a wait says
@@ -513,10 +513,6 @@ fn fullScan(said: []const u8, patterns: []const []const u8) ?access.Found {
     return winner;
 }
 
-test "Expect exposes no writable conversation state" {
-    try testing.expect(@typeInfo(Expect) == .@"enum");
-}
-
 test "a stopped Expect refuses a start, and stopping again does nothing" {
     var buffer: [1]u8 = undefined;
     var expect = Expect.init(undefined, &buffer);
@@ -551,7 +547,7 @@ test "a full Expect buffer waits for its consumer without interval sleeps" {
     const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
     var buffer: [1]u8 = .{'x'};
     var expect = Expect.init(undefined, &buffer);
-    access.inner(&expect).filled = buffer.len;
+    expect.filled = buffer.len;
     try std.testing.expectError(error.Canceled, access.read(&expect, observed_io));
     try std.testing.expectEqual(@as(usize, 0), backend.sleeps);
     try std.testing.expectEqual(@as(usize, 1), backend.waits);
@@ -572,7 +568,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
             // The reader has checked that it is full and is entering its
             // wait. Make room here: this notification must not be lost.
             if (backend.consume) {
-                access.inner(&backend.expect).consumed = 1;
+                backend.expect.consumed = 1;
                 access.compact(backend.io, &backend.expect);
             } else backend.expect.discard(backend.io);
         }
@@ -588,7 +584,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         var buffer: [1]u8 = .{'a'};
         const f = handles.file(if (is_windows) std.os.windows.INVALID_HANDLE_VALUE else -1);
         var expect = Expect.init(.{ .read = f, .write = f }, &buffer);
-        access.inner(&expect).filled = buffer.len;
+        expect.filled = buffer.len;
         var backend: Backend = .{ .expect = &expect, .consume = consume };
         var vtable = std.testing.io.vtable.*;
         vtable.futexWait = Backend.wait;

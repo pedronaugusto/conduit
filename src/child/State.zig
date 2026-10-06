@@ -110,13 +110,3 @@ force_tree: bool = false,
 /// An identity retired without a term, because something else reaped it.
 /// Guarded by `identity`; once set, no signal uses the child's name again.
 identity_retired: bool = false,
-
-/// Only spawn creates this pointer, and deinit destroys it after all tasks join.
-pub fn get(child: anytype) *State {
-    const value = if (@typeInfo(@TypeOf(child)) == .@"enum") child else if (@typeInfo(@TypeOf(child.*)) == .@"enum") child.* else child.*.*;
-    return @ptrFromInt(@intFromEnum(value)); // safe: spawn encodes its allocated State, which lives until deinit.
-}
-
-pub fn owner(comptime Owner: type, state: *State) Owner {
-    return @enumFromInt(@intFromPtr(state)); // safe: the Child takes this allocated State and releases it in deinit.
-}
