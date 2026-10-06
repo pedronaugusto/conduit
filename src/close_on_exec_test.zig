@@ -33,31 +33,52 @@ test "a pipe is close-on-exec at both ends, and nonblocking only when asked" {
     }
 }
 
+/// A pipe asked for on another thread, and whether it is made yet.
+const Made = struct {
+    ends: tty.PipeError![2]posix.fd_t = undefined,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn open(made: *Made) void {
+        made.ends = tty.pipe(.{});
+        made.done.store(true, .release);
+    }
+
+    /// In the lock, as a child being started is: a pipe asked for on
+    /// another thread meanwhile, and whether it was made. The opener is
+    /// given ample time to get it wrong, and can only be joined once the
+    /// lock is left, so the wait's own result comes back with it.
+    fn whileStarting(made: *Made) std.Thread.SpawnError!struct { std.Thread, bool, std.Io.Cancelable!void } {
+        const opener = try std.Thread.spawn(.{}, open, .{made});
+        const waited = std.Io.sleep(testing.io, .fromMilliseconds(50), .awake);
+        return .{ opener, made.done.load(.acquire), waited };
+    }
+};
+
 test "a pipe opened in two calls waits for a child being started" {
     if (is_windows or !tty.opening_is_two_calls) return error.SkipZigTest;
-    tty.ForkGap.startingAChild();
-    var starting = true;
-    defer if (starting) tty.ForkGap.release();
 
-    var made: std.atomic.Value(bool) = .init(false);
-    var ends: tty.PipeError![2]posix.fd_t = undefined;
-    const opener = try std.Thread.spawn(.{}, struct {
-        fn run(result: *tty.PipeError![2]posix.fd_t, done: *std.atomic.Value(bool)) void {
-            result.* = tty.pipe(.{});
-            done.store(true, .release);
-        }
-    }.run, .{ &ends, &made });
-
-    // A pipe made while the child is being started is one it could inherit.
-    // The opener is given ample time to get it wrong.
-    try std.Io.sleep(testing.io, .fromMilliseconds(50), .awake);
-    const made_while_starting = made.load(.acquire);
-    tty.ForkGap.release();
-    starting = false;
+    var made: Made = .{};
+    const opener, const made_while_starting, const waited = try tty.ForkGap.hold(Made.whileStarting, .{&made});
     opener.join();
-    const fds = try ends;
+    try waited;
+    const fds = try made.ends;
     for (fds) |fd| {
         _ = posix.system.close(fd);
     }
     try testing.expect(!made_while_starting);
+}
+
+test "the fork gap is left however the call inside it returns" {
+    const Failing = struct {
+        fn call() error{TestFailedInside}!void {
+            return error.TestFailedInside;
+        }
+    };
+    try testing.expectError(error.TestFailedInside, tty.ForkGap.hold(Failing.call, .{}));
+    if (is_windows) return;
+    // Taken again, which would spin for ever had the failure kept it.
+    const ends = try tty.pipe(.{});
+    for (ends) |fd| {
+        _ = posix.system.close(fd);
+    }
 }

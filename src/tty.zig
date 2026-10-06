@@ -72,8 +72,8 @@ pub const pipe = close_on_exec.pipe;
 pub const PipeOptions = close_on_exec.PipeOptions;
 pub const PipeError = close_on_exec.PipeError;
 /// The lock that keeps conduit's spawns out of the moment a descriptor opened
-/// in two calls has no close-on-exec flag yet. Darwin only; elsewhere it costs
-/// nothing.
+/// in two calls has no close-on-exec flag yet, taken only for the length of a
+/// call. Darwin only; elsewhere it costs nothing.
 pub const ForkGap = close_on_exec.ForkGap;
 /// Whether a descriptor here is opened and marked close-on-exec in two calls.
 pub const opening_is_two_calls = close_on_exec.opening_is_two_calls;

@@ -25,9 +25,8 @@ pub const opening_is_two_calls = !is_windows and @TypeOf(system.pipe2) == void;
 ///
 /// A child started in that moment inherits a descriptor that has nothing to do
 /// with it and keeps the far end of it waiting. There is no flag to close the
-/// gap on Darwin, so what closes it is that the two never happen at once:
-/// `openingDescriptors` is held while a pipe is made, `startingAChild` while a
-/// child is started, and they are the same lock.
+/// gap on Darwin, so what closes it is that the two never happen at once: a
+/// pipe is made, and a child is started, inside `hold`, and it is one lock.
 ///
 /// **It reaches this package's spawns and no others.** A `fork` somewhere else
 /// in the program is still free to land in the gap, and nothing a library can
@@ -35,29 +34,27 @@ pub const opening_is_two_calls = !is_windows and @TypeOf(system.pipe2) == void;
 /// where they are: `Pty.open` marks the master in a second call on a system
 /// whose `posix_openpt` refuses the flag, and a descriptor the caller opened
 /// without the flag is the caller's to close with `SpawnOptions.fd_policy`.
+/// A program that opens a descriptor of its own in two calls keeps conduit's
+/// spawns out of that gap by doing it inside `hold`.
 ///
 /// It is one lock per program only while the program builds one conduit: a
 /// program and a package it depends on that pin two conduits have two.
 ///
-/// Where an open carries its own flag this is not compiled at all.
+/// Where an open carries its own flag, `hold` only calls the function.
 pub const ForkGap = struct {
     var held: std.atomic.Value(bool) = .init(false);
 
-    /// Taken while a descriptor is being opened and marked.
-    pub fn openingDescriptors() void {
-        if (opening_is_two_calls) take();
-    }
-
-    /// Taken while a child is being started, which is the moment a descriptor
-    /// with no flag on it would be copied into.
-    pub fn startingAChild() void {
-        if (opening_is_two_calls) take();
-    }
-
-    pub fn release() void {
-        if (!opening_is_two_calls) return;
-        std.debug.assert(held.load(.monotonic));
-        held.store(false, .release);
+    /// Calls `function` with `args` inside the lock, and leaves it however
+    /// the call returns. The section is a few system calls long: the wait for
+    /// it is a spin. It is not reentrant, so `function` makes no `pipe` and
+    /// starts no child through conduit.
+    pub fn hold(function: anytype, args: anytype) @typeInfo(@TypeOf(function)).@"fn".return_type.? {
+        if (!opening_is_two_calls) return @call(.auto, function, args);
+        take();
+        // A fork child inherits the lock as held and never returns here: it
+        // runs a handful of system calls and execs.
+        defer held.store(false, .release);
+        return @call(.auto, function, args);
     }
 
     fn take() void {
@@ -84,7 +81,7 @@ pub const PipeError = error{
 } || std.Io.UnexpectedError;
 
 /// A pipe, both ends close-on-exec: `pipe2` where the system has it, and
-/// `pipe` with the flag set in the `ForkGap` where it has not. POSIX only.
+/// `pipe` with the flag set inside `ForkGap.hold` where it has not. POSIX only.
 pub const pipe = if (is_windows)
     @compileError("pipe is POSIX-only")
 else
@@ -96,20 +93,22 @@ fn pipePosix(options: PipeOptions) PipeError![2]posix.fd_t {
         // No `pipe2` here, so the flag is a second call and there is a gap
         // between the two. `ForkGap` is what keeps this package's own spawns
         // out of it.
-        ForkGap.openingDescriptors();
-        defer ForkGap.release();
-        try opened(system.pipe(&ends));
-        errdefer for (ends) |fd| {
-            _ = system.close(fd);
-        };
-        for (ends) |fd| {
-            try set(fd, posix.F.SETFD, posix.FD_CLOEXEC);
-            if (options.nonblocking) try set(fd, posix.F.SETFL, @bitCast(posix.O{ .NONBLOCK = true }));
-        }
+        try ForkGap.hold(pipeMarked, .{ &ends, options });
     } else {
         try opened(system.pipe2(&ends, .{ .CLOEXEC = true, .NONBLOCK = options.nonblocking }));
     }
     return ends;
+}
+
+fn pipeMarked(ends: *[2]posix.fd_t, options: PipeOptions) PipeError!void {
+    try opened(system.pipe(ends));
+    errdefer for (ends) |fd| {
+        _ = system.close(fd);
+    };
+    for (ends) |fd| {
+        try set(fd, posix.F.SETFD, posix.FD_CLOEXEC);
+        if (options.nonblocking) try set(fd, posix.F.SETFL, @bitCast(posix.O{ .NONBLOCK = true }));
+    }
 }
 
 fn opened(rc: anytype) PipeError!void {

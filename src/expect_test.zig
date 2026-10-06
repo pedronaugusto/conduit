@@ -153,7 +153,7 @@ test "deinit stops the reader while the terminal is still open" {
     // piece and waits for a line, so its console stays open and nothing but
     // `deinit` will end the read the task is in. Asked with `CancelIoEx`, a
     // Windows read of the master was issued again at once, and `deinit` did
-    // not return within the test runner's thirty-second watchdog.
+    // not return before the test runner's watchdog fired.
     const argv: []const []const u8 = if (is_windows)
         &.{ "cmd.exe", "/c", "echo ready& set /p ignored=" }
     else

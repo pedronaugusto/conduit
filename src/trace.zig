@@ -32,9 +32,6 @@ pub fn enabled() bool {
         else => {},
     }
     const on = look();
-    // The test runner prints what `std.testing.log_level` admits, warnings
-    // and worse unless a test asks for more.
-    if (builtin.is_test and on) std.testing.log_level = .info;
     state.store(if (on) 2 else 1, .release);
     return on;
 }

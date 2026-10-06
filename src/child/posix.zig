@@ -21,7 +21,6 @@ const tree = @import("../tree.zig");
 const cgroup = @import("../cgroup.zig");
 const Orphans = @import("../orphans.zig").Orphans;
 const supervisor = @import("../supervisor.zig");
-const SpawnCalls = @import("../testing/support.zig").SpawnCalls;
 const lineage = @import("../lineage.zig");
 
 const file = handles.file;
@@ -191,8 +190,18 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
     // was gone before it.
     const parent = c.getpid();
 
-    tty.ForkGap.startingAChild();
-    if (builtin.is_test) SpawnCalls.forks += 1;
+    const pid = tty.ForkGap.hold(forkRunning, .{ options, plan, exec, ends, parent });
+    if (pid > 0) return pid;
+    return switch (c.errno(@as(c_int, -1))) {
+        .AGAIN => error.ResourceLimitReached,
+        .NOMEM => error.SystemResources,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+/// `fork`, and `childMain` in the child, which never returns: only the parent
+/// comes back from here, with what `fork` said.
+fn forkRunning(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds, parent: posix.pid_t) posix.pid_t {
     const pid = c.fork();
     if (pid == 0) {
         const root_parent = if (comptime builtin.os.tag == .linux) if (ends.channel) |channel|
@@ -203,13 +212,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
         // it is not touch it: it runs a handful of system calls and execs.
         childMain(options, plan, exec, ends.report, root_parent, ends.go, ends.join);
     }
-    tty.ForkGap.release();
-    if (pid > 0) return pid;
-    return switch (c.errno(@as(c_int, -1))) {
-        .AGAIN => error.ResourceLimitReached,
-        .NOMEM => error.SystemResources,
-        else => |err| posix.unexpectedErrno(err),
-    };
+    return pid;
 }
 
 /// What watches a forked child from before its `execve`.
@@ -305,11 +308,7 @@ fn spawnWithoutFork(
     adoption: *Orphans.Spawn,
     state: *State,
 ) SpawnError!?*State {
-    const child = child: {
-        tty.ForkGap.startingAChild();
-        defer tty.ForkGap.release();
-        break :child try posix_spawn.spawn(plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options);
-    } orelse return null;
+    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options }) orelse return null;
     adoption.started(child.pid) catch |err| {
         var forks = child.forks;
         forks.close();

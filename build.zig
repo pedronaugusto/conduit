@@ -137,6 +137,9 @@ pub fn build(b: *std.Build) void {
         // Measurements that print numbers rather than assert a behaviour, off
         // in the suite: `zig build unit -Dmeasure -Dtest-filter=measures`.
         test_options.addOption(bool, "measure", b.option(bool, "measure", "Also run the measurements, which report numbers and assert nothing") orelse false);
+        // A host that cannot make a cgroup skips the tests that need one;
+        // this makes that a failure, for the run that is there to hold them.
+        test_options.addOption(bool, "require_cgroups", b.option(bool, "require-cgroups", "Fail, rather than skip, the cgroup tests where no cgroup can be made") orelse false);
         test_module.addOptions("conduit_test_options", test_options);
     }
 
@@ -151,6 +154,10 @@ pub fn build(b: *std.Build) void {
     const unit_step = b.step("unit", "Run the conduit tests, without the examples");
     unit_step.dependOn(&b.addRunArtifact(tests).step);
     b.step("check-unit", "Compile the conduit tests without running them").dependOn(&tests.step);
+    // The suite as a program of its own, for a run as another user: only root
+    // may make a cgroup on CI's Linux runner, so its cgroup leg runs
+    // `sudo zig-out/bin/conduit-tests`.
+    b.step("install-unit", "Install the test binary, to run it directly").dependOn(&b.addInstallArtifact(tests, .{}).step);
 
     const test_step = b.step("test", "Run the conduit tests");
     test_step.dependOn(unit_step);
@@ -205,11 +212,19 @@ pub fn build(b: *std.Build) void {
 
     if (b.pkg_hash.len != 0) return;
     if (b.lazyImport(@This(), "preflight")) |preflight| {
-        // preflight's test runner fails a test that outlasts this, its Io
-        // teardown included, by name and phase. Under CI's
-        // `--test-timeout 45s`, so the test is named from inside the run.
-        const watchdog_ms = b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown") orelse 30_000;
-        preflight.addCi(b, .{ .tests = test_step, .test_timeout = .fromMilliseconds(watchdog_ms) });
+        // preflight's test runner fails a test that outlasts its watchdog,
+        // its Io teardown included, by name and phase. `check-runner` sets a
+        // short one, to watch that happen.
+        const watchdog_ms = b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown; preflight's default when unset");
+        preflight.addCi(b, .{
+            .tests = test_step,
+            .test_timeout = if (watchdog_ms) |ms| .{ .bound = .{
+                .limit = .fromMilliseconds(ms),
+                .reason = "asked for by -Dtest-watchdog-ms",
+            } } else .default,
+            // What `CONDUIT_TRACE` prints is at the info level.
+            .test_log_level = .info,
+        });
         const containment = preflight.addCheck(b, "check-containment", "ci/containment.zig");
         const probe = b.addRunArtifact(containment);
         probe.addArg("runner");

@@ -61,12 +61,6 @@ pub const Watchdog = struct {
     }
 };
 
-/// Counts only the parent's fork and posix_spawn calls, never wall time.
-pub const SpawnCalls = struct {
-    pub var forks: usize = 0;
-    pub var file_actions: usize = 0;
-};
-
 var teardown_probe_group: std.Io.Group = .init;
 test "runner teardown probe" {
     if (!try std.testing.environ.contains(std.testing.allocator, "CONDUIT_TEARDOWN_PROBE")) return error.SkipZigTest;

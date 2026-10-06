@@ -794,8 +794,8 @@ Output collection borrows that watcher too; it keeps the identity check and owne
 
 | | Mechanism | Suite |
 |---|---|---|
-| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 where writable and a private supervisor per contained child; opt-in process subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and in Docker with `zig build ci-linux --` |
-| Linux (musl) | the same | Alpine, in CI and with `zig build ci-linux -- --musl` |
+| Linux (glibc) | `posix_openpt`, `posix_spawn` or `fork` and `execve`; a cgroup v2 where writable and a private supervisor per contained child; opt-in process subreaper (`Orphans`, 5.4) | `ubuntu-latest`, and once more as root, where a cgroup can be made |
+| Linux (musl) | the same | `ubuntu-latest`, built for `x86_64-linux-musl` against Zig's own musl |
 | macOS | the same | `macos-latest` |
 | Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |
 | FreeBSD, NetBSD | as Linux | cross-compiled only |
@@ -839,17 +839,18 @@ zig build test --fuzz            # the three properties, under the fuzzer
 zig build unit -Dthread-sanitizer   # the suite under ThreadSanitizer
 zig build examples               # the examples alone
 zig fmt --check src examples build.zig
-zig build ci-linux -- --both               # the suite on glibc and musl Linux, in Docker,
-                                 # then once more with a writable cgroup
+zig build test -Dtarget=x86_64-linux-musl  # on Linux: the suite on musl, linked statically
+zig build install-unit -Drequire-cgroups && sudo zig-out/bin/conduit-tests
+                                 # on Linux, as root: the cgroup tests, which fail
+                                 # rather than skip where no cgroup can be made
 ```
 
 Most of the suite starts a real child process and reaps it, and CI runs it in
 Debug and ReleaseSafe on Linux, macOS and Windows, and in ReleaseFast on
 Linux: the code between `fork` and `execve` is the kind an inlining decision
-can change. CI passes `--test-timeout 45s`, which ends the run and names the
-test that did not finish, and preflight's test runner fails a test that runs
-past thirty seconds, its Io teardown included, by name and phase
-(`-Dtest-watchdog-ms` sets the bound). The suite also runs with the
+can change. preflight's test runner fails a test that runs past its bound,
+its Io teardown included, by name and phase: preflight's default, or what
+`-Dtest-watchdog-ms` sets. The suite also runs with the
 `posix_spawn` path turned off, because that path is a second implementation of
 one contract and running both is what says they make the same child.
 
@@ -865,7 +866,7 @@ error return traces off, which is what lets the fuzzing test runner compile.
 `zig build unit` is the suite without the examples, `-Dtest-filter` runs part
 of it, and `CONDUIT_TRACE` in the environment logs what this package asked
 the operating system for, through `std.log` at the info level under the
-`conduit` scope; in the suite it raises `std.testing.log_level` to match.
+`conduit` scope, which the suite prints.
 
 ## Requirements
 

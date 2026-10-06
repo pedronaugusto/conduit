@@ -7,6 +7,7 @@ const tty = @import("conduit.tty");
 const Child = conduit.Child;
 const Pty = conduit.Pty;
 const Deadline = tty.Deadline;
+const Watchdog = @import("testing/support.zig").Watchdog;
 const Options = conduit.Proxy.Options;
 const run = conduit.Proxy.run;
 const testing = std.testing;
@@ -227,4 +228,27 @@ fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
     return error.TestSizeWasNotForwarded;
+}
+
+test "an input error interrupts a silent output pump" {
+    if (is_windows) return error.SkipZigTest;
+
+    const io = testing.io;
+    var watchdog: Watchdog = .init(@src(), 2000);
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var terminal = try Pty.open(std.testing.allocator, .{});
+    defer terminal.close(io);
+    var input_buffer: [32]u8 = undefined;
+    var output_buffer: [32]u8 = undefined;
+    const invalid: std.Io.File = .{ .handle = -1, .flags = .{ .nonblocking = false } };
+
+    try testing.expectError(error.ReadFailed, run(io, .{
+        .master = terminal.master(),
+        .input = invalid,
+        .output = invalid,
+        .input_buffer = &input_buffer,
+        .output_buffer = &output_buffer,
+    }));
 }

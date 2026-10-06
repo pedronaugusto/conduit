@@ -68,7 +68,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
         return error.RunnerProbeCompileFailed;
     }
     const result = try std.process.run(a, io, .{
-        .argv = &.{ "zig", "build", "unit", "-Dci-lint=false", "-Dtest-filter=runner teardown probe", "-Dtest-watchdog-ms=200", "--test-timeout", "45s" },
+        .argv = &.{ "zig", "build", "unit", "-Dci-lint=false", "-Dtest-filter=runner teardown probe", "-Dtest-watchdog-ms=200" },
         .environ_map = &env,
         .timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } },
     });

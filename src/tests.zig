@@ -76,7 +76,7 @@ test {
     _ = @import("child/spawn_test.zig");
     _ = @import("child/descendants_test.zig");
     _ = @import("child/windows/completion.zig");
-    if (builtin.os.tag == .linux) _ = @import("supervisor.zig");
+    if (builtin.os.tag == .linux) _ = @import("supervisor_test.zig");
     _ = @import("lineage.zig");
 }
 

@@ -1559,7 +1559,13 @@ fn setsidProgram() ?[]const u8 {
 /// that would, and that only a cgroup would end.
 fn cgroupsHere() !bool {
     if (is_windows or !cgroup.supported) return false;
-    if (setsidProgram() == null) return false;
+    const here = setsidProgram() != null and try madeOne();
+    // `-Drequire-cgroups`: the run that is there to hold these tests.
+    if (!here and test_options.require_cgroups) return error.TestNoCgroupCouldBeMade;
+    return here;
+}
+
+fn madeOne() !bool {
     var looked = try Child.spawn(gpa, io, .{ .argv = &.{"/bin/true"}, .stdio = .ignore });
     defer looked.release(io) catch unreachable;
     _ = try looked.wait(io);
@@ -3335,6 +3341,33 @@ extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 /// Whether `Child.spawn` has a `posix_spawn` path in this build.
 const fast_path = if (is_windows) false else spawn_path.available;
 
+/// The forks this process makes, seen from outside conduit: libc runs a fork
+/// handler in the parent before every `fork`, and none for a `posix_spawn` on
+/// the systems that have the fast path (glibc and musl start that child with
+/// `clone`, Darwin with a system call of its own).
+const Forks = struct {
+    var count: std.atomic.Value(usize) = .init(0);
+    var registered: std.atomic.Value(bool) = .init(false);
+
+    fn counted() callconv(.c) void {
+        _ = count.fetchAdd(1, .monotonic);
+    }
+
+    /// Counts from zero, from now on. A handler cannot be taken back, so it
+    /// is added once and stays for the rest of the run.
+    fn start() !void {
+        if (comptime is_windows) return;
+        if (!registered.swap(true, .acq_rel)) {
+            if (c.pthread_atfork(counted, null, null) != 0) return error.SystemResources;
+        }
+        count.store(0, .monotonic);
+    }
+
+    fn seen() usize {
+        return count.load(.monotonic);
+    }
+};
+
 test "both spawn paths start the same child" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
@@ -3403,23 +3436,19 @@ test "a spawn expressible by file actions makes no fork call" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
-    const calls = @import("../testing/support.zig").SpawnCalls;
-    calls.forks = 0;
-    calls.file_actions = 0;
+    try Forks.start();
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
-    try testing.expectEqual(@as(usize, 0), calls.forks);
-    try testing.expectEqual(@as(usize, 1), calls.file_actions);
+    try testing.expectEqual(@as(usize, 0), Forks.seen());
 
     // cwd cannot be expressed by this implementation's file actions.
     var forked = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
     defer forked.release(io) catch unreachable;
     defer _ = forked.killWait(io, 0) catch {};
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&forked));
-    try testing.expectEqual(@as(usize, 1), calls.forks);
-    try testing.expectEqual(@as(usize, 1), calls.file_actions);
+    try testing.expectEqual(@as(usize, 1), Forks.seen());
 }
 
 //======================================================================
@@ -3950,8 +3979,7 @@ test "extra files arrive at descriptor 3 and up, in order" {
         for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
         defer for (files) |f| f.close(io);
 
-        const calls = @import("../testing/support.zig").SpawnCalls;
-        calls.file_actions = 0;
+        try Forks.start();
         var child = try Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "inherited", "3" },
             .stdio = .ignore,
@@ -3965,13 +3993,13 @@ test "extra files arrive at descriptor 3 and up, in order" {
         try expectSaid(tmp.dir, "three", "fd 3\n");
         try expectSaid(tmp.dir, "four", "fd 4\n");
         try expectSaid(tmp.dir, "five", "fd 5\n");
-        // Every source above the slots: file actions say it, unless the
-        // policy or the build asks for the fork.
+        // Every source above the slots: file actions say it, with no fork,
+        // unless the policy or the build asks for the fork.
         if (!is_windows and fast_path and policy == .close_on_exec) {
             const all_above = for (files) |f| {
                 if (f.handle < 6) break false;
             } else true;
-            if (all_above) try testing.expectEqual(@as(usize, 1), calls.file_actions);
+            if (all_above) try testing.expectEqual(@as(usize, 0), Forks.seen());
         }
     }
 }

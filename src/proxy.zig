@@ -45,14 +45,12 @@
 //! one `GetConsoleScreenBufferInfo` every `interval_ms`, and `Pty.resize` is
 //! safe to call while the master is being read and written.
 
-const builtin = @import("builtin");
 const std = @import("std");
 
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
-const is_windows = builtin.os.tag == .windows;
 const Deadline = @import("conduit.tty").Deadline;
 
 /// The files to move bytes between, and the buffers to move them in.
@@ -285,7 +283,6 @@ fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!v
 //======================================================================
 
 const testing = std.testing;
-const Watchdog = @import("testing/support.zig").Watchdog;
 
 test "empty transfer buffers are rejected before either direction starts" {
     const io = testing.io;
@@ -303,29 +300,6 @@ test "empty transfer buffers are rejected before either direction starts" {
         .output = undefined,
         .input_buffer = &one,
         .output_buffer = &.{},
-    }));
-}
-
-test "an input error interrupts a silent output pump" {
-    if (is_windows) return error.SkipZigTest;
-
-    const io = testing.io;
-    var watchdog: Watchdog = .init(@src(), 2000);
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
-    var terminal = try Pty.open(std.testing.allocator, .{});
-    defer terminal.close(io);
-    var input_buffer: [32]u8 = undefined;
-    var output_buffer: [32]u8 = undefined;
-    const invalid: std.Io.File = .{ .handle = -1, .flags = .{ .nonblocking = false } };
-
-    try testing.expectError(error.ReadFailed, run(io, .{
-        .master = terminal.master(),
-        .input = invalid,
-        .output = invalid,
-        .input_buffer = &input_buffer,
-        .output_buffer = &output_buffer,
     }));
 }
 

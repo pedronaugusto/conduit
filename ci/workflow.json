@@ -14,7 +14,6 @@
     "x86_64-netbsd"
   ],
   "compile_once": false,
-  "test_timeout": "--test-timeout 45s",
   "sanitizer": "unit",
   "before_tests_step": "check-runner"
 }

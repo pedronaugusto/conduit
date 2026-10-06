@@ -456,13 +456,11 @@ pub const Pty = struct {
         if (grantpt(master_fd) != 0) return openErrno();
         if (unlockpt(master_fd) != 0) return openErrno();
 
-        // `ptsname_r` does not agree with itself across libcs: glibc returns the
-        // error number, musl and Darwin return -1. All three set `errno`, so that
-        // is what is read, and the return value is only tested against zero.
         var name_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        if (ptsname_r(master_fd, &name_buffer, name_buffer.len) != 0) return openErrno();
-        const name_len = std.mem.findScalar(u8, &name_buffer, 0) orelse return error.Unexpected;
-        const name = name_buffer[0..name_len :0];
+        const name = switch (slaveName(master_fd, &name_buffer)) {
+            .name => |name| name,
+            .failed => |err| return openError(err),
+        };
 
         // NOCTTY: opening the slave here must not make it this process's
         // controlling terminal. The child asks for that explicitly, after `setsid`.
@@ -503,18 +501,36 @@ pub const Pty = struct {
         if (fd >= 0) return fd;
         if (c.errno(@as(c_int, -1)) != .INVAL) return openErrno();
 
-        tty.ForkGap.openingDescriptors();
-        defer tty.ForkGap.release();
+        return tty.ForkGap.hold(openMasterMarked, .{});
+    }
+
+    fn openMasterMarked() OpenError!posix.fd_t {
         const plain_fd = posix_openpt(.{ .ACCMODE = .RDWR, .NOCTTY = true });
         if (plain_fd < 0) return openErrno();
         handles.setCloseOnExec(plain_fd);
         return plain_fd;
     }
 
-    /// The current `errno`, as one of `OpenError`. Everything `openPosix` calls
-    /// reports failure the same way, so they all land here.
+    /// The slave's path, or why there is none.
+    const SlaveName = union(enum) { name: [:0]const u8, failed: posix.E };
+
+    fn slaveName(master_fd: posix.fd_t, buffer: []u8) SlaveName {
+        // `ptsname_r` does not agree with itself across libcs: glibc returns the
+        // error number, musl and Darwin return -1. All three set `errno`, so that
+        // is what is read, and the return value is only tested against zero.
+        if (ptsname_r(master_fd, buffer.ptr, buffer.len) != 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+        const len = std.mem.findScalar(u8, buffer, 0) orelse return .{ .failed = .NAMETOOLONG };
+        return .{ .name = buffer[0..len :0] };
+    }
+
+    /// The current `errno`, as one of `OpenError`. Everything else `openPosix`
+    /// calls reports failure there.
     fn openErrno() OpenError {
-        return switch (c.errno(@as(c_int, -1))) {
+        return openError(c.errno(@as(c_int, -1)));
+    }
+
+    fn openError(number: posix.E) OpenError {
+        return switch (number) {
             .MFILE => error.ProcessFdQuotaExceeded,
             .NFILE => error.SystemFdQuotaExceeded,
             .AGAIN, .NOSPC, .NXIO => error.NoDevice,
@@ -651,6 +667,20 @@ pub const Pty = struct {
     //======================================================================
 
     const testing = std.testing;
+
+    test "a slave name that does not fit says so, wherever the C library put the error" {
+        if (is_windows) return error.SkipZigTest;
+        const master_fd = try openMaster();
+        defer _ = c.close(master_fd);
+        // Nothing left over in `errno` to be mistaken for the answer.
+        c._errno().* = 0;
+        // Shorter than any slave's path: `/dev/pts/0`, `/dev/ttys000`.
+        var small: [4]u8 = undefined;
+        switch (slaveName(master_fd, &small)) {
+            .name => return error.TestNameFitWhereItCannot,
+            .failed => |err| try testing.expectEqual(posix.E.RANGE, err),
+        }
+    }
 
     test "open gives a pair at the requested size, and resize changes it" {
         const io = testing.io;

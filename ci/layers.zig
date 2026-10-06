@@ -34,12 +34,12 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/expect.zig",
         "src/proxy.zig",
         "src/child/contract.zig",
+        "src/supervisor.zig",
     } },
     .{ .name = "process policy", .patterns = &.{
         "src/process_exists.zig",
         "src/child/output.zig",
         "src/child/stdio_plan.zig",
-        "src/supervisor.zig",
         "src/tree.zig",
         "src/child/windows/completion.zig",
     } },
@@ -127,12 +127,11 @@ pub const required = [_][]const u8{
 /// Tokens only their owners may spell: Windows declarations, the terminal's
 /// modes, pseudoterminals, exec and cgroups each have their files.
 pub const owned: []const gantry.rules.TokenRule = &.{
-    .{ .name = "windows declarations", .kind = .string, .token = "kernel32", .owners = &.{ "src/win32.zig", "src/console.zig", "src/testing/process.zig", "src/testing/input_process.zig" } },
-    .{ .name = "terminal mode owner", .token = "tcgetattr", .owners = &.{ "src/tty.zig", "src/pty.zig" } },
-    .{ .name = "terminal mode owner", .token = "tcsetattr", .owners = &.{ "src/tty.zig", "src/pty.zig" } },
-    .{ .name = "pseudoterminal owner", .token = "posix_openpt", .owners = &.{"src/pty.zig"} },
-    .{ .name = "pseudoterminal owner", .token = "CreatePseudoConsole", .owners = &.{ "src/pty.zig", "src/win32.zig" } },
-    .{ .name = "exec owner", .token = "execve", .owners = &.{"src/child/posix.zig"} },
-    .{ .name = "exec owner", .token = "posix_spawn", .owners = &.{ "src/child/posix.zig", "src/child/posix/spawn.zig" } },
-    .{ .name = "cgroup owner", .kind = .string, .token = "/sys/fs/cgroup*", .owners = &.{"src/cgroup.zig"} },
+    .{ .name = "windows declarations", .kind = .string, .tokens = &.{"kernel32"}, .owners = &.{ "src/win32.zig", "src/console.zig", "src/testing/process.zig", "src/testing/input_process.zig" } },
+    .{ .name = "terminal mode owner", .tokens = &.{ "tcgetattr", "tcsetattr" }, .owners = &.{ "src/tty.zig", "src/pty.zig" } },
+    .{ .name = "pseudoterminal owner", .tokens = &.{"posix_openpt"}, .owners = &.{"src/pty.zig"} },
+    .{ .name = "pseudoterminal owner", .tokens = &.{"CreatePseudoConsole"}, .owners = &.{ "src/pty.zig", "src/win32.zig" } },
+    .{ .name = "exec owner", .tokens = &.{"execve"}, .owners = &.{"src/child/posix.zig"} },
+    .{ .name = "exec owner", .tokens = &.{"posix_spawn"}, .owners = &.{ "src/child/posix.zig", "src/child/posix/spawn.zig" } },
+    .{ .name = "cgroup owner", .kind = .string, .tokens = &.{"/sys/fs/cgroup*"}, .owners = &.{"src/cgroup.zig"} },
 };
