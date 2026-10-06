@@ -386,8 +386,8 @@ const Report = struct {
     joined: bool,
 };
 
-/// One report or end of file. A short read cannot happen: the child writes
-/// the whole record with one `write` to a pipe, and eight bytes is far below
+/// Every report up to the end of file. A short read cannot happen: a writer
+/// puts each whole record in one `write` to a pipe, and eight bytes is far below
 /// `PIPE_BUF`. The read is the raw one rather than `std.Io`'s because
 /// `spawn` is not a cancelation point: a child exists from the `fork` until
 /// `spawn` returns it, and there is no point in between at which it would be
@@ -396,22 +396,26 @@ fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
     // One record is one `write`, which a pipe keeps whole below `PIPE_BUF`,
     // whose floor is 512.
     comptime std.debug.assert(@sizeOf(Failure) == 8);
-    var record: Failure = undefined;
-    var n = readAll(fd, std.mem.asBytes(&record));
     var outcome: Report = .{ .failure = null, .root_pid = pid, .joined = true };
-    if (n == @sizeOf(Failure) and record.stage == .supervisor_root) {
-        outcome.root_pid = @intCast(record.errno);
-        n = readAll(fd, std.mem.asBytes(&record));
+    // Every record up to the end of file, in whatever order they came: the
+    // supervisor writes the root's pid after its `fork` while the root is
+    // already running, so the root's own records can arrive first. The end
+    // of file comes when the last writer has exec'd or exited; a supervisor
+    // closes its copy before it begins supervising.
+    while (true) {
+        var record: Failure = undefined;
+        const n = readAll(fd, std.mem.asBytes(&record));
+        if (n == 0) break;
+        std.debug.assert(n == @sizeOf(Failure));
+        switch (record.stage) {
+            .supervisor_root => outcome.root_pid = @intCast(record.errno),
+            // A child that could not join its cgroup says so and carries on.
+            .containment => outcome.joined = false,
+            else => if (outcome.failure == null) {
+                outcome.failure = record;
+            },
+        }
     }
-    // A child that could not join its cgroup says so and carries on; the
-    // record after it, if any, is the one that ends the spawn.
-    if (n == @sizeOf(Failure) and record.stage == .containment) {
-        outcome.joined = false;
-        n = readAll(fd, std.mem.asBytes(&record));
-    }
-    if (n == @sizeOf(Failure)) {
-        outcome.failure = record;
-    } else std.debug.assert(n == 0);
     return outcome;
 }
 
@@ -474,8 +478,8 @@ const Failure = extern struct {
         exec,
         parent_death_signal,
         /// Not a failure: the child could not join its cgroup and runs
-        /// without one. Written before the exec, and followed by a failure
-        /// or by nothing.
+        /// without one. Written before the exec, before or after the
+        /// supervisor's root record.
         containment,
         supervisor,
         supervisor_root,
@@ -967,6 +971,33 @@ fn readAll(fd: posix.fd_t, buffer: []u8) usize {
         return filled;
     }
     return filled;
+}
+
+test "the supervisor's root record is read in whatever order it arrives" {
+    const Order = []const Failure;
+    const root: Failure = .{ .stage = .supervisor_root, .errno = 4321 };
+    const unjoined: Failure = .{ .stage = .containment, .errno = @intFromEnum(posix.E.ACCES) };
+    const failed: Failure = .{ .stage = .exec, .errno = @intFromEnum(posix.E.NOENT) };
+    const cases = [_]struct { records: Order, joined: bool, failure: ?Failure.Stage }{
+        .{ .records = &.{ root, unjoined }, .joined = false, .failure = null },
+        .{ .records = &.{ unjoined, root }, .joined = false, .failure = null },
+        .{ .records = &.{ unjoined, failed, root }, .joined = false, .failure = .exec },
+        .{ .records = &.{ failed, root }, .joined = true, .failure = .exec },
+        .{ .records = &.{root}, .joined = true, .failure = null },
+    };
+    for (cases) |case| {
+        var ends: [2]posix.fd_t = undefined;
+        try std.testing.expectEqual(@as(c_int, 0), c.pipe(&ends));
+        defer _ = c.close(ends[0]);
+        for (case.records) |record| {
+            try std.testing.expectEqual(@as(isize, @sizeOf(Failure)), c.write(ends[1], std.mem.asBytes(&record), @sizeOf(Failure)));
+        }
+        _ = c.close(ends[1]);
+        const outcome = readReport(ends[0], 99);
+        try std.testing.expectEqual(@as(posix.pid_t, 4321), outcome.root_pid);
+        try std.testing.expectEqual(case.joined, outcome.joined);
+        try std.testing.expectEqual(case.failure, if (outcome.failure) |record| record.stage else null);
+    }
 }
 
 test "fork signal defaults include ignored real-time signals and leave reserved numbers alone" {
