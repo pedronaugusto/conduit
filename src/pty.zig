@@ -515,10 +515,12 @@ pub const Pty = struct {
     const SlaveName = union(enum) { name: [:0]const u8, failed: posix.E };
 
     fn slaveName(master_fd: posix.fd_t, buffer: []u8) SlaveName {
-        // `ptsname_r` does not agree with itself across libcs: glibc returns the
-        // error number, musl and Darwin return -1. All three set `errno`, so that
-        // is what is read, and the return value is only tested against zero.
-        if (ptsname_r(master_fd, buffer.ptr, buffer.len) != 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+        // `ptsname_r` does not agree with itself across libcs: glibc and musl
+        // return the error number, and musl leaves `errno` as it was; Darwin
+        // returns -1 and sets `errno`.
+        const rc = ptsname_r(master_fd, buffer.ptr, buffer.len);
+        if (rc > 0) return .{ .failed = @enumFromInt(rc) };
+        if (rc < 0) return .{ .failed = c.errno(rc) };
         const len = std.mem.findScalar(u8, buffer, 0) orelse return .{ .failed = .NAMETOOLONG };
         return .{ .name = buffer[0..len :0] };
     }
