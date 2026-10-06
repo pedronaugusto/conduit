@@ -104,15 +104,35 @@ test "one deadline ends a child that neither reads its input nor ends" {
     try testing.expect((try child.result()) != null);
 }
 
-test "input for a child with no input pipe is refused, and the child is reaped" {
+test "exchange refuses input for a child with no stdin pipe and leaves it running" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
-    var child = try Child.spawn(gpa, io, .{
-        .argv = &.{ test_options.input_fixture, "stall" },
-        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
-    });
+    var child = try spawn("end");
     defer child.release(io) catch unreachable;
+    const stdin = child.takeStdin().?;
     try testing.expectError(error.NoStdinPipe, child.exchange(gpa, io, "input", .{ .timeout_ms = budget_ms }));
-    try testing.expect((try child.result()) != null);
+    try testing.expectEqual(null, try child.tryWait());
+    // The refused call left the child alone: it still reads what it is given.
+    try stdin.writeStreamingAll(io, "still here ");
+    stdin.close(io);
+    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
+    defer result.deinit(gpa);
+    try testing.expect(Child.succeeded(result.term()));
+    try testing.expectEqualStrings("still here EOF", result.stdout());
+}
+
+test "output takes an allocator nobody shares" {
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    var child = try spawn("end");
+    defer child.release(io) catch unreachable;
+    child.closeStdin(io);
+    var result = try child.output(arena.allocator(), io, .{ .timeout_ms = budget_ms });
+    defer result.deinit(arena.allocator());
+    try testing.expect(Child.succeeded(result.term()));
+    try testing.expectEqualStrings("EOF", result.stdout());
 }

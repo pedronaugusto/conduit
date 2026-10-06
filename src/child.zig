@@ -1378,12 +1378,15 @@ pub const Child = enum(usize) {
 
     /// Runs the child to the end and collects what it wrote.
     ///
-    /// The two streams are read on tasks of their own, because a child that fills
+    /// Both streams are read as either has bytes, because a child that fills
     /// one pipe while the parent is reading the other deadlocks, and because a
-    /// timeout that a blocked read can defeat is not a timeout. That is also why
-    /// `allocator` must be safe to use from more than one thread when the
-    /// `std.Io` implementation runs tasks on threads: the collected bytes are
-    /// grown on those tasks.
+    /// timeout that a blocked read can defeat is not a timeout: from one task
+    /// that polls the pipes and the child's exit together where the system has
+    /// a handle for the exit, and on reader tasks elsewhere (Windows).
+    ///
+    /// `allocator` need not be safe to use from several threads: where the
+    /// streams are read on tasks, their allocations are serialized. The
+    /// returned `Output` is freed with `allocator`.
     ///
     /// The child is reaped when this returns, whether it ended on its own or was
     /// killed, so `wait` afterwards answers from the same term. That holds for a
@@ -1425,7 +1428,11 @@ pub const Child = enum(usize) {
             }
             if (wait_for.Watch.open(State.get(child).id)) |watch| return child.outputPolled(allocator, io, options, until, watch, null, false);
         }
-        return child.outputOnTasks(allocator, io, options, until);
+        // The readers grow the collected streams on tasks of their own; their
+        // allocations are made one at a time, so the caller's allocator need
+        // not be safe to share.
+        var serial: SerialAllocator = .{ .parent = allocator, .io = io };
+        return child.outputOnTasks(serial.allocator(), io, options, until);
     }
 
     pub const ExchangeOptions = contract.ExchangeOptions;
@@ -1455,7 +1462,8 @@ pub const Child = enum(usize) {
     /// allocation of the call is serialized, and grows only the two collected
     /// streams, each bounded by `max_bytes`. The returned `Output` is freed
     /// with `allocator`. As with `output`, the child is reaped when this
-    /// returns, an error included.
+    /// returns, an error included — except `error.NoStdinPipe`, which refuses
+    /// the call before it starts and leaves the child running.
     pub fn exchange(
         child: *Child,
         allocator: Allocator,
@@ -1463,6 +1471,9 @@ pub const Child = enum(usize) {
         input: []const u8,
         options: ExchangeOptions,
     ) ExchangeError!Output {
+        // A call refused for how it was made leaves the child as it was.
+        const state = State.get(child);
+        if (input.len != 0 and state.stdin == null) return error.NoStdinPipe;
         errdefer child.abandon(io);
         const until: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
         var feed: Feed = .{};
@@ -1471,14 +1482,12 @@ pub const Child = enum(usize) {
         if (input.len == 0) {
             child.closeStdin(io);
         } else {
-            const state = State.get(child);
-            const stdin = state.stdin orelse return error.NoStdinPipe;
+            const stdin = state.stdin.?;
             try group.concurrent(io, Feed.run, .{ io, &feed, stdin, input });
             // The task closes it once written.
             state.stdin = null;
         }
-        var serial: SerialAllocator = .{ .parent = allocator, .io = io };
-        var collected = try child.outputUntil(serial.allocator(), io, .{
+        var collected = try child.outputUntil(allocator, io, .{
             .max_bytes = options.max_bytes,
             .grace_ms = 0,
             .drain_ms = options.drain_ms,
