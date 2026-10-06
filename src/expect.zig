@@ -210,8 +210,8 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         /// The deadline passed with the pattern still not there. The bytes that
         /// did arrive are still pending, and `pending` is where to look at them.
         Timeout,
-        /// The child's end of the stream closed with the pattern still not there.
-        /// Final: nothing more will ever arrive.
+        /// The child's end of the stream closed, or reading was stopped, with
+        /// the pattern still not there. Final: nothing more will ever arrive.
         EndOfStream,
         /// The buffer is full of bytes the pattern does not match, or the pattern
         /// — or the count — is longer than the buffer could ever hold. Nothing
@@ -282,6 +282,9 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         var search: Search = .init(patterns);
         while (true) {
             expect.inner().arrived.reset();
+            // Read before the buffer: a reader seen finished here has appended
+            // everything it ever will, so a search that fails now fails for good.
+            const finished = expect.inner().finished.load(.acquire);
 
             var winner: ?Match = null;
             var full = false;
@@ -308,7 +311,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
             if (winner) |match| return match;
             if (failed) return error.ReadFailed;
-            if (ended) return error.EndOfStream;
+            if (ended or finished) return error.EndOfStream;
             if (full) return error.BufferFull;
             try expect.sleepUntil(io, deadline);
         }
@@ -377,6 +380,8 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         const deadline = deadlineIn(io, timeout_ms);
         while (true) {
             expect.inner().arrived.reset();
+            // As in `untilAny`: before the buffer.
+            const finished = expect.inner().finished.load(.acquire);
 
             var enough = false;
             var ended = false;
@@ -395,7 +400,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
             if (enough) return expect.inner().buffer[0..count];
             if (failed) return error.ReadFailed;
-            if (ended) return error.EndOfStream;
+            if (ended or finished) return error.EndOfStream;
             try expect.sleepUntil(io, deadline);
         }
     }

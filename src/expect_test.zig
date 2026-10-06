@@ -198,6 +198,16 @@ test "deinit stops the reader while the terminal is still open" {
     }
     try testing.expect(access.inner(&expect).finished.load(.acquire));
     try testing.expectError(error.AlreadyStarted, expect.start(io));
+    {
+        // Nothing more will arrive once reading has stopped, and a wait says
+        // so at once instead of spending its whole timeout.
+        var wait_watchdog: Watchdog = .init(@src());
+        wait_watchdog.limit_ms = budget_ms;
+        try wait_watchdog.start(io);
+        defer wait_watchdog.deinit(io);
+        try testing.expectError(error.EndOfStream, expect.until(io, "never", 30_000));
+        try testing.expectError(error.EndOfStream, expect.bytes(io, 512, 30_000));
+    }
     // Still running: the read ended because it was asked to, not because the
     // stream did.
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
