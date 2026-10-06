@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `deinit` cannot fail and leaves its value undefined, everywhere. Teardown that can fail, and be asked again, has its own name:
+  - `Reaper.end(io)` ends the task and the adoption scope, returning `Reaper.EndError`, which replaces `Reaper.DeinitError`; a second call does nothing, and a later `start` or `enableSubreaper` is `AlreadyStarted`. `Reaper.deinit(io)` returns nothing and, with `enableSubreaper`, follows a successful `end`.
+  - `Orphans.stop()` restores the subreaper setting and releases the scope, returning `Orphans.StopError`, which replaces `Orphans.DeinitError`. `Orphans.deinit()` returns nothing and follows a successful `stop` once started.
+  - `Expect.stop(io)` ends the reading task for good and can be called again; a later `start` is `AlreadyStarted`. `Expect.deinit(io)` stops and leaves the value undefined.
+  - `Child.release(io)` on success leaves the Child undefined, as `deinit` does: release or deinit a Child, never both. `Child.deinit` is no longer idempotent, and after either no method may be called: there is no closed Child for `processId`, `wait`, `tryWait`, `kill` or the stream accessors to answer `null` or `ReapedElsewhere` for.
+  - `Child.Output.deinit` and `InputWriter.deinit` are no longer idempotent; `InputWriter.cancel` is the call that can be made again.
+
+- `Child.Output.init(parts)` is public: an `Output` made from bytes the caller allocated, which it frees at `deinit`.
+
 - The allocator comes before the `std.Io`, as in the standard library: `Child.spawn(allocator, io, options)`, `child.inputWriter(allocator, io, options)`, `child.output(allocator, io, options)`, `child.exchange(allocator, io, input, options)`, `spawnShell(allocator, io, options)` and `findProgram(allocator, io, environ, name)`. `readAvailable` takes the `std.Io` first, `readAvailable(io, file, buffer)`. `Shell.SpawnError` is what `spawnShell` fails with; `SpawnShellError` names the same set.
 
 - `console` spells Windows' names in Zig's casing: the mode flags and `CreateFileW` arguments are `enable_line_input`, `generic_read` and the like, `SMALL_RECT` and `CONSOLE_SCREEN_BUFFER_INFO` are `SmallRect` and `ConsoleScreenBufferInfo`, and the `DWORD`, `HANDLE`, `BOOL`, `SHORT`, `WORD` and `COORD` re-exports are gone in favour of `std.os.windows`.

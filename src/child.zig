@@ -55,6 +55,7 @@ const Watchdog = @import("testing/support.zig").Watchdog;
 const input_writer = @import("input_writer.zig");
 const completion = @import("child/windows/completion.zig");
 const contract = @import("child/contract.zig");
+const child_output = @import("child/output.zig");
 const child_posix = @import("child/posix.zig");
 const child_windows = @import("child/windows.zig");
 
@@ -293,48 +294,44 @@ pub const Child = enum(usize) {
 
     pub const ReleaseError = contract.ReleaseError;
 
-    /// Ends an unfinished contained scope, confirms completion, then closes
-    /// the streams and lifecycle. Failure retains the Child and its scope for
-    /// retry. A survival-policy child keeps the ordinary deinit behaviour.
-    /// Join every task borrowing this Child before releasing it.
+    /// Ends an unfinished contained scope, confirms completion, then does what
+    /// `deinit` does. A failure keeps the Child and its scope whole, so the
+    /// call can be made again; a success leaves the Child undefined, like
+    /// `deinit`, so a Child is released or deinited, never both. A
+    /// survival-policy child is simply deinited. Join every task borrowing
+    /// this Child before releasing it.
     pub fn release(child: *Child, io: std.Io) ReleaseError!void {
-        const state = State.optional(child) orelse return;
+        const state = State.get(child);
         if (state.descendants == .contain and !state.scope_complete) {
             _ = try child.killWait(io, 0);
         }
         child.deinit(io);
     }
 
-    /// Closes owned streams and lifecycle resources; supplied streams stay open.
-    /// A contained scope must already have confirmed completion. Use release
-    /// to end an unfinished scope and learn cleanup failures. Join every task
-    /// borrowing this Child first. Idempotent, including after release.
-    /// A reaped survival-policy child leaves descendants alone. Linux cgroups
-    /// with surviving members remain until empty and a later cleanup removes them.
+    /// Closes owned streams and lifecycle resources; supplied streams stay
+    /// open. The Child is undefined afterwards. A contained scope must
+    /// already have confirmed completion: `release` ends an unfinished one
+    /// and reports what its cleanup met. Join every task borrowing this Child
+    /// first. A reaped survival-policy child leaves descendants alone. Linux
+    /// cgroups with surviving members remain until empty and a later cleanup
+    /// removes them.
     pub fn deinit(child: *Child, io: std.Io) void {
-        if (State.optional(child) == null) return;
         const state = State.get(child);
         std.debug.assert(state.descendants != .contain or state.scope_complete);
-        defer {
-            const allocator = state.allocator;
-            allocator.destroy(state);
-            child.* = @enumFromInt(0);
-        }
-        if (State.get(child).stdin) |f| f.close(io);
-        if (State.get(child).stdout) |f| f.close(io);
-        if (State.get(child).stderr) |f| f.close(io);
-        State.get(child).stdin = null;
-        State.get(child).stdout = null;
-        State.get(child).stderr = null;
+        if (state.stdin) |f| f.close(io);
+        if (state.stdout) |f| f.close(io);
+        if (state.stderr) |f| f.close(io);
         if (is_windows) {
-            if (State.get(child).handles_open) child.closeHandles();
+            if (state.handles_open) child.closeHandles();
             child.closeJob();
         } else {
             if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| owner.close();
-            if (State.get(child).lineage) |tracker| tracker.destroy();
-            State.get(child).forks.close();
-            State.get(child).cgroup.release();
+            if (state.lineage) |tracker| tracker.destroy();
+            state.forks.close();
+            state.cgroup.release();
         }
+        state.allocator.destroy(state);
+        child.* = undefined;
     }
 
     /// Closes the child's standard input, and nothing else.
@@ -354,7 +351,7 @@ pub const Child = enum(usize) {
     ///
     /// Idempotent, and safe after the child has been reaped.
     pub fn closeStdin(child: *Child, io: std.Io) void {
-        const state = State.optional(child) orelse return;
+        const state = State.get(child);
         const f = state.stdin orelse return;
         state.stdin = null;
         f.close(io);
@@ -369,11 +366,10 @@ pub const Child = enum(usize) {
         return InputWriter.init(allocator, io, child, options);
     }
 
-    /// The live identity as a number, or null after retirement or deinit.
+    /// The live identity as a number, or null after retirement.
     /// This is a snapshot, not authority to signal: only kill holds the identity
     /// through delivery. A process that ended but is not reaped still has an id.
     pub fn processId(child: *const Child) ?Id {
-        if (State.optional(child) == null) return null;
         const state = State.get(child);
         spin.lock(&state.identity);
         defer state.identity.unlock();
@@ -399,7 +395,6 @@ pub const Child = enum(usize) {
     /// Save processId and this record before starting a Reaper. Retain the saved
     /// id as the ledger key through retirement; it is not permission to signal.
     pub fn containment(child: *const Child, buffer: []u8) ContainmentError!Containment {
-        if (State.optional(child) == null) return .{ .group = null };
         const state = State.get(child);
         var record: Containment = .{ .group = state.pgid };
         if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| {
@@ -416,9 +411,7 @@ pub const Child = enum(usize) {
 
     /// The published answer without asking the OS to reap. Safe alongside a wait
     /// or Reaper: null before publication, or ReapedElsewhere after status loss.
-    /// After deinit there is no result to read.
     pub fn result(child: *const Child) TryWaitError!?Term {
-        if (State.optional(child) == null) return null;
         const state = State.get(child);
         spin.lock(&state.identity);
         defer state.identity.unlock();
@@ -445,7 +438,6 @@ pub const Child = enum(usize) {
     /// `output` is the version of this that reads and waits at once, and `Proxy`
     /// is the version that keeps reading.
     pub fn wait(child: *Child, io: std.Io) WaitError!Term {
-        if (State.optional(child) == null) return error.ReapedElsewhere;
         // Another task may already be inside the wait -- a `Reaper`, in practice.
         // It will publish the term, and a second wait on the same child would only
         // take the status away from it; so this waits for the answer instead, and
@@ -519,7 +511,6 @@ pub const Child = enum(usize) {
     /// in flight: `tryWait` says the child is still running, and `wait` waits for
     /// the term the holder publishes.
     pub fn holdReap(child: *Child) ?HeldReap {
-        if (State.optional(child) == null) return null;
         if (!child.claimReap()) return null;
         return @enumFromInt(@intFromPtr(child)); // safe: the claimed guard borrows this Child until release.
     }
@@ -572,7 +563,6 @@ pub const Child = enum(usize) {
     /// call's to reap, and it says the same thing it says about a child that is
     /// still running.
     pub fn waitTimeout(child: *Child, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
-        if (State.optional(child) == null) return error.ReapedElsewhere;
         const deadline: Deadline = .in(io, timeout_ms);
         if (child.settled()) |term| return term;
         if (!child.claimReap()) return child.settledWithin(io, deadline);
@@ -751,7 +741,6 @@ pub const Child = enum(usize) {
     /// soon as there is one. A `null` was always a snapshot; that is the one case
     /// where it can be a moment out of date.
     pub fn tryWait(child: *Child) TryWaitError!?Term {
-        if (State.optional(child) == null) return error.ReapedElsewhere;
         if (child.settled()) |term| return term;
         // Another task is inside the wait. The child is still running as far as
         // anything that has not been told otherwise is concerned, and taking the
@@ -937,7 +926,6 @@ pub const Child = enum(usize) {
     /// during the descendant walk or signal delivery. The child still needs
     /// reaping when this returns, unless another task has already done it.
     pub fn kill(child: *Child, signal: Signal) KillError!void {
-        if (State.optional(child) == null) return;
         // Never wait for an exit here. Whoever holds identity is only delivering
         // a signal or doing the final nonblocking reap, not waiting on the child.
         spin.lock(&State.get(child).identity);
@@ -1174,9 +1162,8 @@ pub const Child = enum(usize) {
     /// millisecond slices, between which cancelation is asked about, as every
     /// wait here is.
     ///
-    /// Ask it before `deinit`. The job and its port, or the cgroup, are released
-    /// there, under the chosen descendant policy. A Windows answer after `deinit`
-    /// is what it heard while there was something to hear on.
+    /// Ask it before `deinit`, which releases the job and its port, or the
+    /// cgroup, under the chosen descendant policy.
     ///
     /// A zero `timeout_ms` asks and does not wait, which is how to poll. On
     /// Windows the job's message is posted once and taking it off the port
@@ -1272,7 +1259,7 @@ pub const Child = enum(usize) {
     /// Borrowed either way. The pipe is closed by `deinit` and the master by the
     /// `Pty`.
     pub fn stdinFile(child: Child) ?std.Io.File {
-        const state = State.optional(&child) orelse return null;
+        const state = State.get(&child);
         if (state.stdin) |f| return f;
         if (State.get(child).pty) |m| return m.write;
         return null;
@@ -1286,7 +1273,7 @@ pub const Child = enum(usize) {
     /// because a terminal is one stream. That is the terminal's doing, not this
     /// package's.
     pub fn stdoutFile(child: Child) ?std.Io.File {
-        const state = State.optional(&child) orelse return null;
+        const state = State.get(&child);
         if (state.stdout) |f| return f;
         if (State.get(child).pty) |m| return m.read;
         return null;
@@ -1294,19 +1281,19 @@ pub const Child = enum(usize) {
 
     /// The separate standard-error pipe, borrowed until closure or deinit.
     pub fn stderrFile(child: Child) ?std.Io.File {
-        const state = State.optional(&child) orelse return null;
+        const state = State.get(&child);
         return state.stderr;
     }
 
     /// The borrowed terminal streams, when spawned on a pair.
     pub fn terminalMaster(child: Child) ?Pty.Master {
-        const state = State.optional(&child) orelse return null;
+        const state = State.get(&child);
         return state.pty;
     }
 
     /// Transfers the stdin pipe to the caller, who must close it. Terminal streams stay borrowed.
     pub fn takeStdin(child: *Child) ?std.Io.File {
-        const state = State.optional(child) orelse return null;
+        const state = State.get(child);
         const taken = state.stdin;
         state.stdin = null;
         return taken;
@@ -1314,7 +1301,7 @@ pub const Child = enum(usize) {
 
     /// Transfers the stdout pipe to the caller, who must close it. Terminal streams stay borrowed.
     pub fn takeStdout(child: *Child) ?std.Io.File {
-        const state = State.optional(child) orelse return null;
+        const state = State.get(child);
         const taken = state.stdout;
         state.stdout = null;
         return taken;
@@ -1322,7 +1309,7 @@ pub const Child = enum(usize) {
 
     /// Transfers the stderr pipe to the caller, who must close it. Terminal streams stay borrowed.
     pub fn takeStderr(child: *Child) ?std.Io.File {
-        const state = State.optional(child) orelse return null;
+        const state = State.get(child);
         const taken = state.stderr;
         state.stderr = null;
         return taken;
@@ -1368,83 +1355,8 @@ pub const Child = enum(usize) {
     // Run and collect.
     //======================================================================
 
-    /// Everything the child wrote, and how it ended.
-    const OutputState = struct {
-        stdout: []u8,
-        stderr: []u8,
-        stdout_truncated: bool,
-        stderr_truncated: bool,
-        term: Term,
-        timed_out: bool,
-    };
-
     /// Owns collected bytes; move before sharing and never copy an owner.
-    pub const Output = enum(@Int(.unsigned, @sizeOf(OutputState) * 8)) {
-        _,
-
-        // The state lives in the value's own bits and `inner` casts to it: the
-        // bits must hold it and be at least as aligned.
-        comptime {
-            std.debug.assert(@sizeOf(Output) >= @sizeOf(OutputState));
-            std.debug.assert(@alignOf(Output) >= @alignOf(OutputState));
-        }
-        fn inner(collected: *Output) *OutputState {
-            return @ptrCast(@alignCast(collected)); // safe: collection initializes inline storage of the same size and alignment.
-        }
-        fn value(collected: *const Output) *const OutputState {
-            return @ptrCast(@alignCast(collected)); // safe: borrows initialized inline state without copying ownership.
-        }
-        fn init(state: OutputState) Output {
-            var collected: Output = undefined;
-            collected.inner().* = state;
-            return collected;
-        }
-        /// Borrows retained standard output until transfer or deinit.
-        pub fn stdout(collected: *const Output) []u8 {
-            return collected.value().stdout;
-        }
-        /// Borrows retained standard error until transfer or deinit.
-        pub fn stderr(collected: *const Output) []u8 {
-            return collected.value().stderr;
-        }
-        /// Transfers retained output bytes. The caller frees them with the collecting allocator.
-        pub fn takeStdout(collected: *Output) []u8 {
-            const state = collected.inner();
-            const taken = state.stdout;
-            state.stdout = &.{};
-            return taken;
-        }
-        /// Transfers retained error bytes. The caller frees them with the collecting allocator.
-        pub fn takeStderr(collected: *Output) []u8 {
-            const state = collected.inner();
-            const taken = state.stderr;
-            state.stderr = &.{};
-            return taken;
-        }
-        /// Whether bytes were dropped or the stream outlived the drain budget.
-        pub fn stdoutTruncated(collected: *const Output) bool {
-            return collected.value().stdout_truncated;
-        }
-        pub fn stderrTruncated(collected: *const Output) bool {
-            return collected.value().stderr_truncated;
-        }
-        /// How the child ended.
-        pub fn term(collected: *const Output) Child.Term {
-            return collected.value().term;
-        }
-        /// Whether the child was ended after its execution budget elapsed.
-        pub fn timedOut(collected: *const Output) bool {
-            return collected.value().timed_out;
-        }
-        /// Frees bytes with their collecting allocator. Idempotent.
-        pub fn deinit(collected: *Output, allocator: Allocator) void {
-            const state = collected.inner();
-            allocator.free(state.stdout);
-            allocator.free(state.stderr);
-            state.stdout = &.{};
-            state.stderr = &.{};
-        }
-    };
+    pub const Output = child_output.Output;
 
     pub const OutputOptions = contract.OutputOptions;
 
@@ -1545,7 +1457,7 @@ pub const Child = enum(usize) {
         if (input.len == 0) {
             child.closeStdin(io);
         } else {
-            const state = State.optional(child) orelse return error.NoStdinPipe;
+            const state = State.get(child);
             const stdin = state.stdin orelse return error.NoStdinPipe;
             try group.concurrent(io, Feed.run, .{ io, &feed, stdin, input });
             // The task closes it once written.
@@ -1589,11 +1501,10 @@ pub const Child = enum(usize) {
         // The run may have failed while draining after normal publication.
         // The job or cgroup still belongs to us even then; a retired process
         // or group number never becomes signalling authority again.
-        if (State.optional(child)) |state| {
-            if (is_windows) {
-                if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
-            } else if (state.cgroup.active()) _ = state.cgroup.kill();
-        }
+        const state = State.get(child);
+        if (is_windows) {
+            if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
+        } else if (state.cgroup.active()) _ = state.cgroup.kill();
         // ziglint-ignore: Z026 the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
         _ = child.killWait(io, 0) catch {};
     }
@@ -2295,9 +2206,6 @@ pub const Child = enum(usize) {
 
     test "Child exposes no writable lifecycle or stream ownership" {
         try std.testing.expect(@typeInfo(Child) == .@"enum");
-    }
-    test "Output exposes no writable collection ownership" {
-        try std.testing.expect(@typeInfo(Output) == .@"enum");
     }
 };
 

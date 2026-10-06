@@ -92,9 +92,9 @@ const Implementation = struct {
     space: std.Io.Event,
     /// The task doing the reading.
     group: std.Io.Group,
-    /// One claim for initialization, task ownership and closure. Deinit closes
+    /// One claim for initialization, task ownership and stopping. Stop ends
     /// even a lifetime whose task has never been started.
-    lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
+    lifetime: std.atomic.Value(enum(u8) { ready, started, stopped }),
 };
 
 pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
@@ -154,7 +154,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     }
 
     pub const StartError = error{
-        /// This `Expect` already has, or had, its one reading task.
+        /// This `Expect` already has, or had, its one reading task, or was stopped.
         AlreadyStarted,
     } || std.Io.ConcurrentError;
 
@@ -165,8 +165,8 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// deadlocking at the first `until`. Everything the child says from this
     /// moment is kept; anything it said before it is not. An `Expect` has one
     /// reading task for its lifetime; a second successful-start attempt is
-    /// `error.AlreadyStarted`, including after deinit. A failed task submission
-    /// may be retried before deinit.
+    /// `error.AlreadyStarted`, including after `stop`. A failed task submission
+    /// may be retried before `stop`.
     pub fn start(expect: *Expect, io: std.Io) StartError!void {
         if (expect.inner().lifetime.cmpxchgStrong(.ready, .started, .acq_rel, .acquire) != null) {
             return error.AlreadyStarted;
@@ -177,11 +177,11 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         };
     }
 
-    /// Stops reading and releases the task.
+    /// Stops reading and releases the task, and ends the conversation: a
+    /// later `start` is `error.AlreadyStarted`, whether or not one ran before.
     ///
-    /// Idempotent, and safe after the child has gone. Bytes that had arrived and
-    /// were never matched are simply forgotten; the buffer is the caller's and is
-    /// untouched.
+    /// Calling it again does nothing, and it is safe after the child has gone.
+    /// The buffer is the caller's and is untouched.
     ///
     /// The task is inside a read, and a read ends when the far end finishes, when
     /// the handle goes away, or when the task is cancelled. For a pseudo-terminal
@@ -189,15 +189,21 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// cancels: the `std.Io` implementation interrupts the read and keeps at it
     /// until the task has seen the request (on Windows `std.Io.Threaded` does it
     /// with `NtCancelSynchronousIoFile`, on POSIX with a signal). A reader between
-    /// reads observes the closed lifetime and starts no further read.
+    /// reads observes the stopped lifetime and starts no further read.
     ///
     /// Cancelling is the only request a read here answers. `CancelIoEx` from
     /// another thread does abort the pending read on Windows, but `std.Io.Threaded`
     /// issues it again straight away unless its own task was cancelled, so a
     /// reader asked that way never stops.
-    pub fn deinit(expect: *Expect, io: std.Io) void {
-        expect.inner().lifetime.store(.closed, .release);
+    pub fn stop(expect: *Expect, io: std.Io) void {
+        expect.inner().lifetime.store(.stopped, .release);
         expect.inner().group.cancel(io);
+    }
+
+    /// Stops reading, as `stop` does, and leaves the `Expect` undefined.
+    pub fn deinit(expect: *Expect, io: std.Io) void {
+        expect.stop(io);
+        expect.* = undefined;
     }
 
     pub const WaitError = error{
@@ -451,7 +457,7 @@ pub const Expect = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         defer expect.markFinished(io);
         var chunk: [512]u8 = undefined;
         while (true) {
-            if (expect.inner().lifetime.load(.acquire) == .closed) return expect.finish(io, .ended);
+            if (expect.inner().lifetime.load(.acquire) == .stopped) return expect.finish(io, .ended);
             // Reset before checking the buffer under the consumer mutex. A
             // consumer before this check leaves room; one after it sets space.
             expect.inner().space.reset();

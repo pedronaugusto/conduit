@@ -53,6 +53,7 @@ test {
     _ = @import("testing/support.zig");
     _ = @import("input_writer_test.zig");
     _ = @import("child/exchange_test.zig");
+    _ = @import("child/output.zig");
     _ = Pty;
     _ = Child;
     _ = Reaper;

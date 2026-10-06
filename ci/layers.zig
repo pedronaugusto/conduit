@@ -37,6 +37,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "process policy", .patterns = &.{
         "src/process_exists.zig",
+        "src/child/output.zig",
         "src/child/stdio_plan.zig",
         "src/tree.zig",
         "src/child/windows/completion.zig",
@@ -130,6 +131,7 @@ pub const required = [_][]const u8{
     "src/expect.zig",
     "src/child/contract.zig",
     "src/process_exists.zig",
+    "src/child/output.zig",
     "src/child/stdio_plan.zig",
     "src/tree.zig",
     "src/child/windows/completion.zig",

@@ -92,19 +92,21 @@ to read while a wait or Reaper runs.
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait()` | Never blocks. `null` while the child runs. |
-| `child.release(io)` | Ends an unfinished contained scope and closes resources only after confirmed completion. Failure retains ownership for retry. `deinit` requires an already completed scope. |
+| `child.release(io)` | Ends an unfinished contained scope, then does what `deinit` does. Failure retains ownership, and the call can be made again; success leaves the child undefined, so release or deinit, never both. |
 | `child.containment(buffer)` | Copies the detached group, private Linux supervisor identity and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. On POSIX any other signal goes the same way: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"`, `.window_change`, or `.{ .posix = .ALRM }` for one by number. Only the first three end the tree with the child; the rest leave it to `descendants`. Windows refuses each of the others with `error.Unsupported`, as POSIX does a number it does not define. |
 | `child.killWait(io, grace_ms)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Waits for the container the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. Windows: the job object. Linux: the child's own cgroup, woken by `cgroup.events` rather than asking again; a child given none is `error.Unsupported`. A compile error on the other POSIX systems, which have nothing to ask. |
-| `child.deinit(io)` | Closes owned resources after confirmed containment completion. Use `release` for an unfinished contained child. Supplied streams stay open. |
+| `child.deinit(io)` | Closes owned resources after confirmed containment completion and leaves the child undefined. Use `release` for an unfinished contained child. Supplied streams stay open. |
 
 `Child.Output` owns the collected bytes until `deinit(allocator)`. `stdout()`
 and `stderr()` borrow them; `takeStdout()` and `takeStderr()` transfer them
 for the caller to free with the collecting allocator. `term()`, `timedOut()`,
-`stdoutTruncated()` and `stderrTruncated()` copy the result facts.
+`stdoutTruncated()` and `stderrTruncated()` copy the result facts. `deinit`
+frees what was not taken and leaves the value undefined. `Output.init(parts)`
+makes one from bytes the caller allocated.
 
 `conduit.Cgroup` is the cgroup a Linux child holds. Both cgroup handle types
 keep ownership opaque in fixed storage. `cgroup.id()` gives its
@@ -177,7 +179,7 @@ The caller holds one socket, closed on exec and closed in the root. Loss of
 that socket ends the scope even if the caller crashes. The root watches its
 supervisor with a parent death `SIGKILL`; this contained policy takes precedence
 over `parent_death_signal`. `Child.release(io)` ends and reaps an unfinished contained scope before
-closing the lifecycle. Failure retains ownership for retry. `Child.deinit(io)`
+closing the lifecycle. Failure retains ownership for another call. `Child.deinit(io)`
 requires confirmed scope completion; it never performs hidden scope cleanup.
 
 The supervisor has [tini's](https://github.com/krallin/tini) single-root signal
@@ -231,12 +233,12 @@ owner, including orphans from other direct children. Existing direct children
 and new conduit children retain their independent waits. Every new direct
 child must use conduit while the scope runs; an outside spawn or a
 `SIGCHLD` handler using `waitpid(-1)` breaks that ownership. End and reap
-all direct children before the owner's `deinit`, which ends remaining
-adoptees and restores the previous subreaper setting. `Reaper.deinit` and
-`Orphans.deinit` are fallible. Cancellation, lookup or restoration failure
-retains the scope for retry; `DirectChildrenRemain` refuses to restore the
+all direct children before the owner's `end`, which ends remaining
+adoptees and restores the previous subreaper setting. `Reaper.end` and
+`Orphans.stop` are fallible. Cancellation, lookup or restoration failure
+retains the scope for another call; `DirectChildrenRemain` refuses to restore the
 attribute while another direct child still owns a wait. Handle these failures
-before releasing the owner's storage. This explicit process-wide scope is
+before `deinit`, which cannot fail and leaves the owner undefined. This explicit process-wide scope is
 separate from each contained child's private supervisor.
 
 `reaper.adoptionRecords(out)` copies the explicit scope's `Orphans.Record`
@@ -356,12 +358,12 @@ without waiting for that CLI to read.
 
 Conversation state is opaque; create it with `init` and observe bytes through
 `pending`, `until`, `untilAny` and `bytes`. A lifetime permits one successful
-start; a start after `deinit` is `AlreadyStarted`, even if no reader ran.
+start; a start after `stop` is `AlreadyStarted`, even if no reader ran.
 
 | | |
 |---|---|
 | `Expect.init(master, buffer)` | Over `Child.terminalMaster()` or `Pty.master()`, with a buffer the caller owns. |
-| `expect.start(io)`, `expect.deinit(io)` | The one reading task, which runs between calls. A second `start` is `error.AlreadyStarted`. |
+| `expect.start(io)`, `expect.stop(io)`, `expect.deinit(io)` | The one reading task, which runs between calls. `stop` ends it for good and can be called again; `deinit` stops and leaves the value undefined. A second `start` is `error.AlreadyStarted`. |
 | `expect.until(io, pattern, timeout_ms)` | Waits for a literal byte pattern and consumes through it: `Match.before` and `Match.found`. |
 | `expect.untilAny(io, patterns, timeout_ms)` | Waits for any of several. The earliest match wins, whatever order they were listed in; `Match.index` says which, and the ones that lost stay pending. |
 | `expect.bytes(io, count, timeout_ms)` | Waits for a count of bytes and consumes them. |
@@ -452,14 +454,14 @@ asks the child and what it started to end and makes them once the grace has
 passed, and returns at once: the grace is spent on the `Reaper`'s task, so a
 caller holding a lock can stop a child. On POSIX its held reap ends the
 remaining owned group or cgroup before releasing the root identity, spending
-the remainder of that same grace. `deinit(io)` ends the task; on POSIX
+the remainder of that same grace. `end(io)` and `deinit(io)` end the task; on POSIX
 the wait is on the child's `pidfd` or kqueue registration beside a pipe
-`deinit` writes to, so it goes at once whether or not the `std.Io` can cancel
+they write to, so it goes at once whether or not the `std.Io` can cancel
 a system call. The `Child` must outlive it, it must not move once started, and
 a wait error is final and returned by every later `exit()`. The state and wake handles are opaque.
 Only one successful start is allowed per lifetime; another start, including
-after `deinit`, returns `AlreadyStarted`. A concurrency failure releases
-its resources and may be retried before `deinit`. Release every HeldReap
+after `end`, returns `AlreadyStarted`. A concurrency failure releases
+its resources and may be retried before `end`. Release every HeldReap
 exactly once, and join Reaper before destroying its Child.
 
 `Options.end_tree` ends what the child leaves running when it ends by itself,
@@ -488,8 +490,8 @@ reports `IdentityUnavailable` if that snapshot could not be read. Retain
 these facts and the boot identity for a later `captureStarted` or
 `endRecorded`; records own no handles. `end(io, grace_ms)` ends them all through a pidfd
 each — `SIGTERM`, the grace, then
-`SIGKILL` — for the end of a program. `try deinit()` restores the attribute
-after every direct child and adoptee has been reaped; failure retains ownership.
+`SIGKILL` — for the end of a program. `try stop()` restores the attribute
+after every direct child and adoptee has been reaped; failure retains ownership for another call, and `deinit()` follows success.
 Opt-in, and only for a program that starts every child through conduit
 (below). `error.Unsupported` elsewhere.
 
@@ -647,7 +649,7 @@ taken for an orphan and reaped, and its owner's wait would find nothing. A
 `Child`'s own status is never taken: every spawn holds the shared side of a
 lock from before its fork until the child is on conduit's list, and a look
 holds it alone. What a caller may observe: the subreaper attribute is set
-from `start` to `deinit`; a process below this one reports this one as its
+from `start` to `stop`; a process below this one reports this one as its
 parent once its own has gone, and this process gets a `SIGCHLD` when it
 ends. Nothing wakes an idle program for it: a look — a read of
 `/proc/self/task/<tid>/children` per thread and a `waitid` per child, a

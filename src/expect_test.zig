@@ -194,9 +194,10 @@ test "deinit stops the reader while the terminal is still open" {
         join_watchdog.limit_ms = budget_ms;
         try join_watchdog.start(io);
         defer join_watchdog.deinit(io);
-        expect.deinit(io);
+        expect.stop(io);
     }
     try testing.expect(access.inner(&expect).finished.load(.acquire));
+    try testing.expectError(error.AlreadyStarted, expect.start(io));
     // Still running: the read ended because it was asked to, not because the
     // stream did.
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
@@ -506,11 +507,12 @@ test "Expect exposes no writable conversation state" {
     try testing.expect(@typeInfo(Expect) == .@"enum");
 }
 
-test "Expect refuses a start after deinit before its first reader" {
+test "a stopped Expect refuses a start, and stopping again does nothing" {
     var buffer: [1]u8 = undefined;
     var expect = Expect.init(undefined, &buffer);
     defer expect.deinit(std.testing.io);
-    expect.deinit(std.testing.io);
+    expect.stop(std.testing.io);
+    expect.stop(std.testing.io);
     try std.testing.expectError(error.AlreadyStarted, expect.start(std.testing.io));
 }
 

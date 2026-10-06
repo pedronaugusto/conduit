@@ -112,14 +112,9 @@ force_tree: bool = false,
 identity_retired: bool = false,
 
 /// Only spawn creates this pointer, and deinit destroys it after all tasks join.
-pub fn optional(child: anytype) ?*State {
-    const value = if (@typeInfo(@TypeOf(child)) == .@"enum") child else if (@typeInfo(@TypeOf(child.*)) == .@"enum") child.* else child.*.*;
-    const address = @intFromEnum(value);
-    return if (address == 0) null else @ptrFromInt(address); // safe: spawn encodes its allocated State; zero is a closed owner.
-}
-
 pub fn get(child: anytype) *State {
-    return optional(child).?;
+    const value = if (@typeInfo(@TypeOf(child)) == .@"enum") child else if (@typeInfo(@TypeOf(child.*)) == .@"enum") child.* else child.*.*;
+    return @ptrFromInt(@intFromEnum(value)); // safe: spawn encodes its allocated State, which lives until deinit.
 }
 
 pub fn owner(comptime Owner: type, state: *State) Owner {

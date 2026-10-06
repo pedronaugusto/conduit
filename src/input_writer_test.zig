@@ -187,9 +187,14 @@ test "InputWriter cancellation closes an idle pipe and deinit joins an active wr
     var vtable: std.Io.VTable = undefined;
     const gated_io = gate.backend(&vtable);
     var active = try blocked.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
-    defer active.deinit(gated_io);
-    try active.queue(gated_io, "held");
-    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    active.queue(gated_io, "held") catch |err| {
+        active.deinit(gated_io);
+        return err;
+    };
+    gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } }) catch |err| {
+        active.deinit(gated_io);
+        return err;
+    };
     active.deinit(gated_io);
     try output(&blocked, "EOF");
 }

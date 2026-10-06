@@ -7,73 +7,31 @@
     "reason": "The test runner's fuzz entry point: std.testing.fuzz calls it positionally as root.fuzz(context, testOne, options), so the order is std's."
   },
   {
-    "rule": "Z030",
-    "path": "src/child.zig",
-    "source": "pub fn deinit(child: *Child, io: std.Io) void {",
-    "detail": "deinit should set child.* = undefined (has early return before invalidation)",
-    "reason": "Child.deinit is idempotent by contract, including after release: it leaves the closed value 0, which State.optional reads on the next call, so the early return for a closed Child is the point."
-  },
-  {
     "rule": "Z015",
     "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "public function exposes private error set 'WaitError'",
-    "reason": "ziglint 0.5.3 resolves a name in a nested type only against that type and the file's top level, not the containers between: WaitError is Child's public declaration, named here from inside Child.HeldReap."
+    "reason": "WaitError is the public Child.WaitError, in scope because HeldReap is nested in Child; ziglint 0.5.3 resolves names in a nested type only against that type and the file's top level. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
   },
   {
     "rule": "Z012",
     "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "public function exposes private type 'Term'",
-    "reason": "ziglint 0.5.3 resolves a name in a nested type only against that type and the file's top level, not the containers between: Term is Child's public declaration, named here from inside Child.HeldReap."
+    "reason": "Term is the public Child.Term, in scope because HeldReap is nested in Child; ziglint 0.5.3 resolves names in a nested type only against that type and the file's top level. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
   },
   {
     "rule": "Z012",
     "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "public function exposes private type 'HeldReap'",
-    "reason": "HeldReap is the public Child.HeldReap and wait is its method; ziglint 0.5.3 looks for a pub declaration only in the enclosing type and at the file's top level, not in the container around them."
+    "reason": "HeldReap is the public Child.HeldReap and wait is its method; ziglint 0.5.3 looks for a pub declaration only in the enclosing type and at the file's top level. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
   },
   {
     "rule": "Z023",
     "path": "src/child.zig",
     "source": "pub fn wait(held: HeldReap, io: std.Io) WaitError!Term {",
     "detail": "'Io' parameter should come before 'other'",
-    "reason": "held is the receiver of Child.HeldReap.wait, and method syntax needs it first; ziglint 0.5.3 recognizes a receiver only on a file's top-level types, and HeldReap is nested in Child."
-  },
-  {
-    "rule": "Z023",
-    "path": "src/child.zig",
-    "source": "pub fn deinit(collected: *Output, allocator: Allocator) void {",
-    "detail": "'Allocator' parameter should come before 'other'",
-    "reason": "collected is the receiver of Child.Output.deinit, and method syntax needs it first; ziglint 0.5.3 recognizes a receiver only on a file's top-level types, and Output is nested in Child."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/child.zig",
-    "source": "pub fn deinit(collected: *Output, allocator: Allocator) void {",
-    "detail": "deinit should set collected.* = undefined",
-    "reason": "Output.deinit is idempotent by contract: it leaves both slices empty, so a second deinit frees nothing; undefined would make the second call free garbage."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/reaper.zig",
-    "source": "pub fn deinit(reaper: *Reaper, io: std.Io) DeinitError!void {",
-    "detail": "deinit should set reaper.* = undefined (has early return before invalidation)",
-    "reason": "Reaper.deinit is retryable by contract: a failure to end adoptees or restore the subreaper setting keeps the Reaper for another call, and a completed one returns early on the next; the value must stay readable."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/orphans.zig",
-    "source": "pub fn deinit(orphans: *Orphans) DeinitError!void {",
-    "detail": "deinit should set orphans.* = undefined (has early return before invalidation)",
-    "reason": "Orphans.deinit is retryable by contract: a failure keeps every identity and the process setting for another call, and a completed one returns early on the next; the value must stay readable."
-  },
-  {
-    "rule": "Z030",
-    "path": "src/expect.zig",
-    "source": "pub fn deinit(expect: *Expect, io: std.Io) void {",
-    "detail": "deinit should set expect.* = undefined",
-    "reason": "Expect.deinit leaves the lifetime closed, which a later start reads to refuse with AlreadyStarted (the test 'Expect refuses a start after deinit before its first reader' holds it); the value must stay readable."
+    "reason": "held is the receiver of Child.HeldReap.wait, and method syntax needs it first; ziglint 0.5.3 recognizes a receiver only on a file's top-level types. HeldReap stays nested by design: it guards the Child's reap claim, and its methods call Child's private waitClaimed and releaseReap, which moving it out would make public."
   }
 ]

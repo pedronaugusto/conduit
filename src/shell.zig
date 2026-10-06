@@ -59,7 +59,8 @@ pub const Shell = enum(@Int(.unsigned, @sizeOf(ShellState) * 8)) {
     pub fn pty(shell: *Shell) *Pty {
         return &shell.inner().pty;
     }
-    /// Reap the child first, then close the pair and resources. Idempotent.
+    /// Reap the child first, then close the pair and resources. The Shell is
+    /// undefined afterwards.
     pub fn deinit(shell: *Shell, io: std.Io) void {
         shell.inner().child.deinit(io);
         shell.inner().pty.close(io);

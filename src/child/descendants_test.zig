@@ -51,6 +51,8 @@ const Fixture = struct {
     child: Child,
     daemon: Process,
     tmp: std.testing.TmpDir,
+    /// Whether a test released the child itself; release ends a Child.
+    released: bool = false,
 
     fn start(policy: Child.Descendants, argument: []const u8) !Fixture {
         var tmp = std.testing.tmpDir(.{});
@@ -84,10 +86,17 @@ const Fixture = struct {
         return .{ .child = child, .daemon = daemon, .tmp = tmp };
     }
 
+    fn release(fixture: *Fixture) Child.ReleaseError!void {
+        try fixture.child.release(io);
+        fixture.released = true;
+    }
+
     fn deinit(fixture: *Fixture) void {
-        // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
-        _ = fixture.child.killWait(io, 0) catch {};
-        fixture.child.release(io) catch unreachable;
+        if (!fixture.released) {
+            // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
+            _ = fixture.child.killWait(io, 0) catch {};
+            fixture.child.release(io) catch unreachable;
+        }
         fixture.daemon.end();
         fixture.tmp.cleanup();
         fixture.* = undefined;
@@ -123,7 +132,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io) catch unreachable;
+            defer reaper.deinit(io);
             break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .exited = if (comptime std.mem.eql(u8, method, "exit-7")) 7 else 0 }, term);
@@ -134,7 +143,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_active_process != 0);
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_kill_on_job_close == 0);
         }
-        fixture.child.release(io) catch unreachable;
+        fixture.release() catch unreachable;
         try std.testing.expect(fixture.daemon.alive());
         // Observe beyond the asynchronous termination boundary as well.
         try io.sleep(.fromMilliseconds(50), .awake);
@@ -166,10 +175,10 @@ test "containment ends a daemon after normal completion through every reap" {
         } else {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io) catch unreachable;
+            defer reaper.deinit(io);
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
         }
-        fixture.child.release(io) catch unreachable;
+        fixture.release() catch unreachable;
         try fixture.expectEnded();
     }
 }
@@ -197,7 +206,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
                 defer _ = fixture.child.takeStdout();
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }
-            fixture.child.release(io) catch unreachable;
+            fixture.release() catch unreachable;
             try fixture.expectEnded();
         }
     }
@@ -243,10 +252,10 @@ test "containment ends a double-forked session after normal exit" {
         } else if (comptime std.mem.eql(u8, method, "Reaper")) {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io) catch unreachable;
+            defer reaper.deinit(io);
             try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
         } else try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
-        fixture.child.release(io) catch unreachable;
+        fixture.release() catch unreachable;
         try fixture.expectEnded();
     }
 }
@@ -287,10 +296,16 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     var reaper: Reaper = .init(&fixture.child, .{});
     // Activation precedes spawn: an intermediate can exit before start runs.
     try reaper.enableSubreaper();
-    errdefer reaper.deinit(io) catch unreachable;
-    fixture = try Fixture.start(.contain, "--double-fork");
+    fixture = Fixture.start(.contain, "--double-fork") catch |err| {
+        reaper.end(io) catch unreachable;
+        reaper.deinit(io);
+        return err;
+    };
     defer fixture.deinit();
-    defer reaper.deinit(io) catch unreachable;
+    defer {
+        reaper.end(io) catch unreachable;
+        reaper.deinit(io);
+    }
     var unrelated = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
@@ -322,15 +337,19 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
     try reaper.enableSubreaper();
-    errdefer reaper.deinit(io) catch unreachable;
-    fixture = try Fixture.start(.survive, "--race");
+    fixture = Fixture.start(.survive, "--race") catch |err| {
+        reaper.end(io) catch unreachable;
+        reaper.deinit(io);
+        return err;
+    };
     const held = fixture.child.holdReap().?;
     var holding = true;
     defer {
         if (holding) held.release();
         reaper.stop(io, 0);
         _ = fixture.child.killWait(io, 0) catch {};
-        reaper.deinit(io) catch unreachable;
+        reaper.end(io) catch unreachable;
+        reaper.deinit(io);
         fixture.deinit();
     }
     try reaper.start(io);
@@ -493,17 +512,11 @@ test "a failed private scope release keeps ownership for retry" {
     const scope = State.get(&fixture.child).id;
     supervisor.testing_hook.fail_request = true;
     defer supervisor.testing_hook.fail_request = false;
-    const Release = struct {
-        fn run(child: *Child) !void {
-            if (@hasDecl(Child, "release")) try child.release(io) else child.deinit(io);
-        }
-    };
-    try std.testing.expectError(error.Unexpected, Release.run(&fixture.child));
+    try std.testing.expectError(error.Unexpected, fixture.release());
     try std.testing.expectEqual(scope, State.get(&fixture.child).id);
     try std.testing.expect(fixture.daemon.alive());
     supervisor.testing_hook.fail_request = false;
-    try Release.run(&fixture.child);
-    try std.testing.expect(State.optional(&fixture.child) == null);
+    try fixture.release();
     try std.testing.expect(!fixture.daemon.alive());
 }
 
@@ -531,7 +544,7 @@ test "a contained Windows wait confirms every Job member ended before returning"
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
-            defer reaper.deinit(io) catch unreachable;
+            defer reaper.deinit(io);
             break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .exited = 7 }, term);

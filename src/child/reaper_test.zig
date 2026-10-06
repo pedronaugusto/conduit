@@ -51,7 +51,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         var reaper: Reaper = .init(&child, .{});
         stage = "starting Reaper";
         try reaper.start(io);
-        defer reaper.deinit(io) catch unreachable;
+        defer reaper.deinit(io);
 
         var probe: Observer = .{ .reaper = &reaper };
         var hook: access.SignalProbe = .{ .context = &probe, .observe = Observer.observe };

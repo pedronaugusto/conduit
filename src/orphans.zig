@@ -44,7 +44,7 @@
 //! its owner makes afterwards would find nothing (the standard library's
 //! treats that as a bug), and the last would take the status of a `Child`
 //! from under it. **A program that starts `Orphans` starts every child
-//! through conduit until `deinit`, and reaps only what conduit hands it.**
+//! through conduit until `stop`, and reaps only what conduit hands it.**
 //!
 //! A `Child`'s own status is never taken. A spawn holds a lock shared with
 //! every other spawn from before its `fork` until the child is on the list of
@@ -53,9 +53,9 @@
 //!
 //! # What a caller may observe
 //!
-//! * This process is a child subreaper from `start` to `deinit`, and
+//! * This process is a child subreaper from `start` to `stop`, and
 //!   `PR_GET_CHILD_SUBREAPER` says so. Its children are not: the setting is
-//!   not inherited. `deinit` puts back what was there before.
+//!   not inherited. `stop` puts back what was there before.
 //! * A process below this one whose parent ends reports this process as its
 //!   parent (`getppid`, `/proc/<pid>/stat`), where it used to report `init` or
 //!   whatever ancestor was a subreaper. This process receives a `SIGCHLD` for
@@ -85,9 +85,9 @@
 //! walk.
 //!
 //! Lifetime rules: an `Orphans` must not move once `start` has been called,
-//! and `deinit` must be called. One may run at a time in a process. POSIX
-//! elsewhere has no such attribute, and there `start` is
-//! `error.Unsupported`.
+//! and once started it must be stopped before `deinit`. One may run at a
+//! time in a process. POSIX elsewhere has no such attribute, and there
+//! `start` is `error.Unsupported`.
 
 const builtin = @import("builtin");
 const std = @import("std");
@@ -115,7 +115,7 @@ const Implementation = struct {
     /// `lock`.
     adopted: std.ArrayList(Orphans.Held),
     lock: Orphans.SpinLock,
-    /// Whether this process was a subreaper before `start`, so that `deinit`
+    /// Whether this process was a subreaper before `start`, so that `stop`
     /// puts back what it found.
     was_subreaper: bool,
     running: bool,
@@ -311,7 +311,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
     /// A running process whose start time could not be read is
     /// IdentityUnavailable; its numeric pid is never returned alone.
     /// Empty when this is not running. Records own no handle and remain valid
-    /// as saved facts after end or deinit; they do not promise liveness.
+    /// as saved facts after end or stop; they do not promise liveness.
     pub fn list(orphans: *Orphans, out: []Record) ListError![]Record {
         if (!supported or !orphans.inner().running) return out[0..0];
         gate.lock();
@@ -331,11 +331,12 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 
     /// Restores the process attribute and releases the scope after all direct
     /// children and adoptees have been reaped. A failure keeps ownership and
-    /// every remaining identity intact, so the owner can end them and retry.
-    /// Idempotent after success. No child may be spawned during teardown.
-    pub const DeinitError = LookError || error{ DirectChildrenRemain, OrphansRemain };
+    /// every remaining identity intact, so the owner can end them and call
+    /// this again. Once it has succeeded another call does nothing. No child
+    /// may be spawned during it.
+    pub const StopError = LookError || error{ DirectChildrenRemain, OrphansRemain };
 
-    pub fn deinit(orphans: *Orphans) DeinitError!void {
+    pub fn stop(orphans: *Orphans) StopError!void {
         if (!supported or !orphans.inner().running) return;
         gate.lock();
         defer gate.unlock();
@@ -354,6 +355,14 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
         orphans.inner().adopted.deinit(orphans.inner().allocator);
         orphans.inner().own = .empty;
         orphans.inner().adopted = .empty;
+    }
+
+    /// Leaves the `Orphans` undefined. One that was started must have been
+    /// stopped first: the scope is process-wide, and only `stop` can report
+    /// what keeps it from ending.
+    pub fn deinit(orphans: *Orphans) void {
+        std.debug.assert(!orphans.inner().running);
+        orphans.* = undefined;
     }
 
     //======================================================================
@@ -868,7 +877,7 @@ pub const Orphans = enum(@Int(.unsigned, @sizeOf(Implementation) * 8)) {
 test "orphan records retain a pid and its captured start time" {
     var storage: [1]Orphans.Record = undefined;
     var orphans: Orphans = .init(std.testing.allocator);
-    defer orphans.deinit() catch unreachable;
+    defer orphans.deinit();
     try std.testing.expectEqual(@as(usize, 0), (try orphans.list(&storage)).len);
 }
 

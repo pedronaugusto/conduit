@@ -37,7 +37,7 @@ pub fn Writer(comptime Child: type) type {
             /// A terminal has no separate input to close and is `error.NoStdinPipe`.
             /// Do not use an earlier copy of the pipe after this succeeds.
             pub fn init(allocator: std.mem.Allocator, io: std.Io, child: *Child, options: Options) StartError!InputWriter {
-                const child_state = ChildState.optional(child) orelse return error.NoStdinPipe;
+                const child_state = ChildState.get(child);
                 const file = child_state.stdin orelse return error.NoStdinPipe;
                 const state = try allocator.create(State);
                 errdefer allocator.destroy(state);
@@ -116,13 +116,13 @@ pub fn Writer(comptime Child: type) type {
             }
 
             /// Cancels and joins the task, then frees the queue and state. Call after
-            /// other users have stopped. Idempotent; after it only deinit may be called.
+            /// other users have stopped. The InputWriter is undefined afterwards;
+            /// `cancel` is the call that can be made more than once.
             pub fn deinit(writer: *InputWriter, io: std.Io) void {
-                if (@intFromEnum(writer.*) == 0) return;
                 writer.cancel(io);
                 const state = writer.get();
                 state.allocator.destroy(state);
-                writer.* = @enumFromInt(0);
+                writer.* = undefined;
             }
 
             fn get(writer: *const InputWriter) *State {
