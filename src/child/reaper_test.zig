@@ -70,3 +70,54 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         try child.kill(.kill);
     }
 }
+
+const HeldOutput = struct {
+    child: *Child,
+    result: ?(Child.OutputError!Child.Output) = null,
+
+    fn run(held: *HeldOutput) std.Io.Cancelable!void {
+        held.result = held.child.output(std.testing.allocator, std.testing.io, .{ .timeout_ms = 10_000 });
+    }
+};
+
+test "output leaves the reap to the task that holds it" {
+    if (is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+
+    var child = try Child.spawn(testing.allocator, io, .{
+        .argv = &.{ "/bin/sh", "-c", "echo done" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        .detach = true,
+    });
+    defer child.release(io) catch unreachable;
+    defer _ = child.killWait(io, 0) catch {};
+    const held = child.holdReap().?;
+    var released = false;
+    defer if (!released) held.release();
+
+    var output: HeldOutput = .{ .child = &child };
+    defer if (output.result) |result| if (result) |collected| {
+        var owned = collected;
+        owned.deinit(testing.allocator);
+    } else |_| {};
+    var group: std.Io.Group = .init;
+    defer group.cancel(io);
+    try group.concurrent(io, HeldOutput.run, .{&output});
+
+    // The child has long ended; output must still not have reaped it.
+    try io.sleep(.fromMilliseconds(300), .awake);
+    try testing.expect(!State.get(&child).reaped.load(.acquire));
+    try testing.expect(output.result == null);
+
+    const term = try held.wait(io);
+    held.release();
+    released = true;
+    try group.await(io);
+    const result = try output.result.?;
+    try testing.expectEqual(term, result.term());
+    try testing.expectEqualStrings("done\n", result.stdout());
+}

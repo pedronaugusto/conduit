@@ -1810,7 +1810,9 @@ pub const Child = enum(usize) {
                     timed_out = true;
                     term = try child.killWait(io, options.grace_ms);
                 } else if (ended) {
-                    term = try child.tryWaitClaimed();
+                    // Through the reap claim: a task holding it (a `Reaper`,
+                    // or a `HeldReap`) reaps, and this reads what it publishes.
+                    term = try child.tryWait();
                 }
                 if (term != null) drain = drainDeadline(io, options, until);
             }
