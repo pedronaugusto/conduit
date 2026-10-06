@@ -53,9 +53,6 @@ test "a canceled reading task publishes that it finished" {
 test "start refuses to put a second reader over the buffer" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     const argv: []const []const u8 = if (is_windows)
         &.{ "cmd.exe", "/c", "echo one reader" }
@@ -80,9 +77,6 @@ test "start refuses to put a second reader over the buffer" {
 test "a conversation over pipes: wait for what the child echoes, then answer" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Both systems. The shell that reads a line and echoes it is the smallest
     // program that can be talked to, and `Child.expect` finds the two pipes.
     const argv: []const []const u8 = if (is_windows)
@@ -113,9 +107,6 @@ test "a conversation over pipes: wait for what the child echoes, then answer" {
 test "a conversation on a pseudo-terminal, one prompt at a time" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only for the fixture, not for the feature: this needs a shell that
     // prompts, reads and prompts again, which is three words of `sh` and no
     // words of `cmd.exe`.
@@ -158,14 +149,11 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
 test "deinit stops the reader while the terminal is still open" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Both systems, and Windows is the one this is about. The child says its
     // piece and waits for a line, so its console stays open and nothing but
     // `deinit` will end the read the task is in. Asked with `CancelIoEx`, a
     // Windows read of the master was issued again at once, and `deinit` did
-    // not return within the watchdog's thirty seconds.
+    // not return within the test runner's thirty-second watchdog.
     const argv: []const []const u8 = if (is_windows)
         &.{ "cmd.exe", "/c", "echo ready& set /p ignored=" }
     else
@@ -190,8 +178,7 @@ test "deinit stops the reader while the terminal is still open" {
     _ = try expect.until(io, "ready", budget_ms);
 
     {
-        var join_watchdog: Watchdog = .init(@src());
-        join_watchdog.limit_ms = budget_ms;
+        var join_watchdog: Watchdog = .init(@src(), budget_ms);
         try join_watchdog.start(io);
         defer join_watchdog.deinit(io);
         expect.stop(io);
@@ -201,8 +188,7 @@ test "deinit stops the reader while the terminal is still open" {
     {
         // Nothing more will arrive once reading has stopped, and a wait says
         // so at once instead of spending its whole timeout.
-        var wait_watchdog: Watchdog = .init(@src());
-        wait_watchdog.limit_ms = budget_ms;
+        var wait_watchdog: Watchdog = .init(@src(), budget_ms);
         try wait_watchdog.start(io);
         defer wait_watchdog.deinit(io);
         try testing.expectError(error.EndOfStream, expect.until(io, "never", 30_000));
@@ -216,9 +202,6 @@ test "deinit stops the reader while the terminal is still open" {
 test "untilAny says which of several answers came, and leaves the rest" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Both systems. The shape is the one a single pattern cannot express: a
     // child that will say one of two things, and a caller that has to wait for
     // either without knowing which.
@@ -251,9 +234,6 @@ test "untilAny says which of several answers came, and leaves the rest" {
 test "untilAny takes the earliest match and leaves the later one pending" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only for the fixture: this needs a child that writes two words in
     // one breath, which `printf` says in one word.
     if (is_windows) return error.SkipZigTest;
@@ -290,9 +270,6 @@ test "untilAny takes the earliest match and leaves the later one pending" {
 test "untilAny with nothing to wait for ends the way a pattern that never comes does" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(gpa, io, .{
@@ -319,9 +296,6 @@ test "bytes waits for a count, and what follows stays pending" {
     const io = testing.io;
     const gpa = testing.allocator;
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
@@ -354,9 +328,6 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
     const io = testing.io;
     const gpa = testing.allocator;
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
@@ -384,9 +355,6 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
 test "a buffer that fills says so, and discard makes room" {
     const io = testing.io;
     const gpa = testing.allocator;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only for the fixture, not for the feature: this needs a child that
     // writes an exact number of bytes and then waits, which `printf` says in
     // one word and `cmd.exe` cannot say at all.

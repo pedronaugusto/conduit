@@ -73,12 +73,12 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
         .timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } },
     });
     const output = try std.mem.concat(a, u8, &.{ result.stdout, result.stderr });
-    const expected = "conduit: watchdog: src/testing/support.zig: testing.support.test.runner teardown probe; phase=io_teardown";
+    const expected = "preflight: watchdog: testing.support.test.runner teardown probe exceeded 200 ms; phase io_teardown";
     if ((result.term == .exited and result.term.exited == 0) or std.mem.find(u8, output, expected) == null) {
         log.err("runner probe did not identify backend teardown:\n{s}", .{output});
         return error.RunnerProbeFailed;
     }
-    log.info("runner probe: stuck backend teardown names its test and source", .{});
+    log.info("runner probe: stuck backend teardown names its test and phase", .{});
 }
 
 test "the boundary needs every term in the Darwin containment promise" {

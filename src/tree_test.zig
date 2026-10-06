@@ -8,7 +8,6 @@ const Deadline = access.Deadline;
 const wait_for = access.wait_for;
 const Dirents = @import("tree.zig").Dirents;
 const signalDescendants = @import("tree.zig").signalDescendants;
-const forceHeldGroup = @import("tree.zig").forceHeldGroup;
 const signalDescendantsGuarded = access.signalDescendantsGuarded;
 const waitCaptured = access.waitCaptured;
 const provenBelow = access.provenBelow;
@@ -18,12 +17,9 @@ const collectLinux = access.collectLinux;
 const LinuxRelation = access.LinuxRelation;
 const processRelationLinux = access.processRelationLinux;
 const parseLinuxStat = access.parseLinuxStat;
-const adoptionRecord = @import("tree.zig").adoptionRecord;
 const startTime = @import("tree.zig").startTime;
-const CapturedPid = @import("tree.zig").CapturedPid;
 const captureStarted = @import("tree.zig").captureStarted;
 const captureStartedProcess = access.captureStartedProcess;
-const RecordedOptions = @import("tree.zig").RecordedOptions;
 const killRecorded = @import("tree.zig").killRecorded;
 const killHeld = access.killHeld;
 const signalGroupSince = @import("tree.zig").signalGroupSince;
@@ -45,16 +41,11 @@ const proc_pid_unique_info = access.proc_pid_unique_info;
 const childrenOf = access.childrenOf;
 const childrenOfNobody = access.childrenOfNobody;
 const childrenOfDarwin = access.childrenOfDarwin;
-const observedChildrenOfDarwin = @import("tree.zig").observedChildrenOfDarwin;
-const knows_leaves = @import("tree.zig").knows_leaves;
 const hasChildren = @import("tree.zig").hasChildren;
-const Forks = @import("tree.zig").Forks;
 const DarwinForks = access.DarwinForks;
-const testing_hook = @import("tree.zig").testing_hook;
 const NoForks = access.NoForks;
 const Members = @import("tree.zig").Members;
 const members = @import("tree.zig").members;
-const Watchdog = @import("testing/support.zig").Watchdog;
 const test_options = @import("conduit_test_options");
 const membersLinux = access.membersLinux;
 const membersDarwin = access.membersDarwin;
@@ -62,9 +53,6 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
     const options: Child.SpawnOptions = .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
@@ -388,9 +376,6 @@ test "a captured process keeps its identity across exec" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },
@@ -420,9 +405,6 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "echo before; read x; exec /bin/sh -c 'echo after; read x'" },

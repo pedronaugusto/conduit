@@ -312,9 +312,6 @@ fn expectKilled(term: Child.Term, signal: posix.SIG) !void {
 //======================================================================
 
 test "a child on pipes: its output is collected and its exit code is seen" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.greeting,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
@@ -332,9 +329,6 @@ test "a child on pipes: its output is collected and its exit code is seen" {
 }
 
 test "a child on pipes can be written to" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.echo_stdin,
         .stdio = .{ .pipes = .{ .stderr = false } },
@@ -353,9 +347,6 @@ test "a child on pipes can be written to" {
 }
 
 test "output stops at max_bytes and says it did" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.greeting,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
@@ -374,9 +365,6 @@ test "output stops at max_bytes and says it did" {
 }
 
 test "output keeps draining after allocation failure and reports out of memory" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     // Much more than a pipe holds: a collector that stops at its first failed
@@ -396,9 +384,6 @@ test "output keeps draining after allocation failure and reports out of memory" 
 }
 
 test "output ends a silent child when its stream cannot be read" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(gpa, io, .{
@@ -416,9 +401,6 @@ test "output ends a silent child when its stream cannot be read" {
 }
 
 test "output gives up on a child that will not end, and ends it" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .{ .pipes = .{ .stdin = false } },
@@ -434,9 +416,6 @@ test "output gives up on a child that will not end, and ends it" {
 }
 
 test "tryWait is null while the child runs and a term once it has ended" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_7,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -454,9 +433,6 @@ test "tryWait is null while the child runs and a term once it has ended" {
 }
 
 test "Reaper.exit becomes non-null once the child has ended" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -485,9 +461,6 @@ test "Reaper.exit becomes non-null once the child has ended" {
 
 test "a Reaper started after reaping never watches a reused identity" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
@@ -519,10 +492,6 @@ test "a Reaper started after reaping never watches a reused identity" {
 }
 
 test "killWait is legal while a Reaper is waiting, and the two share one reap" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     // The sequence the documentation used to forbid and now allows: a wait in
     // flight on a task of its own, `exit` asked and answering null, and then
     // the owner deciding the child has had long enough. Two reaps of one child
@@ -563,10 +532,6 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
 }
 
 test "a wait whose Reaper was cancelled is still a wait" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     // A `Reaper` that is stopped before the child ends leaves the child
     // unreaped, and whoever asked for the wait while it held it has to end up
     // doing the wait itself rather than waiting forever for a publish that is
@@ -591,9 +556,6 @@ test "a wait whose Reaper was cancelled is still a wait" {
 }
 
 test "Reaper.wait blocks until the child has ended, and answers everyone who asks" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -617,9 +579,6 @@ test "Reaper.wait blocks until the child has ended, and answers everyone who ask
 }
 
 test "Reaper.kill returns at once and ends a child that ignores the request, by force, with its tree" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX: a request that can be ignored is a signal, and so is the force.
     if (is_windows) return error.SkipZigTest;
 
@@ -676,9 +635,6 @@ test "Reaper.kill returns at once and ends a child that ignores the request, by 
 }
 
 test "Reaper.kill is over the moment a child that honours the request ends" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(gpa, io, .{
@@ -700,9 +656,6 @@ test "Reaper.kill is over the moment a child that honours the request ends" {
 }
 
 test "Reaper.kill with no grace is the force, now" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     // The shell says so once it ignores the request, so the request cannot
@@ -736,9 +689,6 @@ test "Reaper.kill with no grace is the force, now" {
 
 test "killWait retires a forced group only after closing its late fork's pipe" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     for (0..16) |_| {
         var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", "trap '' TERM; printf 'pid %d.' $$; sleep 100; :" },
@@ -761,9 +711,6 @@ test "killWait retires a forced group only after closing its late fork's pipe" {
 }
 
 test "end_tree: what a child leaves in its group ends with it, before the child is reaped" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // A process group is a POSIX address; the Windows answer is the job.
     if (is_windows) return error.SkipZigTest;
 
@@ -824,9 +771,6 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
 }
 
 test "end_tree: a child that ended before its Reaper started still takes what it left" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     // The child has ended, unreaped, before the Reaper's task first looks at
@@ -867,9 +811,6 @@ test "end_tree: a child that ended before its Reaper started still takes what it
 }
 
 test "end_tree on Windows ends the child's job at the reap, not at deinit" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows only: the job is the tree there. Without `end_tree` a grandchild
     // outlives the reap and goes at `deinit`, which the test below shows;
     // with it the job is ended when the child is reaped.
@@ -911,9 +852,6 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
 }
 
 test "end_tree: a child that leaves nothing is reaped without waiting on its group" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(gpa, io, .{
@@ -934,10 +872,6 @@ test "end_tree: a child that leaves nothing is reaped without waiting on its gro
 }
 
 test "a Reaper told to go while the child runs goes at once, and leaves the child to be waited for" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -951,8 +885,7 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
     defer reaper.deinit(io);
     try std.Io.sleep(io, .fromMilliseconds(20), .awake);
     {
-        var join_watchdog: Watchdog = .init(@src());
-        join_watchdog.limit_ms = budget_ms;
+        var join_watchdog: Watchdog = .init(@src(), budget_ms);
         try join_watchdog.start(io);
         defer join_watchdog.deinit(io);
         try reaper.stop(io);
@@ -964,10 +897,6 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
 }
 
 test "output abandoned by a cancelation ends the child and reaps it" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .{ .pipes = .{ .stdin = false, .stderr = false } },
@@ -993,9 +922,6 @@ test "output abandoned by a cancelation ends the child and reaps it" {
 }
 
 test "stdinWriter and stdoutReader find the child's streams wherever they are" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.echo_stdin,
         .stdio = .{ .pipes = .{ .stderr = false } },
@@ -1018,9 +944,6 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
 }
 
 test "closeStdin is the half-close a child reading to end of file waits for" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.drain_then_exit_7,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -1042,9 +965,6 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
 }
 
 test "waitTimeout uses the native exit wait without interval sleeps" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -1073,9 +993,6 @@ test "waitTimeout uses the native exit wait without interval sleeps" {
 }
 
 test "waitTimeout gives up without ending the child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
@@ -1094,9 +1011,6 @@ test "waitTimeout gives up without ending the child" {
 }
 
 test "succeeded, exitCode and signalName say how a child ended" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var ok_child = try Child.spawn(gpa, io, .{
         .argv = &script.drain_then_exit_7,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -1150,9 +1064,6 @@ test "shellStatus says an end as a shell's $? does, and signalNumber names every
         try testing.expectEqual(@as(u8, 168), conduit.shellStatus(.{ .signal = unnamed }));
     }
 
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var killed = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
@@ -1164,9 +1075,6 @@ test "shellStatus says an end as a shell's $? does, and signalNumber names every
 }
 
 test "processExists says whether a process has an id, until it is reaped" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const own: Child.Id = if (is_windows) std.os.windows.GetCurrentProcessId() else std.c.getpid();
     try testing.expectEqual(@as(?bool, true), conduit.processExists(own));
     if (!is_windows) {
@@ -1196,9 +1104,6 @@ test "processExists says whether a process has an id, until it is reaped" {
 //======================================================================
 
 test "killWait ends a child that would otherwise outlive the test, and says how" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
@@ -1214,10 +1119,6 @@ test "killWait ends a child that would otherwise outlive the test, and says how"
 }
 
 test "killWait reaches what the child started, not only the child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     // Both systems, by different means: a job object on Windows, the child's
     // process group on POSIX. The fixture is a shell waiting on a program of
     // its own, so there is a grandchild, and both of them hold the standard
@@ -1260,9 +1161,6 @@ test "killWait reaches what the child started, not only the child" {
 }
 
 test "killWait reaches a grandchild that put itself in a process group of its own" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: on Windows the job object holds everything the child starts
     // whatever it does with console groups, and the test above already asserts
     // that.
@@ -1310,9 +1208,6 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
 }
 
 test "a child that has never forked is stopped by its signal alone, without the walk" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Where nothing says a child has no children every stop walks, as it
     // always did, and there is nothing here to count. Darwin watches the
     // child's forks; Linux reads the child's `children` files.
@@ -1378,9 +1273,6 @@ test "a child on a terminal opens it as one poll can wait on" {
 }
 
 test "a grandchild started at once, out of reach of the signal, still ends with the child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     // The watch on the child's forks is registered late on purpose: long
@@ -1464,9 +1356,6 @@ const trapping_tree =
 const shell_reports: Child.Stdio = .{ .streams = .{ .stdout = .pipe, .stderr = .ignore } };
 
 test "a signal other than the three reaches a detached child and what it started" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows has none of these, and refuses them: the test below.
     if (is_windows) return error.SkipZigTest;
 
@@ -1505,9 +1394,6 @@ test "a signal other than the three reaches a detached child and what it started
 }
 
 test "stop suspends a child and what it started, and continue resumes them" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     var child = try Child.spawn(gpa, io, .{
@@ -1541,9 +1427,6 @@ test "stop suspends a child and what it started, and continue resumes them" {
 }
 
 test "a signal that is not a request to end leaves what the child started to its policy" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     // The child catches the signal and exits normally; the grandchild
@@ -1589,10 +1472,6 @@ test "a signal that is not a request to end leaves what the child started to its
 }
 
 test "a signal with no meaning on this system is refused by name" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
@@ -1778,9 +1657,6 @@ test "killRecorded ends a verified Linux cgroup and its detached grandchild" {
 }
 
 test "a grandchild that double-forks and setsid()s away is still ended with the tree, in the child's cgroup" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // A system where this process may not make one: the walk, which does
     // not reach this grandchild, and nothing here to show.
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
@@ -1841,9 +1717,6 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
 }
 
 test "end_tree: what a child left in its cgroup ends with it, orphaned and in a session of its own" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
 
     // Not detached: there is no group to end, and before the cgroup a child
@@ -1874,9 +1747,6 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
 }
 
 test "deinit signals nothing in a child's cgroup, and the cgroup goes once what is in it has ended" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
 
     var child = try Child.spawn(gpa, io, .{
@@ -2009,9 +1879,6 @@ fn expectZombie(pid: posix.pid_t) !void {
 }
 
 test "an orphan that forked twice and called setsid is adopted, reaped at conduit's next event, and ended by Orphans.killAll" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
     var orphans: Orphans = .init(gpa);
     defer {
@@ -2115,9 +1982,6 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
 }
 
 test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !Orphans.supported) return error.SkipZigTest;
     if (setsidProgram() == null) return error.SkipZigTest;
     var orphans: Orphans = .init(gpa);
@@ -2153,9 +2017,6 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
 }
 
 test "a Child's status is never taken by the reaping of orphans, however the two race" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !Orphans.supported) return error.SkipZigTest;
 
     // A child this process had before `start` is somebody's too.
@@ -2230,9 +2091,6 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
 }
 
 test "with Orphans not started, an orphan goes where it always went" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or builtin.os.tag != .linux) return error.SkipZigTest;
     if (setsidProgram() == null) return error.SkipZigTest;
     try testing.expect(!subreaperNow());
@@ -2367,9 +2225,6 @@ fn endedWithin(handle: windows.HANDLE) bool {
 }
 
 test "waitTree says the tree has ended, and does not say it early" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // The job object; the Linux cgroup has the test below. `Child.waitTree`
     // says why the other systems have nothing: a process group is an address
     // to send signals to, not a container the system accounts for.
@@ -2434,9 +2289,6 @@ test "waitTree says the tree has ended, and does not say it early" {
 }
 
 test "waitTree on Linux says the child's cgroup has emptied, and does not say it early" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Linux with a cgroup this process may make: the container is the cgroup.
     if (builtin.os.tag != .linux or !try cgroupsHere()) return error.SkipZigTest;
 
@@ -2469,9 +2321,6 @@ test "waitTree on Linux says the child's cgroup has emptied, and does not say it
 }
 
 test "waitTree on Linux refuses a child with no cgroup of its own" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
@@ -2484,9 +2333,6 @@ test "waitTree on Linux refuses a child with no cgroup of its own" {
 }
 
 test "a contained wait ends a grandchild before lifecycle release" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows only: contained completion confirms the whole Job.
     if (!is_windows) return error.SkipZigTest;
 
@@ -2537,9 +2383,6 @@ test "a contained wait ends a grandchild before lifecycle release" {
 }
 
 test "a detached child has a process group of its own and an attached one does not" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var detached = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
@@ -2560,9 +2403,6 @@ test "a detached child has a process group of its own and an attached one does n
 }
 
 test "a detached child's process group is the one the operating system reports" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: Windows has no `getpgid`, and the group a
     // `CREATE_NEW_PROCESS_GROUP` child is in is not something a parent can
     // read back.
@@ -2585,9 +2425,6 @@ test "a detached child's process group is the one the operating system reports" 
 
 test "an attached child shares the parent's process group" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
@@ -2601,9 +2438,6 @@ test "an attached child shares the parent's process group" {
 }
 
 test "killWait with no grace goes straight to the signal nothing survives" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim is about a child that ignores the polite request,
     // and Windows has no polite request for a process to ignore.
     if (is_windows) return error.SkipZigTest;
@@ -2623,10 +2457,6 @@ test "killWait with no grace goes straight to the signal nothing survives" {
 //======================================================================
 
 test "what a child writes to its terminal reaches the master" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     // Traced stage by stage, like the shell test below and for the same
     // reason: this one has hung on a Windows runner with nothing to say.
     // The order out, for every test in this section: stop the reader, end the
@@ -2667,9 +2497,6 @@ test "what a child writes to its terminal reaches the master" {
 }
 
 test "a cursor shape the child wrote reaches the master where passthrough was granted" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows only: this is a claim about `PSEUDOCONSOLE_PASSTHROUGH_MODE`,
     // and on POSIX there is nothing between the two ends of a pair rewriting
     // anything in the first place.
@@ -2715,9 +2542,6 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
 }
 
 test "a child on a pty sees a terminal" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: `cmd.exe` has no way to ask, and on Windows the answer is
     // structural anyway -- a pseudoconsole client is attached to a console by
     // construction.
@@ -2739,9 +2563,6 @@ test "a child on a pty sees a terminal" {
 }
 
 test "a child on a pty reports the window size it was given, and the one it is resized to" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: this asks the child what size its terminal is, and `stty` is
     // how a shell asks. Windows has no equivalent a `cmd.exe` one-liner can
     // print; that a pseudoconsole takes the new size is `Pty`'s own test.
@@ -2775,9 +2596,6 @@ test "a child on a pty reports the window size it was given, and the one it is r
 }
 
 test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim is that a line discipline turns a byte into a
     // signal for a foreground process group, and neither half of that sentence
     // has a Windows counterpart.
@@ -2807,9 +2625,6 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
 
 test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
@@ -2832,9 +2647,6 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
 }
 
 test "a detached pty child is the terminal's foreground process group, and an attached one is not" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim is about the group a line discipline sends its
     // generated signals to, which is not a thing a console has.
     if (is_windows) return error.SkipZigTest;
@@ -2878,9 +2690,6 @@ test "a detached pty child is the terminal's foreground process group, and an at
 }
 
 test "closing the master hangs the terminal up, and a detached child gets SIGHUP" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: there is no Windows counterpart. Closing a pseudoconsole is
     // `ClosePseudoConsole`, which ends the client outright rather than
     // signalling it, and that is `Pty.closeSlave`, not this.
@@ -2908,9 +2717,6 @@ test "closing the master hangs the terminal up, and a detached child gets SIGHUP
 }
 
 test "stderr_to sends the child's standard error to a file of the caller's" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only, for want of a fixture rather than for want of the feature:
     // the sink here is the terminal end of a second pair, which is the one
     // writable file this package can open without touching the filesystem, and
@@ -2944,9 +2750,6 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
 //======================================================================
 
 test "each stream is chosen on its own" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // A pipe for what is wanted and the null device for what is not, which is
     // the combination `.pipes` cannot say: it pipes a stream or leaves it the
     // parent's, and leaving standard error the parent's puts the child's
@@ -2977,9 +2780,6 @@ test "each stream is chosen on its own" {
 }
 
 test "the terminal end of a pair can be one stream and a pipe another" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim needs the terminal end to be a file, and on
     // Windows a pseudoconsole is an object a whole process is attached to.
     // `Pty.slaveFile` is a compile error there and says so.
@@ -3021,9 +2821,6 @@ test "the terminal end of a pair can be one stream and a pipe another" {
 }
 
 test "a stream can be closed rather than connected to anything" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim is what a child finds at a descriptor that is not
     // there, and `cmd.exe` has no way to report it.
     if (is_windows) return error.SkipZigTest;
@@ -3068,9 +2865,6 @@ test "the older stdio shapes are the per-stream ones under another name" {
 //======================================================================
 
 test "a signal this process ignores is back at its default action in the child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim is about signal dispositions surviving `execve`,
     // and Windows has neither.
     if (is_windows) return error.SkipZigTest;
@@ -3110,9 +2904,6 @@ test "a signal this process ignores is back at its default action in the child" 
 //======================================================================
 
 test "a child's file-creation mask is the one it was given" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: a Windows process has no umask, and `credentials` there is
     // `error.Unsupported`, which the test below this one checks.
     if (is_windows) return error.SkipZigTest;
@@ -3136,9 +2927,6 @@ test "a child's file-creation mask is the one it was given" {
 
 test "a uid and gid this process may take are taken, and one it may not is an error" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     // The ids this process already has. Changing to them is allowed without
     // privilege, so what this proves is that the calls are made and that the
@@ -3182,9 +2970,6 @@ test "a resource limit set at spawn is the child's own" {
     // POSIX only: Windows has no `setrlimit`, and the test below this one
     // checks that the option is refused there rather than dropped.
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     // Lowering a soft limit needs no privilege, and `ulimit -n` is how a shell
     // reports the one for open files. The hard limit is left where it is: a
@@ -3227,9 +3012,6 @@ test "a resource limit set at spawn is the child's own" {
 }
 
 test "a job limit bounds what the child's tree may do" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows only: the limit is on the job object, which is the container the
     // child and everything it starts live in, and POSIX has no such thing.
     if (!is_windows) return error.SkipZigTest;
@@ -3293,9 +3075,6 @@ test "resource limits are refused on Windows rather than quietly not applied" {
 
 test "credentials are refused on Windows rather than quietly not applied" {
     if (!is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
         .argv = &script.sleep_forever,
         .stdio = .ignore,
@@ -3308,9 +3087,6 @@ test "credentials are refused on Windows rather than quietly not applied" {
 //======================================================================
 
 test "the child's environment and working directory are the ones asked for" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var environ = try conduit.environ.inherit(gpa, &.{
         .{ .name = "CONDUIT_TEST_VALUE", .value = "present" },
     });
@@ -3334,9 +3110,6 @@ test "the child's environment and working directory are the ones asked for" {
 }
 
 test "a scrubbed environment is the only thing the child sees" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only for the fixture, not for the feature: `cmd.exe` cannot be run
     // without the environment Windows starts it with, so a child with nothing
     // but one variable has nothing to report it with.
@@ -3374,10 +3147,6 @@ test "a scrubbed environment is the only thing the child sees" {
 }
 
 test "path_search decides which PATH a bare program name is looked up in" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     if (is_windows) {
         var environment = try conduit.environ.inherit(gpa, &.{});
         defer environment.deinit();
@@ -3457,9 +3226,6 @@ test "path_search decides which PATH a bare program name is looked up in" {
 }
 
 test "a program that is not there is an error, not a child that exits 127" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"conduit-no-such-program-anywhere"},
         .stdio = .ignore,
@@ -3483,9 +3249,6 @@ test "a program that is not there is an error, not a child that exits 127" {
 }
 
 test "a working directory that is not there is an error" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const missing = if (is_windows)
         "C:\\conduit-no-such-directory\\at-all"
     else
@@ -3498,9 +3261,6 @@ test "a working directory that is not there is an error" {
 }
 
 test "a program at a path that is not there is an error" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows resolves the program from the command line, and a path with no
     // such file is `ERROR_FILE_NOT_FOUND` all the same; the POSIX side goes
     // through a different branch of the search, which is why both are here.
@@ -3516,9 +3276,6 @@ test "a program at a path that is not there is an error" {
 
 test "a batch file is refused rather than handed to cmd.exe" {
     if (!is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     try testing.expectError(error.UnsupportedBatchFile, Child.spawn(gpa, io, .{
         .argv = &.{ "C:\\conduit-no-such-script.bat", "arg" },
         .stdio = .ignore,
@@ -3530,10 +3287,6 @@ test "a batch file is refused rather than handed to cmd.exe" {
 //======================================================================
 
 test "spawnShell starts the user's shell on a pair" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
-
     // This one is traced stage by stage. It has hung once on a Windows runner
     // with nothing to say for itself, and the stages are what a run that does
     // it again will have to say.
@@ -3583,9 +3336,6 @@ extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 const fast_path = if (is_windows) false else spawn_path.available;
 
 test "both spawn paths start the same child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
     // spawns that take `posix_spawn`: those where no cgroup is made.
@@ -3619,9 +3369,6 @@ test "both spawn paths start the same child" {
 }
 
 test "a child on the posix_spawn path starts with the same clean slate" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
     // spawns that take `posix_spawn`: those where no cgroup is made.
@@ -3654,9 +3401,6 @@ test "a child on the posix_spawn path starts with the same clean slate" {
 
 test "a spawn expressible by file actions makes no fork call" {
     if (is_windows or !fast_path) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
     const calls = @import("../testing/support.zig").SpawnCalls;
@@ -3683,9 +3427,6 @@ test "a spawn expressible by file actions makes no fork call" {
 //======================================================================
 
 test "fd_policy close_all leaves the child its three streams and nothing else" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: a Windows child is given the handles named in an attribute
     // list and nothing else, so `.close_all` is what it already does.
     if (is_windows) return error.SkipZigTest;
@@ -3731,9 +3472,6 @@ test "fd_policy close_all leaves the child its three streams and nothing else" {
 }
 
 test "a caller's handle is as inheritable after a spawn as it was before" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // Windows only: inheritance there is a flag on the handle and
     // `CreateProcessW` takes every inheritable handle at once, so a spawn has
     // to set the flag on a file the caller opened -- and then put it back, or
@@ -3774,9 +3512,6 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
 }
 
 test "concurrent Windows spawns never change a caller handle's inheritance flag" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (!is_windows) return error.SkipZigTest;
 
     var tmp = testing.tmpDir(.{});
@@ -3834,9 +3569,6 @@ fn spawnWithSharedHandle(sink: std.Io.File, changed: *std.atomic.Value(bool)) st
 }
 
 test "a Windows child with every stream closed inherits no unrelated handle" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (!is_windows) return error.SkipZigTest;
 
     // A handle this process holds that is inheritable and has nothing to do
@@ -3980,9 +3712,6 @@ fn plainSpawn(argv: []const []const u8) !std.os.windows.HANDLE {
 }
 
 test "a child gets no descriptor of this process's but its own three" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: `/dev/fd` is where a process can see its own descriptors,
     // and Windows hands a child a named list of handles rather than a table it
     // might inherit the whole of.
@@ -4105,9 +3834,6 @@ fn spawnAndList(each: usize, control: u64, strangers: *std.atomic.Value(u32)) st
 //======================================================================
 
 test "a stream whose file is a descriptor an earlier stream overwrites still gets its own file" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // POSIX only: the claim is about the order `dup2` puts descriptors in, and
     // Windows hands the child three named handles with no numbering to clash.
     if (is_windows) return error.SkipZigTest;
@@ -4143,9 +3869,6 @@ test "a stream whose file is a descriptor an earlier stream overwrites still get
 }
 
 test "two streams whose files are each other's descriptors are not crossed" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
 
     var tmp = testing.tmpDir(.{});
@@ -4211,9 +3934,6 @@ fn expectSaid(dir: std.Io.Dir, name: []const u8, expected: []const u8) !void {
 }
 
 test "extra files arrive at descriptor 3 and up, in order" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     // About the spawn path, so not in a cgroup, which always forks.
@@ -4257,9 +3977,6 @@ test "extra files arrive at descriptor 3 and up, in order" {
 }
 
 test "extra files cross over correctly, however their numbers fall" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // The numbering is POSIX's; Windows lists handles by value.
     if (is_windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{});
@@ -4312,9 +4029,6 @@ test "extra files cross over correctly, however their numbers fall" {
 }
 
 test "a program that cannot run is still reported when extra files cover the report pipe" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4335,9 +4049,6 @@ test "a program that cannot run is still reported when extra files cover the rep
 }
 
 test "a child on a terminal gets its extra files above the terminal's three" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     var tmp = testing.tmpDir(.{});
@@ -4380,9 +4091,6 @@ test "a child on a terminal gets its extra files above the terminal's three" {
 }
 
 test "a child on the C runtime finds extra handles at descriptor 3" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // The other systems number descriptors themselves; the tests above.
     if (!is_windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{});
@@ -4429,9 +4137,6 @@ const BorrowedDescriptor = struct {
 
 test "a fork spawn resets an ignored real-time signal in the child" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const signal: posix.SIG = @enumFromInt(std.os.linux.NSIG - 1);
     var saved: posix.Sigaction = undefined;
     const ignored: posix.Sigaction = .{
@@ -4454,9 +4159,6 @@ test "a fork spawn resets an ignored real-time signal in the child" {
 
 test "a fork spawn reports exec failure even when all standard descriptors were closed" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     var file = try tmp.dir.createFile(io, "stand-in", .{ .read = true });
@@ -4500,9 +4202,6 @@ test "a parent death signal is refused where the system has none" {
 
 test "a child given a parent death signal ends with the thread that started it" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // The parent the kernel watches is the thread that forked: a thread of
     // this test's own that spawns and ends stands in for a program that
     // crashes, since the test runner itself has to live on.
@@ -4532,9 +4231,6 @@ test "a child given a parent death signal ends with the thread that started it" 
 }
 
 test "a detached child on a pty takes posix_spawn where the platform can give it its terminal, and is the same child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A cgroup of the child's own sends any spawn to the fork: this is about
     // the ones that take `posix_spawn`.
@@ -4584,9 +4280,6 @@ test "a spawn with a parent death signal takes the fork, where the signal is set
 
 test "blocking waits and Reaper report status reaped elsewhere" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     for ([_]bool{ false, true }) |background| {
         var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
         defer child.release(io) catch unreachable;
@@ -4607,9 +4300,6 @@ test "blocking waits and Reaper report status reaped elsewhere" {
 
 test "Windows wait and Reaper preserve the control exit status" {
     if (!is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     for ([_]bool{ false, true }) |background| {
         var child = try Child.spawn(gpa, io, .{ .argv = &.{ "cmd.exe", "/c", "exit -1073741510" }, .stdio = .ignore });
         defer child.release(io) catch unreachable;
@@ -4626,9 +4316,6 @@ test "Windows wait and Reaper preserve the control exit status" {
 }
 
 test "Child identity and result access share the Reaper's retirement" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{ .argv = &script.read_then_exit_7, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } } });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
@@ -4662,9 +4349,6 @@ test "a PID fixture reports malformed output instead of a silent timeout" {
 
 test "a Reaper started after status loss never watches a reused identity" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 7" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     var status: c_int = undefined;
@@ -4726,9 +4410,6 @@ test "the Windows PID fixture keeps reading after a successful empty read" {
 }
 
 test "a containment snapshot survives reaping and deinit without owned handles" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -4772,9 +4453,6 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
 }
 
 test "Reaper start cannot replace an active task or restart a joined lifetime" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.read_then_exit_5,
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
@@ -4800,9 +4478,6 @@ test "Reaper start cannot replace an active task or restart a joined lifetime" {
 
 test "output reads a published result before watching a retired process number" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf retained; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
@@ -4829,9 +4504,6 @@ test "output reads a published result before watching a retired process number" 
 
 test "Orphans list copies the held identity for a record kept after reaping" {
     if (!Orphans.supported) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var orphans: Orphans = .init(gpa);
     try orphans.start();
     defer {
@@ -4863,9 +4535,6 @@ test "Orphans list copies the held identity for a record kept after reaping" {
 
 test "a pty master in a standard slot cannot close the child's replacement stream" {
     if (is_windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var pair = try Pty.open(gpa, .{});
     defer pair.close(io);
     var stdin: BorrowedDescriptor = try .take(0, pair.readFile());

@@ -140,18 +140,8 @@ pub fn build(b: *std.Build) void {
         test_module.addOptions("conduit_test_options", test_options);
     }
 
-    const ci_timings = b.option(bool, "ci-timings", "Record hosted full-tier test durations") orelse false;
-    const runner_options = b.addOptions();
-    runner_options.addOption(bool, "record_timings", ci_timings);
-    runner_options.addOption(u32, "watchdog_ms", b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown") orelse 30_000);
-    test_module.addOptions("conduit_runner_options", runner_options);
-    test_module.addAnonymousImport("standard_test_runner", .{
-        .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ b.graph.zig_lib_directory.path.?, "compiler", "test_runner.zig" }) },
-    });
-
     const tests = b.addTest(.{
         .name = "conduit-tests",
-        .test_runner = .{ .path = b.path("src/testing/runner.zig"), .mode = .server },
         .filters = test_filters,
         .root_module = test_module,
     });
@@ -215,22 +205,22 @@ pub fn build(b: *std.Build) void {
 
     if (b.pkg_hash.len != 0) return;
     if (b.lazyImport(@This(), "preflight")) |preflight| {
-        preflight.addCi(b, .{ .tests = test_step, .timings_enabled = ci_timings });
+        // preflight's test runner fails a test that outlasts this, its Io
+        // teardown included, by name and phase. Under CI's
+        // `--test-timeout 45s`, so the test is named from inside the run.
+        const watchdog_ms = b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown") orelse 30_000;
+        preflight.addCi(b, .{ .tests = test_step, .test_timeout = .fromMilliseconds(watchdog_ms) });
+        const containment = preflight.addCheck(b, "check-containment", "ci/containment.zig");
+        const probe = b.addRunArtifact(containment);
+        probe.addArg("runner");
+        b.step("check-runner", "Check the teardown watchdog diagnostic").dependOn(&probe.step);
+        // The build a consumer gets: nothing conduit fetches for itself.
+        preflight.addConsumerCheck(b, .{
+            .package = "conduit",
+            .program = b.path("ci/consumer.zig"),
+            .modules = &.{ "conduit", "conduit.tty" },
+        });
     }
-    const containment = ciCheck(b, "check-containment", "ci/containment.zig");
-    const probe = b.addRunArtifact(containment);
-    probe.addArg("runner");
-    b.step("check-runner", "Check the teardown watchdog diagnostic").dependOn(&probe.step);
-
-    // A project that depends on conduit by path, built with an empty package
-    // directory, so nothing conduit fetches for itself can be reached. It is
-    // the build a consumer gets.
-    const consumer = b.addSystemCommand(&.{ b.graph.zig_exe, "build", "--system" });
-    consumer.addDirectoryArg(b.addWriteFiles().add("README", "No packages.\n").dirname());
-    consumer.setCwd(b.path("ci/consumer"));
-    consumer.has_side_effects = true;
-    consumer.expectExitCode(0);
-    b.step("check-consumer", "Build a project that depends on conduit, with no packages fetched").dependOn(&consumer.step);
 }
 
 /// Every example, listed rather than globbed: a build graph that scans a
@@ -238,16 +228,3 @@ pub fn build(b: *std.Build) void {
 const example_sources = [_][]const u8{
     "examples/usage.zig",
 };
-
-// Build-only tooling belongs to a root invocation, never a consumer's dependency graph.
-fn ciCheck(b: *std.Build, name: []const u8, source: []const u8) *std.Build.Step.Compile {
-    const module = b.createModule(.{ .root_source_file = b.path(source), .target = b.graph.host, .optimize = .Debug });
-    const executable = b.addExecutable(.{ .name = name, .root_module = module });
-    const tests = b.addTest(.{ .root_module = module });
-    const run = b.addRunArtifact(executable);
-    run.setCwd(b.path("."));
-    const step = b.step(name, "Run repository CI checks and their regressions");
-    step.dependOn(&b.addRunArtifact(tests).step);
-    step.dependOn(&run.step);
-    return executable;
-}

@@ -6,21 +6,18 @@
 const std = @import("std");
 const Deadline = @import("conduit.tty").Deadline;
 
-/// Turns a hang into a failure that says which test hung.
+/// Bounds one step a test promises returns promptly: a stop that must not
+/// wait out a read, a wait that must say at once that nothing more will come.
 ///
-/// Every wait a test makes should have a bound, and the ones this package
-/// writes do. Not every call it makes is one of those: closing a pseudoconsole
-/// waits for the console host to flush and go, a read of a handle another task
-/// is closing is the operating system's business, and a child that inherits
-/// something it should not can hold a stream open with no deadline attached to
-/// it at all. A test that stops in one of those reports nothing and takes the
-/// whole run with it, which is the one failure mode a suite cannot recover
-/// from — so the bound goes around the test as well.
+/// A hang anywhere in a test is the shared test runner's: `zig build` passes
+/// it the package's `test_timeout`, and it fails the test by name and phase,
+/// its Io teardown included. This is the tighter bound a test asserts about
+/// one call, so it ends the process from inside, after whatever the test has
+/// printed, and names the test function and file.
 ///
 /// The bark is a panic rather than a test failure: the point is to interrupt a
 /// task that is not going to return, and only the process going down does
-/// that. The message names the test, which is what a run that shows no output
-/// at all is missing.
+/// that.
 ///
 /// The same lifetime rules as `Reaper`: it holds a pointer to itself, so it
 /// must not move once started, and `deinit` must run.
@@ -30,20 +27,10 @@ pub const Watchdog = struct {
     group: std.Io.Group,
     finished: std.atomic.Value(bool),
 
-    /// Generous: this is a failure budget and not a timing assertion. Nothing
-    /// in this suite should come within an order of magnitude of it, and a
-    /// loaded continuous-integration machine should not either.
-    ///
-    /// Under the build runner's own `--test-timeout`, which CI sets to 45
-    /// seconds, this has to be the shorter of the two or it never fires: the
-    /// runner's bound names the test but ends the process from outside, and
-    /// this one ends it from inside, after whatever the test has printed.
-    pub const default_ms = 30_000;
-
-    pub fn init(source: std.builtin.SourceLocation) Watchdog {
+    pub fn init(source: std.builtin.SourceLocation, limit_ms: u32) Watchdog {
         return .{
             .source = source,
-            .limit_ms = default_ms,
+            .limit_ms = limit_ms,
             .group = .init,
             .finished = .init(false),
         };

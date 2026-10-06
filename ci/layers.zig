@@ -1,4 +1,5 @@
-//! Source layers, lowest first. Every source has one explicit place.
+//! Production source layers, lowest first. Every production source has one
+//! place; test code is in no layer.
 const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
@@ -13,14 +14,10 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/environ.zig",
         "src/handles.zig",
         "src/serial_allocator.zig",
-        "src/testing/input_process.zig",
-        "src/testing/process.zig",
-        "src/testing/runner.zig",
         "src/child/windows/search.zig",
     } },
     .{ .name = "platform handles", .patterns = &.{
         "src/cgroup.zig",
-        "src/testing/support.zig",
         "src/tty.zig",
         "src/wait.zig",
     } },
@@ -33,14 +30,16 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "terminals", .patterns = &.{
         "src/pty.zig",
     } },
-    .{ .name = "child contracts", .patterns = &.{
+    .{ .name = "child contracts and conversations", .patterns = &.{
         "src/expect.zig",
+        "src/proxy.zig",
         "src/child/contract.zig",
     } },
     .{ .name = "process policy", .patterns = &.{
         "src/process_exists.zig",
         "src/child/output.zig",
         "src/child/stdio_plan.zig",
+        "src/supervisor.zig",
         "src/tree.zig",
         "src/child/windows/completion.zig",
     } },
@@ -48,7 +47,6 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/orphans.zig",
         "src/lineage.zig",
         "src/child/posix/spawn.zig",
-        "src/supervisor.zig",
     } },
     .{ .name = "lifecycle storage", .patterns = &.{
         "src/child/State.zig",
@@ -62,51 +60,23 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/child.zig",
         "src/find.zig",
     } },
-    .{ .name = "conversations and reaping", .patterns = &.{
-        "src/proxy.zig",
+    .{ .name = "reaping and shells", .patterns = &.{
         "src/reaper.zig",
-        "src/expect_test.zig",
-        "src/handles_test.zig",
-        "src/deadline_test.zig",
-        "src/close_on_exec_test.zig",
-        "src/lineage_test.zig",
         "src/shell.zig",
-        "src/tree_test.zig",
-        "src/wait_test.zig",
     } },
-    .{ .name = "public and identity scenarios", .patterns = &.{
-        "src/child/reaper_test.zig",
+    .{ .name = "public", .patterns = &.{
         "src/conduit.zig",
-        "src/child/descendants_test.zig",
-    } },
-    .{ .name = "public scenarios", .patterns = &.{
-        "src/child/exchange_test.zig",
-        "src/input_writer_test.zig",
-        "src/child/spawn_test.zig",
-    } },
-    .{ .name = "tests", .patterns = &.{
-        "src/tests.zig",
-        "src/testing/tty_process.zig",
     } },
 };
 
-pub const entries: []const []const u8 = &.{
-    "src/testing/input_process.zig",
-    "src/testing/process.zig",
-    "src/testing/tty_process.zig",
-    "src/testing/runner.zig",
-};
+pub const entries: []const []const u8 = &.{};
 
 pub const modules: []const gantry.NamedModule = &.{.{ .name = "conduit.tty", .path = "src/tty.zig" }};
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
         "builtin",
         "conduit_options",
-        "conduit_runner_options",
         "conduit_test_options",
-        "standard_test_runner",
-        "preflight_timings",
-        "preflight_order",
         "std",
     } },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
@@ -123,12 +93,8 @@ pub const required = [_][]const u8{
     "src/environ.zig",
     "src/handles.zig",
     "src/serial_allocator.zig",
-    "src/testing/input_process.zig",
-    "src/testing/process.zig",
-    "src/testing/runner.zig",
     "src/child/windows/search.zig",
     "src/cgroup.zig",
-    "src/testing/support.zig",
     "src/tty.zig",
     "src/wait.zig",
     "src/win32.zig",
@@ -153,22 +119,9 @@ pub const required = [_][]const u8{
     "src/find.zig",
     "src/proxy.zig",
     "src/reaper.zig",
-    "src/expect_test.zig",
-    "src/handles_test.zig",
-    "src/deadline_test.zig",
-    "src/close_on_exec_test.zig",
-    "src/lineage_test.zig",
     "src/shell.zig",
-    "src/tree_test.zig",
-    "src/wait_test.zig",
-    "src/child/reaper_test.zig",
     "src/conduit.zig",
-    "src/child/descendants_test.zig",
-    "src/child/exchange_test.zig",
-    "src/input_writer_test.zig",
-    "src/child/spawn_test.zig",
     "src/tests.zig",
-    "src/testing/tty_process.zig",
 };
 
 /// Tokens only their owners may spell: Windows declarations, the terminal's

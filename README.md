@@ -843,14 +843,13 @@ zig build ci-linux -- --both               # the suite on glibc and musl Linux, 
                                  # then once more with a writable cgroup
 ```
 
-Most of the suite starts a real child process and reaps it, and CI runs it on
-Linux and macOS in Debug, ReleaseSafe, ReleaseFast and ReleaseSmall: the code
-between `fork` and `execve` is the kind an inlining decision can change. On
-Windows the three release modes run whole and Debug runs in filtered pieces,
-each its own step, so a step that hangs names what it was running. CI passes
-`--test-timeout 45s`, which ends the run and names the test that did not
-finish, and a test that starts a child or opens a pair carries a watchdog that
-panics with its own name after thirty seconds. The suite also runs with the
+Most of the suite starts a real child process and reaps it, and CI runs it in
+Debug and ReleaseSafe on Linux, macOS and Windows, and in ReleaseFast on
+Linux: the code between `fork` and `execve` is the kind an inlining decision
+can change. CI passes `--test-timeout 45s`, which ends the run and names the
+test that did not finish, and preflight's test runner fails a test that runs
+past thirty seconds, its Io teardown included, by name and phase
+(`-Dtest-watchdog-ms` sets the bound). The suite also runs with the
 `posix_spawn` path turned off, because that path is a second implementation of
 one contract and running both is what says they make the same child.
 
@@ -866,7 +865,7 @@ error return traces off, which is what lets the fuzzing test runner compile.
 `zig build unit` is the suite without the examples, `-Dtest-filter` runs part
 of it, and `CONDUIT_TRACE` in the environment logs what this package asked
 the operating system for, through `std.log` at the info level under the
-`conduit` scope.
+`conduit` scope; in the suite it raises `std.testing.log_level` to match.
 
 ## Requirements
 

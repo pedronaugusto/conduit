@@ -4,13 +4,11 @@ const posix = std.posix;
 const windows = std.os.windows;
 const c = std.c;
 const Allocator = std.mem.Allocator;
-const Pty = @import("../pty.zig").Pty;
 const is_windows = builtin.os.tag == .windows;
 const Child = @import("../child.zig").Child;
 const win32 = @import("../win32.zig");
 const access = @import("../child.zig").test_access;
 const Reaper = @import("../reaper.zig").Reaper;
-const Watchdog = @import("../testing/support.zig").Watchdog;
 const Observer = struct {
     reaper: *Reaper,
     retired: bool = false,
@@ -33,9 +31,6 @@ const Observer = struct {
 test "a Reaper cannot retire the identity while kill is delivering a signal" {
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     for (0..64) |iteration| {
         var stage: []const u8 = "spawning";
@@ -83,9 +78,6 @@ test "output leaves the reap to the task that holds it" {
     if (is_windows) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
 
     var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "echo done" },

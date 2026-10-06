@@ -64,6 +64,7 @@ test {
     _ = @import("spin.zig");
     _ = console;
     _ = Proxy;
+    _ = @import("proxy_test.zig");
     _ = Expect;
     // A module of its own, so its declarations are named here to be
     // compiled for every target the check builds.

@@ -290,26 +290,3 @@ fn endedOrWokenKqueue(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcom
     // comes back. Either way there is nothing left to wait for.
     return .ended;
 }
-
-pub const test_access = if (builtin.is_test) struct {
-    pub const p_pid = fixture_p_pid;
-    pub const WaitId = FixtureWaitId;
-    pub const waitid_flags = fixture_waitid_flags;
-    pub const infoPid = fixtureInfoPid;
-    pub const openPidfd = fixtureOpenPidfd;
-    pub const endedPidfd = fixtureEndedPidfd;
-    pub const endedOrWokenPidfd = fixtureEndedOrWokenPidfd;
-    pub const openKqueue = fixtureOpenKqueue;
-    pub const endedKqueue = fixtureEndedKqueue;
-    pub const endedOrWokenKqueue = fixtureEndedOrWokenKqueue;
-} else struct {};
-const fixture_p_pid = p_pid;
-const FixtureWaitId = WaitId;
-const fixture_waitid_flags = waitid_flags;
-const fixtureInfoPid = infoPid;
-const fixtureOpenPidfd = openPidfd;
-const fixtureEndedPidfd = endedPidfd;
-const fixtureEndedOrWokenPidfd = endedOrWokenPidfd;
-const fixtureOpenKqueue = openKqueue;
-const fixtureEndedKqueue = endedKqueue;
-const fixtureEndedOrWokenKqueue = endedOrWokenKqueue;

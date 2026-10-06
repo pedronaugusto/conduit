@@ -51,7 +51,6 @@ const wait_for = @import("wait.zig");
 const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
 const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
-const Watchdog = @import("testing/support.zig").Watchdog;
 const input_writer = @import("input_writer.zig");
 const completion = @import("child/windows/completion.zig");
 const contract = @import("child/contract.zig");
@@ -2074,9 +2073,6 @@ pub const Child = struct {
         if (!tree.Forks.supported) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: Watchdog = .init(@src());
-        try watchdog.start(io);
-        defer watchdog.deinit(io);
         var child = try Child.spawn(testing.allocator, io, .{
             .argv = &.{ "/bin/echo", "retained" },
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
@@ -2107,9 +2103,6 @@ pub const Child = struct {
     test "output on tasks bounds draining by elapsed time after a delayed sleep" {
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: Watchdog = .init(@src());
-        try watchdog.start(io);
-        defer watchdog.deinit(io);
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
         var child = try spawn(testing.allocator, io, .{
             .argv = argv,
@@ -2160,9 +2153,6 @@ pub const Child = struct {
         if (is_windows) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
-        var watchdog: Watchdog = .init(@src());
-        try watchdog.start(io);
-        defer watchdog.deinit(io);
 
         var child = try spawn(testing.allocator, io, .{
             .argv = &.{ "/bin/sh", "-c", "exit 7" },

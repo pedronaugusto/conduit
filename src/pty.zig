@@ -37,7 +37,6 @@ const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = @import("win32.zig");
-const Watchdog = @import("testing/support.zig").Watchdog;
 
 const Size = tty.Size;
 const file = handles.file;
@@ -655,9 +654,6 @@ pub const Pty = struct {
 
     test "open gives a pair at the requested size, and resize changes it" {
         const io = testing.io;
-        var watchdog: Watchdog = .init(@src());
-        try watchdog.start(io);
-        defer watchdog.deinit(io);
 
         var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
         defer pty.close(io);
@@ -680,9 +676,6 @@ pub const Pty = struct {
 
     test "close is idempotent and correct after closing one end" {
         const io = testing.io;
-        var watchdog: Watchdog = .init(@src());
-        try watchdog.start(io);
-        defer watchdog.deinit(io);
 
         var pty = try Pty.open(std.testing.allocator, .{});
         // The master ends go first here, which is what makes the terminal end safe
@@ -846,9 +839,6 @@ pub const Pty = struct {
     test "Windows size and stream borrows stay coherent while another task resizes" {
         if (!is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var watchdog: Watchdog = .init(@src());
-        try watchdog.start(io);
-        defer watchdog.deinit(io);
         const a: Size = .{ .rows = 24, .cols = 80, .x_pixel = 640, .y_pixel = 480 };
         const b: Size = .{ .rows = 30, .cols = 100, .x_pixel = 1000, .y_pixel = 600 };
         var pty = try Pty.open(std.testing.allocator, .{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });

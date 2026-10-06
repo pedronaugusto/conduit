@@ -2,7 +2,6 @@
 const std = @import("std");
 const conduit = @import("../conduit.zig");
 const Child = conduit.Child;
-const Watchdog = @import("../testing/support.zig").Watchdog;
 const testing = std.testing;
 const test_options = @import("conduit_test_options");
 const io = testing.io;
@@ -25,9 +24,6 @@ fn bulk() ![]u8 {
 }
 
 test "exchange writes input past a pipe's size while it reads as much back" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const input = try bulk();
     defer gpa.free(input);
     var child = try spawn("end");
@@ -43,9 +39,6 @@ test "exchange writes input past a pipe's size while it reads as much back" {
 }
 
 test "exchange closes input at once when there is none, and takes an allocator nobody shares" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // An arena is not made to be used from two threads; the exchange's own
     // tasks use it one at a time.
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -59,9 +52,6 @@ test "exchange closes input at once when there is none, and takes an allocator n
 }
 
 test "exchange keeps no more than max_bytes and says the rest was dropped" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const input = try bulk();
     defer gpa.free(input);
     var child = try spawn("echo");
@@ -74,9 +64,6 @@ test "exchange keeps no more than max_bytes and says the rest was dropped" {
 }
 
 test "input a child never reads is not an error" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const input = try bulk();
     defer gpa.free(input);
     var child = try spawn("exit");
@@ -88,9 +75,6 @@ test "input a child never reads is not an error" {
 }
 
 test "one deadline ends a child that neither reads its input nor ends" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const input = try bulk();
     defer gpa.free(input);
     var child = try spawn("stall");
@@ -105,9 +89,6 @@ test "one deadline ends a child that neither reads its input nor ends" {
 }
 
 test "exchange refuses input for a child with no stdin pipe and leaves it running" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("end");
     defer child.release(io) catch unreachable;
     const stdin = child.takeStdin().?;
@@ -123,9 +104,6 @@ test "exchange refuses input for a child with no stdin pipe and leaves it runnin
 }
 
 test "output takes an allocator nobody shares" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var child = try spawn("end");

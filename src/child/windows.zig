@@ -19,7 +19,6 @@ const windows_search = @import("windows/search.zig");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
-const file = @import("../handles.zig").file;
 
 /// See `Child.spawn`.
 pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {

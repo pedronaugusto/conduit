@@ -1,9 +1,1 @@
-[
-  {
-    "rule": "Z023",
-    "path": "src/testing/runner.zig",
-    "source": "pub fn fuzz(context: anytype, comptime testOne: fn (@TypeOf(context), *testing.Smith) anyerror!void, input: testing.FuzzInputOptions) anyerror!void {",
-    "detail": "'comptime' parameter should come before 'other'",
-    "reason": "The test runner's fuzz entry point: std.testing.fuzz calls it positionally as root.fuzz(context, testOne, options), so the order is std's."
-  }
-]
+[]

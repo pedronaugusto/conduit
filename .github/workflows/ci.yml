@@ -24,25 +24,25 @@ permissions:
 jobs:
   skip:
     if: github.event_name != 'push'
-    uses: pedronaugusto/preflight/.github/workflows/skip.yml@9fb3e5d24f83d18c056ed308cdfb3d78c0a9a8ba
+    uses: pedronaugusto/preflight/.github/workflows/skip.yml@9e72aac1b9f2837716105dca4de617685a4ca284
     with:
       full: ${{ github.event_name != 'workflow_dispatch' || inputs.full }}
-      preflight-ref: 9fb3e5d24f83d18c056ed308cdfb3d78c0a9a8ba
+      preflight-ref: 9e72aac1b9f2837716105dca4de617685a4ca284
   gate:
     needs: skip
     if: always() && (github.event_name == 'push' || (needs.skip.result == 'success' && needs.skip.outputs.docs-only != 'true'))
-    uses: pedronaugusto/preflight/.github/workflows/zig.yml@9fb3e5d24f83d18c056ed308cdfb3d78c0a9a8ba
+    uses: pedronaugusto/preflight/.github/workflows/zig.yml@9e72aac1b9f2837716105dca4de617685a4ca284
     with:
-      preflight-ref: 9fb3e5d24f83d18c056ed308cdfb3d78c0a9a8ba
+      preflight-ref: 9e72aac1b9f2837716105dca4de617685a4ca284
       full: ${{ github.event_name != 'workflow_dispatch' || inputs.full }}
       adopt: ${{ github.event_name == 'workflow_dispatch' && inputs.adopt }}
       attest: ${{ github.event_name == 'push' }}
       # Generated from ci/workflow.json with zig build plan -- --full false.
       fast-matrix: >-
-        {"include":[{"os":"ubuntu-latest","name":"Linux Debug","step":"preflight-fast","args":"-Doptimize=Debug","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"fast-linux-debug-0","artifact":""}]}
+        {"include":[{"os":"ubuntu-latest","name":"Linux Debug","step":"preflight-fast","args":"-Doptimize=Debug","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"fast-linux-debug-0","artifact":""}]}
       # Generated from ci/workflow.json with zig build plan -- --full true.
       full-matrix: >-
-        {"include":[{"os":"ubuntu-latest","name":"test (ubuntu-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"25f449f3154b7d3d","artifact":""},{"os":"ubuntu-latest","name":"test (ubuntu-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"cc6c1cc24da7f214","artifact":""},{"os":"ubuntu-latest","name":"test (ubuntu-latest, ReleaseFast)","step":"ci","args":"-Doptimize=ReleaseFast -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"7c21bf8ca8c8a4cd","artifact":""},{"os":"macos-latest","name":"test (macos-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"301095300dc4aa8e","artifact":""},{"os":"macos-latest","name":"test (macos-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"768b6e45387c7a43","artifact":""},{"os":"windows-latest","name":"test (windows-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"a98a02c7e73a200d","artifact":""},{"os":"windows-latest","name":"test (windows-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","cases":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"b36a8ccc2ca2a9c0","artifact":""},{"os":"ubuntu-latest","name":"source checks and documented snippets","step":"lint","args":"","cases":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"10bdf2590c7a0117","artifact":""},{"os":"ubuntu-latest","name":"compile (ReleaseSmall)","step":"check","args":"-Doptimize=ReleaseSmall","cases":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"2d9a4fde819ce492","artifact":""},{"os":"ubuntu-latest","name":"cross (all configured targets)","step":"preflight-cross","args":"","cases":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"0abaad5bfb3ff7f9","artifact":""},{"os":"ubuntu-latest","name":"ThreadSanitizer (Linux)","step":"unit","args":"-Dthread-sanitizer -Doptimize=Debug","cases":"","timeout":"--test-timeout 120s","setup":true,"job_timeout":20,"cache_key":"0767d29636bd4295","artifact":""}]}
+        {"include":[{"os":"ubuntu-latest","name":"test (ubuntu-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"01947137a0b1f3b1","artifact":""},{"os":"ubuntu-latest","name":"test (ubuntu-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"3667898e0a45f0ee","artifact":""},{"os":"ubuntu-latest","name":"test (ubuntu-latest, ReleaseFast)","step":"ci","args":"-Doptimize=ReleaseFast -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"9adf5e897789bf7d","artifact":""},{"os":"macos-latest","name":"test (macos-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"64985ed68efee111","artifact":""},{"os":"macos-latest","name":"test (macos-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"9af08c0e418a8881","artifact":""},{"os":"windows-latest","name":"test (windows-latest, Debug)","step":"ci","args":"-Doptimize=Debug -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"3fbe91f81225ba5c","artifact":""},{"os":"windows-latest","name":"test (windows-latest, ReleaseSafe)","step":"ci","args":"-Doptimize=ReleaseSafe -Dci-lint=false -Dci-timings=true","shard":"","timeout":"--test-timeout 45s","setup":true,"job_timeout":20,"cache_key":"3e842c9ab2333759","artifact":""},{"os":"ubuntu-latest","name":"source checks and documented snippets","step":"lint","args":"","shard":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"119e3d2ddf82d539","artifact":""},{"os":"ubuntu-latest","name":"compile (ReleaseSmall)","step":"check","args":"-Doptimize=ReleaseSmall","shard":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"4515d8efc7af7d51","artifact":""},{"os":"ubuntu-latest","name":"cross (all configured targets)","step":"preflight-cross","args":"","shard":"","timeout":"","setup":false,"job_timeout":20,"cache_key":"1b13795de3f7fdd5","artifact":""},{"os":"ubuntu-latest","name":"ThreadSanitizer (Linux)","step":"unit","args":"-Dthread-sanitizer -Doptimize=Debug -Dci-lint=false","shard":"","timeout":"--test-timeout 120s","setup":true,"job_timeout":20,"cache_key":"4a863b4dbe2a0998","artifact":""}]}
   fork:
     needs: skip
     if: needs.skip.outputs.docs-only != 'true' && github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.full)
@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: 9fb3e5d24f83d18c056ed308cdfb3d78c0a9a8ba
+          ref: 9e72aac1b9f2837716105dca4de617685a4ca284
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci -Dci-lint=false -Doptimize=ReleaseSafe -Dfork-spawn --test-timeout 45s
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: 9fb3e5d24f83d18c056ed308cdfb3d78c0a9a8ba
+          ref: 9e72aac1b9f2837716105dca4de617685a4ca284
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci-linux -- --musl --no-lint --optimize ${{ matrix.optimize }} --cgroup ${{ matrix.cgroup }}

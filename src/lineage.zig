@@ -190,10 +190,3 @@ const Darwin = struct {
         allocator.destroy(tracker);
     }
 };
-
-pub const test_access = if (builtin.is_test) struct {
-    pub const tree = fixture_tree;
-    pub const Darwin = FixtureDarwin;
-} else struct {};
-const fixture_tree = tree;
-const FixtureDarwin = Darwin;

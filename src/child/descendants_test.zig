@@ -6,7 +6,6 @@ const windows = builtin.os.tag == .windows;
 const win32 = @import("../win32.zig");
 const tree = @import("../tree.zig");
 const cgroups = @import("../cgroup.zig");
-const Watchdog = @import("../testing/support.zig").Watchdog;
 const io = std.testing.io;
 const gpa = std.testing.allocator;
 const Deadline = @import("conduit.tty").Deadline;
@@ -110,9 +109,6 @@ const Fixture = struct {
 };
 
 test "normal reap and deinit leave a detached daemon alive by default" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper", "exit-7" }) |method| {
         var fixture = try Fixture.start(.survive, if (comptime std.mem.eql(u8, method, "exit-7")) "--exit-7" else "--escape");
         defer fixture.deinit();
@@ -151,9 +147,6 @@ test "normal reap and deinit leave a detached daemon alive by default" {
 }
 
 test "containment ends a daemon after normal completion through every reap" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
         var fixture = try Fixture.start(.contain, "");
         defer fixture.deinit();
@@ -183,9 +176,6 @@ test "containment ends a daemon after normal completion through every reap" {
 }
 
 test "timeout kill killWait and output errors end a daemon in either policy" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     inline for (.{ Child.Descendants.survive, Child.Descendants.contain }) |policy| {
         inline for (.{ "timeout", "kill", "killWait", "error" }) |operation| {
             var fixture = try Fixture.start(policy, "--escape");
@@ -213,9 +203,6 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
 
 test "a walk too large to hold still kills and reaps the child itself" {
     if (windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     // The walk is what is under test: a child in a cgroup is ended without one.
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
@@ -238,9 +225,6 @@ test "a walk too large to hold still kills and reaps the child itself" {
 
 test "containment ends a double-forked session after normal exit" {
     if (builtin.os.tag != .macos and builtin.os.tag != .linux and !windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
         var fixture = try Fixture.start(.contain, "--double-fork");
         defer fixture.deinit();
@@ -289,9 +273,6 @@ test "containment ends a double-forked session after normal exit" {
 // Run with `zig build unit -Dmeasure -Dtest-filter=measures`.
 test "Darwin measures the fork then exit registration race" {
     if (builtin.os.tag != .macos or !test_options.measure) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const attempts = 100;
     const hook = &lineage.testing_hook.delay_ms;
     defer hook.store(0, .release);
@@ -313,9 +294,6 @@ test "Darwin measures the fork then exit registration race" {
 
 test "a Reaper subreaper ends and reaps a detached orphan without stealing another child" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var fixture: Fixture = undefined;
@@ -354,9 +332,6 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
 
 test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const linux = std.os.linux;
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
@@ -406,9 +381,6 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
 
 test "independent contained Linux children end only their own detached orphans" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var first = try Fixture.start(.contain, "--race");
@@ -427,9 +399,6 @@ test "independent contained Linux children end only their own detached orphans" 
 
 test "a private supervisor preserves the root exit code and signal" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     inline for (.{ "exit 7", "kill -TERM $$" }, .{ Child.Term{ .exited = 7 }, Child.Term{ .signal = .TERM } }) |script, expected| {
         var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
         defer child.release(io) catch unreachable;
@@ -440,9 +409,6 @@ test "a private supervisor preserves the root exit code and signal" {
 
 test "a saved private supervisor ends only its recorded scope" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var first = try Fixture.start(.contain, "--race");
@@ -465,9 +431,6 @@ test "a saved private supervisor ends only its recorded scope" {
 
 test "a failed contained exec leaves no private supervisor to wait for" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     try std.testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"/no-such-conduit-contained-executable"},
         .descendants = .contain,
@@ -481,9 +444,6 @@ test "a failed contained exec leaves no private supervisor to wait for" {
 
 test "dropping a contained child ends and reaps its private supervisor" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .descendants = .contain,
@@ -512,9 +472,6 @@ test "a private supervisor has its own session and process group" {
 
 test "every catchable supervisor stop ends and reaps its detached adoptee" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     inline for (.{ std.posix.SIG.HUP, std.posix.SIG.INT, std.posix.SIG.QUIT, std.posix.SIG.TERM, std.posix.SIG.TSTP }) |signal| {
@@ -529,9 +486,6 @@ test "every catchable supervisor stop ends and reaps its detached adoptee" {
 
 test "a failed private scope release keeps ownership for retry" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const supervisor = @import("../supervisor.zig");
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
@@ -548,9 +502,6 @@ test "a failed private scope release keeps ownership for retry" {
 
 test "a contained Windows wait confirms every Job member ended before returning" {
     if (!windows) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
         errdefer std.debug.print("contained Windows completion via {s}\n", .{method});
         var fixture = try Fixture.start(.contain, "--exit-7");

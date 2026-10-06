@@ -248,10 +248,3 @@ test "writeStreamingAll retains short writes after zero progress" {
     try std.testing.expectEqual(4, ShortWrites.calls);
     try std.testing.expectEqualStrings("abcdef", &ShortWrites.bytes);
 }
-
-pub const test_access = if (builtin.is_test) struct {
-    pub const setCloseOnExecPosix = fixtureSetCloseOnExecPosix;
-    pub const windowsPipeClosed = fixtureWindowsPipeClosed;
-} else struct {};
-const fixtureSetCloseOnExecPosix = setCloseOnExecPosix;
-const fixtureWindowsPipeClosed = windowsPipeClosed;

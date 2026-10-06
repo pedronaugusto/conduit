@@ -65,7 +65,6 @@ const wait_for = @import("wait.zig");
 const Term = Child.Term;
 const Deadline = tty.Deadline;
 const Cgroup = @import("cgroup.zig").Cgroup;
-const Watchdog = @import("testing/support.zig").Watchdog;
 
 // Published before signalling, and retained until the held reap ends the tree.
 // Only the small deadline snapshot is under this lock; no I/O is done in it.
@@ -633,9 +632,6 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "trap '' TERM; sleep 30 & echo ready; read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -734,9 +730,6 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     if (is_windows) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },

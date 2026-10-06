@@ -1,3 +1,4 @@
+//! What a project that depends on conduit writes.
 const std = @import("std");
 const conduit = @import("conduit");
 const tty = @import("conduit.tty");

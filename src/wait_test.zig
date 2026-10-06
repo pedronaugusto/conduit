@@ -3,24 +3,11 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
 const is_windows = builtin.os.tag == .windows;
-const access = @import("wait.zig").test_access;
 const Deadline = @import("wait.zig").Deadline;
-const slice_ms = @import("wait.zig").slice_ms;
 const Watch = @import("wait.zig").Watch;
 const Outcome = @import("wait.zig").Outcome;
 const Ended = @import("wait.zig").Ended;
 const endedUnreaped = @import("wait.zig").endedUnreaped;
-const Watchdog = @import("testing/support.zig").Watchdog;
-const p_pid = access.p_pid;
-const WaitId = access.WaitId;
-const waitid_flags = access.waitid_flags;
-const infoPid = access.infoPid;
-const openPidfd = access.openPidfd;
-const endedPidfd = access.endedPidfd;
-const endedOrWokenPidfd = access.endedOrWokenPidfd;
-const openKqueue = access.openKqueue;
-const endedKqueue = access.endedKqueue;
-const endedOrWokenKqueue = access.endedOrWokenKqueue;
 test "a watch on a child ends when the child does" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
@@ -95,9 +82,6 @@ test "a watch on a child that is still running says so" {
 test "exit observation keeps the child's identity until its owner reaps it" {
     const testing = std.testing;
     const io = testing.io;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.allocator, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x; exit 0" },

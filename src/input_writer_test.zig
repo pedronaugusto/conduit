@@ -4,7 +4,6 @@ const builtin = @import("builtin");
 const conduit = @import("conduit.zig");
 const InputWriter = conduit.InputWriter;
 const Child = conduit.Child;
-const Watchdog = @import("testing/support.zig").Watchdog;
 const testing = std.testing;
 const test_options = @import("conduit_test_options");
 const io = testing.io;
@@ -57,9 +56,6 @@ const WriteGate = struct {
 };
 
 test "InputWriter delivers copied bytes in queue order" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("echo");
     defer reap(&child);
     var gate: WriteGate = .{ .file = child.stdinFile().? };
@@ -81,9 +77,6 @@ test "InputWriter delivers copied bytes in queue order" {
 }
 
 test "InputWriter bounds queued bytes together with bytes being written" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("echo");
     defer reap(&child);
     var gate: WriteGate = .{ .file = child.stdinFile().? };
@@ -103,9 +96,6 @@ test "InputWriter bounds queued bytes together with bytes being written" {
 }
 
 test "InputWriter closes input after every byte queued before its close" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("end");
     defer reap(&child);
     var gate: WriteGate = .{ .file = child.stdinFile().? };
@@ -125,9 +115,6 @@ test "InputWriter closes input after every byte queued before its close" {
 }
 
 test "InputWriter refuses a backlog without waiting for a child that stops reading" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("stall");
     defer reap(&child);
     var gate: WriteGate = .{ .file = child.stdinFile().?, .block = false };
@@ -147,9 +134,6 @@ test "InputWriter refuses a backlog without waiting for a child that stops readi
 }
 
 test "InputWriter keeps a write failure for later writers and waiters" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var saved: std.posix.Sigaction = undefined;
     if (builtin.os.tag != .windows) std.posix.sigaction(.PIPE, &.{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 }, &saved);
     defer if (builtin.os.tag != .windows) std.posix.sigaction(.PIPE, &saved, null);
@@ -168,9 +152,6 @@ test "InputWriter keeps a write failure for later writers and waiters" {
 }
 
 test "InputWriter cancellation closes an idle pipe and deinit joins an active write" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("end");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 10 });
@@ -200,9 +181,6 @@ test "InputWriter cancellation closes an idle pipe and deinit joins an active wr
 }
 
 test "InputWriter cancellation of a waiter leaves delivery running" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("echo");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 10 });
@@ -225,9 +203,6 @@ test "InputWriter cancellation of a waiter leaves delivery running" {
 }
 
 test "InputWriter serializes concurrent producers without splitting their bytes" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("echo");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 });
@@ -259,9 +234,6 @@ test "InputWriter serializes concurrent producers without splitting their bytes"
 }
 
 test "InputWriter allocation refusal leaves the queue and the bound intact" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("echo");
     defer reap(&child);
     // State, node, then payload: fail the payload, after a node was allocated.
@@ -277,9 +249,6 @@ test "InputWriter allocation refusal leaves the queue and the bound intact" {
 }
 
 test "InputWriter failed startup leaves the pipe with the child" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("echo");
     defer reap(&child);
     const file = child.stdinFile().?;
@@ -303,9 +272,6 @@ test "InputWriter failed startup leaves the pipe with the child" {
 }
 
 test "InputWriter a zero bound accepts only empty input" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("end");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 0 });
@@ -320,9 +286,6 @@ test "InputWriter a zero bound accepts only empty input" {
 }
 
 test "InputWriter checks cancellation when a write makes no progress" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     const NoProgress = struct {
         var zero: std.atomic.Value(bool) = .init(false);
 
@@ -354,9 +317,6 @@ test "InputWriter checks cancellation when a write makes no progress" {
 }
 
 test "InputWriter isOpen observes acceptance even with a full backlog" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("end");
     defer reap(&child);
     var gate: WriteGate = .{ .file = child.stdinFile().? };
@@ -378,9 +338,6 @@ test "InputWriter isOpen observes acceptance even with a full backlog" {
 }
 
 test "InputWriter isOpen observes cancellation and retained failures" {
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(io);
-    defer watchdog.deinit(io);
     var child = try spawn("end");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 0 });

@@ -1,22 +1,12 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
-const is_windows = builtin.os.tag == .windows;
 const testing = std.testing;
-const access = @import("lineage.zig").test_access;
-const tree = access.tree;
 const testing_hook = @import("lineage.zig").testing_hook;
 const supported = @import("lineage.zig").supported;
-const Tracker = @import("lineage.zig").Tracker;
 const Child = @import("child.zig").Child;
-const Watchdog = @import("testing/support.zig").Watchdog;
-const Darwin = access.Darwin;
 test "a contained wait reports lost observation after reaping its held root" {
     if (!supported) return error.SkipZigTest;
-    var watchdog: Watchdog = .init(@src());
-    try watchdog.start(std.testing.io);
-    defer watchdog.deinit(std.testing.io);
     testing_hook.fail_enumeration.store(true, .release);
     defer testing_hook.fail_enumeration.store(false, .release);
     var child = try Child.spawn(std.testing.allocator, std.testing.io, .{
