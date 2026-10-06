@@ -616,7 +616,7 @@ test "Reaper.wait blocks until the child has ended, and answers everyone who ask
     try testing.expectEqual(Child.Term{ .exited = 5 }, try child.wait(io));
 }
 
-test "Reaper.stop returns at once and ends a child that ignores the request, by force, with its tree" {
+test "Reaper.kill returns at once and ends a child that ignores the request, by force, with its tree" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
@@ -655,11 +655,11 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     var vtable = io.vtable.*;
     vtable.groupConcurrent = Count.concurrent;
     const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    reaper.stop(counted_io, grace_ms);
+    reaper.kill(counted_io, grace_ms);
     try testing.expectEqual(@as(usize, 1), Count.tasks);
     // Asked, not waited for: exactly one task owns the grace.
     // A second request with a grace changes nothing.
-    reaper.stop(counted_io, grace_ms);
+    reaper.kill(counted_io, grace_ms);
     try testing.expectEqual(@as(usize, 1), Count.tasks);
 
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
@@ -675,7 +675,7 @@ test "Reaper.stop returns at once and ends a child that ignores the request, by 
     }
 }
 
-test "Reaper.stop is over the moment a child that honours the request ends" {
+test "Reaper.kill is over the moment a child that honours the request ends" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
@@ -693,13 +693,13 @@ test "Reaper.stop is over the moment a child that honours the request ends" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    reaper.stop(io, 60_000);
+    reaper.kill(io, 60_000);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     // The request, not the force: the grace was never waited out.
     try testing.expectEqual(Child.Term{ .signal = .TERM }, term);
 }
 
-test "Reaper.stop with no grace is the force, now" {
+test "Reaper.kill with no grace is the force, now" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
@@ -723,8 +723,8 @@ test "Reaper.stop with no grace is the force, now" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    reaper.stop(io, 60_000);
-    reaper.stop(io, 0);
+    reaper.kill(io, 60_000);
+    reaper.kill(io, 0);
     const term = (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
     const deadline: Deadline = .in(io, budget_ms);
@@ -955,7 +955,7 @@ test "a Reaper told to go while the child runs goes at once, and leaves the chil
         join_watchdog.limit_ms = budget_ms;
         try join_watchdog.start(io);
         defer join_watchdog.deinit(io);
-        try reaper.end(io);
+        try reaper.stop(io);
     }
     try testing.expectError(error.Canceled, reaper.exit());
 
@@ -1753,7 +1753,7 @@ test "a recorded cgroup waits on population changes" {
     try testing.expect(try recorded.waitEmpty(io, 1000));
 }
 
-test "endRecorded ends a verified Linux cgroup and its detached grandchild" {
+test "killRecorded ends a verified Linux cgroup and its detached grandchild" {
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 30 & wait" },
@@ -1766,7 +1766,7 @@ test "endRecorded ends a verified Linux cgroup and its detached grandchild" {
     var recorded = cgroup.Cgroup.openRecorded(child.state.cgroup.path(&where).?, child.state.cgroup.id().?).?;
     defer recorded.release();
     const since = (try tree.startTime(child.state.id)).?;
-    try testing.expect(try conduit.endRecorded(io, .{
+    try testing.expect(try conduit.killRecorded(io, .{
         .pid = child.state.id,
         .start = since,
         .group = child.state.pgid,
@@ -2008,7 +2008,7 @@ fn expectZombie(pid: posix.pid_t) !void {
     }
 }
 
-test "an orphan that forked twice and called setsid is adopted, reaped at conduit's next event, and ended by Orphans.end" {
+test "an orphan that forked twice and called setsid is adopted, reaped at conduit's next event, and ended by Orphans.killAll" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
@@ -2029,7 +2029,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     };
     try testing.expect(subreaperNow());
 
-    // One that stays until `end`, left by a child that is still running.
+    // One that stays until `killAll`, left by a child that is still running.
     var keeper = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x; exit 3" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -2101,12 +2101,12 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try expectCount(&orphans, 1);
 
     // The child that left the first still has its own status, and its orphan
-    // runs on after it until `end`.
+    // runs on after it until `killAll`.
     keeper.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 3 }, (try keeper.waitTimeout(io, budget_ms)) orelse
         return error.TestChildDidNotExit);
     try testing.expect(alive(kept));
-    try orphans.end(io, 2000);
+    try orphans.killAll(io, 2000);
     try expectGone(kept);
     try testing.expectEqual(@as(usize, 0), try orphans.count());
 
@@ -2148,7 +2148,7 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
     try std.Io.sleep(io, .fromMilliseconds(1000), .awake);
     try testing.expectEqual(before, Orphans.looks.load(.monotonic));
 
-    try orphans.end(io, 0);
+    try orphans.killAll(io, 0);
     try expectGone(orphan);
 }
 
@@ -2192,7 +2192,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
     try group.await(io);
     try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
 
-    try orphans.end(io, 0);
+    try orphans.killAll(io, 0);
     try testing.expectEqual(@as(usize, 0), try orphans.count());
 }
 
@@ -4754,7 +4754,7 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
     defer reaper.deinit(io);
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
-    try reaper.end(io);
+    try reaper.stop(io);
     try testing.expectEqual(@as(?Child.Id, null), child.processId());
     var retired_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
     const retired = try child.containment(&retired_buffer);
@@ -4794,7 +4794,7 @@ test "Reaper start cannot replace an active task or restart a joined lifetime" {
     try testing.expect(rejected);
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
-    try reaper.end(io);
+    try reaper.stop(io);
     try testing.expectError(error.AlreadyStarted, reaper.start(io));
 }
 
@@ -4838,7 +4838,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
         orphans.stop() catch unreachable;
         orphans.deinit();
     }
-    defer orphans.end(io, 0) catch {};
+    defer orphans.killAll(io, 0) catch {};
     var keeper = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -4856,7 +4856,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     try testing.expectEqual((try conduit.startTime(kept)).?, saved.start);
     try testing.expectEqual(getpgid(kept), saved.group);
     try testing.expectEqual(getsid(kept), saved.session);
-    try orphans.end(io, 0);
+    try orphans.killAll(io, 0);
     try testing.expectEqual(@as(usize, 0), (try orphans.list(&records)).len);
     try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);
 }

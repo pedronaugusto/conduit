@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Renamed, so that each verb for ending something means one thing on every type: `kill` makes processes end, `close` ends a stream or handle, `stop` ends what `start` began, and `deinit` releases what a value holds and cannot fail. The old names are gone.
+
+  | was | is | why |
+  |---|---|---|
+  | `Reaper.stop(io, grace_ms)` | `Reaper.kill(io, grace_ms)` | it signals the child: terminate, then kill after the grace |
+  | `Reaper.end(io)`, `Reaper.EndError` | `Reaper.stop(io)`, `Reaper.StopError` | the counterpart of `Reaper.start`: joins the task, ends the adoption scope |
+  | `Orphans.end(io, grace_ms)`, `Orphans.EndError` | `Orphans.killAll(io, grace_ms)`, `Orphans.KillError` | it ends every adoptee |
+  | `InputWriter.end(io)` | `InputWriter.close(io)` | it half-closes the input stream |
+  | `endRecorded(io, options)`, `EndRecordedError` | `killRecorded(io, options)`, `KillRecordedError` | it signals a recorded process and its provable descendants |
+
+  `Orphans.stop()` and `Expect.stop(io)` keep their names: each is the counterpart of its type's `start`.
+
 - The public types are ordinary Zig structs with private fields, no longer integer-backed enums whose state was cast out of their bits: `Child`, `Child.HeldReap`, `Child.Output`, `InputWriter`, `Reaper`, `Expect`, `Orphans`, `Orphans.Spawn`, `Pty`, `Shell`, `Cgroup`, `Cgroup.Recorded` and `CapturedPid`. Their methods are unchanged. A value can no longer be made with `@enumFromInt`; `Child` is a handle whose copies name the same child, released or deinited once. `Reaper`, `Expect` and `Orphans` assert in safe builds that they have not moved since `start`.
   - `Reaper` copies the `Child` handle at `start`, so the caller's `Child` may move afterwards; it must still not be deinited while the `Reaper` runs. `Child.HeldReap` holds the handle, not a pointer to it.
 

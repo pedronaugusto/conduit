@@ -24,7 +24,7 @@ const CapturedPid = @import("tree.zig").CapturedPid;
 const captureStarted = @import("tree.zig").captureStarted;
 const captureStartedProcess = access.captureStartedProcess;
 const RecordedOptions = @import("tree.zig").RecordedOptions;
-const endRecorded = @import("tree.zig").endRecorded;
+const killRecorded = @import("tree.zig").killRecorded;
 const killHeld = access.killHeld;
 const signalGroupSince = @import("tree.zig").signalGroupSince;
 const Started = access.Started;
@@ -287,7 +287,7 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
     _ = try child.wait(testing.io);
 }
 
-test "endRecorded waits for a recorded root and a descendant it captured" {
+test "killRecorded waits for a recorded root and a descendant it captured" {
     switch (builtin.os.tag) {
         .linux, .macos => {},
         else => return error.SkipZigTest,
@@ -312,10 +312,10 @@ test "endRecorded waits for a recorded root and a descendant it captured" {
     var captured = (try captureStarted(descendant, (try startTime(descendant)).?)).?;
     defer captured.deinit();
     defer _ = captured.signal(.KILL);
-    try testing.expect(!try endRecorded(testing.io, .{ .pid = child.state.id, .start = since +% 1, .grace_ms = 20 }));
+    try testing.expect(!try killRecorded(testing.io, .{ .pid = child.state.id, .start = since +% 1, .grace_ms = 20 }));
     try testing.expect((try startTime(child.state.id)) != null);
     stage = "ending the recorded tree";
-    try testing.expect(try endRecorded(testing.io, .{ .pid = child.state.id, .start = since, .grace_ms = 20 }));
+    try testing.expect(try killRecorded(testing.io, .{ .pid = child.state.id, .start = since, .grace_ms = 20 }));
     stage = "observing the descendant's exit";
     // Cleanup proves delivery of KILL, which may precede observable exit.
     // Keep the same 20 ms budget when waiting on the held identity.

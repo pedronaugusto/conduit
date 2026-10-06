@@ -74,7 +74,7 @@ test "InputWriter delivers copied bytes in queue order" {
     @memset(&bytes, 'x');
     try writer.queue(gated_io, "second");
     try writer.queue(gated_io, "third");
-    try writer.end(gated_io);
+    try writer.close(gated_io);
     gate.release.set(io);
     try output(&child, "firstsecondthird");
     try writer.wait(gated_io);
@@ -96,13 +96,13 @@ test "InputWriter bounds queued bytes together with bytes being written" {
     try writer.queue(gated_io, "7890");
     try testing.expectError(error.BacklogFull, writer.queue(gated_io, "x"));
     try writer.queue(gated_io, "");
-    try writer.end(gated_io);
+    try writer.close(gated_io);
     gate.release.set(io);
     try output(&child, "1234567890");
     try writer.wait(gated_io);
 }
 
-test "InputWriter closes input after every byte queued before its end" {
+test "InputWriter closes input after every byte queued before its close" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
@@ -116,8 +116,8 @@ test "InputWriter closes input after every byte queued before its end" {
     try writer.queue(gated_io, "before");
     try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
     try writer.queue(gated_io, "end");
-    try writer.end(gated_io);
-    try writer.end(gated_io);
+    try writer.close(gated_io);
+    try writer.close(gated_io);
     try testing.expectError(error.InputClosed, writer.queue(gated_io, "after"));
     gate.release.set(io);
     try output(&child, "beforeendEOF");
@@ -162,7 +162,7 @@ test "InputWriter keeps a write failure for later writers and waiters" {
     try testing.expectError(error.BrokenPipe, writer.wait(io));
     try testing.expect(!writer.isOpen(io));
     try testing.expectError(error.BrokenPipe, writer.queue(io, "later"));
-    try testing.expectError(error.BrokenPipe, writer.end(io));
+    try testing.expectError(error.BrokenPipe, writer.close(io));
     writer.cancel(io);
     try testing.expectError(error.BrokenPipe, writer.wait(io));
 }
@@ -178,7 +178,7 @@ test "InputWriter cancellation closes an idle pipe and deinit joins an active wr
     writer.cancel(io);
     writer.cancel(io);
     try testing.expectError(error.Canceled, writer.wait(io));
-    try testing.expectError(error.Canceled, writer.end(io));
+    try testing.expectError(error.Canceled, writer.close(io));
     try output(&child, "EOF");
 
     var blocked = try spawn("end");
@@ -219,7 +219,7 @@ test "InputWriter cancellation of a waiter leaves delivery running" {
     try entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
     try testing.expectError(error.Canceled, waiting.cancel(io));
     try writer.queue(io, "alive");
-    try writer.end(io);
+    try writer.close(io);
     try output(&child, "alive");
     try writer.wait(io);
 }
@@ -241,7 +241,7 @@ test "InputWriter serializes concurrent producers without splitting their bytes"
     defer producers.cancel(io);
     for (0..4) |id| try producers.concurrent(io, Producer.queue, .{ &writer, @as(u8, @intCast(id)) });
     try producers.await(io);
-    try writer.end(io);
+    try writer.close(io);
     var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
     defer result.deinit(gpa);
     try testing.expect(Child.succeeded(result.term()));
@@ -271,7 +271,7 @@ test "InputWriter allocation refusal leaves the queue and the bound intact" {
     try testing.expectError(error.OutOfMemory, writer.queue(io, "lost"));
     failing.fail_index = std.math.maxInt(usize);
     try writer.queue(io, "kept");
-    try writer.end(io);
+    try writer.close(io);
     try output(&child, "kept");
     try writer.wait(io);
 }
@@ -312,7 +312,7 @@ test "InputWriter a zero bound accepts only empty input" {
     defer writer.deinit(io);
     try writer.queue(io, "");
     try testing.expectError(error.BacklogFull, writer.queue(io, "x"));
-    try writer.end(io);
+    try writer.close(io);
     try output(&child, "EOF");
     try writer.wait(io);
     writer.cancel(io);
@@ -369,7 +369,7 @@ test "InputWriter isOpen observes acceptance even with a full backlog" {
     try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
     try testing.expect(writer.isOpen(gated_io));
     try testing.expectError(error.BacklogFull, writer.queue(gated_io, "x"));
-    try writer.end(gated_io);
+    try writer.close(gated_io);
     try testing.expect(!writer.isOpen(gated_io));
     gate.release.set(io);
     try writer.wait(gated_io);

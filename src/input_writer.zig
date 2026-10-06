@@ -1,12 +1,12 @@
 //! Bounded, ordered input for a child on a pipe.
 //!
 //! `Child.inputWriter` takes the child's stdin pipe and starts its one writing
-//! task. `queue` copies bytes and never waits for the child to read; `end`
+//! task. `queue` copies bytes and never waits for the child to read; `close`
 //! closes the pipe after those bytes, and `wait` reports delivery or the first
 //! failure. Delivery means written to the pipe, not consumed by the child.
 //!
 //! The writer owns its pipe independently of the Child. It may move before
-//! being shared, but must not be copied. `queue`, `end` and `wait` may run on
+//! being shared, but must not be copied. `queue`, `close` and `wait` may run on
 //! several tasks; `cancel` has one caller at a time. Stop all callers before
 //! `deinit`, which cancels and joins the writing task before freeing anything.
 //! The allocator and Io used to create it must outlive it. Its own allocator
@@ -84,7 +84,7 @@ pub fn Writer(comptime Child: type) type {
             /// Refuses further input and asks the task to close the pipe after everything
             /// already queued. Returns at once, and is idempotent. A retained failure is
             /// returned instead. `wait` observes the eventual closure or failure.
-            pub fn end(writer: *InputWriter, io: std.Io) WriteError!void {
+            pub fn close(writer: *InputWriter, io: std.Io) WriteError!void {
                 const state = writer.state;
                 state.mutex.lockUncancelable(io);
                 defer state.mutex.unlock(io);
@@ -94,7 +94,7 @@ pub fn Writer(comptime Child: type) type {
             }
 
             /// Waits until the pipe is closed, returning the first write failure or
-            /// `Canceled` if delivery was abandoned. It does not request an end itself.
+            /// `Canceled` if delivery was abandoned. It does not ask for the close itself.
             /// Canceling a waiting caller leaves delivery running for the other callers.
             pub fn wait(writer: *InputWriter, io: std.Io) WriteError!void {
                 const state = writer.state;
@@ -107,7 +107,7 @@ pub fn Writer(comptime Child: type) type {
             /// Abandons pending input, interrupts a blocked write and joins the task.
             /// No descriptor is closed under a write. Later calls report `Canceled`;
             /// an earlier write failure, or successful closure, stays final. Idempotent.
-            /// Only one caller may cancel at a time; queue, end and wait may run alongside.
+            /// Only one caller may cancel at a time; queue, close and wait may run alongside.
             pub fn cancel(writer: *InputWriter, io: std.Io) void {
                 const state = writer.state;
                 state.mutex.lockUncancelable(io);

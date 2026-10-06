@@ -7,7 +7,7 @@
 //! this process that ancestor (`PR_SET_CHILD_SUBREAPER`), so every such orphan
 //! becomes a child of this one instead, and conduit takes care of it: it
 //! reaps each one that has ended whenever conduit is doing something anyway,
-//! and `end` ends them all, through a pidfd each, so no process given a
+//! and `killAll` ends them all, through a pidfd each, so no process given a
 //! recycled pid is ever signalled.
 //!
 //! # Nothing runs while nothing happens
@@ -23,10 +23,10 @@
 //!   have become this one's;
 //! * a spawn returns a child;
 //! * `count` is asked;
-//! * `end` runs.
+//! * `killAll` runs.
 //!
 //! **The bound, as it is:** an orphan that ends while none of those happens
-//! stays a zombie until the next of them, or until `end`. A program that
+//! stays a zombie until the next of them, or until `killAll`. A program that
 //! wants them gone sooner asks `count` when it likes. An orphan that is still
 //! running costs nothing but its pidfd.
 //!
@@ -74,7 +74,7 @@
 //!
 //! # What reaches an adopted process
 //!
-//! `end`, and nothing on behalf of a single child. By the time an orphan is
+//! `killAll`, and nothing on behalf of a single child. By the time an orphan is
 //! this process's child it has no link left to the `Child` whose tree it came
 //! from — its parent is gone, its group and session may be its own, and
 //! nothing records the parent it had — so `Child.kill` and
@@ -217,7 +217,7 @@ pub const Orphans = struct {
         active.store(true, .release);
     }
 
-    pub const EndError = LookError || std.Io.Cancelable;
+    pub const KillError = LookError || std.Io.Cancelable;
 
     /// Ends every process this one has adopted, reaps each, and returns once a
     /// look finds none left.
@@ -233,7 +233,7 @@ pub const Orphans = struct {
     /// `kill`. What is adopted while this runs is ended too, so a program that is
     /// still leaving orphans keeps this busy; it is the call for the end of a
     /// program. It waits by sleeping between looks, and is a cancelation point.
-    pub fn end(orphans: *Orphans, io: std.Io, grace_ms: u32) EndError!void {
+    pub fn killAll(orphans: *Orphans, io: std.Io, grace_ms: u32) KillError!void {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return;
         const deadline: wait_for.Deadline = .in(io, grace_ms);
@@ -262,12 +262,12 @@ pub const Orphans = struct {
             }
             empty_looks = 0;
             try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
-            interval_ms = @min(interval_ms * 2, end_slice_ms);
+            interval_ms = @min(interval_ms * 2, kill_slice_ms);
         }
     }
 
-    /// The longest `end` waits between two looks.
-    const end_slice_ms: u32 = 5;
+    /// The longest `killAll` waits between two looks.
+    const kill_slice_ms: u32 = 5;
 
     /// Looks, reaps every adopted process that has ended, and says how many are
     /// left: still running, or ended in the moment since. Zero when this is not
@@ -289,7 +289,7 @@ pub const Orphans = struct {
 
     /// A copied process identity. Retain both fields; the pid alone is not
     /// authority to signal. Save this boot's identity alongside persistent
-    /// records, then use captureStarted or endRecorded within that boot.
+    /// records, then use captureStarted or killRecorded within that boot.
     pub const Record = adoption_record.Record;
 
     pub const ListError = LookError || error{IdentityUnavailable};
@@ -300,7 +300,7 @@ pub const Orphans = struct {
     /// A running process whose start time could not be read is
     /// IdentityUnavailable; its numeric pid is never returned alone.
     /// Empty when this is not running. Records own no handle and remain valid
-    /// as saved facts after end or stop; they do not promise liveness.
+    /// as saved facts after killAll or stop; they do not promise liveness.
     pub fn list(orphans: *Orphans, out: []Record) ListError![]Record {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return out[0..0];
@@ -387,7 +387,7 @@ pub const Orphans = struct {
         const orphans = current orelse return;
         orphans.lock.lock();
         defer orphans.lock.unlock();
-        // ziglint-ignore: Z026 an event has no caller to tell; what this look missed the next one, or `count` or `end`, finds
+        // ziglint-ignore: Z026 an event has no caller to tell; what this look missed the next one, or `count` or `killAll`, finds
         orphans.look() catch {};
         orphans.reapEnded();
     }
@@ -467,7 +467,7 @@ pub const Orphans = struct {
     //======================================================================
 
     /// A mutex that spins, yielding. Every section it guards is a handful of
-    /// system calls, but for `end`'s, which is the end of a program.
+    /// system calls, but for `killAll`'s, which is the end of a program.
     const SpinLock = struct {
         held: std.atomic.Value(bool) = .init(false),
 
@@ -539,7 +539,7 @@ pub const Orphans = struct {
     // Looking and reaping. Linux.
     //======================================================================
 
-    /// A process held by its pidfd, and what `end` has asked of it.
+    /// A process held by its pidfd, and what `killAll` has asked of it.
     const Held = struct {
         pid: posix.pid_t,
         pidfd: posix.fd_t,

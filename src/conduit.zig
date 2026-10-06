@@ -108,7 +108,7 @@ pub const InputWriter = @import("child.zig").InputWriter;
 pub const Reaper = @import("reaper.zig").Reaper;
 /// Linux, opt-in: this process as the parent of every orphan below it, the
 /// ended ones reaped whenever this package reaps or spawns a child, and all
-/// of them ended by `end`, for a program that starts every child through
+/// of them ended by `killAll`, for a program that starts every child through
 /// this package. No task, no timer.
 pub const Orphans = @import("orphans.zig").Orphans;
 /// A Linux child's cgroup. `Cgroup.openRecorded` returns the separate
@@ -248,7 +248,7 @@ pub const captureStarted = tree.captureStarted;
 pub const CaptureError = tree.CaptureError;
 /// What `CapturedPid.signalGroupSince` can meet, the same on every system.
 pub const SignalGroupError = tree.SignalGroupError;
-/// End a process recorded by an earlier run, together with its provable
+/// Kill a process recorded by an earlier run, together with its provable
 /// descendants, preferring a verified recorded cgroup when one is available.
-pub const endRecorded = tree.endRecorded;
-pub const EndRecordedError = tree.EndRecordedError;
+pub const killRecorded = tree.killRecorded;
+pub const KillRecordedError = tree.KillRecordedError;

@@ -172,7 +172,7 @@ nothing. Startup failure refuses the spawn. Lost supervisor status is
 
 A force ends the cgroup first where one is writable, then the adoption scope.
 An interrupt or termination request reaches the root's group and adoptees,
-and the other cgroup members where available. `Reaper.stop` supplies the
+and the other cgroup members where available. `Reaper.kill` supplies the
 root's grace. Once the root exits, remaining descendants are forced at once;
 `tree_grace_ms` governs `end_tree` on children with the survival policy.
 The caller holds one socket, closed on exec and closed in the root. Loss of
@@ -192,7 +192,7 @@ a writable cgroup remains the kernel containment reach in that case.
 
 `containment` copies the supervisor's pid, start time and boot in `supervisor`,
 beside the root's group and optional cgroup facts. Save that complete record.
-`endRecorded` with its `supervisor` field verifies this identity through a
+`killRecorded` with its `supervisor` field verifies this identity through a
 pidfd and asks it to empty its scope. It never kills the adoption owner before
 the tree is reaped, and reports `UnableToEnd` if that completion cannot be
 established. A missing recorded supervisor does not authorize a root-group
@@ -233,8 +233,8 @@ owner, including orphans from other direct children. Existing direct children
 and new conduit children retain their independent waits. Every new direct
 child must use conduit while the scope runs; an outside spawn or a
 `SIGCHLD` handler using `waitpid(-1)` breaks that ownership. End and reap
-all direct children before the owner's `end`, which ends remaining
-adoptees and restores the previous subreaper setting. `Reaper.end` and
+all direct children before the owner's `stop`, which ends remaining
+adoptees and restores the previous subreaper setting. `Reaper.stop` and
 `Orphans.stop` are fallible. Cancellation, lookup or restoration failure
 retains the scope for another call; `DirectChildrenRemain` refuses to restore the
 attribute while another direct child still owns a wait. Handle these failures
@@ -317,7 +317,7 @@ var input = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 * 1024 });
 defer input.deinit(io);
 try input.queue(io, "first\n");
 try input.queue(io, "second\n");
-try input.end(io);
+try input.close(io);
 // Read output while the input task writes, so neither pipe waits on the other.
 var result = try child.output(gpa, io, .{ .timeout_ms = 5000 });
 defer result.deinit(gpa);
@@ -327,7 +327,7 @@ try input.wait(io);
 | | |
 |---|---|
 | `input.queue(io, bytes)` | Copy all bytes in order, or accept none. `BacklogFull` refuses the write without waiting for the child to read. |
-| `input.end(io)` | Refuse further input with `InputClosed`, then close the pipe after everything already queued. Idempotent. |
+| `input.close(io)` | Refuse further input with `InputClosed`, then close the pipe after everything already queued. Idempotent. |
 | `input.wait(io)` | Wait for pipe closure and return its delivery result. Canceling a waiter leaves delivery running. |
 | `input.cancel(io)` | Abandon pending bytes, interrupt a blocked write and join the task. Later calls return `Canceled`; an earlier failure or completed delivery stays final. |
 | `input.deinit(io)` | Cancel, join and free. Stop the other callers first. Idempotent. |
@@ -337,7 +337,7 @@ is then null. Startup failure leaves it with the child. Only a separate pipe
 can be transferred: a child on a terminal is `NoStdinPipe`. The writer does
 not borrow the child. Its allocator and Io must outlive it, and an earlier
 copy of stdin must no longer be used. Move it before sharing and never copy
-it. Queue, end and wait may run on several tasks; cancel has one caller at a
+it. Queue, close and wait may run on several tasks; cancel has one caller at a
 time. The writing task alone writes and closes the pipe, with no mutex held
 across a write. The first write failure is returned to later callers too.
 
@@ -350,7 +350,7 @@ the writer's allocator are serialized.
 [Tokio's `ChildStdin`](https://docs.rs/tokio/latest/tokio/process/struct.ChildStdin.html)
 is an asynchronous pipe writer; [Go's `StdinPipe`](https://pkg.go.dev/os/exec#Cmd.StdinPipe)
 returns an `io.WriteCloser`. Both leave queueing to the caller. `InputWriter`
-adds a byte bound, a task that delivers the queue, and an end ordered after
+adds a byte bound, a task that delivers the queue, and a close ordered after
 the accepted bytes, so a caller can answer a CLI while holding its own lock
 without waiting for that CLI to read.
 
@@ -396,7 +396,7 @@ child when the thread that spawned it ends, however it ends: Linux's
 `PR_SET_PDEATHSIG`, and `error.Unsupported` anywhere else. Where there is no
 such thing, a program that must not leave children running behind a crash
 writes down each child's pid and `conduit.startTime(pid)`, and the next time
-it runs uses `conduit.endRecorded` to end what it can still prove belongs to
+it runs uses `conduit.killRecorded` to end what it can still prove belongs to
 that process. A recorded cgroup reaches the complete Linux tree.
 `conduit.captureStarted(pid, start)` holds such a process by a pidfd on Linux
 and a stable unique process id on Darwin, taken before the start time is checked (Linux)
@@ -419,7 +419,7 @@ returns `error.Unsupported`, since another process there can join the group.
 `captured.wait(io, timeout_ms)` waits for its process to end without reaping
 it. `recorded.waitEmpty(io, timeout_ms)` waits for a recorded Linux cgroup to
 empty. Both return `true` when done and `false` at the deadline.
-`conduit.endRecorded(io, .{ .pid, .start, .group, .cgroup, .grace_ms })`
+`conduit.killRecorded(io, .{ .pid, .start, .group, .cgroup, .grace_ms })`
 asks a recorded process and its provable descendants to end, waits the grace,
 then forces survivors. Pass `&recorded`, from `Cgroup.openRecorded`, for a
 complete Linux tree, including orphans. Without one, an unproven group member is left
@@ -449,20 +449,20 @@ never authorizes a signal.
 `Reaper.init(&child, options)` and `start(io)` put the wait for a child on a
 task of its own; `exit()` answers a `Child.WaitError!?Term` without blocking,
 and `wait(io)` and `waitTimeout(io, ms)` wait for the answer on an event the
-task sets, so nothing asks the system again and again. `stop(io, grace_ms)`
+task sets, so nothing asks the system again and again. `kill(io, grace_ms)`
 asks the child and what it started to end and makes them once the grace has
 passed, and returns at once: the grace is spent on the `Reaper`'s task, so a
-caller holding a lock can stop a child. On POSIX its held reap ends the
+caller holding a lock can kill a child. On POSIX its held reap ends the
 remaining owned group or cgroup before releasing the root identity, spending
-the remainder of that same grace. `end(io)` and `deinit(io)` end the task; on POSIX
+the remainder of that same grace. `stop(io)` and `deinit(io)` end the task; on POSIX
 the wait is on the child's `pidfd` or kqueue registration beside a pipe
 they write to, so it goes at once whether or not the `std.Io` can cancel
 a system call. The `Child` must not be deinited while it runs, the `Reaper` must not move
 once started (safe builds assert it on each call), and a wait error is final
 and returned by every later `exit()`. Its fields are private.
 Only one successful start is allowed per lifetime; another start, including
-after `end`, returns `AlreadyStarted`. A concurrency failure releases
-its resources and may be retried before `end`. Release every HeldReap
+after `stop`, returns `AlreadyStarted`. A concurrency failure releases
+its resources and may be retried before `stop`. Release every HeldReap
 exactly once, and join Reaper before destroying its Child.
 
 `Options.end_tree` ends what the child leaves running when it ends by itself,
@@ -490,7 +490,7 @@ does the same on demand and says how many are left. `list(out)` copies
 one process snapshot under pidfd and reap ownership during adoption. It
 reports `IdentityUnavailable` if that snapshot could not be read. Retain
 these facts and the boot identity for a later `captureStarted` or
-`endRecorded`; records own no handles. `end(io, grace_ms)` ends them all through a pidfd
+`killRecorded`; records own no handles. `killAll(io, grace_ms)` ends them all through a pidfd
 each — `SIGTERM`, the grace, then
 `SIGKILL` — for the end of a program. `try stop()` restores the attribute
 after every direct child and adoptee has been reaped; failure retains ownership for another call, and `deinit()` follows success.
@@ -640,7 +640,7 @@ the walk.** A process whose parent ends goes to `init`, or to the nearest
 ancestor that asked for orphans, and is then related to nothing a walk can
 name. `Orphans.start` makes this process that ancestor, so every orphan
 below it becomes its child, and conduit reaps each one that has ended at
-its next event and ends them all with `Orphans.end`. The kernel does not say which children
+its next event and ends them all with `Orphans.killAll`. The kernel does not say which children
 were adopted — an orphan and a child this process started are both its
 children, and nothing records the parent one had before — so conduit
 takes the children it started, and the ones this process had at `start`,
@@ -657,7 +657,7 @@ ends. Nothing wakes an idle program for it: a look — a read of
 `/proc/self/task/<tid>/children` per thread and a `waitid` per child, a
 bounded process scan — runs when a child of conduit's is reaped (the moment
 what it left has become this process's), when a spawn returns, and in
-`count` and `end`, so an orphan that ends while none of those happens
+`count` and `killAll`, so an orphan that ends while none of those happens
 stays a zombie until the next one; each adopted process holds a pidfd
 until it is reaped; each child conduit starts while it runs holds one more
 descriptor until it has been reaped, and every Linux spawn takes that lock,
@@ -742,7 +742,7 @@ the bytes
 it collects and `environ` the map it returns; both say whose they are.
 `Child.exchange` allocates what `output` does, one call at a time, and copies
 none of its input.
-The descendant walks of POSIX signalling and `endRecorded` use the bounded
+The descendant walks of POSIX signalling and `killRecorded` use the bounded
 workspace the kill section describes. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
 lists with the allocator it is given until `deinit`, from spawns on any

@@ -866,7 +866,7 @@ pub const Child = struct {
     /// Where `Orphans` runs, a descendant whose parent ended before the signal is
     /// this process's child by then, adopted, and is reached here only through
     /// the child's cgroup: nothing else says which child it came from, and this
-    /// does not guess. `Orphans.end` ends every adopted process.
+    /// does not guess. `Orphans.killAll` ends every adopted process.
     ///
     /// Otherwise POSIX has no container for a tree, and this reaches three things:
     /// the child, the child's process group when `detach` made one, and every

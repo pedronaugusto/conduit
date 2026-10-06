@@ -48,7 +48,7 @@ const parseBootIdentity = conduit.parseBootIdentity;
 const startTime = conduit.startTime;
 const CapturedPid = conduit.CapturedPid;
 const captureStarted = conduit.captureStarted;
-const endRecorded = conduit.endRecorded;
+const killRecorded = conduit.killRecorded;
 test {
     _ = @import("testing/support.zig");
     _ = @import("input_writer_test.zig");

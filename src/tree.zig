@@ -620,8 +620,8 @@ pub const RecordedOptions = struct {
     grace_ms: u32,
 };
 
-/// What `endRecorded` can meet.
-pub const EndRecordedError = error{
+/// What `killRecorded` can meet.
+pub const KillRecordedError = error{
     /// The record names something this system cannot end by proof: a
     /// supervisor off Linux, or a group on Darwin.
     Unsupported,
@@ -648,8 +648,8 @@ pub const EndRecordedError = error{
 /// proved and held have ended or have been sent SIGKILL; `true` means there
 /// was something to end. A held identity cannot survive a delivered SIGKILL,
 /// even when the kernel has not yet made its exit observable to a waiter.
-pub fn endRecorded(io: std.Io, options: RecordedOptions) EndRecordedError!bool {
-    if (builtin.os.tag == .windows) @compileError("endRecorded is POSIX-only");
+pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool {
+    if (builtin.os.tag == .windows) @compileError("killRecorded is POSIX-only");
     if (options.supervisor) |record| {
         if (builtin.os.tag != .linux) return error.Unsupported;
         const boot = cgroups.bootIdentity() orelse return error.Unproven;
@@ -689,7 +689,7 @@ pub fn endRecorded(io: std.Io, options: RecordedOptions) EndRecordedError!bool {
         // recorded root outside it. The pid and start record remains useful.
         var fallback = options;
         fallback.cgroup = null;
-        return (try endRecorded(io, fallback)) or had_members;
+        return (try killRecorded(io, fallback)) or had_members;
     }
 
     var root = (try captureStartedProcess(options.pid, options.start)) orelse {
