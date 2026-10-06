@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `pipe(options)`, `PipeOptions`, `PipeError` and `Deadline`, in `conduit` and in `conduit.tty`, for a program that waits on its own terminal without linking libc on Linux. `pipe(.{ .nonblocking = true })` makes both ends close-on-exec and, if asked, nonblocking: one `pipe2` where the system has it, and on Darwin `pipe` and `fcntl` under `ForkGap`, the lock conduit's spawns take, so no child conduit starts inherits it. `Deadline.fromTimeout(io, timeout)` reads a `std.Io.Timeout`; `remainingMs` and `windowsMs` (never `INFINITE`) round what is left up to whole milliseconds. `conduit.tty` also exports `ForkGap` and `opening_is_two_calls`.
+
 - Renamed, so that each verb for ending something means one thing on every type: `kill` makes processes end, `close` ends a stream or handle, `stop` ends what `start` began, and `deinit` releases what a value holds and cannot fail. The old names are gone.
 
   | was | is | why |

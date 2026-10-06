@@ -1,4 +1,5 @@
-//! One clock-based deadline for every bounded wait in conduit.
+//! One clock-based deadline for every bounded wait in conduit, and for a
+//! caller whose wait ends in a system call that counts whole milliseconds.
 const std = @import("std");
 
 pub const Deadline = struct {
@@ -11,6 +12,12 @@ pub const Deadline = struct {
         }) };
     }
 
+    /// The deadline a timeout names, read against the clock now; `null` for
+    /// `.none`, which has none.
+    pub fn fromTimeout(io: std.Io, timeout: std.Io.Timeout) ?Deadline {
+        return .{ .at = timeout.toTimestamp(io) orelse return null };
+    }
+
     pub fn remainingMs(deadline: Deadline, io: std.Io) u32 {
         const left = deadline.at.durationFromNow(io).raw.nanoseconds;
         if (left <= 0) return 0;
@@ -19,40 +26,10 @@ pub const Deadline = struct {
         const milliseconds = @divTrunc(left - 1, std.time.ns_per_ms) + 1;
         return std.math.lossyCast(u32, milliseconds);
     }
+
+    /// `remainingMs` for a Windows wait, where the largest count is
+    /// `INFINITE` and would never end: one short of it at most.
+    pub fn windowsMs(deadline: Deadline, io: std.Io) u32 {
+        return @min(deadline.remainingMs(io), std.math.maxInt(u32) - 1);
+    }
 };
-
-test "a deadline retains its last fraction of a millisecond until it expires" {
-    const Clock = struct {
-        var nanoseconds: i96 = 0;
-
-        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            return .{ .nanoseconds = nanoseconds };
-        }
-    };
-    var vtable = std.testing.io.vtable.*;
-    vtable.now = Clock.now;
-    const io: std.Io = .{ .vtable = &vtable, .userdata = std.testing.io.userdata };
-    Clock.nanoseconds = 0;
-    const deadline: Deadline = .in(io, 1);
-    Clock.nanoseconds = std.time.ns_per_ms - 1;
-    try std.testing.expectEqual(@as(u32, 1), deadline.remainingMs(io));
-    Clock.nanoseconds = std.time.ns_per_ms;
-    try std.testing.expectEqual(@as(u32, 0), deadline.remainingMs(io));
-}
-
-test "a deadline reads the clock and expires" {
-    const Clock = struct {
-        var milliseconds: u32 = 100;
-        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            return .{ .nanoseconds = @as(i96, milliseconds) * std.time.ns_per_ms };
-        }
-    };
-    var vtable = std.testing.io.vtable.*;
-    vtable.now = Clock.now;
-    const io: std.Io = .{ .vtable = &vtable, .userdata = std.testing.io.userdata };
-    Clock.milliseconds = 100;
-    const deadline: Deadline = .in(io, 10);
-    try std.testing.expectEqual(@as(u32, 10), deadline.remainingMs(io));
-    Clock.milliseconds = 111;
-    try std.testing.expectEqual(@as(u32, 0), deadline.remainingMs(io));
-}

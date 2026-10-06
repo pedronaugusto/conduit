@@ -205,6 +205,19 @@ pub const ForegroundGroupError = tty.ForegroundGroupError;
 pub const ttyName = tty.ttyName;
 pub const TtyNameError = tty.TtyNameError;
 
+/// A pipe, both ends close-on-exec: one call where the system has `pipe2`,
+/// and on Darwin two, made where none of this package's spawns can copy it
+/// unmarked into a child. `.nonblocking` makes both ends nonblocking. POSIX
+/// only.
+pub const pipe = tty.pipe;
+pub const PipeOptions = tty.PipeOptions;
+pub const PipeError = tty.PipeError;
+/// A point a bounded wait ends at. `Deadline.fromTimeout` reads a
+/// `std.Io.Timeout` against the clock, and `remainingMs` and `windowsMs` say
+/// what is left in the whole milliseconds a system wait takes, rounded up:
+/// rounding down would end a wait with time still on it.
+pub const Deadline = tty.Deadline;
+
 /// Reads what a pipe holds now, without waiting for more: 0 once nothing is
 /// left at this moment. For the rest of what a child wrote, once it has
 /// ended, when something it started may still hold the pipe open.

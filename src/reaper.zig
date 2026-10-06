@@ -57,13 +57,13 @@ const Child = @import("child.zig").Child;
 
 const is_windows = builtin.os.tag == .windows;
 const win32 = @import("win32.zig");
-const handles = @import("handles.zig");
+const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
 const Orphans = @import("orphans.zig").Orphans;
 const wait_for = @import("wait.zig");
 
 const Term = Child.Term;
-const Deadline = @import("deadline.zig").Deadline;
+const Deadline = tty.Deadline;
 const Cgroup = @import("cgroup.zig").Cgroup;
 const Watchdog = @import("testing/support.zig").Watchdog;
 
@@ -245,7 +245,7 @@ pub const Reaper = struct {
         // Without a pipe the wait falls back to Child.wait, which is
         // a cancelation point of its own: the wake is how a better wait is ended,
         // not a condition of waiting at all.
-        if (!is_windows) reaper.wake = handles.pipe() catch null;
+        if (!is_windows) reaper.wake = tty.pipe(.{}) catch null;
         errdefer reaper.closeWake();
         if (reaper.orphans != null) {
             try reaper.group.concurrent(io, observeAdoption, .{ reaper, io });

@@ -4,7 +4,7 @@
 //! that imports `conduit`.
 
 const std = @import("std");
-const Deadline = @import("../deadline.zig").Deadline;
+const Deadline = @import("conduit.tty").Deadline;
 
 /// Turns a hang into a failure that says which test hung.
 ///

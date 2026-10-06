@@ -191,7 +191,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
     // was gone before it.
     const parent = c.getpid();
 
-    handles.ForkGap.startingAChild();
+    tty.ForkGap.startingAChild();
     if (builtin.is_test) SpawnCalls.forks += 1;
     const pid = c.fork();
     if (pid == 0) {
@@ -203,7 +203,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
         // it is not touch it: it runs a handful of system calls and execs.
         childMain(options, plan, exec, ends.report, root_parent, ends.go, ends.join);
     }
-    handles.ForkGap.release();
+    tty.ForkGap.release();
     if (pid > 0) return pid;
     return switch (c.errno(@as(c_int, -1))) {
         .AGAIN => error.ResourceLimitReached,
@@ -306,8 +306,8 @@ fn spawnWithoutFork(
     state: *State,
 ) SpawnError!?*State {
     const child = child: {
-        handles.ForkGap.startingAChild();
-        defer handles.ForkGap.release();
+        tty.ForkGap.startingAChild();
+        defer tty.ForkGap.release();
         break :child try posix_spawn.spawn(plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options);
     } orelse return null;
     adoption.started(child.pid) catch |err| {
@@ -930,7 +930,7 @@ fn openNullDevice() SpawnError!posix.fd_t {
 /// at all, and another thread that forks through it hands them to a child that
 /// has nothing to do with this one. Darwin has no `pipe2` and takes the gap.
 fn makePipe() SpawnError![2]posix.fd_t {
-    return handles.pipe();
+    return tty.pipe(.{});
 }
 
 /// The fork handshake is owned by spawn, outside the slots the stdio plan

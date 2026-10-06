@@ -31,7 +31,7 @@ const c = std.c;
 /// One of these replaces the counters the waits here used to keep: a step that
 /// returned early — a signal, a spurious wakeup — used to count as a whole
 /// step, so a deadline was only ever approximately one.
-pub const Deadline = @import("deadline.zig").Deadline;
+pub const Deadline = @import("conduit.tty").Deadline;
 
 /// How long one wait on a `Watch` lasts before the caller is given a chance to
 /// notice it has been cancelled.

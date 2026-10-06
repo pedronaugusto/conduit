@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 const c = std.c;
 const posix = std.posix;
 const tree = @import("tree.zig");
-const handles = @import("handles.zig");
+const tty = @import("conduit.tty");
 
 /// Test-only observer delay exposes the window without changing the fixture.
 pub const testing_hook = struct {
@@ -54,7 +54,7 @@ const Darwin = struct {
         const queue = c.kqueue();
         if (queue < 0) return error.SystemResources;
         errdefer _ = c.close(queue);
-        const wake = handles.pipe() catch return error.SystemResources;
+        const wake = tty.pipe(.{}) catch return error.SystemResources;
         errdefer {
             _ = c.close(wake[0]);
             _ = c.close(wake[1]);

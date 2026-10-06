@@ -53,7 +53,7 @@ const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
 const is_windows = builtin.os.tag == .windows;
-const Deadline = @import("deadline.zig").Deadline;
+const Deadline = @import("conduit.tty").Deadline;
 
 /// The files to move bytes between, and the buffers to move them in.
 ///

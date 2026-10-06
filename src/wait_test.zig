@@ -45,7 +45,7 @@ test "a watch on a child ends when the child does" {
 test "a watch with a wake ends on the wake, then on the child" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
-    const handles = @import("handles.zig");
+    const tty = @import("conduit.tty");
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.allocator, testing.io, .{
@@ -57,7 +57,7 @@ test "a watch with a wake ends on the wake, then on the child" {
 
     const watch = Watch.open(child.state.id) orelse return error.SkipZigTest;
     defer watch.close();
-    const wake = try handles.pipe();
+    const wake = try tty.pipe(.{});
     defer _ = c.close(wake[0]);
     defer _ = c.close(wake[1]);
 

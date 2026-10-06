@@ -36,6 +36,12 @@
 //! Elsewhere the system's own library is the system interface and is linked
 //! whatever a program does.
 //!
+//! Two things a program that waits on its own terminal needs are here too:
+//! `pipe`, close-on-exec at both ends and inside the `ForkGap` conduit's
+//! spawns take, for a wake like a resize; and `Deadline`, a timeout in the
+//! whole milliseconds a kernel wait counts, rounded up so a wait never ends
+//! before its time.
+//!
 //! Nothing here waits on the terminal. `rawMode` and `restore` take effect
 //! at once and throw away input nobody read, rather than waiting for the
 //! output to drain: a terminal that has stopped reading -- suspended, gone,
@@ -46,6 +52,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 /// This file, so a signature can name its error sets as callers do.
 const tty = @This();
+const close_on_exec = @import("close_on_exec.zig");
 const posix = std.posix;
 const system = posix.system;
 
@@ -58,6 +65,21 @@ const windows = std.os.windows;
 /// The console calls the primitives make on Windows, for conduit's own
 /// Windows code to take from here rather than declare twice.
 pub const console = @import("console.zig");
+
+/// A pipe, both ends close-on-exec, for a wake a program writes itself.
+/// POSIX only.
+pub const pipe = close_on_exec.pipe;
+pub const PipeOptions = close_on_exec.PipeOptions;
+pub const PipeError = close_on_exec.PipeError;
+/// The lock that keeps conduit's spawns out of the moment a descriptor opened
+/// in two calls has no close-on-exec flag yet. Darwin only; elsewhere it costs
+/// nothing.
+pub const ForkGap = close_on_exec.ForkGap;
+/// Whether a descriptor here is opened and marked close-on-exec in two calls.
+pub const opening_is_two_calls = close_on_exec.opening_is_two_calls;
+/// A point on the clock a bounded wait ends at, read back in whole
+/// milliseconds rounded up.
+pub const Deadline = @import("deadline.zig").Deadline;
 
 /// A terminal handle. `std.posix.fd_t` on POSIX, `HANDLE` on Windows, which is
 /// what `std.Io.File.Handle` already is on both.

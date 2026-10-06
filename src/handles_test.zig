@@ -12,14 +12,10 @@ const ReadStreamingError = @import("handles.zig").ReadStreamingError;
 const readStreaming = @import("handles.zig").readStreaming;
 const writeStreamingAll = @import("handles.zig").writeStreamingAll;
 const windowsPipeClosed = access.windowsPipeClosed;
-const opening_is_two_calls = @import("handles.zig").opening_is_two_calls;
-const ForkGap = @import("handles.zig").ForkGap;
-const PipeError = @import("handles.zig").PipeError;
-const pipe = @import("handles.zig").pipe;
+const pipe = @import("conduit.tty").pipe;
 const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 const test_options = @import("conduit_test_options");
-const pipePosix = access.pipePosix;
 test "Windows a closed pipe is a broken write and a file keeps its unexpected error" {
     if (!is_windows) return error.SkipZigTest;
     const testing = std.testing;
@@ -65,7 +61,7 @@ test "readAvailable reads what a pipe holds and returns rather than wait for the
         if (win32.CreatePipe(&read_end, &write_end, null, 0) == .FALSE) return error.PipeFailed;
         break :ends .{ file(read_end), file(write_end) };
     } else ends: {
-        const fds = try pipe();
+        const fds = try pipe(.{});
         break :ends .{ file(fds[0]), file(fds[1]) };
     };
     defer ends[0].close(io);

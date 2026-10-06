@@ -22,7 +22,7 @@ const untilAny = Expect.untilAny;
 const testing = std.testing;
 const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
-const Deadline = @import("deadline.zig").Deadline;
+const Deadline = @import("conduit.tty").Deadline;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;

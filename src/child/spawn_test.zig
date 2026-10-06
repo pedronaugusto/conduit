@@ -26,7 +26,7 @@ const c = std.c;
 
 const conduit = @import("../conduit.zig");
 const Child = conduit.Child;
-const Deadline = @import("../deadline.zig").Deadline;
+const Deadline = @import("conduit.tty").Deadline;
 const Pty = conduit.Pty;
 const handles = @import("../handles.zig");
 const wait_for = @import("../wait.zig");

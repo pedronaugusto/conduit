@@ -53,8 +53,8 @@ const std = @import("std");
 const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
-const Deadline = @import("deadline.zig").Deadline;
-const handles = @import("handles.zig");
+const Deadline = tty.Deadline;
+const tty = @import("conduit.tty");
 
 /// Whether this system has cgroups for `spawn` to use at all.
 pub const supported = builtin.os.tag == .linux;
@@ -1278,7 +1278,7 @@ test "deferred cgroup cleanup keeps directory ownership instead of removing a re
 
 test "a consumed cgroup handoff cannot close a recycled join descriptor" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
-    const ends = try handles.pipe();
+    const ends = try tty.pipe(.{});
     defer _ = c.close(ends[0]);
     var pending = Pending.init(.none, ends[1]);
     errdefer pending.abandon();

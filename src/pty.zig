@@ -504,8 +504,8 @@ pub const Pty = struct {
         if (fd >= 0) return fd;
         if (c.errno(@as(c_int, -1)) != .INVAL) return openErrno();
 
-        handles.ForkGap.openingDescriptors();
-        defer handles.ForkGap.release();
+        tty.ForkGap.openingDescriptors();
+        defer tty.ForkGap.release();
         const plain_fd = posix_openpt(.{ .ACCMODE = .RDWR, .NOCTTY = true });
         if (plain_fd < 0) return openErrno();
         handles.setCloseOnExec(plain_fd);

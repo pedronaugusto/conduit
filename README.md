@@ -527,6 +527,17 @@ console with no `std.Io` to hand, a panic handler among it.
 neither waits for the output to drain, so a terminal that has stopped reading
 cannot hold a program there, on its way out or in a panic.
 
+For a program's own wait on its terminal, POSIX only: `pipe(.{ .nonblocking = true })`
+is a pipe with both ends close-on-exec, for a wake such as a resize. Darwin
+has no `pipe2`, so there it is two calls, made under the lock conduit's own
+spawns take, and no child conduit starts is handed it unmarked. A program
+gets that only if it and its dependencies build one conduit.
+
+`Deadline.fromTimeout(io, timeout)` turns a `std.Io.Timeout` into a deadline,
+and `remainingMs(io)` or `windowsMs(io)` (never `INFINITE`) says what is left
+for a system wait that counts whole milliseconds, rounded up, so the wait does
+not end with time still left.
+
 These are also a module of their own, `conduit.tty`, for a program that draws
 its own screen and runs no child:
 
