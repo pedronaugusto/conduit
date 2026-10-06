@@ -216,6 +216,9 @@ test "a walk too large to hold still kills and reaps the child itself" {
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
+    // The walk is what is under test: a child in a cgroup is ended without one.
+    cgroups.testing_hook.off = true;
+    defer cgroups.testing_hook.off = false;
     tree.testing_hook.walk_full = true;
     defer tree.testing_hook.walk_full = false;
     {
