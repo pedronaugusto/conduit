@@ -212,6 +212,28 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
     }
 }
 
+test "a walk too large to hold still kills and reaps the child itself" {
+    if (windows) return error.SkipZigTest;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    tree.testing_hook.walk_full = true;
+    defer tree.testing_hook.walk_full = false;
+    {
+        var fixture = try Fixture.start(.survive, "--escape");
+        defer fixture.deinit();
+        try std.testing.expectError(error.OutOfMemory, fixture.child.kill(.kill));
+        const term = (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term);
+    }
+    {
+        var fixture = try Fixture.start(.survive, "--escape");
+        defer fixture.deinit();
+        try std.testing.expectError(error.OutOfMemory, fixture.child.killWait(io, 0));
+        try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try fixture.child.tryWait()).?);
+    }
+}
+
 test "containment ends a double-forked session after normal exit" {
     if (builtin.os.tag != .macos and builtin.os.tag != .linux and !windows) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());

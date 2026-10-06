@@ -24,9 +24,10 @@
 //! anyone looked. Contained Darwin children retain observed lineage separately
 //! (`lineage.zig`).
 //!
-//! POSIX only. The walk uses a bounded stack buffer to name the tree, and
-//! reports `error.OutOfMemory` if it cannot hold the whole snapshot rather
-//! than silently leaving a suffix of it alive. A process is captured as a
+//! POSIX only. The walk names the tree in a bounded stack buffer that holds
+//! the tree and never the whole process table, and reports
+//! `error.OutOfMemory` if it cannot hold the whole tree rather than
+//! silently leaving a suffix of it alive. A process is captured as a
 //! stable kernel identity before the walk retains it: a pidfd on Linux and
 //! a unique process id on Darwin. Every candidate's ancestry is then proved
 //! through held identities before signalling. A PID alone is
@@ -130,6 +131,7 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     const anchor = guard orelse if (captured_root) |*held| held else return 0;
     if (!anchor.alive()) return 0;
     if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
+    if (builtin.is_test and testing_hook.walk_full) return error.OutOfMemory;
     // Exhausting this bounded workspace reports OutOfMemory before sending
     // a partial pass.
     var storage: [64 * 1024]u8 = undefined;
@@ -250,11 +252,9 @@ fn parentOf(pid: posix.pid_t) ?posix.pid_t {
     return null;
 }
 
-/// Fills `into` with the descendants of `root`, breadth first, and returns how
-/// many there were.
-///
-/// Breadth first so that the order in the array is by generation, which makes
-/// walking it backwards the deepest-first order `signalDescendants` sends in.
+/// Fills `into` with the descendants of `root`, each after its parent, which
+/// makes walking it backwards the deepest-first order `signalDescendants`
+/// sends in.
 fn collect(
     allocator: std.mem.Allocator,
     root: posix.pid_t,
@@ -276,61 +276,149 @@ fn collect(
 }
 
 /// Linux exposes the parent and process group in every process's `stat` file.
-/// Read the process directory once, then walk the resulting relationships in
-/// memory instead of opening every thread's `children` file at every level.
 fn collectLinux(
     allocator: std.mem.Allocator,
     root: posix.pid_t,
     in_group: ?posix.pid_t,
     into: *std.ArrayList(Process),
 ) std.mem.Allocator.Error!void {
-    const Record = struct {
-        pid: posix.pid_t,
-        ppid: posix.pid_t,
-        pgrp: posix.pid_t,
-    };
+    var table = ProcTable.open() orelse return;
+    defer table.close();
+    var below: std.ArrayList(TableRecord) = .empty;
+    defer below.deinit(allocator);
+    try treeFromTable(ProcTable, allocator, &table, root, &below);
+    for (below.items) |record| {
+        if (in_group) |pgid| if (record.pgrp == pgid) continue;
+        var process = Process.capture(record.pid) orelse continue;
+        into.append(allocator, process) catch |err| {
+            process.deinit();
+            return err;
+        };
+    }
+}
 
-    var records: std.ArrayList(Record) = .empty;
-    defer records.deinit(allocator);
+/// One process's entry in the table, as far as a walk needs it.
+const TableRecord = struct {
+    pid: posix.pid_t,
+    ppid: posix.pid_t,
+    pgrp: posix.pid_t,
+};
 
-    const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
-    if (dir < 0) return;
-    defer _ = c.close(dir);
+/// `/proc` read as a process table, one pass at a time.
+const ProcTable = struct {
+    dir: c.fd_t,
+    entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = undefined,
+    names: Dirents = .{ .bytes = &.{} },
 
-    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
-    while (true) {
-        const rc = std.os.linux.getdents64(dir, &entries, entries.len);
-        if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
-
-        var names: Dirents = .{ .bytes = entries[0..rc] };
-        while (names.next()) |name| {
-            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
-            const relation = processRelationLinux(pid) orelse continue;
-            try records.append(allocator, .{
-                .pid = pid,
-                .ppid = relation.ppid,
-                .pgrp = relation.pgrp,
-            });
-        }
+    fn open() ?ProcTable {
+        const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
+        if (dir < 0) return null;
+        return .{ .dir = dir };
     }
 
-    var parents: std.ArrayList(posix.pid_t) = .empty;
-    defer parents.deinit(allocator);
-    try parents.append(allocator, root);
+    fn close(table: *ProcTable) void {
+        _ = c.close(table.dir);
+        table.* = undefined;
+    }
 
-    var expanded: usize = 0;
-    while (expanded < parents.items.len) : (expanded += 1) {
-        const parent = parents.items[expanded];
-        for (records.items) |record| {
-            if (record.ppid != parent) continue;
-            try parents.append(allocator, record.pid);
-            if (in_group) |pgid| if (record.pgrp == pgid) continue;
-            var process = Process.capture(record.pid) orelse continue;
-            into.append(allocator, process) catch |err| {
-                process.deinit();
-                return err;
-            };
+    /// Starts the next pass from the beginning of the directory.
+    fn rewind(table: *ProcTable) void {
+        _ = std.os.linux.lseek(table.dir, 0, std.os.linux.SEEK.SET);
+        table.names = .{ .bytes = &.{} };
+    }
+
+    fn next(table: *ProcTable) ?TableRecord {
+        while (true) {
+            while (table.names.next()) |name| {
+                const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+                const relation = processRelationLinux(pid) orelse continue;
+                return .{ .pid = pid, .ppid = relation.ppid, .pgrp = relation.pgrp };
+            }
+            const rc = std.os.linux.getdents64(table.dir, &table.entries, table.entries.len);
+            if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) return null;
+            table.names = .{ .bytes = table.entries[0..rc] };
         }
+    }
+};
+
+/// Fills `into` with the descendants of `root`, each after its parent, from a
+/// process table read through `rewind` and `next`.
+///
+/// The walk keeps the tree and never the table: a pass keeps each process
+/// whose parent it already holds, and passes repeat until one adds nothing.
+/// `/proc` lists in ascending pid order, so a child numbered above its parent
+/// is kept in the same pass; one numbered below it, after pid wrap-around, is
+/// kept by the next. The workspace is therefore bounded by the size of the
+/// tree, whatever the size of the system.
+fn treeFromTable(
+    comptime Table: type,
+    allocator: std.mem.Allocator,
+    table: *Table,
+    root: posix.pid_t,
+    into: *std.ArrayList(TableRecord),
+) std.mem.Allocator.Error!void {
+    while (true) {
+        const before = into.items.len;
+        table.rewind();
+        while (table.next()) |record| {
+            if (record.pid == root or inTree(into.items, record.pid)) continue;
+            if (record.ppid != root and !inTree(into.items, record.ppid)) continue;
+            try into.append(allocator, record);
+        }
+        if (into.items.len == before) return;
+    }
+}
+
+fn inTree(records: []const TableRecord, pid: posix.pid_t) bool {
+    for (records) |record| if (record.pid == pid) return true;
+    return false;
+}
+
+test "the Linux walk holds the tree, not the process table" {
+    // Twenty thousand processes, a tree of five below 100 among them, and a
+    // walk workspace the size of the one `signalDescendants` uses. One of the
+    // tree has a lower number than its parent, as after pid wrap-around.
+    const Fake = struct {
+        const Self = @This();
+        at: usize = 0,
+
+        const system = 20_000;
+        const tree = [_]TableRecord{
+            .{ .pid = 30_001, .ppid = 100, .pgrp = 100 },
+            .{ .pid = 30_002, .ppid = 30_001, .pgrp = 100 },
+            .{ .pid = 30_003, .ppid = 30_002, .pgrp = 30_003 },
+            .{ .pid = 50, .ppid = 30_003, .pgrp = 30_003 },
+            .{ .pid = 40, .ppid = 50, .pgrp = 30_003 },
+        };
+
+        fn rewind(fake: *Self) void {
+            fake.at = 0;
+        }
+
+        fn next(fake: *Self) ?TableRecord {
+            defer fake.at += 1;
+            if (fake.at < system) {
+                const pid: posix.pid_t = @intCast(1000 + fake.at);
+                return .{ .pid = pid, .ppid = 1, .pgrp = pid };
+            }
+            // Ascending, as /proc lists them.
+            const order = [_]usize{ 4, 3, 0, 1, 2 };
+            if (fake.at - system < order.len) return tree[order[fake.at - system]];
+            return null;
+        }
+    };
+    var storage: [64 * 1024]u8 = undefined;
+    var scratch = std.heap.FixedBufferAllocator.init(&storage);
+    var fake: Fake = .{};
+    var below: std.ArrayList(TableRecord) = .empty;
+    try treeFromTable(Fake, scratch.allocator(), &fake, 100, &below);
+    try std.testing.expectEqual(Fake.tree.len, below.items.len);
+    // Each after its parent, so walking it backwards signals deepest first.
+    for (below.items, 0..) |record, i| {
+        if (record.ppid == 100) continue;
+        for (below.items[0..i]) |earlier| {
+            if (earlier.pid == record.ppid) break;
+        } else return error.TestParentAfterChild;
     }
 }
 
@@ -1331,6 +1419,8 @@ pub const DarwinForks = struct {
 /// Test builds only: what a test needs to show the watch has no window.
 pub const testing_hook = struct {
     pub var group_forces: std.atomic.Value(usize) = .init(0);
+    /// Makes every descendant walk fail as one too large to hold would.
+    pub var walk_full: bool = false;
     /// How long `Forks.watch` waits before it registers: time in which a
     /// child that was not being held would run its program, and fork.
     pub var hold_ms: u32 = 0;

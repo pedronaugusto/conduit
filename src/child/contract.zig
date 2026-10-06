@@ -667,8 +667,9 @@ pub const Signal = union(enum) {
 };
 
 pub const KillError = error{
-    /// POSIX: the descendant walk could not retain every stable process
-    /// identity, so no partial tree signal was sent.
+    /// POSIX: the descendant walk could not hold the whole tree, so no
+    /// descendant outside the child's group was signalled. The child, and its
+    /// group if it has one, were signalled all the same.
     OutOfMemory,
     /// This process may not signal the child.
     PermissionDenied,

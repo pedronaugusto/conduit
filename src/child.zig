@@ -979,12 +979,15 @@ pub const Child = enum(usize) {
         // leaves them orphaned, and an orphan belongs to `init` and is named by no
         // walk. A descendant already in the group about to be signalled is left to
         // it, so the ordinary tree gets the one signal it always did.
-        _ = try tree.signalDescendants(State.get(child).id, sig, State.get(child).pgid);
+        // A walk that cannot hold the tree still leaves the child and its group
+        // to be signalled; the incomplete pass is reported after that.
+        const walked = tree.signalDescendants(State.get(child).id, sig, State.get(child).pgid);
 
         const answer = child.signalTarget(target, sig);
-        if (sig != .KILL) return answer;
-        try child.killPasses(target, sig);
-        return answer;
+        const passes = if (sig == .KILL) child.killPasses(target, sig) else {};
+        try answer;
+        _ = try walked;
+        return passes;
     }
 
     /// Whether a walk could name anything below the child, asked without one.
@@ -1013,9 +1016,9 @@ pub const Child = enum(usize) {
     fn killPasses(child: *Child, target: posix.pid_t, sig: posix.SIG) KillError!void {
         var pass: u8 = 0;
         while (pass < kill_passes) : (pass += 1) {
-            const reached = try tree.signalDescendants(State.get(child).id, sig, null);
+            const reached = tree.signalDescendants(State.get(child).id, sig, null);
             _ = c.kill(target, sig);
-            if (reached == 0) break;
+            if (try reached == 0) break;
         }
     }
 
@@ -1126,6 +1129,9 @@ pub const Child = enum(usize) {
     ///
     /// The grace is `waitTimeout`, so a child that obeys the `.terminate` is
     /// noticed the moment it does rather than at the end of an interval.
+    ///
+    /// `error.OutOfMemory` is `kill`'s: the walk could not hold the child's
+    /// tree. The child itself was killed and has been reaped when it returns.
     pub fn killWait(child: *Child, io: std.Io, grace_ms: u32) KillWaitError!Term {
         // A child that has already ended is reaped rather than signalled.
         if (try child.tryWait()) |term| return term;
@@ -1136,7 +1142,15 @@ pub const Child = enum(usize) {
             if (try child.waitTimeout(io, grace_ms)) |term| return term;
         }
 
-        try child.kill(.kill);
+        // A walk too large to hold still killed the child itself, so it is
+        // reaped before the incomplete walk is reported.
+        child.kill(.kill) catch |err| switch (err) {
+            error.OutOfMemory => {
+                _ = try child.wait(io);
+                return err;
+            },
+            else => return err,
+        };
         return child.wait(io);
     }
 

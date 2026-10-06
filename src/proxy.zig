@@ -5,8 +5,8 @@
 //! This is the loop at the centre of every program that puts another program on
 //! a pseudo-terminal: everything read from `input` is written to the master as
 //! if it had been typed, and everything the child writes to its terminal is
-//! read from the master and written to `output`. The caller waits for either
-//! direction to end and cancels the other one.
+//! read from the master and written to `output`. The call ends when the
+//! child's output does, or when either direction fails.
 //!
 //! # What happens to Ctrl-C
 //!
@@ -123,9 +123,13 @@ pub const RunError = error{
 /// Pumps both directions, and forwards the window size, until the child's end
 /// of the terminal closes.
 ///
-/// Returns when either direction ends: when reading the master reports end of
-/// file — which on some systems is reported as an I/O error instead and is
-/// treated the same — or when either input pump fails. The other tasks are
+/// Returns when the output direction ends: when reading the master reports
+/// end of file — which on some systems is reported as an I/O error instead
+/// and is treated the same — or when either pump fails. `input` reaching its
+/// own end of file stops the input pump and nothing else; the child's output
+/// is still carried until its terminal closes. Nothing is written to the
+/// master in its place: a child that should see the end of its input is sent
+/// the terminal's end-of-file character by the caller. The other tasks are
 /// cancelled on the way out, so a read from a silent terminal cannot hide an
 /// input-side error, and a read of the program's own standard input that will
 /// never complete does not hold the call open.
@@ -185,8 +189,10 @@ const Completion = struct {
     output_error: ?RunError = null,
 };
 
-/// One direction as a task. The first direction to finish publishes its result
-/// and wakes `run`; the group boundary itself carries cancellation only.
+/// One direction as a task. The output direction finishing, or either one
+/// failing, publishes its result and wakes `run`; input that reaches its end
+/// only ends its own task. The group boundary itself carries cancellation
+/// only.
 fn pumpTask(
     io: std.Io,
     from: std.Io.File,
@@ -204,7 +210,11 @@ fn pumpTask(
     };
     switch (direction) {
         .none => unreachable,
-        .input => completion.input_error = pump_error,
+        // Input that has simply run out ends this direction and nothing else:
+        // the child may still have everything it is going to write to say.
+        .input => if (pump_error == null) return else {
+            completion.input_error = pump_error;
+        },
         .output => completion.output_error = pump_error,
     }
     if (completion.winner.cmpxchgStrong(.none, direction, .release, .monotonic) == null) {
@@ -319,6 +329,48 @@ test "an input error interrupts a silent output pump" {
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     }));
+}
+
+test "input at end of file leaves the child's output flowing" {
+    if (is_windows) return error.SkipZigTest;
+
+    const io = testing.io;
+    var watchdog: Watchdog = .init(@src());
+    try watchdog.start(io);
+    defer watchdog.deinit(io);
+    const gpa = testing.allocator;
+
+    var terminal = try Pty.open(std.testing.allocator, .{});
+    defer terminal.close(io);
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/sh", "-c", "sleep 0.3; echo hello-from-child" },
+        .stdio = .{ .pty = &terminal },
+        .detach = true,
+    });
+    defer child.release(io) catch unreachable;
+    terminal.closeSlave(io);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const output = try tmp.dir.createFile(io, "output", .{ .read = true });
+    defer output.close(io);
+    const input = try std.Io.Dir.cwd().openFile(io, "/dev/null", .{});
+    defer input.close(io);
+
+    var input_buffer: [64]u8 = undefined;
+    var output_buffer: [64]u8 = undefined;
+    try run(io, .{
+        .master = terminal.master(),
+        .input = input,
+        .output = output,
+        .input_buffer = &input_buffer,
+        .output_buffer = &output_buffer,
+    });
+    _ = try child.wait(io);
+
+    var seen: [128]u8 = undefined;
+    const n = try output.readPositionalAll(io, &seen, 0);
+    try testing.expect(std.mem.indexOf(u8, seen[0..n], "hello-from-child") != null);
 }
 
 /// `run` under a `std.Io.Group`, which accepts only `error.Canceled`.
