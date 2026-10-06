@@ -26,6 +26,11 @@
       "zig",
       "build",
       "check-containment"
+    ],
+    [
+      "zig",
+      "build",
+      "check-consumer"
     ]
   ],
   "unreachable_exceptions": "ci/unreachable-exceptions.json",

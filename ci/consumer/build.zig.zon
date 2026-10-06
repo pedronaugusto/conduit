@@ -1,0 +1,12 @@
+// A program that depends on conduit and nothing else, built by
+// `zig build check-consumer` with an empty package directory: conduit's
+// build.zig must compile and run without any of conduit's own CI
+// dependencies.
+.{
+    .name = .consumer,
+    .version = "0.0.0",
+    .fingerprint = 0x705b37272f017aed,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{ .conduit = .{ .path = "../.." } },
+    .paths = .{""},
+}
