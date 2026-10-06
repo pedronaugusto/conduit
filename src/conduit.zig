@@ -228,6 +228,7 @@ pub const processExists = @import("process_exists.zig").processExists;
 /// time, and the next time it runs it ends each that still runs as the same
 /// process.
 pub const startTime = tree.startTime;
+pub const StartTimeError = tree.StartTimeError;
 /// A process held by a kernel identity rather than by its number — a pidfd
 /// on Linux, a stable unique process id on Darwin. Darwin checks that id
 /// before refreshing the audit version for delivery, so exec preserves the
@@ -244,6 +245,10 @@ else
 /// the number could be someone else's. Linux and Darwin; `error.Unsupported`
 /// elsewhere. POSIX only.
 pub const captureStarted = tree.captureStarted;
+pub const CaptureError = tree.CaptureError;
+/// What `CapturedPid.signalGroupSince` can meet, the same on every system.
+pub const SignalGroupError = tree.SignalGroupError;
 /// End a process recorded by an earlier run, together with its provable
 /// descendants, preferring a verified recorded cgroup when one is available.
 pub const endRecorded = tree.endRecorded;
+pub const EndRecordedError = tree.EndRecordedError;

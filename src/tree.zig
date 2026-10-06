@@ -482,7 +482,12 @@ pub fn adoptionRecord(pid: posix.pid_t) ?adoption_record.Record {
 /// `null` when there is no such process, or it has ended and waits to be
 /// reaped: a zombie runs nothing. `error.Unsupported` on every other system,
 /// where there is no cheap way to ask.
-pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
+pub const StartTimeError = error{
+    /// The system has no cheap way to ask: everywhere but Linux and Darwin.
+    Unsupported,
+};
+
+pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
     if (builtin.os.tag == .windows) @compileError("startTime is POSIX-only");
     switch (builtin.os.tag) {
         .linux => {
@@ -510,6 +515,15 @@ pub fn startTime(pid: posix.pid_t) error{Unsupported}!?u64 {
 /// poll on the held pidfd on Linux, kqueue NOTE_EXIT on Darwin, and bounded
 /// 1–4 ms clock-based checks only if no event registration is available.
 /// `deinit` lets go of it.
+/// What `CapturedPid.signalGroupSince` can meet, the same on every system.
+pub const SignalGroupError = error{
+    /// The group cannot be reached by proof here: by number on Darwin, or a
+    /// group this capture's session did not start.
+    Unsupported,
+    /// Darwin: the group's member list could not be held.
+    OutOfMemory,
+};
+
 pub const CapturedPid = enum(u128) {
     _,
 
@@ -550,7 +564,7 @@ pub const CapturedPid = enum(u128) {
         return captured.unwrap().signalDescendants(sig, in_group);
     }
 
-    pub fn signalGroupSince(captured: *const CapturedPid, group: posix.pid_t, since: u64, sig: posix.SIG) @typeInfo(@TypeOf(Process.signalGroupSince)).@"fn".return_type.? {
+    pub fn signalGroupSince(captured: *const CapturedPid, group: posix.pid_t, since: u64, sig: posix.SIG) SignalGroupError!usize {
         return captured.unwrap().signalGroupSince(group, since, sig);
     }
 
@@ -579,7 +593,12 @@ pub const CapturedPid = enum(u128) {
 /// answers the start time and stable unique process id together. Delivery
 /// refreshes the audit version only while that unique id matches, so exec
 /// preserves the capture and PID reuse cannot authorize a signal. `error.Unsupported` elsewhere.
-pub fn captureStarted(pid: posix.pid_t, since: u64) error{Unsupported}!?CapturedPid {
+pub const CaptureError = error{
+    /// Everywhere but Linux and Darwin.
+    Unsupported,
+};
+
+pub fn captureStarted(pid: posix.pid_t, since: u64) CaptureError!?CapturedPid {
     if (builtin.os.tag == .windows) @compileError("captureStarted is POSIX-only");
     return CapturedPid.wrap((try captureStartedProcess(pid, since)) orelse return null);
 }
@@ -617,6 +636,22 @@ pub const RecordedOptions = struct {
     grace_ms: u32,
 };
 
+/// What `endRecorded` can meet.
+pub const EndRecordedError = error{
+    /// The record names something this system cannot end by proof: a
+    /// supervisor off Linux, or a group on Darwin.
+    Unsupported,
+    /// Something in the recorded group could not be proven to descend from
+    /// the recorded root, and was left alone.
+    Unproven,
+    /// A held process or the recorded cgroup refused to end.
+    UnableToEnd,
+    /// The walk could not hold the recorded root's tree.
+    OutOfMemory,
+    /// The task was cancelled during the grace.
+    Canceled,
+};
+
 /// Ask a recorded process and every descendant still provably below it to
 /// end, wait for the grace, then make any held survivors end. A verified
 /// recorded cgroup is the complete reach on Linux, including orphans and
@@ -629,7 +664,7 @@ pub const RecordedOptions = struct {
 /// proved and held have ended or have been sent SIGKILL; `true` means there
 /// was something to end. A held identity cannot survive a delivered SIGKILL,
 /// even when the kernel has not yet made its exit observable to a waiter.
-pub fn endRecorded(io: std.Io, options: RecordedOptions) (std.mem.Allocator.Error || std.Io.Cancelable || error{ Unsupported, Unproven, UnableToEnd })!bool {
+pub fn endRecorded(io: std.Io, options: RecordedOptions) EndRecordedError!bool {
     if (builtin.os.tag == .windows) @compileError("endRecorded is POSIX-only");
     if (options.supervisor) |record| {
         if (builtin.os.tag != .linux) return error.Unsupported;

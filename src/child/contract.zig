@@ -509,7 +509,8 @@ pub const SpawnError = error{
     Unexpected,
 };
 
-pub const ReleaseError = KillWaitError || WaitTreeError;
+/// What `release` can meet: ending an unfinished contained scope is `killWait`.
+pub const ReleaseError = KillWaitError;
 
 /// Containment facts for a survivor record, with no owned handles.
 /// The cgroup path borrows the buffer passed to containment; everything else
