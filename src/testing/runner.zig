@@ -112,7 +112,6 @@ fn serverMain(init: std.process.Init.Minimal) !void {
                 var watchdog: Watchdog = .{ .name = test_fn.name };
                 try watchdog.start();
                 defer watchdog.stop();
-                std.debug.print("conduit: test: {s}\n", .{test_fn.name});
                 try server.serveStringMessage(.test_started, &.{});
                 testing.environ = init.environ;
                 testing.allocator_instance = .{};

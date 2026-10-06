@@ -134,6 +134,9 @@ pub fn build(b: *std.Build) void {
             }),
         });
         test_options.addOptionPath("tty_fixture", tty_fixture.getEmittedBin());
+        // Measurements that print numbers rather than assert a behaviour, off
+        // in the suite: `zig build unit -Dmeasure -Dtest-filter=measures`.
+        test_options.addOption(bool, "measure", b.option(bool, "measure", "Also run the measurements, which report numbers and assert nothing") orelse false);
         test_module.addOptions("conduit_test_options", test_options);
     }
 

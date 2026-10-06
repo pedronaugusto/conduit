@@ -138,6 +138,9 @@ const Sink = struct {
     /// end. The difference between "the child said nothing" and "nobody was
     /// listening".
     failed: ?anyerror = null,
+    /// A test of the report itself, whose failure is the expected outcome,
+    /// keeps it off the test output.
+    quiet: bool = false,
 
     fn start(sink: *Sink, file: std.Io.File) !void {
         try sink.group.concurrent(io, read, .{ sink, file });
@@ -226,6 +229,7 @@ const Sink = struct {
     /// What was being waited for, why the reading stopped, and the first of
     /// what did arrive with the unprintable bytes escaped.
     fn report(sink: *Sink, needle: []const u8) void {
+        if (sink.quiet) return;
         sink.mutex.lockUncancelable(io);
         defer sink.mutex.unlock(io);
         const why: []const u8 = if (sink.failed) |err|
@@ -4650,7 +4654,7 @@ test "Child identity and result access share the Reaper's retirement" {
 }
 
 test "a PID fixture reports malformed output instead of a silent timeout" {
-    var sink: Sink = .{};
+    var sink: Sink = .{ .quiet = true };
     defer sink.deinit();
     try sink.bytes.appendSlice(gpa, "pid not-a-number.\n");
     sink.finished.store(true, .release);

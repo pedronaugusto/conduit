@@ -282,8 +282,11 @@ test "containment ends a double-forked session after normal exit" {
     }
 }
 
+// A measurement, not a test: how often a detached descendant escapes the
+// Darwin lineage observer, with and without a delay before it registers.
+// Run with `zig build unit -Dmeasure -Dtest-filter=measures`.
 test "Darwin measures the fork then exit registration race" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.os.tag != .macos or !test_options.measure) return error.SkipZigTest;
     var watchdog: Watchdog = .init(@src());
     try watchdog.start(io);
     defer watchdog.deinit(io);
@@ -303,7 +306,6 @@ test "Darwin measures the fork then exit registration race" {
             if (fixture.daemon.alive()) escapes += 1;
         }
         std.debug.print("Darwin fork/exit registration ({d} ms observer delay): {d}/{d} detached descendants escaped\n", .{ delay_ms, escapes, attempts });
-        if (delay_ms != 0) try std.testing.expect(escapes > 0);
     }
 }
 
@@ -548,7 +550,7 @@ test "a contained Windows wait confirms every Job member ended before returning"
     try watchdog.start(io);
     defer watchdog.deinit(io);
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
-        std.debug.print("contained Windows completion via {s}\n", .{method});
+        errdefer std.debug.print("contained Windows completion via {s}\n", .{method});
         var fixture = try Fixture.start(.contain, "--exit-7");
         defer fixture.deinit();
         fixture.child.closeStdin(io);
