@@ -830,7 +830,7 @@ pub const Child = struct {
 
     /// What `kill` sends: the three requests to end that mean the same thing on
     /// both systems, the common POSIX signals by name, and any POSIX signal by
-    /// number. `child_types.zig` says what each is on each system.
+    /// number. `child/contract.zig` says what each is on each system.
     pub const Signal = contract.Signal;
 
     pub const KillError = contract.KillError;

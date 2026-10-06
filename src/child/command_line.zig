@@ -4,7 +4,7 @@
 //! whatever the child is written in splits it again by the rules
 //! `CommandLineToArgvW` parses. Serialising an argument list for those rules is
 //! arithmetic on quotes and backslashes and nothing else, so it lives here
-//! rather than in `child_windows.zig`: it is the same on every host, and a
+//! rather than in `child/windows.zig`: it is the same on every host, and a
 //! host that cannot start a Windows child can still run its tests.
 
 const std = @import("std");

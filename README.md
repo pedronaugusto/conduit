@@ -79,13 +79,12 @@ to read while a wait or Reaper runs.
 |---|---|
 | `Child.spawn(allocator, io, options)` | Start it. The allocator owns the lifecycle until `deinit` and must outlive the child. |
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
-| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Borrowed `std.Io.File`s; the created pipes remain owned by the `Child`. |
+| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Borrowed `std.Io.File`s: the pipes, or for input and output the master of a child on a pair. The `Child` keeps owning its pipes, and the `Pty` its master. |
 | `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller, who closes it. A pair has no pipe to transfer. |
 | `conduit.readAvailable(io, file, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
 | `child.inputWriter(allocator, io, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
 | `child.terminalMaster()` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
-| `child.stdinFile()`, `child.stdoutFile()` | The child's input and output wherever they are: the pipes, or the master. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(allocator, io, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
@@ -683,8 +682,10 @@ system, and a grandchild of a child that was already reaped keeps running. The
 walk signals stable process identities — pidfds on Linux and audit tokens on
 Darwin — so a descendant that exits cannot turn a recycled PID into a signal
 for an unrelated process. Each candidate's ancestry is proved through held
-identities before delivery. The walk grows to hold the whole tree; if it cannot,
-`kill` reports `error.OutOfMemory` before sending a partial descendant pass. On
+identities before delivery. The walk holds the tree, never the whole process
+table, in a 64 KiB stack workspace: about two thousand descendants of one child. A
+tree larger than that is not walked; `kill` still signals the child or its
+group, then reports `error.OutOfMemory`. On
 Darwin, where the walk is a pass over the whole process table each time it
 is asked, a child that has never forked is not walked at all: `spawn` watches
 its forks with a kqueue registered before the child runs anything — a
@@ -741,12 +742,15 @@ the bytes
 it collects and `environ` the map it returns; both say whose they are.
 `Child.exchange` allocates what `output` does, one call at a time, and copies
 none of its input.
-Process snapshots for POSIX signalling and `endRecorded` use bounded stack
-buffers and report `error.OutOfMemory` if a snapshot exceeds them. Recorded
+The descendant walks of POSIX signalling and `endRecorded` use the bounded
+workspace the kill section describes. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
 lists with the allocator it is given until `deinit`, from spawns on any
-thread, so that one must be thread-safe. Every heap allocation made by the
-package uses an allocator the caller passed. `Pty.open` retains its allocator
+thread, so that one must be thread-safe. Every other heap allocation made by
+the package uses an allocator the caller passed, with two exceptions that run
+on tasks of their own: `Reaper.enableSubreaper` makes its `Orphans` and their
+lists from `std.heap.page_allocator`, and so does the Darwin lineage observer
+of a contained spawn. `Pty.open` retains its allocator
 for Windows geometry until every end of the pair closes; POSIX uses no
 allocation. `spawnShell` forwards its allocator, which must outlive the
 Shell on Windows. Other operations use
