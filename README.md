@@ -521,17 +521,16 @@ console rather than named in the list; ordinary handles beside them remain
 restricted to the ones the child was given.
 
 `extra_fds` gives the child more files than its standard three, in order:
-the first at descriptor 3, the next at 4, as Go's `ExtraFiles` does — a
-listening socket handed over the way a service manager hands one, or a pipe
-for a status protocol. They are borrowed, given whatever their close-on-exec
-flag, and placed correctly whatever numbers they already have, including the
-numbers they are placed at. `.close_all` closes what is above them. Windows
+the first at descriptor 3, the next at 4 — a listening socket handed over
+the way a service manager hands one, or a pipe for a status protocol. They
+are borrowed, given whatever their close-on-exec flag, and placed correctly
+whatever numbers they already have, including the numbers they are placed
+at. `.close_all` closes what is above them. Windows
 numbers no descriptors: each file goes to the child as an inheritable
 duplicate named in the handle list, and in the table of inherited
 descriptors the Microsoft C runtime reads from the startup record
 (`lpReserved2`), so a child on that runtime — `cmd.exe`, Python, Node — has
-them at 3 and up, as libuv arranges for Node's extra stdio. A child on no C
-runtime finds them with `GetStartupInfoW`. With `.pty` it is
+them at 3 and up. A child on no C runtime finds them with `GetStartupInfoW`. With `.pty` it is
 `error.Unsupported` there, as `stderr_to` is.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
@@ -589,12 +588,10 @@ in the operating system's pipe or say when the child consumed them. Allocation
 metadata is additional. A zero bound accepts only empty writes. Calls using
 the writer's allocator are serialized.
 
-[Tokio's `ChildStdin`](https://docs.rs/tokio/latest/tokio/process/struct.ChildStdin.html)
-is an asynchronous pipe writer; [Go's `StdinPipe`](https://pkg.go.dev/os/exec#Cmd.StdinPipe)
-returns an `io.WriteCloser`. Both leave queueing to the caller. `InputWriter`
-adds a byte bound, a task that delivers the queue, and a close ordered after
-the accepted bytes, so a caller can answer a CLI while holding its own lock
-without waiting for that CLI to read.
+A pipe writer alone leaves queueing to the caller. `InputWriter` adds a byte
+bound, a task that delivers the queue, and a close ordered after the accepted
+bytes, so a caller can answer a CLI while holding its own lock without waiting
+for that CLI to read.
 
 ### `Expect` — a conversation with a child
 

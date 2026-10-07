@@ -662,9 +662,8 @@ fn inheritList(arena: Allocator, given: [3]?windows.HANDLE, extras: []const wind
 pub const runtime_table_limit = (std.math.maxInt(u16) - @sizeOf(i32)) / (1 + @sizeOf(usize));
 
 /// The table of inherited descriptors the Microsoft C runtime reads from the
-/// startup record at its start, the layout libuv writes for Node's extra
-/// stdio: the count as an `int`, a flag byte for each descriptor, then each
-/// descriptor's handle, packed with no alignment.
+/// startup record at its start: the count as an `int`, a flag byte for each
+/// descriptor, then each descriptor's handle, packed with no alignment.
 ///
 /// The standard three are left unopened, with no flag and no handle, so the
 /// runtime takes them from the standard handles as it does with no table:

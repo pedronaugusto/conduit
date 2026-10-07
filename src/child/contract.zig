@@ -212,7 +212,7 @@ pub const SpawnOptions = struct {
     /// first is its descriptor 3, the next 4, and so on. A listening socket
     /// handed over the way a service manager hands one (`LISTEN_FDS`), or a
     /// pipe for a protocol of the caller's own (`--status-fd=3`), has no other
-    /// way in. Go's `ExtraFiles`.
+    /// way in.
     ///
     /// Borrowed: `spawn` closes none of them, and they must stay open until it
     /// returns. The child gets each whatever its close-on-exec flag says here,
@@ -226,8 +226,8 @@ pub const SpawnOptions = struct {
     /// streams do, and in the table of inherited descriptors the Microsoft C
     /// runtime reads from the startup record (`lpReserved2`): a child on that
     /// runtime — `cmd.exe`, Python, Node, any C program — has them as its
-    /// descriptors 3 and up, which is how libuv gives a Node child extra
-    /// stdio. A child on no C runtime finds them with `GetStartupInfoW`.
+    /// descriptors 3 and up. A child on no C runtime finds them with
+    /// `GetStartupInfoW`.
     /// Together with `.pty` this is `error.Unsupported`: a pseudoconsole is
     /// attached through the attribute list, which Windows documents as
     /// incompatible with naming a child's handles, the reason `stderr_to` is
