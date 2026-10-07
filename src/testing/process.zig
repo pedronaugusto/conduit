@@ -13,8 +13,8 @@ extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: w
 extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(allocator);
+    const gpa = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(gpa);
     if (args.len > 1 and std.mem.eql(u8, args[1], "--daemon")) return daemonTree(init, args);
     if (builtin.target.os.tag != .windows) return posixTree(init, args.len > 1 and std.mem.eql(u8, args[1], "--fail-report"));
     if (args.len > 1 and std.mem.eql(u8, args[1], "--middle")) {
@@ -28,9 +28,9 @@ pub fn main(init: std.process.Init) !void {
         Sleep(std.math.maxInt(windows.DWORD));
         return;
     }
-    const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, args[0]);
-    const command = try allocator.print("\"{s}\" --grandchild", .{args[0]});
-    const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
+    const program = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, args[0]);
+    const command = try gpa.print("\"{s}\" --grandchild", .{args[0]});
+    const line = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, command);
     var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
     startup.cb = @sizeOf(windows.STARTUPINFOW);
     startup.dwFlags = windows.STARTF_USESHOWWINDOW;
@@ -159,10 +159,10 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
 /// Each generation has a separate console and inherits no root streams.
 /// The intermediate exits before the root reports its detached grandchild.
 fn daemonWindows(init: std.process.Init, executable: []const u8, double: bool) !u32 {
-    const allocator = init.arena.allocator();
-    const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, executable);
-    const command = try allocator.print("\"{s}\" {s}", .{ executable, if (double) "--middle" else "--grandchild" });
-    const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
+    const gpa = init.arena.allocator();
+    const program = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, executable);
+    const command = try gpa.print("\"{s}\" {s}", .{ executable, if (double) "--middle" else "--grandchild" });
+    const line = try std.unicode.wtf8ToWtf16LeAllocZ(gpa, command);
     var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
     startup.cb = @sizeOf(windows.STARTUPINFOW);
     startup.dwFlags = windows.STARTF_USESHOWWINDOW;

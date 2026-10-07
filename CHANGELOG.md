@@ -6,19 +6,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Requires Zig 0.17.0. Windows whole writes report `BrokenPipe` for a pipe whose reader has closed through the standard library, which now maps the closing state itself; conduit no longer asks the pipe before and after each write.
+### Breaking
 
-- `pipe(options)`, `PipeOptions`, `PipeError` and `Deadline`, in `conduit` and in `conduit.tty`, for a program that waits on its own terminal without linking libc on Linux. `pipe(.{ .nonblocking = true })` makes both ends close-on-exec and, if asked, nonblocking: one `pipe2` where the system has it, and on Darwin `pipe` and `fcntl` under `ForkGap`, the lock conduit's spawns take, so no child conduit starts inherits it. `Deadline.fromTimeout(io, timeout)` reads a `std.Io.Timeout`; `remainingMs` and `windowsMs` (never `INFINITE`) round what is left up to whole milliseconds. `conduit.tty.ForkGap.hold(function, args)` makes a call inside that lock and leaves it however the call returns, for a program that opens a descriptor of its own in two calls; `opening_is_two_calls` says whether this system does.
+- Every wait with a bound takes a `std.Io.Timeout` instead of milliseconds, and every span (a grace, a drain, an interval) is a `std.Io.Duration`. `.none` waits as long as it takes; `Deadline.within(span)` is a timeout on the awake clock.
 
-- `Pty.open` on musl reports a failed `ptsname_r` by the error number musl returns. It read `errno`, which musl leaves as it was, so the error was whatever an earlier call had left there.
+  | was | is |
+  |---|---|
+  | `child.waitTimeout(io, timeout_ms)`, `child.waitTree(io, timeout_ms)` | `child.waitTimeout(io, timeout)`, `child.waitTree(io, timeout)` |
+  | `child.killWait(io, grace_ms)` | `child.killWait(io, grace)` |
+  | `OutputOptions.timeout_ms: ?u32 = null`, `.grace_ms`, `.drain_ms` | `.timeout: std.Io.Timeout = .none`, `.grace`, `.drain` |
+  | `ExchangeOptions.timeout_ms`, `.drain_ms` | `.timeout`, `.drain` |
+  | `Reaper.waitTimeout(io, timeout_ms)`, `Reaper.kill(io, grace_ms)`, `Reaper.Options.tree_grace_ms` | `Reaper.waitTimeout(io, timeout)`, `Reaper.kill(io, grace)`, `Reaper.Options.tree_grace` |
+  | `Orphans.killAll(io, grace_ms)` | `Orphans.killAll(io, grace)` |
+  | `expect.until`, `untilAny` and `bytes` with `timeout_ms` | the same with `timeout` |
+  | `CapturedPid.wait(io, timeout_ms)`, `Cgroup.waitEmpty(io, timeout_ms)`, `Cgroup.Recorded.waitEmpty(io, timeout_ms)` | the same with `timeout` |
+  | `RecordedOptions.grace_ms` | `RecordedOptions.grace` |
+  | `Proxy.Resize.interval_ms`, `.tick_ms` | `.interval`, `.tick` |
+  | `console.waitInput(handle, milliseconds)` | `console.waitInput(io, handle, timeout)`, a cancelation point that returns `console.WaitInputError` |
+  | `Deadline.in(io, milliseconds)` | `Deadline.in(io, span)` |
+
+- `Child.release(io)` is `Child.finish(io)`, and `Child.ReleaseError` is `Child.FinishError`. It ends an unfinished contained scope as before, but leaves the Child valid whatever it returns, so `deinit` is always owed after it. `Child.deinit` no longer asserts a confirmed scope: it kills and reaps one `finish` has not confirmed, reporting nothing, which makes `errdefer child.deinit(io)` safe.
+
+- `Child.Output` keeps the allocator that collected it: `Output.init(gpa, parts)`, and `output.deinit()` takes no allocator.
+
+- `Cgroup.release()` and `Cgroup.Recorded.release()` are `close()`: they close the handle and leave it empty, so they may be called again.
+
+- Requires Zig 0.17.0.
 
 - Renamed, so that each verb for ending something means one thing on every type: `kill` makes processes end, `close` ends a stream or handle, `stop` ends what `start` began, and `deinit` releases what a value holds and cannot fail. The old names are gone.
 
   | was | is | why |
   |---|---|---|
-  | `Reaper.stop(io, grace_ms)` | `Reaper.kill(io, grace_ms)` | it signals the child: terminate, then kill after the grace |
+  | `Reaper.stop(io, grace_ms)` | `Reaper.kill(io, grace)` | it signals the child: terminate, then kill after the grace |
   | `Reaper.end(io)`, `Reaper.EndError` | `Reaper.stop(io)`, `Reaper.StopError` | the counterpart of `Reaper.start`: joins the task, ends the adoption scope |
-  | `Orphans.end(io, grace_ms)`, `Orphans.EndError` | `Orphans.killAll(io, grace_ms)`, `Orphans.KillError` | it ends every adoptee |
+  | `Orphans.end(io, grace_ms)`, `Orphans.EndError` | `Orphans.killAll(io, grace)`, `Orphans.KillError` | it ends every adoptee |
   | `InputWriter.end(io)` | `InputWriter.close(io)` | it half-closes the input stream |
   | `endRecorded(io, options)`, `EndRecordedError` | `killRecorded(io, options)`, `KillRecordedError` | it signals a recorded process and its provable descendants |
 
@@ -27,32 +48,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The public types are ordinary Zig structs with private fields, no longer integer-backed enums whose state was cast out of their bits: `Child`, `Child.HeldReap`, `Child.Output`, `InputWriter`, `Reaper`, `Expect`, `Orphans`, `Orphans.Spawn`, `Pty`, `Shell`, `Cgroup`, `Cgroup.Recorded` and `CapturedPid`. Their methods are unchanged. A value can no longer be made with `@enumFromInt`; `Child` is a handle whose copies name the same child, released or deinited once. `Reaper`, `Expect` and `Orphans` assert in safe builds that they have not moved since `start`.
   - `Reaper` copies the `Child` handle at `start`, so the caller's `Child` may move afterwards; it must still not be deinited while the `Reaper` runs. `Child.HeldReap` holds the handle, not a pointer to it.
 
-- Named error sets, the same on every POSIX target: `StartTimeError`, `CaptureError`, `EndRecordedError` and `SignalGroupError`, returned by `startTime`, `captureStarted`, `endRecorded` and `CapturedPid.signalGroupSince`. `Child.ReleaseError` is `Child.KillWaitError`; `release` never returned a `waitTree` error.
-
-- `Child.kill` signals the child, or its group, even when the descendant walk cannot hold the tree, and reports `OutOfMemory` after; `killWait` then reaps the child before returning that error. On Linux the walk holds the tree rather than the whole process table, so it no longer fails on a host with a few thousand processes.
-
-- `Child.output` takes any allocator on every system, as `exchange` does: where it reads on tasks, their allocations are serialized.
-
-- `Child.exchange` refuses input for a child with no stdin pipe (`NoStdinPipe`) before it starts, and leaves the child running instead of killing and reaping it.
-
-- `Expect.until`, `untilAny` and `bytes` return `EndOfStream` once reading has stopped, instead of waiting out their timeout.
-
-- `Proxy.run` keeps carrying the child's output after `input` reaches end of file; only the output ending, or either direction failing, ends the call.
-
-- A spawn with `descendants = .contain` on Linux no longer hangs when the root's note that it could not join its cgroup arrives before its supervisor's report.
-
-- `output` no longer reaps a child whose reap a `Reaper` or `HeldReap` holds.
-
-- A project that depends on conduit builds: build.zig reaches its CI dependency only in conduit's own tree.
-
 - `deinit` cannot fail and leaves its value undefined, everywhere. Teardown that can fail, and be asked again, has its own name:
-  - `Reaper.end(io)` ends the task and the adoption scope, returning `Reaper.EndError`, which replaces `Reaper.DeinitError`; a second call does nothing, and a later `start` or `enableSubreaper` is `AlreadyStarted`. `Reaper.deinit(io)` returns nothing and, with `enableSubreaper`, follows a successful `end`.
+  - `Reaper.stop(io)` ends the task and the adoption scope, returning `Reaper.StopError`, which replaces `Reaper.DeinitError`; a second call does nothing, and a later `start` or `enableSubreaper` is `AlreadyStarted`. `Reaper.deinit(io)` returns nothing and, with `enableSubreaper`, follows a successful `stop`.
   - `Orphans.stop()` restores the subreaper setting and releases the scope, returning `Orphans.StopError`, which replaces `Orphans.DeinitError`. `Orphans.deinit()` returns nothing and follows a successful `stop` once started.
   - `Expect.stop(io)` ends the reading task for good and can be called again; a later `start` is `AlreadyStarted`. `Expect.deinit(io)` stops and leaves the value undefined.
-  - `Child.release(io)` on success leaves the Child undefined, as `deinit` does: release or deinit a Child, never both. `Child.deinit` is no longer idempotent, and after either no method may be called: there is no closed Child for `processId`, `wait`, `tryWait`, `kill` or the stream accessors to answer `null` or `ReapedElsewhere` for.
+  - `Child.finish(io)` ends an unfinished contained scope, reports what that met and leaves the Child valid, so it can be asked again; `deinit` is still owed after it, and kills and reaps a scope `finish` has not confirmed, reporting nothing, so `errdefer child.deinit(io)` is safe. `Child.deinit` is no longer idempotent, and after it no method may be called: there is no closed Child for `processId`, `wait`, `tryWait`, `kill` or the stream accessors to answer `null` or `ReapedElsewhere` for.
   - `Child.Output.deinit` and `InputWriter.deinit` are no longer idempotent; `InputWriter.cancel` is the call that can be made again.
-
-- `Child.Output.init(parts)` is public: an `Output` made from bytes the caller allocated, which it frees at `deinit`.
 
 - The allocator comes before the `std.Io`, as in the standard library: `Child.spawn(allocator, io, options)`, `child.inputWriter(allocator, io, options)`, `child.output(allocator, io, options)`, `child.exchange(allocator, io, input, options)`, `spawnShell(allocator, io, options)` and `findProgram(allocator, io, environ, name)`. `readAvailable` takes the `std.Io` first, `readAvailable(io, file, buffer)`. `Shell.SpawnError` is what `spawnShell` fails with; `SpawnShellError` names the same set.
 
@@ -60,15 +61,65 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `setWinSize`, `ttyName`, `foregroundGroup`, `Pty.slaveFile`, `Child.Signal.toPosix`, `Child.waitTree`, `startTime`, `captureStarted` and `endRecorded` are functions rather than constants chosen per system. On a system without them, calling one is the compile error that says why; naming one without calling it no longer is.
 
-- `CONDUIT_TRACE` lines go through `std.log` at the info level under the `conduit` scope, and the `GetLastError` number behind an `error.Unexpected` on Windows at the warning level, so the program's log function and level decide where they go, instead of standard error.
+- Contained Windows waits publish the root status only after ending the Job and confirming that every member has ended.
 
-- Use the native terminal fixture for the Windows cursor passthrough comparison.
+- `Child.finish` reports contained cleanup failures and keeps the Child for another call; `Child.deinit` ends a scope `finish` has not confirmed without reporting.
 
-- Share the Zig CI gate through preflight, with requested fast runs and full merge checks.
+- Reaper.deinit and Orphans.deinit report failed completion and retain their scope for retry until every direct child and adoptee is reaped.
 
-- Keep namespace entry files beside their directories; put InputWriter internals in `src/InputWriter/` and orphan records in `src/Orphans/`.
+- `Orphans.Spawn` keeps its adoption gate claim opaque; callers use `begin`, `started` and `finish`.
 
-- Keep the Child implementation and its tests in `src/Child/`, and test helpers in `src/testing/`.
+- `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.
+
+- `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.
+
+- `Orphans.Record` also copies group and session from the same verified adoption snapshot as its start time.
+
+- `Cgroup.prepare` returns an opaque handoff; `joinDescriptor` borrows its descriptor and `started` or `abandon` consumes ownership.
+
+- `Pty` keeps descriptors and Windows geometry opaque; `readHandle`, `writeHandle`, `slaveHandle` and `consoleOptions` borrow or copy observations.
+
+- `Child` hides lifecycle and owned pipes; `stdinFile`, `stdoutFile`, `stderrFile` and `terminalMaster` borrow streams, and `takeStdin`, `takeStdout` and `takeStderr` transfer pipes.
+
+- `InputWriter` keeps its allocated queue and pipe ownership behind an opaque value; callers construct it through its methods.
+
+- `Orphans.list` copies `Record` values with pid and start time captured during adoption, and reports `IdentityUnavailable` instead of returning an unverified number.
+
+- `Cgroup` and `Cgroup.Recorded` keep directory ownership opaque in fixed storage; their observation and cleanup methods retain their signatures.
+
+- `Orphans` keeps adoption and lifecycle state opaque in fixed storage; its methods own every list and notification.
+
+- `Expect` keeps conversation state opaque in fixed storage; construction and observations use its methods.
+
+- `Pty.open` takes a caller allocator retained for Windows geometry until every end closes; `spawnShell` forwards its allocator.
+
+- `HeldReap` and Reaper state are opaque; `Reaper.StartError` includes `AlreadyStarted`, and a successful start or deinit prevents another start in that lifetime.
+
+- `CapturedPid` is opaque; `processId()` replaces its numeric field, and Darwin captures retain process identity across exec while checking refreshed audit versions for signal delivery.
+
+- `Pty.size` borrows a pointer; Windows geometry is opaque and synchronized with the OS resize, so stream borrows never copy a changing cache.
+
+- Child owns opaque lifecycle state until `deinit`; `processId` and `result` synchronize identity and result access, replacing public handles and mutable lifecycle fields.
+
+- Conduit owns `Term`, whose `exited` payload and `exitCode` retain all 32 bits of a Windows exit status.
+
+- Blocking Child waits and Reaper report `ReapedElsewhere` when another owner took the child's status.
+
+- `conduit.signalDescendants` and `conduit.signalGroupSince` on a bare pid are
+  gone: a pid can be reused during the walk. `CapturedPid.signalDescendants`,
+  `CapturedPid.signalGroupSince` and `endRecorded` reach a recorded process
+  through a held identity; a live child is ended with `Child.kill`.
+
+- `Reaper.init` takes `Reaper.Options`: `.init(&child, .{})` is the
+  behaviour it had.
+
+### Added
+
+- `Deadline.within(span)`, `Deadline.of(io, timeout)`, `Deadline.never`, `deadline.min(other)`, `deadline.remaining(io)` and `deadline.toTimeout()`, for a caller that holds its own deadline across several waits.
+
+- `pipe(options)`, `PipeOptions`, `PipeError` and `Deadline`, in `conduit` and in `conduit.tty`, for a program that waits on its own terminal without linking libc on Linux. `pipe(.{ .nonblocking = true })` makes both ends close-on-exec and, if asked, nonblocking: one `pipe2` where the system has it, and on Darwin `pipe` and `fcntl` under `ForkGap`, the lock conduit's spawns take, so no child conduit starts inherits it. `Deadline.fromTimeout(io, timeout)` reads a `std.Io.Timeout`; `remainingMs` and `windowsMs` (never `INFINITE`) round what is left up to whole milliseconds. `conduit.tty.ForkGap.hold(function, args)` makes a call inside that lock and leaves it however the call returns, for a program that opens a descriptor of its own in two calls; `opening_is_two_calls` says whether this system does.
+
+- `Child.Output.init(gpa, parts)` is public: an `Output` made from bytes the caller allocated with `gpa`, which keeps it and frees them at `deinit()`.
 
 - `Child.waitTree` works on Linux for a child in a cgroup of its own: it waits for `cgroup.events` to say the cgroup has emptied, woken by the change, and is `Unsupported` for a child given no cgroup. A recorded cgroup's `waitEmpty` reads the file only when the change wakes it.
 
@@ -76,17 +127,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Child.kill` sends any POSIX signal to the child and what it started, aimed as the three requests to end are: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"` and `.window_change` by name, any other by number with `.{ .posix = … }`. Only `.interrupt`, `.terminate` and `.kill` end the tree with the child. Windows refuses the others with `Unsupported`. `Child.Signal` is a tagged union now; `.interrupt`, `.terminate` and `.kill` are spelled as before.
 
-- `tty.openControlling` on macOS opens the terminal under the device name a standard stream has open on it, when one has, so `poll` can wait on it (`/dev/tty` answers `POLLNVAL` there).
-
 - `readAvailable` reads what a pipe holds now without waiting for more, POSIX and Windows: once a child has ended, the rest of what it wrote, even while something it started still holds the pipe open.
-
-- `spawn` refuses an argument holding a NUL with `InvalidArgv`. It ended the argument where it stood, and on Windows ended the command line there, so the child received fewer arguments than it was given.
-
-- A wait status is decoded from its sixteen bits, so a word with higher bits set cannot panic in Darwin's `EXITSTATUS`.
-
-- A `/proc/self/cgroup` line the read stopped in the middle of is no longer taken as this process's cgroup.
-
-- `environ.inherit` reads this process's environment as `getenv` does: an entry with no `=` or no name is left out instead of crashing the map, and a name given twice keeps its first value.
 
 - `tty.openControlling` opens the process's own terminal, `/dev/tty` or the console's `CONIN$` and `CONOUT$`, and `tty.console` declares `CreateFileW` and `WriteFile`, which conduit's own Windows code now takes from there.
 
@@ -98,212 +139,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `bootIdentity` and `parseBootIdentity` are public: the checked identity of this boot, and the same check for one read back from a record, so a consumer compares boots without reading `boot_id` itself.
 
-- Collect Darwin output with the retained exit watcher, including when the child exited before collection began.
-
-- Skip the final Darwin group enumeration when the held root exited without ever forking.
-
-- Retain Darwin exit events from before spawn so a killed tree does not fall back to a sleeping wait.
-
-- Reject undeclared dependencies, duplicate layer membership and imports of source executables.
-
-- Keep Darwin captures distinct from the platform-selected process fixture.
-
-- Preserve platform selection and private process captures in the relocated identity tests.
-- Check containment comments at their shared contract owner.
-
-- Keep child contracts below lifecycle storage and assemble owner tests above their implementations.
-
-- Check named source layers, cycles, entry files and dependency owners during source CI.
-
-- Bound local Zig build caches before builds, retaining downloaded packages and tools.
-- The former Windows Job-close fixture now requires the grandchild to have ended before lifecycle release.
-
-- Contained Windows completion also consumes the Job termination notification, retaining the pending wait after accounting reaches zero.
-
-- The macOS platform table and containment policy comment state the measured fork/registration escape window and its observation boundary.
-
-- Breaking: contained Windows waits publish the root status only after ending the Job and confirming that every member has ended.
-
-- Breaking: `Child.release` reports contained cleanup failures and retains ownership for retry; `Child.deinit` requires confirmed scope completion.
-
-- Private Linux supervisors have their own sessions and process groups, and end their scopes on catchable stops.
-
-- A recorded private scope stop stays pending until its supervisor observes it, including before the first poll.
-- Contained Linux children have independent private subreaper supervisors, exact root status and saved scope identities, with orphan cleanup and reaping even without writable cgroups.
 - Reaper exposes copied adoption records and notifications without lending its scope owner.
-
-- A subreaper Reaper observes and reaps adopted exits even while another task owns the root wait.
-
-- Breaking: Reaper.deinit and Orphans.deinit report failed completion and retain their scope for retry until every direct child and adoptee is reaped.
 
 - `Reaper.enableSubreaper` explicitly owns Linux adoption before spawn, ends and reaps its process-wide orphan set on contained completion, and reaps adopted exits while the root waits; registered direct children keep their own statuses.
 
-- Contained macOS children retain observed fork, exec and exit lineage across double-forks and session changes, with identity-safe ending and an explicitly measured registration race.
-
-| Platform | Containment after normal exit |
-| --- | --- |
-| Linux with a writable cgroup | Ends all members before reaping, including detached orphans; a process permitted to leave the cgroup can escape. |
-| Linux without a writable cgroup, with a Reaper subreaper scope | Reaper completion ends and reaps the process-wide adopted set, including detached orphans; direct children keep their own waits. |
-| Linux without either | Ends the private group before reaping; an orphan that left the group can escape. |
-| macOS | Ends the private group and observed lineage before reaping; a fork followed by parent exit before enumeration or registration can escape. |
-| Windows | Job Objects retain descendants across separate consoles and intermediate exits; deinit ends the members. |
-| Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
-
-The subreaper scope requires conduit for every new direct child, no outside global reaper, and all direct children ended and reaped before teardown; it does not assign adopted orphans to individual children.
-
 - `SpawnOptions.descendants` chooses one lifecycle policy on every platform: the default `.survive` leaves descendants alone after normal, reaped completion, including Windows daemons; `.contain` ends survivors through job kill-on-close or a private POSIX group or Linux cgroup. Timeout, output error and explicit termination retain tree cleanup.
-- Native daemon tests prove default survival, containment through every reap path, and termination on timeout, kill, killWait and output error; Windows runs them on the hosted runner.
-
-- Force delivery retains group cleanup through the final held reap, catching a late fork before identity retirement; Reaper stop spends one grace on its owned tree.
-
-- Deadline expiry tests use controlled clock readings instead of elapsed wall time.
-
-- Adoption spawn handoffs reject registration after success or finish, so a released gate cannot authorize later ownership.
-
-- Breaking: `Orphans.Spawn` keeps its adoption gate claim opaque; callers use `begin`, `started` and `finish`.
-
-- Every test has an independent native watchdog through Io teardown, reporting its name, source module and phase before the runner can lose contact.
-
-- Breaking: `Child.Output` keeps collected allocation ownership opaque; byte slices and result flags are borrowed or copied through methods.
-
-- Breaking: `Shell` owns its child and pair in opaque storage; `child()` and `pty()` borrow them for their methods.
-
-- Breaking: `Orphans.Record` also copies group and session from the same verified adoption snapshot as its start time.
-
-- Breaking: `Cgroup.prepare` returns an opaque handoff; `joinDescriptor` borrows its descriptor and `started` or `abandon` consumes ownership.
-
-- Breaking: `Pty` keeps descriptors and Windows geometry opaque; `readHandle`, `writeHandle`, `slaveHandle` and `consoleOptions` borrow or copy observations.
-
-- Breaking: `Child` hides lifecycle and owned pipes; `stdinFile`, `stdoutFile`, `stderrFile` and `terminalMaster` borrow streams, and `takeStdin`, `takeStdout` and `takeStderr` transfer pipes.
-
-- Breaking: `InputWriter` keeps its allocated queue and pipe ownership behind an opaque value; callers construct it through its methods.
-
-- Forked PTY children preserve standard streams that replaced a master descriptor in a standard slot.
-
-- Program lookup documentation distinguishes missing and empty PATH values and describes relative paths without search.
-
-- Cgroup handoffs consume their join descriptor and directory ownership once, so repeated cleanup cannot close a recycled descriptor or release the transferred cgroup.
-
-- Deferred cgroup cleanup retains owned directory handles and verifies their identity before removal, leaving replacement directories alone.
-
-- Orphan identity capture verifies pidfd reap ownership after reading start time, refusing a process number recycled during the lookup.
-
-- Orphans refuses new reap ownership when pidfd waitid cannot verify it, while retaining existing holds until retirement is known.
-
-- Expect waits for a buffer-space event when full, with discard and consumption waking the reader instead of an interval timer.
-
-- Expect deinit closes its lifetime before canceling, so even a never-started reader cannot be started afterwards.
-
-- Breaking: `Orphans.list` copies `Record` values with pid and start time captured during adoption, and reports `IdentityUnavailable` instead of returning an unverified number.
-
-- Breaking: `Cgroup` and `Cgroup.Recorded` keep directory ownership opaque in fixed storage; their observation and cleanup methods retain their signatures.
-
-- Breaking: `Orphans` keeps adoption and lifecycle state opaque in fixed storage; its methods own every list and notification.
-
-- Breaking: `Expect` keeps conversation state opaque in fixed storage; construction and observations use its methods.
 
 - `InputWriter.isOpen(io)` gives adapters an uncancelable acceptance snapshot, independent of backlog space.
 
-- Breaking: `Pty.open` takes a caller allocator retained for Windows geometry until every end closes; `spawnShell` forwards its allocator.
-
-- The root API documentation describes the stable Darwin process identity and the audit version checked at delivery.
-
-- `Child.output` reads a published result before opening an exit watch, draining an already reaped child without watching its retired process number.
-
-- Proxy resize forwarding checks cancellation even when tickets keep changing, yields for zero intervals, and measures each refresh interval by one deadline.
-
-- Unit tests count spawn calls, native wait sleeps and stop tasks instead of asserting speed; deadline tests use controlled clocks, and timing claims live on the bench branch.
-
-- Breaking: `HeldReap` and Reaper state are opaque; `Reaper.StartError` includes `AlreadyStarted`, and a successful start or deinit prevents another start in that lifetime.
-
-- Breaking: `CapturedPid` is opaque; `processId()` replaces its numeric field, and Darwin captures retain process identity across exec while checking refreshed audit versions for signal delivery.
-
 - `Child.containment` copies the detached group and Linux cgroup path, directory identity and boot identity for records retained through retirement.
-
-- Windows whole writes report `BrokenPipe` for a pipe whose peer has closed, including the closing state Zig 0.16 reports as `Unexpected`.
-
-- Whole writes check cancellation after zero progress, through one file helper shared by `InputWriter`, `Expect`, and `Proxy`.
 
 - `Child.inputWriter` transfers stdin to a bounded `InputWriter` task, with ordered delivery and end, retained write failures, and cancellation that joins before closure.
 
-- POSIX tree fixtures end and reap their owned descendant on every return, including a failed report.
-
-- Signal-name documentation distinguishes Windows wait results from a supplied signal term.
-
-- Reaper documentation states the resource and result ownership behind its one-start lifetime.
-
-- A refused group signal addresses the still-held child directly before reporting permission denial, covering Darwin's exit-to-wait observation gap.
-
-- Recorded-tree fixtures report a stopped descendant after the kernel confirms readiness and observe its exit through the held identity after kill delivery.
-
-- Windows tree fixtures create a native descendant in a separate console with no inherited pipes, and prove the parent's streams ended before closing them.
-
-- Windows program lookup refuses directories and batch scripts as spawn does, sharing the same batch-file policy.
-
-- Documentation describes opaque lifecycle ownership, exit observation before reaping, and complete Windows exit statuses.
-
-- Windows tree fixtures retry successful empty reads, launch direct children and prove a live grandchild belongs to the specific job before testing cleanup.
-
-- A Reaper started after observed status loss reports `ReapedElsewhere` before watching or addressing the retired process identity.
-
-- A rejected Reaper start closes its wake pipe before returning, so retrying cannot overwrite and leak its descriptors.
-
-- PID fixtures report malformed or missing output and stop when the stream ends; Windows tree fixtures report the failing stage, child result, stdout, stderr and process-open errors.
-
-- Breaking: `Pty.size` borrows a pointer; Windows geometry is opaque and synchronized with the OS resize, so stream borrows never copy a changing cache.
-
-- Breaking: Child owns opaque lifecycle state until `deinit`; `processId` and `result` synchronize identity and result access, replacing public handles and mutable lifecycle fields.
-
-- Breaking: conduit owns `Term`, whose `exited` payload and `exitCode` retain all 32 bits of a Windows exit status.
-
-- Breaking: blocking Child waits and Reaper report `ReapedElsewhere` when another owner took the child's status.
-
-- A deadline keeps its final fraction of a millisecond until it has actually elapsed, so tree cleanup cannot cut a grace short by rounding it down.
-- Forked children reset ignored real-time signals as well as named signals, while leaving numbers reserved by libc alone.
-- Fork handshakes keep their control pipes above standard descriptors, so placing streams cannot overwrite an exec failure report when the parent's streams were closed.
-- Descendant signalling proves ancestry through held process identities before delivery, so a recycled pid in a snapshot cannot authorize a signal to a stranger.
-- Reaper tree cleanup and task-based output draining measure their remaining budgets against clock deadlines, including interrupted polls and delayed wakes.
-- A Reaper started after the child was reaped returns its published term before opening a watch or addressing the old process group.
-- Signalling and final reaping share the child's identity, so a concurrent wait cannot release its pid or close its Windows handles during delivery.
 - `Orphans.list` names the adopted processes still running after a look, so
   a program can write them down for a later one to end.
-- A detached child on a pseudo-terminal is started by `posix_spawn` on Linux:
-  `POSIX_SPAWN_SETSID` gives it a session, and the terminal opened by name in
-  that session becomes its controlling terminal, so its process group, its
-  window size and the end of what it started are those of a forked one.
-  macOS and the BSDs keep the fork for it, since a terminal becomes
-  controlling there only through the `TIOCSCTTY` ioctl.
+
 - `Cgroup.openRecorded` returns a separate, allocation-free `Cgroup.Recorded`
   handle. It holds the cgroup and its parent by descriptor, checks the saved
   inode through that parent, and removes the empty directory with `unlinkat`.
   A record must also carry the boot id. POSIX process snapshots now use
   bounded stack storage and report `error.OutOfMemory` when it is exhausted.
-- Bounded waits on every platform now use one clock-based deadline type.
-- `CapturedPid.signalDescendants` checks the captured root again after the
-  descendant walk, before signalling, including its audit token on Darwin.
-- `CapturedPid.signalGroupSince` anchors a Linux group reach to its captured
-  leader. Darwin reaches a captured session leader's group through audit
-  tokens; an ordinary group remains `error.Unsupported` because another
-  process in that session can join it.
+
 - `conduit.console` exposes typed Windows console input records and waits,
   peeks and reads through a small API.
+
 - `CapturedPid.wait` and `Cgroup.waitEmpty` wait on kernel events with clock
   deadlines. `endRecorded` asks and then forces a recorded process and the
   descendants it can prove, using a verified cgroup for a complete Linux tree.
-- Tests that wait for process state now compare a clock deadline rather than
-  counting sleep iterations, so a descheduled test keeps its original budget.
-
-### Breaking
-
-- `conduit.signalDescendants` and `conduit.signalGroupSince` on a bare pid are
-  gone: a pid can be reused during the walk. `CapturedPid.signalDescendants`,
-  `CapturedPid.signalGroupSince` and `endRecorded` reach a recorded process
-  through a held identity; a live child is ended with `Child.kill`.
-
-- `Reaper.init` takes `Reaper.Options`: `.init(&child, .{})` is the
-  behaviour it had.
-
-### Added
 
 - `Orphans`: on Linux, opt-in, this process as the parent of every orphan
   below it (`PR_SET_CHILD_SUBREAPER`), for a program that starts every child
@@ -392,6 +254,86 @@ The subreaper scope requires conduit for every new direct child, no outside glob
 
 ### Changed
 
+- Windows whole writes report `BrokenPipe` for a pipe whose reader has closed, including the closing state Zig 0.16 reported as `Unexpected`. The standard library now maps that state itself, so conduit no longer asks the pipe before and after each write.
+
+- Named error sets, the same on every POSIX target: `StartTimeError`, `CaptureError`, `EndRecordedError` and `SignalGroupError`, returned by `startTime`, `captureStarted`, `endRecorded` and `CapturedPid.signalGroupSince`. `Child.FinishError` is `Child.KillWaitError`; `finish` never returns a `waitTree` error.
+
+- `Child.kill` signals the child, or its group, even when the descendant walk cannot hold the tree, and reports `OutOfMemory` after; `killWait` then reaps the child before returning that error. On Linux the walk holds the tree rather than the whole process table, so it no longer fails on a host with a few thousand processes.
+
+- `Child.output` takes any allocator on every system, as `exchange` does: where it reads on tasks, their allocations are serialized.
+
+- `Proxy.run` keeps carrying the child's output after `input` reaches end of file; only the output ending, or either direction failing, ends the call.
+
+- `CONDUIT_TRACE` lines go through `std.log` at the info level under the `conduit` scope, and the `GetLastError` number behind an `error.Unexpected` on Windows at the warning level, so the program's log function and level decide where they go, instead of standard error.
+
+- `tty.openControlling` on macOS opens the terminal under the device name a standard stream has open on it, when one has, so `poll` can wait on it (`/dev/tty` answers `POLLNVAL` there).
+
+- Collect Darwin output with the retained exit watcher, including when the child exited before collection began.
+
+- Skip the final Darwin group enumeration when the held root exited without ever forking.
+
+- Retain Darwin exit events from before spawn so a killed tree does not fall back to a sleeping wait.
+
+- Private Linux supervisors have their own sessions and process groups, and end their scopes on catchable stops.
+
+- Contained Linux children have independent private subreaper supervisors, exact root status and saved scope identities, with orphan cleanup and reaping even without writable cgroups.
+
+- A subreaper Reaper observes and reaps adopted exits even while another task owns the root wait.
+
+- Contained macOS children retain observed fork, exec and exit lineage across double-forks and session changes, with identity-safe ending and an explicitly measured registration race.
+
+| Platform | Containment after normal exit |
+| --- | --- |
+| Linux with a writable cgroup | Ends all members before reaping, including detached orphans; a process permitted to leave the cgroup can escape. |
+| Linux without a writable cgroup, with a Reaper subreaper scope | Reaper completion ends and reaps the process-wide adopted set, including detached orphans; direct children keep their own waits. |
+| Linux without either | Ends the private group before reaping; an orphan that left the group can escape. |
+| macOS | Ends the private group and observed lineage before reaping; a fork followed by parent exit before enumeration or registration can escape. |
+| Windows | Job Objects retain descendants across separate consoles and intermediate exits; deinit ends the members. |
+| Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
+
+The subreaper scope requires conduit for every new direct child, no outside global reaper, and all direct children ended and reaped before teardown; it does not assign adopted orphans to individual children.
+
+- Force delivery retains group cleanup through the final held reap, catching a late fork before identity retirement; Reaper stop spends one grace on its owned tree.
+
+- Expect waits for a buffer-space event when full, with discard and consumption waking the reader instead of an interval timer.
+
+- Expect deinit closes its lifetime before canceling, so even a never-started reader cannot be started afterwards.
+
+- `Child.output` reads a published result before opening an exit watch, draining an already reaped child without watching its retired process number.
+
+- Proxy resize forwarding checks cancellation even when tickets keep changing, yields for zero intervals, and measures each refresh interval by one deadline.
+
+- Whole writes check cancellation after zero progress, through one file helper shared by `InputWriter`, `Expect`, and `Proxy`.
+
+- Windows program lookup refuses directories and batch scripts as spawn does, sharing the same batch-file policy.
+
+- Forked children reset ignored real-time signals as well as named signals, while leaving numbers reserved by libc alone.
+
+- Fork handshakes keep their control pipes above standard descriptors, so placing streams cannot overwrite an exec failure report when the parent's streams were closed.
+
+- Descendant signalling proves ancestry through held process identities before delivery, so a recycled pid in a snapshot cannot authorize a signal to a stranger.
+
+- Reaper tree cleanup and task-based output draining measure their remaining budgets against clock deadlines, including interrupted polls and delayed wakes.
+
+- Signalling and final reaping share the child's identity, so a concurrent wait cannot release its pid or close its Windows handles during delivery.
+
+- A detached child on a pseudo-terminal is started by `posix_spawn` on Linux:
+  `POSIX_SPAWN_SETSID` gives it a session, and the terminal opened by name in
+  that session becomes its controlling terminal, so its process group, its
+  window size and the end of what it started are those of a forked one.
+  macOS and the BSDs keep the fork for it, since a terminal becomes
+  controlling there only through the `TIOCSCTTY` ioctl.
+
+- Bounded waits on every platform now use one clock-based deadline type.
+
+- `CapturedPid.signalDescendants` checks the captured root again after the
+  descendant walk, before signalling, including its audit token on Darwin.
+
+- `CapturedPid.signalGroupSince` anchors a Linux group reach to its captured
+  leader. Darwin reaches a captured session leader's group through audit
+  tokens; an ordinary group remains `error.Unsupported` because another
+  process in that session can join it.
+
 - On Darwin a child that has never forked is stopped with its signal alone,
   without the descendant walk: `Child.kill` walked with `proc_listchildpids`,
   a pass over the whole process table, twice for `.kill`, and a child with no
@@ -436,6 +378,52 @@ The subreaper scope requires conduit for every new direct child, no outside glob
   shorter. A system that refuses the flag gets the second call as before.
 
 ### Fixed
+
+- `Pty.open` on musl reports a failed `ptsname_r` by the error number musl returns. It read `errno`, which musl leaves as it was, so the error was whatever an earlier call had left there.
+
+- `Child.exchange` refuses input for a child with no stdin pipe (`NoStdinPipe`) before it starts, and leaves the child running instead of killing and reaping it.
+
+- `Expect.until`, `untilAny` and `bytes` return `EndOfStream` once reading has stopped, instead of waiting out their timeout.
+
+- A spawn with `descendants = .contain` on Linux no longer hangs when the root's note that it could not join its cgroup arrives before its supervisor's report.
+
+- `output` no longer reaps a child whose reap a `Reaper` or `HeldReap` holds.
+
+- A project that depends on conduit builds: build.zig reaches its CI dependency only in conduit's own tree.
+
+- `spawn` refuses an argument holding a NUL with `InvalidArgv`. It ended the argument where it stood, and on Windows ended the command line there, so the child received fewer arguments than it was given.
+
+- A wait status is decoded from its sixteen bits, so a word with higher bits set cannot panic in Darwin's `EXITSTATUS`.
+
+- A `/proc/self/cgroup` line the read stopped in the middle of is no longer taken as this process's cgroup.
+
+- `environ.inherit` reads this process's environment as `getenv` does: an entry with no `=` or no name is left out instead of crashing the map, and a name given twice keeps its first value.
+
+- Contained Windows completion also consumes the Job termination notification, retaining the pending wait after accounting reaches zero.
+
+- A recorded private scope stop stays pending until its supervisor observes it, including before the first poll.
+
+- Adoption spawn handoffs reject registration after success or finish, so a released gate cannot authorize later ownership.
+
+- Forked PTY children preserve standard streams that replaced a master descriptor in a standard slot.
+
+- Cgroup handoffs consume their join descriptor and directory ownership once, so repeated cleanup cannot close a recycled descriptor or release the transferred cgroup.
+
+- Deferred cgroup cleanup retains owned directory handles and verifies their identity before removal, leaving replacement directories alone.
+
+- Orphan identity capture verifies pidfd reap ownership after reading start time, refusing a process number recycled during the lookup.
+
+- Orphans refuses new reap ownership when pidfd waitid cannot verify it, while retaining existing holds until retirement is known.
+
+- A refused group signal addresses the still-held child directly before reporting permission denial, covering Darwin's exit-to-wait observation gap.
+
+- A Reaper started after observed status loss reports `ReapedElsewhere` before watching or addressing the retired process identity.
+
+- A rejected Reaper start closes its wake pipe before returning, so retrying cannot overwrite and leak its descriptors.
+
+- A deadline keeps its final fraction of a millisecond until it has actually elapsed, so tree cleanup cannot cut a grace short by rounding it down.
+
+- A Reaper started after the child was reaped returns its published term before opening a watch or addressing the old process group.
 
 - `Expect.deinit` on Windows did not return within thirty seconds when the
   console was still open. It asked the read to stop with `CancelIoEx`, and
@@ -944,7 +932,6 @@ pass found missing.
   Windows, because `STARTF_USESTDHANDLES` is all or nothing and a null slot is
   not "leave it alone". It inherits on both now.
 
-
 ## [0.2.0] - 2026-09-13
 
 Windows, through pseudoconsoles, behind the same API, which changed shape to
@@ -1047,6 +1034,9 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.1
+[0.5.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.4.0
 [0.3.2]: https://github.com/pedronaugusto/conduit/releases/tag/v0.3.2
 [0.3.1]: https://github.com/pedronaugusto/conduit/releases/tag/v0.3.1

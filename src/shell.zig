@@ -104,18 +104,18 @@ pub const SpawnShellError = Shell.SpawnError;
 ///
 /// On success the caller owns the `Shell` and must reap the child and call
 /// `Shell.deinit`. On Windows the allocator must outlive the Shell.
-pub fn spawnShell(allocator: Allocator, io: std.Io, options: Options) SpawnShellError!Shell {
+pub fn spawnShell(gpa: Allocator, io: std.Io, options: Options) SpawnShellError!Shell {
     var owned_program: ?[]u8 = null;
-    defer if (owned_program) |program| allocator.free(program);
+    defer if (owned_program) |program| gpa.free(program);
     const program = options.program orelse program: {
-        owned_program = try defaultShell(allocator);
+        owned_program = try defaultShell(gpa);
         break :program owned_program.?;
     };
 
     var argv: std.ArrayList([]const u8) = .empty;
-    defer argv.deinit(allocator);
-    try argv.append(allocator, program);
-    try argv.appendSlice(allocator, options.args);
+    defer argv.deinit(gpa);
+    try argv.append(gpa, program);
+    try argv.appendSlice(gpa, options.args);
 
     // Built here and freed on the way out: `Child.spawn` copies everything it
     // needs before there is a child at all.
@@ -124,11 +124,11 @@ pub fn spawnShell(allocator: Allocator, io: std.Io, options: Options) SpawnShell
     const environ_map: ?*const std.process.Environ.Map = map: {
         if (options.environ) |given| break :map given;
         const term = options.term orelse break :map null;
-        inherited = try environ.inherit(allocator, &.{.{ .name = "TERM", .value = term }});
+        inherited = try environ.inherit(gpa, &.{.{ .name = "TERM", .value = term }});
         break :map &inherited.?;
     };
 
-    var pty: Pty = try .open(allocator, .{
+    var pty: Pty = try .open(gpa, .{
         .rows = options.size.rows,
         .cols = options.size.cols,
         .x_pixel = options.size.x_pixel,
@@ -137,14 +137,14 @@ pub fn spawnShell(allocator: Allocator, io: std.Io, options: Options) SpawnShell
     });
     errdefer pty.close(io);
 
-    var child = try Child.spawn(allocator, io, .{
+    var child = try Child.spawn(gpa, io, .{
         .argv = argv.items,
         .cwd = options.cwd,
         .environ = environ_map,
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
     });
-    errdefer _ = child.killWait(io, 0) catch {};
+    errdefer _ = child.killWait(io, .zero) catch {};
 
     if (!is_windows) pty.closeSlave(io);
 
@@ -152,11 +152,11 @@ pub fn spawnShell(allocator: Allocator, io: std.Io, options: Options) SpawnShell
 }
 
 /// The user's shell, or the one every system is guaranteed to have.
-fn defaultShell(allocator: Allocator) Allocator.Error![]u8 {
-    if (try fromEnvironment(allocator, if (is_windows) "COMSPEC" else "SHELL")) |program| {
+fn defaultShell(gpa: Allocator) Allocator.Error![]u8 {
+    if (try fromEnvironment(gpa, if (is_windows) "COMSPEC" else "SHELL")) |program| {
         return program;
     }
-    return allocator.dupe(u8, if (is_windows) "cmd.exe" else "/bin/sh");
+    return gpa.dupe(u8, if (is_windows) "cmd.exe" else "/bin/sh");
 }
 
 /// An owned copy of one variable from this process's environment.
@@ -165,7 +165,7 @@ fn defaultShell(allocator: Allocator) Allocator.Error![]u8 {
 /// copied rather than pointed at. `GetEnvironmentVariableW` does the copying:
 /// one call, rather than a walk of the process environment block under the
 /// loader's lock with an assertion about every entry it passes.
-fn fromEnvironment(allocator: Allocator, name: []const u8) Allocator.Error!?[]u8 {
+fn fromEnvironment(gpa: Allocator, name: []const u8) Allocator.Error!?[]u8 {
     if (is_windows) {
         var value: [max_program_units]u16 = undefined;
         // Three bytes of WTF-8 for every WTF-16 unit is the worst case.
@@ -188,7 +188,7 @@ fn fromEnvironment(allocator: Allocator, name: []const u8) Allocator.Error!?[]u8
         // been written and there is nothing to read.
         if (written == 0 or written >= value.len) return null;
         const len = std.unicode.wtf16LeToWtf8(&buffer, value[0..written]);
-        const program = try allocator.dupe(u8, buffer[0..len]);
+        const program = try gpa.dupe(u8, buffer[0..len]);
         return program;
     }
     var index: usize = 0;
@@ -199,7 +199,7 @@ fn fromEnvironment(allocator: Allocator, name: []const u8) Allocator.Error!?[]u8
         if (pair[name.len] != '=') continue;
         const value = pair[name.len + 1 ..];
         if (value.len == 0) continue;
-        const program = try allocator.dupe(u8, value);
+        const program = try gpa.dupe(u8, value);
         return program;
     }
     return null;

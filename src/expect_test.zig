@@ -26,6 +26,8 @@ const Deadline = @import("conduit.tty").Deadline;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;
+const budget: std.Io.Duration = .fromMilliseconds(budget_ms);
+const within_budget: std.Io.Timeout = .{ .duration = .{ .raw = budget, .clock = .awake } };
 
 test "a canceled reading task publishes that it finished" {
     const io = testing.io;
@@ -62,15 +64,15 @@ test "start refuses to put a second reader over the buffer" {
         .argv = argv,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
 
     var buffer: [64]u8 = undefined;
     var expect = child.expect(&buffer).?;
     try expect.start(io);
     defer expect.deinit(io);
     try testing.expectError(error.AlreadyStarted, expect.start(io));
-    try testing.expectEqualStrings("one reader", (try expect.until(io, "one reader", budget_ms)).found);
+    try testing.expectEqualStrings("one reader", (try expect.until(io, "one reader", within_budget)).found);
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
 }
 
@@ -88,8 +90,8 @@ test "a conversation over pipes: wait for what the child echoes, then answer" {
         .argv = argv,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -97,7 +99,7 @@ test "a conversation over pipes: wait for what the child echoes, then answer" {
     defer expect.deinit(io);
 
     try expect.send(io, "a line\n");
-    const match = try expect.until(io, "you said a line", budget_ms);
+    const match = try expect.until(io, "you said a line", within_budget);
     try testing.expectEqualStrings("you said a line", match.found);
 
     child.closeStdin(io);
@@ -123,8 +125,8 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
         .stdio = .{ .pty = &pty },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
     pty.closeSlave(io);
 
     var buffer: [1024]u8 = undefined;
@@ -135,12 +137,12 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
     // Each wait consumes through its pattern, so the second prompt is found in
     // what arrived after the first rather than in the terminal's echo of the
     // answer to it.
-    _ = try expect.until(io, "first? ", budget_ms);
+    _ = try expect.until(io, "first? ", within_budget);
     try expect.send(io, "one\n");
-    _ = try expect.until(io, "second? ", budget_ms);
+    _ = try expect.until(io, "second? ", within_budget);
     try expect.send(io, "two\n");
 
-    const match = try expect.until(io, "got one and two", budget_ms);
+    const match = try expect.until(io, "got one and two", within_budget);
     try testing.expectEqualStrings("got one and two", match.found);
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
@@ -167,15 +169,15 @@ test "deinit stops the reader while the terminal is still open" {
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     if (!is_windows) pty.closeSlave(io);
 
     var buffer: [1024]u8 = undefined;
     var expect: Expect = .init(child.terminalMaster().?, &buffer);
     try expect.start(io);
     defer expect.deinit(io);
-    _ = try expect.until(io, "ready", budget_ms);
+    _ = try expect.until(io, "ready", within_budget);
 
     {
         var join_watchdog: Watchdog = .init(@src(), budget_ms);
@@ -191,8 +193,8 @@ test "deinit stops the reader while the terminal is still open" {
         var wait_watchdog: Watchdog = .init(@src(), budget_ms);
         try wait_watchdog.start(io);
         defer wait_watchdog.deinit(io);
-        try testing.expectError(error.EndOfStream, expect.until(io, "never", 30_000));
-        try testing.expectError(error.EndOfStream, expect.bytes(io, 512, 30_000));
+        try testing.expectError(error.EndOfStream, expect.until(io, "never", Deadline.within(.fromMilliseconds(30_000))));
+        try testing.expectError(error.EndOfStream, expect.bytes(io, 512, Deadline.within(.fromMilliseconds(30_000))));
     }
     // Still running: the read ended because it was asked to, not because the
     // stream did.
@@ -214,8 +216,8 @@ test "untilAny says which of several answers came, and leaves the rest" {
         .argv = argv,
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -223,7 +225,7 @@ test "untilAny says which of several answers came, and leaves the rest" {
     defer expect.deinit(io);
 
     try expect.send(io, "a\n");
-    const match = try expect.untilAny(io, &.{ "GOOD", "BAD" }, budget_ms);
+    const match = try expect.untilAny(io, &.{ "GOOD", "BAD" }, within_budget);
     try testing.expectEqual(@as(usize, 0), match.index);
     try testing.expectEqualStrings("GOOD", match.found);
 
@@ -242,8 +244,8 @@ test "untilAny takes the earliest match and leaves the later one pending" {
         .argv = &.{ "/bin/sh", "-c", "printf 'first SECOND\n'" },
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -252,13 +254,13 @@ test "untilAny takes the earliest match and leaves the later one pending" {
 
     // `SECOND` is listed first and arrives second, so the order in the list is
     // not what decides: the earliest match is.
-    const match = try expect.untilAny(io, &.{ "SECOND", "first" }, budget_ms);
+    const match = try expect.untilAny(io, &.{ "SECOND", "first" }, within_budget);
     try testing.expectEqual(@as(usize, 1), match.index);
     try testing.expectEqualStrings("first", match.found);
     try testing.expectEqualStrings("", match.before);
 
     // And the one that lost is still there to be waited for.
-    const later = try expect.until(io, "SECOND", budget_ms);
+    const later = try expect.until(io, "SECOND", within_budget);
     try testing.expectEqual(@as(usize, 0), later.index);
     try testing.expectEqualStrings("SECOND", later.found);
     try testing.expectEqualStrings(" ", later.before);
@@ -276,18 +278,18 @@ test "untilAny with nothing to wait for ends the way a pattern that never comes 
         .argv = &.{ "/bin/sh", "-c", "printf 'here\n'; exec sleep 100" },
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
     try expect.start(io);
     defer expect.deinit(io);
 
-    try testing.expectError(error.Timeout, expect.untilAny(io, &.{}, 50));
+    try testing.expectError(error.Timeout, expect.untilAny(io, &.{}, Deadline.within(.fromMilliseconds(50))));
     // An empty pattern is the other end of it: it matches before anything has
     // arrived, and says which one it was.
-    const empty = try expect.untilAny(io, &.{ "never", "" }, budget_ms);
+    const empty = try expect.untilAny(io, &.{ "never", "" }, within_budget);
     try testing.expectEqual(@as(usize, 1), empty.index);
     try testing.expectEqualStrings("", empty.found);
 }
@@ -305,8 +307,8 @@ test "bytes waits for a count, and what follows stays pending" {
         .stdio = .{ .pty = &pty },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
     pty.closeSlave(io);
 
     var buffer: [64]u8 = undefined;
@@ -314,12 +316,12 @@ test "bytes waits for a count, and what follows stays pending" {
     try expect.start(io);
     defer expect.deinit(io);
 
-    try testing.expectEqualStrings("ABCD", try expect.bytes(io, 4, budget_ms));
-    try testing.expectEqualStrings("EFGH", try expect.bytes(io, 4, budget_ms));
+    try testing.expectEqualStrings("ABCD", try expect.bytes(io, 4, within_budget));
+    try testing.expectEqualStrings("EFGH", try expect.bytes(io, 4, within_budget));
 
     // And the stream really has ended, which is a different answer from a
     // deadline running out.
-    try testing.expectError(error.EndOfStream, expect.bytes(io, 1, budget_ms));
+    try testing.expectError(error.EndOfStream, expect.bytes(io, 1, within_budget));
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
 }
@@ -337,8 +339,8 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
         .stdio = .{ .pty = &pty },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     pty.closeSlave(io);
 
     var buffer: [256]u8 = undefined;
@@ -346,10 +348,10 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
     try expect.start(io);
     defer expect.deinit(io);
 
-    _ = try expect.until(io, "here I am", budget_ms);
+    _ = try expect.until(io, "here I am", within_budget);
     // The child is alive and quiet, which is exactly the case a deadline
     // exists for: not an ended stream, not a match.
-    try testing.expectError(error.Timeout, expect.until(io, "never said", 50));
+    try testing.expectError(error.Timeout, expect.until(io, "never said", Deadline.within(.fromMilliseconds(50))));
 }
 
 test "a buffer that fills says so, and discard makes room" {
@@ -367,8 +369,8 @@ test "a buffer that fills says so, and discard makes room" {
         .argv = &.{ "/bin/sh", "-c", "printf 'aaaaaaaa'; read go; printf 'done\n'" },
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
 
     var buffer: [8]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -377,15 +379,15 @@ test "a buffer that fills says so, and discard makes room" {
 
     // Eight bytes of 'a' and no 'z' anywhere: the buffer fills with bytes the
     // pattern cannot match, and nothing is thrown away to make room.
-    try testing.expectError(error.BufferFull, expect.until(io, "zzz", budget_ms));
+    try testing.expectError(error.BufferFull, expect.until(io, "zzz", within_budget));
     try testing.expectEqualStrings("aaaaaaaa", expect.pending(io));
     // A pattern longer than the buffer could ever hold is the same answer,
     // and it does not wait to give it.
-    try testing.expectError(error.BufferFull, expect.until(io, "zzzzzzzzzzzz", budget_ms));
+    try testing.expectError(error.BufferFull, expect.until(io, "zzzzzzzzzzzz", within_budget));
 
     expect.discard(io);
     try expect.send(io, "go\n");
-    const match = try expect.until(io, "done", budget_ms);
+    const match = try expect.until(io, "done", within_budget);
     try testing.expectEqualStrings("done", match.found);
 
     child.closeStdin(io);
@@ -395,14 +397,14 @@ test "a buffer that fills says so, and discard makes room" {
 /// Waits for the child to end, and kills it if it will not within the budget,
 /// so a misbehaving child fails a test rather than stopping the run.
 fn waitWithin(io: std.Io, child: *Child) !Child.Term {
-    const deadline: Deadline = .in(io, budget_ms);
+    const deadline: Deadline = .in(io, budget);
     while (true) {
         if (try child.tryWait()) |term| return term;
         if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
     // ziglint-ignore: Z026 the test fails either way; the kill only keeps the child from outliving it
-    _ = child.killWait(io, 0) catch {};
+    _ = child.killWait(io, .zero) catch {};
     return error.TestChildDidNotExit;
 }
 

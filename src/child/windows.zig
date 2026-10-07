@@ -21,8 +21,8 @@ const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
 
 /// See `Child.spawn`.
-pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
-    var arena_state: std.heap.ArenaAllocator = .init(allocator);
+pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -118,7 +118,7 @@ fn started(
     plan: *const Plan,
 ) *State {
     state.* = .{
-        .allocator = state.allocator,
+        .gpa = state.gpa,
         .descendants = options.descendants,
         .process_id = information.dwProcessId,
         .id = information.hProcess,

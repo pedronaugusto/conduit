@@ -20,7 +20,7 @@ test "a deadline retains its last fraction of a millisecond until it expires" {
     var vtable: std.Io.VTable = undefined;
     const io = Clock.io(&vtable);
     Clock.nanoseconds = 0;
-    const deadline: Deadline = .in(io, 1);
+    const deadline: Deadline = .in(io, .fromMilliseconds(1));
     Clock.nanoseconds = std.time.ns_per_ms - 1;
     try std.testing.expectEqual(@as(u32, 1), deadline.remainingMs(io));
     Clock.nanoseconds = std.time.ns_per_ms;
@@ -31,7 +31,7 @@ test "a deadline reads the clock and expires" {
     var vtable: std.Io.VTable = undefined;
     const io = Clock.io(&vtable);
     Clock.nanoseconds = 100 * std.time.ns_per_ms;
-    const deadline: Deadline = .in(io, 10);
+    const deadline: Deadline = .in(io, .fromMilliseconds(10));
     try std.testing.expectEqual(@as(u32, 10), deadline.remainingMs(io));
     Clock.nanoseconds = 111 * std.time.ns_per_ms;
     try std.testing.expectEqual(@as(u32, 0), deadline.remainingMs(io));
@@ -60,7 +60,26 @@ test "a Windows wait never asks for INFINITE" {
     var vtable: std.Io.VTable = undefined;
     const io = Clock.io(&vtable);
     Clock.nanoseconds = 0;
-    const longest: Deadline = .in(io, std.math.maxInt(u32));
+    const longest: Deadline = .in(io, .fromMilliseconds(std.math.maxInt(u32)));
     try std.testing.expectEqual(@as(u32, std.math.maxInt(u32)), longest.remainingMs(io));
     try std.testing.expectEqual(@as(u32, std.math.maxInt(u32) - 1), longest.windowsMs(io));
+}
+
+test "no timeout is a deadline that never comes, and the earlier of two wins" {
+    var vtable: std.Io.VTable = undefined;
+    const io = Clock.io(&vtable);
+    Clock.nanoseconds = 0;
+    try std.testing.expectEqual(Deadline.never, Deadline.of(io, .none));
+    try std.testing.expectEqual(std.Io.Timeout.none, Deadline.never.toTimeout());
+    try std.testing.expectEqual(Deadline.never, Deadline.in(io, .max));
+    try std.testing.expectEqual(@as(u32, std.math.maxInt(u32) - 1), Deadline.never.windowsMs(io));
+    try std.testing.expectEqual(@as(u32, 0), Deadline.of(io, Deadline.within(.zero)).remainingMs(io));
+    const second = Deadline.of(io, Deadline.within(.fromSeconds(1)));
+    try std.testing.expectEqual(@as(u32, 1000), second.remainingMs(io));
+    try std.testing.expectEqual(std.Io.Duration.fromSeconds(1), second.remaining(io));
+    const soon: Deadline = .in(io, .fromMilliseconds(10));
+    try std.testing.expectEqual(soon, Deadline.never.min(soon));
+    try std.testing.expectEqual(soon, soon.min(second));
+    Clock.nanoseconds = 2 * std.time.ns_per_s;
+    try std.testing.expectEqual(std.Io.Duration.zero, second.remaining(io));
 }

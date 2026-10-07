@@ -76,20 +76,25 @@ const Kill = struct {
         spin.lock(&kill.mutex);
     }
 
-    fn request(kill: *Kill, io: std.Io, grace_ms: u32) bool {
-        const deadline: Deadline = .in(io, grace_ms);
+    fn request(kill: *Kill, io: std.Io, grace: std.Io.Duration) bool {
+        const deadline: Deadline = .in(io, grace);
         kill.lock();
         defer kill.mutex.unlock();
-        if (grace_ms != 0 and kill.deadline != null) return false;
+        if (grace.nanoseconds > 0 and kill.deadline != null) return false;
         kill.deadline = deadline;
         return true;
     }
 
-    fn remaining(kill: *Kill, io: std.Io) ?u32 {
+    /// The deadline of the kill requested, if one was.
+    fn current(kill: *Kill) ?Deadline {
         kill.lock();
-        const deadline = kill.deadline;
-        kill.mutex.unlock();
-        return if (deadline) |at| at.remainingMs(io) else null;
+        defer kill.mutex.unlock();
+        return kill.deadline;
+    }
+
+    /// What is left of the kill's grace, if one was requested.
+    fn remaining(kill: *Kill, io: std.Io) ?std.Io.Duration {
+        return if (kill.current()) |deadline| deadline.remaining(io) else null;
     }
 };
 
@@ -133,12 +138,12 @@ pub const Reaper = struct {
         /// **Linux, for a child in a cgroup of its own** (detached
         /// or not): once the child has ended, and before it is reaped, whatever
         /// is still running in the cgroup is asked to end with `SIGTERM`, given
-        /// `tree_grace_ms`, and ended with `cgroup.kill` if it has not — however
+        /// `tree_grace`, and ended with `cgroup.kill` if it has not — however
         /// it had changed its group or session, and orphaned or not.
         ///
         /// **POSIX otherwise**, for a child spawned with `detach`: once the child has
         /// ended, and before it is reaped, what is left in its process group is
-        /// asked to end with `SIGTERM`, given `tree_grace_ms` to do so, and sent
+        /// asked to end with `SIGTERM`, given `tree_grace` to do so, and sent
         /// `SIGKILL` if it has not. The child, ended but not reaped, still holds
         /// the group's id, so the signal cannot reach a group that has since been
         /// given the same number. A descendant that left the group before the
@@ -158,7 +163,7 @@ pub const Reaper = struct {
         end_tree: bool = false,
         /// With `end_tree`, how long what the child left gets between being asked
         /// to end and being made to.
-        tree_grace_ms: u32 = 1000,
+        tree_grace: std.Io.Duration = .fromSeconds(1),
     };
 
     /// A `Reaper` that is not waiting for anything yet. Call `start` to put the
@@ -195,10 +200,10 @@ pub const Reaper = struct {
     pub fn enableSubreaper(reaper: *Reaper) Orphans.StartError!void {
         if (reaper.lifetime.load(.acquire) != .ready or reaper.orphans != null)
             return error.AlreadyStarted;
-        const allocator = std.heap.page_allocator;
-        const orphans = try allocator.create(Orphans);
-        errdefer allocator.destroy(orphans);
-        orphans.* = .init(allocator);
+        const gpa = std.heap.page_allocator;
+        const orphans = try gpa.create(Orphans);
+        errdefer gpa.destroy(orphans);
+        orphans.* = .init(gpa);
         try orphans.start();
         reaper.orphans = orphans;
     }
@@ -280,31 +285,32 @@ pub const Reaper = struct {
 
     pub const WaitTimeoutError = ExitError;
 
-    /// `wait`, for at most `timeout_ms`: `null` if the child has not ended by
+    /// `wait`, for at most `timeout`: `null` if the child has not ended by
     /// then.
-    pub fn waitTimeout(reaper: *Reaper, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
+    pub fn waitTimeout(reaper: *Reaper, io: std.Io, timeout: std.Io.Timeout) WaitTimeoutError!?Term {
         reaper.pin.check(reaper);
-        const deadline: std.Io.Clock.Timestamp = .fromNow(io, .{
-            .raw = .fromMilliseconds(timeout_ms),
-            .clock = .awake,
-        });
+        return reaper.waitWithin(io, .of(io, timeout));
+    }
+
+    /// `waitTimeout` to a deadline.
+    fn waitWithin(reaper: *Reaper, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         while (true) {
-            reaper.answered.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
+            reaper.answered.waitTimeout(io, deadline.toTimeout()) catch |err| switch (err) {
                 // A wakeup before the deadline is spurious; one after it is the
                 // answer that there is none yet.
-                error.Timeout => if (deadline.durationFromNow(io).raw.nanoseconds > 0) continue else return reaper.exit(),
+                error.Timeout => if (deadline.remainingMs(io) > 0) continue else return reaper.exit(),
                 error.Canceled => return error.Canceled,
             };
             return reaper.exit();
         }
     }
 
-    /// Asks the child to end, and makes it if it has not within `grace_ms`.
+    /// Asks the child to end, and makes it if it has not within `grace`.
     ///
     /// `.terminate` now and `.kill` once the grace has passed, each of them
     /// `Child.kill`'s and reaching what `Child.kill` reaches. A held reap also
     /// ends anything left in the owned group or cgroup before releasing its
-    /// identity, using the remainder of the same grace. A `grace_ms` of zero
+    /// identity, using the remainder of the same grace. A zero grace
     /// is `.kill` now. It never blocks: the grace is waited out on this
     /// `Reaper`'s task, and ends early once the child and its owned tree end.
     ///
@@ -313,20 +319,20 @@ pub const Reaper = struct {
     /// with a grace of zero — and that one is always sent. A signal that cannot
     /// be delivered is not reported: the child has ended, or is ending, and the
     /// term says how.
-    pub fn kill(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
+    pub fn kill(reaper: *Reaper, io: std.Io, grace: std.Io.Duration) void {
         reaper.pin.check(reaper);
-        if (!reaper.killing.request(io, grace_ms)) return;
-        if (grace_ms == 0) {
+        if (!reaper.killing.request(io, grace)) return;
+        if (grace.nanoseconds <= 0) {
             // ziglint-ignore: Z026 undelivered means ended or ending, as documented above; the term says how
             reaper.target().kill(.kill) catch {};
             return;
         }
         // ziglint-ignore: Z026 undelivered means ended or ending, as documented above; the term says how
         reaper.target().kill(.terminate) catch {};
-        reaper.group.concurrent(io, insist, .{ reaper, io, grace_ms }) catch {
+        reaper.group.concurrent(io, insist, .{ reaper, io, grace }) catch {
             // No task to wait out the grace on: insisting now is the one answer
             // that still ends the child.
-            reaper.kill(io, 0);
+            reaper.kill(io, .zero);
         };
     }
 
@@ -336,14 +342,14 @@ pub const Reaper = struct {
         return if (reaper.lifetime.load(.acquire) == .ready) reaper.source else &reaper.child;
     }
 
-    fn insist(reaper: *Reaper, io: std.Io, grace_ms: u32) void {
-        const term = reaper.waitTimeout(io, reaper.killing.remaining(io) orelse grace_ms) catch |err| switch (err) {
+    fn insist(reaper: *Reaper, io: std.Io, grace: std.Io.Duration) void {
+        const term = reaper.waitWithin(io, reaper.killing.current() orelse .in(io, grace)) catch |err| switch (err) {
             // `stop` or `deinit`: the owner is done with this child.
             error.Canceled => return,
             // An answer, if an unhappy one: the child is no longer waited for.
             else => return,
         };
-        if (term == null) reaper.kill(io, 0);
+        if (term == null) reaper.kill(io, .zero);
     }
 
     /// Stops waiting, releases the task and ends the adoption scope.
@@ -367,7 +373,7 @@ pub const Reaper = struct {
         if (reaper.orphans) |orphans| {
             // A process-wide owner cannot leave an adoptee without a future
             // wait. End before restoring the attribute and releasing pidfds.
-            try orphans.killAll(io, 0);
+            try orphans.killAll(io, .zero);
             try orphans.stop();
             orphans.deinit();
             std.heap.page_allocator.destroy(orphans);
@@ -431,7 +437,7 @@ pub const Reaper = struct {
         if (reaper.orphans) |orphans| {
             if (reaper.options.end_tree or reaper.killing.remaining(io) != null or
                 reaper.child.state.descendants == .contain)
-                orphans.killAll(io, reaper.killing.remaining(io) orelse 0) catch |err| switch (err) {
+                orphans.killAll(io, reaper.killing.remaining(io) orelse .zero) catch |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     else => return error.Unexpected,
                 };
@@ -567,12 +573,12 @@ pub const Reaper = struct {
     /// interrupted poll spends only the time it actually took, and a delayed
     /// wake spends all of it. Neither changes the deadline.
     fn treeGrace(reaper: *Reaper, io: std.Io, wake: posix.fd_t, reach: TreeReach) enum { empty, elapsed, woken } {
-        const deadline: Deadline = .in(io, reaper.options.tree_grace_ms);
+        const deadline: Deadline = .in(io, reaper.options.tree_grace);
         var slice_ms: u32 = 1;
         while (true) {
             // A kill owns one grace, including cleanup after the root exits.
             // Re-read it each pass so a force request supersedes that grace.
-            const left = reaper.killing.remaining(io) orelse deadline.remainingMs(io);
+            const left = (reaper.killing.current() orelse deadline).remainingMs(io);
             if (left == 0) return .elapsed;
             if (!pause(wake, @min(left, slice_ms))) return .woken;
             if (reach.empty(reaper.child.state.id)) return .empty;
@@ -637,8 +643,8 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     var buffer: [32]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
@@ -653,7 +659,7 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     var vtable = io.vtable.*;
     vtable.now = Clock.now;
     const clock_io: std.Io = .{ .vtable = &vtable, .userdata = &elapsed };
-    var reaper: Reaper = .init(&child, .{ .tree_grace_ms = 100 });
+    var reaper: Reaper = .init(&child, .{ .tree_grace = .fromMilliseconds(100) });
     pause_elapsed = &elapsed;
     defer pause_elapsed = null;
     try testing.expect(reaper.endGroup(clock_io, child.state.pgid.?, -1));
@@ -696,8 +702,8 @@ test "a rejected Reaper start releases its wake pipe before returning" {
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
     const Reject = struct {
@@ -722,8 +728,8 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     }
     try std.testing.expectEqual(@as(?[2]posix.fd_t, null), reaper.wake);
     try reaper.start(io);
-    reaper.kill(io, 0);
-    _ = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+    reaper.kill(io, .zero);
+    _ = (try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) orelse return error.TestChildDidNotExit;
 }
 
 test "Reaper deadlines keep spurious wakes on one answer event and spend the kill grace there" {
@@ -734,8 +740,8 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
     const Clock = struct {
@@ -766,13 +772,13 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     vtable.futexWait = Clock.futexWait;
     vtable.sleep = Clock.sleep;
     const clock_io: std.Io = .{ .userdata = &clock, .vtable = &vtable };
-    try testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(clock_io, 30));
+    try testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(clock_io, Deadline.within(.fromMilliseconds(30))));
     try testing.expectEqual(@as(usize, 3), clock.waits);
     try testing.expectEqual(@as(usize, 0), clock.sleeps);
     try testing.expectEqual(@as(u32, 30), clock.ms);
     try testing.expectEqual(@as(?Term, null), try child.tryWait());
     clock = .{};
-    reaper.insist(clock_io, 40);
+    reaper.insist(clock_io, .fromMilliseconds(40));
     try testing.expectEqual(@as(usize, 4), clock.waits);
     try testing.expectEqual(@as(usize, 0), clock.sleeps);
     try testing.expectEqual(@as(u32, 40), clock.ms);
@@ -791,15 +797,15 @@ test "a kill keeps its first deadline and a force expires the same grace" {
     const io: std.Io = .{ .vtable = &vtable, .userdata = std.testing.io.userdata };
     var kill: Kill = .{};
     Clock.milliseconds = 100;
-    try std.testing.expect(kill.request(io, 100));
+    try std.testing.expect(kill.request(io, .fromMilliseconds(100)));
     Clock.milliseconds = 150;
-    try std.testing.expect(!kill.request(io, 100));
-    try std.testing.expectEqual(@as(?u32, 50), kill.remaining(io));
-    try std.testing.expect(kill.request(io, 0));
-    try std.testing.expectEqual(@as(?u32, 0), kill.remaining(io));
+    try std.testing.expect(!kill.request(io, .fromMilliseconds(100)));
+    try std.testing.expectEqual(@as(?u32, 50), kill.current().?.remainingMs(io));
+    try std.testing.expect(kill.request(io, .zero));
+    try std.testing.expectEqual(@as(?u32, 0), kill.current().?.remainingMs(io));
     Clock.milliseconds = 200;
-    try std.testing.expect(!kill.request(io, 100));
-    try std.testing.expectEqual(@as(?u32, 0), kill.remaining(io));
+    try std.testing.expect(!kill.request(io, .fromMilliseconds(100)));
+    try std.testing.expectEqual(@as(?u32, 0), kill.current().?.remainingMs(io));
 }
 
 test "subreaping belongs to one Reaper and restores the process attribute" {
@@ -858,8 +864,8 @@ test "a subreaper teardown retains ownership until every direct child is reaped"
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer other.release(io) catch unreachable;
-    defer _ = other.killWait(io, 0) catch {};
+    defer other.deinit(io);
+    defer _ = other.killWait(io, .zero) catch {};
     try std.testing.expectError(error.DirectChildrenRemain, owner.stop(io));
     var during: c_int = 0;
     const linux = std.os.linux;

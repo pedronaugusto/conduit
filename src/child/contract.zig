@@ -509,8 +509,8 @@ pub const SpawnError = error{
     Unexpected,
 };
 
-/// What `release` can meet: ending an unfinished contained scope is `killWait`.
-pub const ReleaseError = KillWaitError;
+/// What `finish` can meet: ending an unfinished contained scope is `killWait`.
+pub const FinishError = KillWaitError;
 
 /// Containment facts for a survivor record, with no owned handles.
 /// The cgroup path borrows the buffer passed to containment; everything else
@@ -697,12 +697,12 @@ pub const OutputOptions = struct {
     /// dropped — the child is never blocked by a full pipe — and the matching
     /// `_truncated` flag is set.
     max_bytes: usize = 10 * 1024 * 1024,
-    /// How long the child gets before `killWait` ends it. `null` waits as long
+    /// How long the child gets before `killWait` ends it. `.none` waits as long
     /// as it takes.
-    timeout_ms: ?u32 = null,
+    timeout: std.Io.Timeout = .none,
     /// The grace `killWait` gives on a timeout, in the same sense as its own
     /// parameter.
-    grace_ms: u32 = 200,
+    grace: std.Io.Duration = .fromMilliseconds(200),
     /// How long to keep reading after the child has ended.
     ///
     /// A stream normally finishes the moment the child does, because the child
@@ -711,7 +711,7 @@ pub const OutputOptions = struct {
     /// for end of file would wait for the grandchild, which is not what a call
     /// with a timeout on it means. So the drain is bounded too, and a stream
     /// that has not finished is reported as truncated.
-    drain_ms: u32 = 1000,
+    drain: std.Io.Duration = .fromSeconds(1),
 };
 
 pub const OutputError = error{
@@ -731,12 +731,12 @@ pub const ExchangeOptions = struct {
     max_bytes: usize = 10 * 1024 * 1024,
     /// One budget for the whole exchange: writing the input, the child's run,
     /// its end and the reading after it. When it runs out the child is killed
-    /// at once, with no grace, and `Output.timedOut` says so. `null` waits as
+    /// at once, with no grace, and `Output.timedOut` says so. `.none` waits as
     /// long as it takes.
-    timeout_ms: ?u32 = null,
+    timeout: std.Io.Timeout = .none,
     /// How long to keep reading after the child has ended, as
-    /// `OutputOptions.drain_ms`, and never past the timeout.
-    drain_ms: u32 = 1000,
+    /// `OutputOptions.drain`, and never past the timeout.
+    drain: std.Io.Duration = .fromSeconds(1),
 };
 
 pub const ExchangeError = OutputError || error{

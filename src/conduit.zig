@@ -163,6 +163,7 @@ pub const spawnShell = shell.spawnShell;
 pub const Shell = shell.Shell;
 /// The options `spawnShell` takes.
 pub const ShellOptions = shell.Options;
+/// What `spawnShell` can meet.
 pub const SpawnShellError = shell.SpawnShellError;
 
 /// Where a program named by a bare name would be found, by `spawn`'s own rules,
@@ -183,16 +184,20 @@ pub const environ = environ_impl;
 
 /// Puts a terminal into raw mode and returns what to pass to `restore`.
 pub const rawMode = tty.rawMode;
+/// What `rawMode` can meet.
 pub const RawModeError = tty.RawModeError;
 /// Puts back the attributes `rawMode` captured.
 pub const restore = tty.restore;
+/// What `restore` can meet.
 pub const RestoreError = tty.RestoreError;
 /// Reads a terminal's window size. On Windows, of a console screen buffer.
 pub const winSize = tty.winSize;
+/// What `winSize` can meet.
 pub const WinSizeError = tty.WinSizeError;
 /// Sets a terminal's window size. POSIX only; on Windows resize the pair with
 /// `Pty.resize` instead.
 pub const setWinSize = tty.setWinSize;
+/// What `setWinSize` can meet.
 pub const SetWinSizeError = tty.SetWinSizeError;
 /// Whether a handle is a terminal.
 pub const isTty = tty.isTty;
@@ -200,9 +205,11 @@ pub const isTty = tty.isTty;
 /// and the way to tell a child that merely *sees* a terminal from one that is
 /// running on it.
 pub const foregroundGroup = tty.foregroundGroup;
+/// What `foregroundGroup` can meet.
 pub const ForegroundGroupError = tty.ForegroundGroupError;
 /// The `/dev` pathname of a terminal descriptor. POSIX only.
 pub const ttyName = tty.ttyName;
+/// What `ttyName` can meet.
 pub const TtyNameError = tty.TtyNameError;
 
 /// A pipe, both ends close-on-exec: one call where the system has `pipe2`,
@@ -210,7 +217,9 @@ pub const TtyNameError = tty.TtyNameError;
 /// unmarked into a child. `.nonblocking` makes both ends nonblocking. POSIX
 /// only.
 pub const pipe = tty.pipe;
+/// The options `pipe` takes.
 pub const PipeOptions = tty.PipeOptions;
+/// What `pipe` can meet.
 pub const PipeError = tty.PipeError;
 /// A point a bounded wait ends at. `Deadline.fromTimeout` reads a
 /// `std.Io.Timeout` against the clock, and `remainingMs` and `windowsMs` say
@@ -222,6 +231,7 @@ pub const Deadline = tty.Deadline;
 /// left at this moment. For the rest of what a child wrote, once it has
 /// ended, when something it started may still hold the pipe open.
 pub const readAvailable = @import("handles.zig").readAvailable;
+/// What `readAvailable` can meet.
 pub const ReadAvailableError = @import("handles.zig").ReadAvailableError;
 
 /// Whether a process has an id now: `true`, `false`, or `null` where the
@@ -241,6 +251,7 @@ pub const processExists = @import("process_exists.zig").processExists;
 /// time, and the next time it runs it ends each that still runs as the same
 /// process.
 pub const startTime = tree.startTime;
+/// What `startTime` can meet.
 pub const StartTimeError = tree.StartTimeError;
 /// A process held by a kernel identity rather than by its number — a pidfd
 /// on Linux, a stable unique process id on Darwin. Darwin checks that id
@@ -258,10 +269,12 @@ else
 /// the number could be someone else's. Linux and Darwin; `error.Unsupported`
 /// elsewhere. POSIX only.
 pub const captureStarted = tree.captureStarted;
+/// What `captureStarted` can meet.
 pub const CaptureError = tree.CaptureError;
 /// What `CapturedPid.signalGroupSince` can meet, the same on every system.
 pub const SignalGroupError = tree.SignalGroupError;
 /// Kill a process recorded by an earlier run, together with its provable
 /// descendants, preferring a verified recorded cgroup when one is available.
 pub const killRecorded = tree.killRecorded;
+/// What `killRecorded` can meet.
 pub const KillRecordedError = tree.KillRecordedError;

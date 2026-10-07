@@ -69,7 +69,9 @@ pub const console = @import("console.zig");
 /// A pipe, both ends close-on-exec, for a wake a program writes itself.
 /// POSIX only.
 pub const pipe = close_on_exec.pipe;
+/// The options `pipe` takes.
 pub const PipeOptions = close_on_exec.PipeOptions;
+/// What `pipe` can meet.
 pub const PipeError = close_on_exec.PipeError;
 /// The lock that keeps conduit's spawns out of the moment a descriptor opened
 /// in two calls has no close-on-exec flag yet, taken only for the length of a
@@ -77,8 +79,8 @@ pub const PipeError = close_on_exec.PipeError;
 pub const ForkGap = close_on_exec.ForkGap;
 /// Whether a descriptor here is opened and marked close-on-exec in two calls.
 pub const opening_is_two_calls = close_on_exec.opening_is_two_calls;
-/// A point on the clock a bounded wait ends at, read back in whole
-/// milliseconds rounded up.
+/// A point on the clock a bounded wait ends at, made from a `std.Io.Timeout`
+/// or a span, and read back in whole milliseconds rounded up.
 pub const Deadline = @import("deadline.zig").Deadline;
 
 /// A terminal handle. `std.posix.fd_t` on POSIX, `HANDLE` on Windows, which is
@@ -149,6 +151,7 @@ pub const Saved = if (is_windows) struct {
     termios: posix.termios,
 };
 
+/// What `rawMode` can meet.
 pub const RawModeError = error{
     /// The handle is not a terminal.
     NotATerminal,
@@ -345,6 +348,7 @@ pub const Controlling = struct {
     }
 };
 
+/// What `openControlling` can meet.
 pub const OpenControllingError = std.Io.File.OpenError || error{
     /// Windows only: the process has no console to open.
     NotATerminal,

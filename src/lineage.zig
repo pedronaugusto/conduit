@@ -36,7 +36,7 @@ const NoTracker = struct {
 };
 
 const Darwin = struct {
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     queue: posix.fd_t,
     wake: [2]posix.fd_t,
     thread: ?std.Thread = null,
@@ -48,9 +48,9 @@ const Darwin = struct {
     observed: if (builtin.is_test) std.atomic.Value(usize) else void = if (builtin.is_test) .init(0) else {},
 
     pub fn start(root: posix.pid_t) error{ OutOfMemory, SystemResources }!*Darwin {
-        const allocator = std.heap.page_allocator;
-        const tracker = try allocator.create(Darwin);
-        errdefer allocator.destroy(tracker);
+        const gpa = std.heap.page_allocator;
+        const tracker = try gpa.create(Darwin);
+        errdefer gpa.destroy(tracker);
         const queue = c.kqueue();
         if (queue < 0) return error.SystemResources;
         errdefer _ = c.close(queue);
@@ -59,9 +59,9 @@ const Darwin = struct {
             _ = c.close(wake[0]);
             _ = c.close(wake[1]);
         }
-        tracker.* = .{ .allocator = allocator, .queue = queue, .wake = wake };
-        errdefer tracker.known.deinit(allocator);
-        try tracker.known.append(allocator, tree.DarwinProcess.capture(root) orelse return error.SystemResources);
+        tracker.* = .{ .gpa = gpa, .queue = queue, .wake = wake };
+        errdefer tracker.known.deinit(gpa);
+        try tracker.known.append(gpa, tree.DarwinProcess.capture(root) orelse return error.SystemResources);
         if (!tracker.register(root, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, tracker.known.items[0].unique_id) or
             !tracker.register(wake[0], c.EVFILT.READ, 0, 0)) return error.SystemResources;
         if (builtin.is_test) tracker.observed.store(1, .release);
@@ -95,8 +95,8 @@ const Darwin = struct {
             }
         }
         var children: std.ArrayList(posix.pid_t) = .empty;
-        defer children.deinit(tracker.allocator);
-        try tree.observedChildrenOfDarwin(tracker.allocator, parent.pid, &children);
+        defer children.deinit(tracker.gpa);
+        try tree.observedChildrenOfDarwin(tracker.gpa, parent.pid, &children);
         for (children.items) |pid| {
             const child = tree.DarwinProcess.capture(pid) orelse continue;
             if (!child.childOf(&parent)) continue;
@@ -106,7 +106,7 @@ const Darwin = struct {
                 break;
             };
             if (found) continue;
-            try tracker.known.append(tracker.allocator, child);
+            try tracker.known.append(tracker.gpa, child);
             // If registration loses to exit, still expand its current children.
             // No delay between discovering an edge and watching the next fork.
             const watching = tracker.register(pid, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, child.unique_id);
@@ -185,8 +185,8 @@ const Darwin = struct {
         _ = c.close(tracker.queue);
         _ = c.close(tracker.wake[0]);
         _ = c.close(tracker.wake[1]);
-        const allocator = tracker.allocator;
-        tracker.known.deinit(allocator);
-        allocator.destroy(tracker);
+        const gpa = tracker.gpa;
+        tracker.known.deinit(gpa);
+        gpa.destroy(tracker);
     }
 };

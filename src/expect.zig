@@ -51,6 +51,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Pin = @import("pin.zig").Pin;
+const Deadline = @import("conduit.tty").Deadline;
 
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
@@ -225,9 +226,9 @@ pub const Expect = struct {
         expect: *Expect,
         io: std.Io,
         pattern: []const u8,
-        timeout_ms: u32,
+        timeout: std.Io.Timeout,
     ) WaitError!Match {
-        return expect.untilAny(io, &.{pattern}, timeout_ms);
+        return expect.untilAny(io, &.{pattern}, timeout);
     }
 
     /// Waits for any of `patterns` to appear, and consumes everything up to and
@@ -256,7 +257,7 @@ pub const Expect = struct {
         expect: *Expect,
         io: std.Io,
         patterns: []const []const u8,
-        timeout_ms: u32,
+        timeout: std.Io.Timeout,
     ) WaitError!Match {
         expect.pin.check(expect);
         expect.compact(io);
@@ -270,7 +271,7 @@ pub const Expect = struct {
             if (pattern.len > expect.buffer.len) return error.BufferFull;
         }
 
-        const deadline = deadlineIn(io, timeout_ms);
+        const deadline = Deadline.of(io, timeout);
         var search: Search = .init(patterns);
         while (true) {
             expect.arrived.reset();
@@ -364,13 +365,13 @@ pub const Expect = struct {
         expect: *Expect,
         io: std.Io,
         count: usize,
-        timeout_ms: u32,
+        timeout: std.Io.Timeout,
     ) WaitError![]const u8 {
         expect.pin.check(expect);
         expect.compact(io);
         if (count > expect.buffer.len) return error.BufferFull;
 
-        const deadline = deadlineIn(io, timeout_ms);
+        const deadline = Deadline.of(io, timeout);
         while (true) {
             expect.arrived.reset();
             // As in `untilAny`: before the buffer.
@@ -515,21 +516,16 @@ pub const Expect = struct {
     // Waiting, and the buffer.
     //======================================================================
 
-    fn deadlineIn(io: std.Io, timeout_ms: u32) std.Io.Clock.Timestamp {
-        return .fromNow(io, .{ .raw = .fromMilliseconds(timeout_ms), .clock = .awake });
-    }
-
     /// Waits for the reading task to say something has changed, or for the
     /// deadline.
-    fn sleepUntil(expect: *Expect, io: std.Io, deadline: std.Io.Clock.Timestamp) WaitError!void {
-        expect.arrived.waitTimeout(io, .{ .deadline = deadline }) catch |err| switch (err) {
+    fn sleepUntil(expect: *Expect, io: std.Io, deadline: Deadline) WaitError!void {
+        expect.arrived.waitTimeout(io, deadline.toTimeout()) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             // A wakeup is allowed to be spurious and to report itself as a
             // timeout, so the clock decides whether there is time left rather
             // than the return value.
             error.Timeout => {
-                const now: std.Io.Clock.Timestamp = .now(io, deadline.clock);
-                if (deadline.compare(.lte, now)) return error.Timeout;
+                if (deadline.remainingMs(io) == 0) return error.Timeout;
             },
         };
     }

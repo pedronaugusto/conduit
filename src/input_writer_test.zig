@@ -9,6 +9,8 @@ const test_options = @import("conduit_test_options");
 const io = testing.io;
 const gpa = testing.allocator;
 const budget_ms = 5000;
+const budget: std.Io.Duration = .fromMilliseconds(budget_ms);
+const within_budget: std.Io.Timeout = .{ .duration = .{ .raw = budget, .clock = .awake } };
 
 fn spawn(mode: []const u8) !Child {
     return Child.spawn(gpa, io, .{
@@ -19,13 +21,13 @@ fn spawn(mode: []const u8) !Child {
 
 fn reap(child: *Child) void {
     // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
-    _ = child.killWait(io, 0) catch {};
-    child.release(io) catch unreachable;
+    _ = child.killWait(io, .zero) catch {};
+    child.deinit(io);
 }
 
 fn output(child: *Child, expected: []const u8) !void {
-    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
-    defer result.deinit(gpa);
+    var result = try child.output(gpa, io, .{ .timeout = within_budget });
+    defer result.deinit();
     try testing.expect(Child.succeeded(result.term()));
     try testing.expectEqualStrings(expected, result.stdout());
 }
@@ -141,7 +143,7 @@ test "InputWriter keeps a write failure for later writers and waiters" {
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 });
     defer writer.deinit(io);
-    try testing.expect((try child.waitTimeout(io, budget_ms)) != null);
+    try testing.expect((try child.waitTimeout(io, within_budget)) != null);
     try writer.queue(io, "gone");
     try testing.expectError(error.BrokenPipe, writer.wait(io));
     try testing.expect(!writer.isOpen(io));
@@ -217,8 +219,8 @@ test "InputWriter serializes concurrent producers without splitting their bytes"
     for (0..4) |id| try producers.concurrent(io, Producer.queue, .{ &writer, @as(u8, @intCast(id)) });
     try producers.await(io);
     try writer.close(io);
-    var result = try child.output(gpa, io, .{ .timeout_ms = budget_ms });
-    defer result.deinit(gpa);
+    var result = try child.output(gpa, io, .{ .timeout = within_budget });
+    defer result.deinit();
     try testing.expect(Child.succeeded(result.term()));
     try testing.expectEqual(1024, result.stdout().len);
     var counts: [4]usize = @splat(0);

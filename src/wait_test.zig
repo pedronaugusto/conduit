@@ -18,7 +18,7 @@ test "a watch on a child ends when the child does" {
         .stdio = .ignore,
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, 0) catch {};
+    defer _ = child.killWait(testing.io, .zero) catch {};
 
     // Every system this package is tested on has one; a system that has not is
     // one where the caller asks again instead, and there is nothing here to
@@ -40,7 +40,7 @@ test "a watch with a wake ends on the wake, then on the child" {
         .stdio = .{ .pipes = .{ .stdout = false, .stderr = false } },
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, 0) catch {};
+    defer _ = child.killWait(testing.io, .zero) catch {};
 
     const watch = Watch.open(child.state.id) orelse return error.SkipZigTest;
     defer watch.close();
@@ -71,7 +71,7 @@ test "a watch on a child that is still running says so" {
         .stdio = .ignore,
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, 0) catch {};
+    defer _ = child.killWait(testing.io, .zero) catch {};
 
     const watch = Watch.open(child.state.id) orelse return error.SkipZigTest;
     defer watch.close();
@@ -88,20 +88,20 @@ test "exit observation keeps the child's identity until its owner reaps it" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         .descendants = .contain,
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     const root = child.processId().?;
     // The owned wait identity is the private supervisor on Linux. The root
     // belongs to that supervisor; waitid in this process cannot observe it.
     const pid = child.state.id;
     try testing.expectEqual(Ended.running, endedUnreaped(pid));
     child.closeStdin(io);
-    const deadline: Deadline = .in(io, 5000);
+    const deadline: Deadline = .in(io, .fromMilliseconds(5000));
     while (endedUnreaped(pid) == .running and deadline.remainingMs(io) > 0)
         try io.sleep(.fromMilliseconds(1), .awake);
     try testing.expectEqual(Ended.ended, endedUnreaped(pid));
     // Observation left the wait identity unreaped and the root label intact.
     try testing.expectEqual(root, child.processId().?);
     try testing.expectEqual(@as(c_int, 0), c.kill(pid, @fromBackingInt(@intCast(0))));
-    try testing.expect(Child.succeeded((try child.waitTimeout(io, 5000)).?));
+    try testing.expect(Child.succeeded((try child.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))).?));
 }

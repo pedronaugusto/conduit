@@ -738,17 +738,17 @@ const LinuxCgroup = struct {
         return (MemberOps{ .dir = cgroup.dir }).populated();
     }
 
-    pub fn waitEmpty(cgroup: *const LinuxCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return (MemberOps{ .dir = cgroup.dir }).waitEmpty(io, timeout_ms);
+    pub fn waitEmpty(cgroup: *const LinuxCgroup, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        return (MemberOps{ .dir = cgroup.dir }).waitEmpty(io, timeout);
     }
 
     /// Lets go of the cgroup and removes it, or leaves it to be removed once
     /// what is in it has ended. Idempotent.
-    pub fn release(cgroup: *LinuxCgroup) void {
-        releaseWith(cgroup, Cleanup);
+    pub fn close(cgroup: *LinuxCgroup) void {
+        closeWith(cgroup, Cleanup);
     }
 
-    fn releaseWith(cgroup: *LinuxCgroup, comptime System: type) void {
+    fn closeWith(cgroup: *LinuxCgroup, comptime System: type) void {
         if (!cgroup.active()) return;
         if (System.remove(cgroup)) return;
         const retained = cgroup.*;
@@ -848,7 +848,7 @@ const LinuxRecorded = struct {
         return true;
     }
 
-    pub fn release(recorded: *LinuxRecorded) void {
+    pub fn close(recorded: *LinuxRecorded) void {
         if (!recorded.active()) return;
         if (recorded.remove()) return;
         _ = c.close(recorded.dir);
@@ -869,8 +869,8 @@ const LinuxRecorded = struct {
         return (MemberOps{ .dir = recorded.dir }).populated();
     }
 
-    pub fn waitEmpty(recorded: *const LinuxRecorded, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return (MemberOps{ .dir = recorded.dir }).waitEmpty(io, timeout_ms);
+    pub fn waitEmpty(recorded: *const LinuxRecorded, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        return (MemberOps{ .dir = recorded.dir }).waitEmpty(io, timeout);
     }
 };
 
@@ -903,23 +903,23 @@ const MemberOps = struct {
     ) std.mem.Allocator.Error!?usize {
         var storage: [64 * 1024]u8 = undefined;
         var scratch = std.heap.FixedBufferAllocator.init(&storage);
-        const allocator = scratch.allocator();
+        const gpa = scratch.allocator();
 
         var named: std.ArrayList(posix.pid_t) = .empty;
-        defer named.deinit(allocator);
-        if (!try cgroup.readMembers(allocator, &named)) return null;
+        defer named.deinit(gpa);
+        if (!try cgroup.readMembers(gpa, &named)) return null;
 
         var captured: std.ArrayList(Held) = .empty;
         defer {
             for (captured.items) |held| _ = c.close(held.pidfd);
-            captured.deinit(allocator);
+            captured.deinit(gpa);
         }
         for (named.items) |pid| {
             if (pid == leader or pid <= 1 or pid == c.getpid()) continue;
             if (in_group) |pgid| if (getpgid(pid) == pgid) continue;
             const rc = std.os.linux.pidfd_open(pid, 0);
             if (std.os.linux.errno(rc) != .SUCCESS) continue;
-            captured.append(allocator, .{ .pid = pid, .pidfd = @intCast(rc) }) catch |err| {
+            captured.append(gpa, .{ .pid = pid, .pidfd = @intCast(rc) }) catch |err| {
                 _ = c.close(@intCast(rc));
                 return err;
             };
@@ -930,7 +930,7 @@ const MemberOps = struct {
         // process is in the cgroup if the pid is listed now and the process is
         // still there when signalled: it held the number all along.
         named.clearRetainingCapacity();
-        if (!try cgroup.readMembers(allocator, &named)) return null;
+        if (!try cgroup.readMembers(gpa, &named)) return null;
         std.mem.sort(posix.pid_t, named.items, {}, std.sort.asc(posix.pid_t));
         var reached: usize = 0;
         for (captured.items) |held| {
@@ -950,7 +950,7 @@ const MemberOps = struct {
     /// `cgroup.procs`, every pid in it. `false` if it cannot be read.
     fn readMembers(
         cgroup: *const MemberOps,
-        allocator: std.mem.Allocator,
+        gpa: std.mem.Allocator,
         into: *std.ArrayList(posix.pid_t),
     ) std.mem.Allocator.Error!bool {
         const fd = c.openat(cgroup.dir, "cgroup.procs", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
@@ -969,7 +969,7 @@ const MemberOps = struct {
             var numbers = std.mem.tokenizeAny(u8, window[0..complete], "\n ");
             while (numbers.next()) |word| {
                 const pid = std.fmt.parseInt(posix.pid_t, word, 10) catch continue;
-                try into.append(allocator, pid);
+                try into.append(gpa, pid);
             }
             std.debug.assert(complete <= held);
             std.debug.assert(held <= window.len);
@@ -1001,9 +1001,9 @@ const MemberOps = struct {
     /// about. If the file cannot be opened, read or polled, only then use
     /// bounded 1–4 ms clock-based checks. True means empty; false means the
     /// deadline passed or the state could not be read.
-    pub fn waitEmpty(cgroup: *const MemberOps, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+    pub fn waitEmpty(cgroup: *const MemberOps, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
         if (!cgroup.active()) return true;
-        const deadline: Deadline = .in(io, timeout_ms);
+        const deadline: Deadline = .of(io, timeout);
         const events = c.openat(cgroup.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         defer {
             if (events >= 0) _ = c.close(events);
@@ -1080,7 +1080,7 @@ pub const Pending = struct {
         var kept = pending.cgroup;
         pending.cgroup = .none;
         if (!joined) {
-            kept.release();
+            kept.close();
             if (supported and had_join) Place.refuse();
         }
         return kept;
@@ -1089,7 +1089,7 @@ pub const Pending = struct {
     /// No child after all. Consumes the handoff; idempotent.
     pub fn abandon(pending: *Pending) void {
         _ = pending.closeProcs();
-        pending.cgroup.release();
+        pending.cgroup.close();
     }
 
     fn closeProcs(pending: *Pending) bool {
@@ -1174,14 +1174,14 @@ const NoCgroup = struct {
         return .unknown;
     }
 
-    pub fn waitEmpty(cgroup: *const NoCgroup, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+    pub fn waitEmpty(cgroup: *const NoCgroup, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
         _ = cgroup;
         _ = io;
-        _ = timeout_ms;
+        _ = timeout;
         return true;
     }
 
-    pub fn release(cgroup: *NoCgroup) void {
+    pub fn close(cgroup: *NoCgroup) void {
         _ = cgroup;
     }
 };
@@ -1196,7 +1196,7 @@ const NoRecorded = struct {
     pub fn remove(_: *NoRecorded) bool {
         return true;
     }
-    pub fn release(_: *NoRecorded) void {}
+    pub fn close(_: *NoRecorded) void {}
     pub fn kill(_: *const NoRecorded) bool {
         return false;
     }
@@ -1206,7 +1206,7 @@ const NoRecorded = struct {
     pub fn populated(_: *const NoRecorded) Populated {
         return .unknown;
     }
-    pub fn waitEmpty(_: *const NoRecorded, _: std.Io, _: u32) std.Io.Cancelable!bool {
+    pub fn waitEmpty(_: *const NoRecorded, _: std.Io, _: std.Io.Timeout) std.Io.Cancelable!bool {
         return true;
     }
 };
@@ -1267,7 +1267,7 @@ test "deferred cgroup cleanup keeps directory ownership instead of removing a re
     Replacement.closes = 0;
     Replacement.retained = null;
     var cgroup = LinuxCgroup.init(7, .{ .owner = 123, .sequence = 1 });
-    cgroup.releaseWith(Replacement);
+    cgroup.closeWith(Replacement);
     try std.testing.expectEqual(@as(usize, 0), Replacement.unlinks);
     try std.testing.expectEqual(@as(usize, 0), Replacement.closes);
     try std.testing.expect(!cgroup.active());
@@ -1283,7 +1283,7 @@ test "a consumed cgroup handoff cannot close a recycled join descriptor" {
     var pending = Pending.init(.none, ends[1]);
     errdefer pending.abandon();
     var kept = pending.started(true);
-    defer kept.release();
+    defer kept.close();
 
     // Force the just-closed descriptor to name a different, live pipe end.
     // No allocator or clock decides whether reuse happens in this test.

@@ -136,17 +136,17 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     // a partial pass.
     var storage: [64 * 1024]u8 = undefined;
     var scratch = std.heap.FixedBufferAllocator.init(&storage);
-    const allocator = scratch.allocator();
+    const gpa = scratch.allocator();
 
     var found: std.ArrayList(Process) = .empty;
     defer {
         for (found.items) |*process| process.deinit();
-        found.deinit(allocator);
+        found.deinit(gpa);
     }
-    try collect(allocator, root, in_group, &found);
+    try collect(gpa, root, in_group, &found);
     if (builtin.is_test) if (snapshot_witness) |pid| {
         var process = Process.capture(pid) orelse unreachable;
-        found.append(allocator, process) catch |err| {
+        found.append(gpa, process) catch |err| {
             process.deinit();
             return err;
         };
@@ -161,8 +161,8 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     // when it was captured. Prove every link through held identities before
     // delivering anything, so allocation failure cannot send a partial pass.
     var proven: std.ArrayList(bool) = .empty;
-    defer proven.deinit(allocator);
-    for (found.items) |*process| try proven.append(allocator, try provenBelow(allocator, anchor, process));
+    defer proven.deinit(gpa);
+    for (found.items) |*process| try proven.append(gpa, try provenBelow(gpa, anchor, process));
     if (!anchor.alive()) return 0;
 
     var reached: usize = 0;
@@ -185,9 +185,8 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
 /// pidfd; Darwin registers NOTE_EXIT with kqueue while the unique process id still
 /// matches. If registration is unavailable, a bounded 1–4 ms clock-based
 /// check is used. True means gone; false means the deadline passed.
-fn waitCaptured(io: std.Io, process: *const Process, timeout_ms: u32) std.Io.Cancelable!bool {
+fn waitCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.Cancelable!bool {
     if (!process.alive()) return true;
-    const deadline: Deadline = .in(io, timeout_ms);
     const watch: ?wait_for.Watch = if (builtin.target.os.tag == .linux)
         .{ .handle = process.pidfd }
     else
@@ -215,11 +214,11 @@ fn waitCaptured(io: std.Io, process: *const Process, timeout_ms: u32) std.Io.Can
 /// A child list is only a snapshot. Recheck each link through held process
 /// identities so a parent that ended, or a reused pid, cannot turn an entry
 /// in that list into permission to signal a stranger.
-fn provenBelow(allocator: std.mem.Allocator, root: *const Process, candidate: *const Process) std.mem.Allocator.Error!bool {
+fn provenBelow(gpa: std.mem.Allocator, root: *const Process, candidate: *const Process) std.mem.Allocator.Error!bool {
     var chain: std.ArrayList(Process) = .empty;
     defer {
         for (chain.items) |*held| held.deinit();
-        chain.deinit(allocator);
+        chain.deinit(gpa);
     }
     var current = candidate;
     while (current.alive()) {
@@ -233,7 +232,7 @@ fn provenBelow(allocator: std.mem.Allocator, root: *const Process, candidate: *c
             parent.deinit();
             return false;
         }
-        chain.append(allocator, parent) catch |err| {
+        chain.append(gpa, parent) catch |err| {
             parent.deinit();
             return err;
         };
@@ -256,28 +255,28 @@ fn parentOf(pid: posix.pid_t) ?posix.pid_t {
 /// makes walking it backwards the deepest-first order `signalDescendants`
 /// sends in.
 fn collect(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     root: posix.pid_t,
     in_group: ?posix.pid_t,
     into: *std.ArrayList(Process),
 ) std.mem.Allocator.Error!void {
     if (comptime builtin.target.os.tag == .linux) {
-        return collectLinux(allocator, root, in_group, into);
+        return collectLinux(gpa, root, in_group, into);
     }
 
     var descendants: std.ArrayList(posix.pid_t) = .empty;
-    defer descendants.deinit(allocator);
+    defer descendants.deinit(gpa);
 
-    try captureChildren(allocator, root, in_group, &descendants, into);
+    try captureChildren(gpa, root, in_group, &descendants, into);
     var expanded: usize = 0;
     while (expanded < descendants.items.len) : (expanded += 1) {
-        try captureChildren(allocator, descendants.items[expanded], in_group, &descendants, into);
+        try captureChildren(gpa, descendants.items[expanded], in_group, &descendants, into);
     }
 }
 
 /// Linux exposes the parent and process group in every process's `stat` file.
 fn collectLinux(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     root: posix.pid_t,
     in_group: ?posix.pid_t,
     into: *std.ArrayList(Process),
@@ -285,12 +284,12 @@ fn collectLinux(
     var table = ProcTable.open() orelse return;
     defer table.close();
     var below: std.ArrayList(TableRecord) = .empty;
-    defer below.deinit(allocator);
-    try treeFromTable(ProcTable, allocator, &table, root, &below);
+    defer below.deinit(gpa);
+    try treeFromTable(ProcTable, gpa, &table, root, &below);
     for (below.items) |record| {
         if (in_group) |pgid| if (record.pgrp == pgid) continue;
         var process = Process.capture(record.pid) orelse continue;
-        into.append(allocator, process) catch |err| {
+        into.append(gpa, process) catch |err| {
             process.deinit();
             return err;
         };
@@ -352,7 +351,7 @@ const ProcTable = struct {
 /// tree, whatever the size of the system.
 fn treeFromTable(
     comptime Table: type,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     table: *Table,
     root: posix.pid_t,
     into: *std.ArrayList(TableRecord),
@@ -363,7 +362,7 @@ fn treeFromTable(
         while (table.next()) |record| {
             if (record.pid == root or inTree(into.items, record.pid)) continue;
             if (record.ppid != root and !inTree(into.items, record.ppid)) continue;
-            try into.append(allocator, record);
+            try into.append(gpa, record);
         }
         if (into.items.len == before) return;
     }
@@ -511,7 +510,7 @@ pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
 /// nothing — once it has ended, never a process given the same pid since.
 /// `alive` says whether it has ended (a zombie has); ask it rather than
 /// sending signal 0, which Darwin refuses through a token. `processId()` is the
-/// number it had, for reports. `wait(io, timeout_ms)` waits without reaping:
+/// number it had, for reports. `wait(io, timeout)` waits without reaping:
 /// poll on the held pidfd on Linux, kqueue NOTE_EXIT on Darwin, and bounded
 /// 1–4 ms clock-based checks only if no event registration is available.
 /// `deinit` lets go of it.
@@ -553,8 +552,8 @@ pub const CapturedPid = struct {
         return captured.process.signalGroupSince(group, since, sig);
     }
 
-    pub fn wait(captured: *const CapturedPid, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return captured.process.wait(io, timeout_ms);
+    pub fn wait(captured: *const CapturedPid, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        return captured.process.wait(io, timeout);
     }
 
     /// Release exactly once; do not copy an owning captured identity.
@@ -617,7 +616,7 @@ pub const RecordedOptions = struct {
     /// Linux: the private adoption owner. It receives TERM as a request to
     /// empty its scope; never kill that owner before it has reaped the tree.
     supervisor: ?SupervisorRecord = null,
-    grace_ms: u32,
+    grace: std.Io.Duration,
 };
 
 /// What `killRecorded` can meet.
@@ -659,14 +658,14 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
             var owner = captured;
             defer owner.deinit();
             if (!owner.signal(.TERM) and owner.alive()) return error.UnableToEnd;
-            if (!try owner.wait(io, options.grace_ms +| 1000)) return error.UnableToEnd;
+            if (!try owner.wait(io, Deadline.within(.fromNanoseconds(options.grace.nanoseconds +| std.time.ns_per_s)))) return error.UnableToEnd;
             ended = true;
         }
         if (options.cgroup) |contained| {
             const had_members = contained.populated() != .none;
             if (had_members) {
                 if (!contained.kill()) return error.UnableToEnd;
-                if (!try contained.waitEmpty(io, 1000)) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, Deadline.within(.fromSeconds(1)))) return error.UnableToEnd;
             }
             _ = contained.remove();
             ended = ended or had_members;
@@ -679,9 +678,9 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
             // Even if the member list cannot be read, the verified cgroup
             // can still be ended with cgroup.kill after the grace.
             _ = try contained.signalMembers(.TERM, 0, null);
-            if (!try contained.waitEmpty(io, options.grace_ms)) {
+            if (!try contained.waitEmpty(io, Deadline.within(options.grace))) {
                 if (!contained.kill()) return error.UnableToEnd;
-                if (!try contained.waitEmpty(io, 1000)) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, Deadline.within(.fromSeconds(1)))) return error.UnableToEnd;
             }
         }
         _ = contained.remove();
@@ -704,26 +703,26 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
     defer root.deinit();
     var storage: [64 * 1024]u8 = undefined;
     var scratch = std.heap.FixedBufferAllocator.init(&storage);
-    const allocator = scratch.allocator();
+    const gpa = scratch.allocator();
     var found: std.ArrayList(Process) = .empty;
     defer {
         for (found.items) |*process| process.deinit();
-        found.deinit(allocator);
+        found.deinit(gpa);
     }
-    try collect(allocator, root.pid, null, &found);
+    try collect(gpa, root.pid, null, &found);
     if (!root.alive()) return error.Unproven;
 
     var verified: std.ArrayList(bool) = .empty;
-    defer verified.deinit(allocator);
+    defer verified.deinit(gpa);
     var accounted: std.ArrayList(Started) = .empty;
-    defer accounted.deinit(allocator);
+    defer accounted.deinit(gpa);
     var unproven = false;
     for (found.items) |*process| {
-        const holds = try provenBelow(allocator, &root, process);
-        try verified.append(allocator, holds);
+        const holds = try provenBelow(gpa, &root, process);
+        try verified.append(gpa, holds);
         if (!holds and process.alive()) unproven = true;
         if (holds and builtin.target.os.tag == .linux and options.group != null) {
-            if (try startTime(process.pid)) |since| try accounted.append(allocator, .{ .pid = process.pid, .start = since });
+            if (try startTime(process.pid)) |since| try accounted.append(gpa, .{ .pid = process.pid, .start = since });
         }
     }
 
@@ -734,11 +733,11 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
     }
     _ = root.signal(.TERM);
 
-    const grace: Deadline = .in(io, options.grace_ms);
+    const grace: Deadline = .in(io, options.grace);
     for (found.items, verified.items) |*process, holds| {
-        if (holds and process.alive()) _ = try process.wait(io, grace.remainingMs(io));
+        if (holds and process.alive()) _ = try process.wait(io, grace.toTimeout());
     }
-    if (root.alive()) _ = try root.wait(io, grace.remainingMs(io));
+    if (root.alive()) _ = try root.wait(io, grace.toTimeout());
 
     for (found.items, verified.items) |*process, holds| {
         if (holds) try killHeld(Process, process);
@@ -884,20 +883,20 @@ const proc_pidtbsdinfo = 3;
 const proc_status_zombie = 5;
 
 fn captureChildren(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     parent: posix.pid_t,
     in_group: ?posix.pid_t,
     descendants: *std.ArrayList(posix.pid_t),
     into: *std.ArrayList(Process),
 ) std.mem.Allocator.Error!void {
     const first = descendants.items.len;
-    try childrenOf(allocator, parent, descendants);
+    try childrenOf(gpa, parent, descendants);
     for (descendants.items[first..]) |pid| {
         // The group signal is already a stable address for this process. Only
         // an escapee needs a separate identity retained for the later signal.
         if (in_group) |pgid| if (getpgid(pid) == pgid) continue;
         var process = Process.capture(pid) orelse continue;
-        into.append(allocator, process) catch |err| {
+        into.append(gpa, process) catch |err| {
             process.deinit();
             return err;
         };
@@ -935,8 +934,8 @@ const LinuxProcess = struct {
         return signalGroupSinceImpl(group, process.pid, since, sig, &.{});
     }
 
-    pub fn wait(process: *const LinuxProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return waitCaptured(io, process, timeout_ms);
+    pub fn wait(process: *const LinuxProcess, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        return waitCaptured(io, process, .of(io, timeout));
     }
 
     /// Whether the process has not ended. A pidfd becomes readable when its
@@ -1021,12 +1020,12 @@ pub const DarwinProcess = struct {
 
         var storage: [32 * 1024]u8 = undefined;
         var scratch = std.heap.FixedBufferAllocator.init(&storage);
-        const allocator = scratch.allocator();
+        const gpa = scratch.allocator();
         var pids: std.ArrayList(posix.pid_t) = .empty;
-        defer pids.deinit(allocator);
+        defer pids.deinit(gpa);
         var capacity: usize = 64;
         while (true) {
-            try pids.resize(allocator, capacity);
+            try pids.resize(gpa, capacity);
             const count = proc_listpgrppids(group, pids.items.ptr, @intCast(capacity * @sizeOf(posix.pid_t)));
             if (count < 0) return error.Unsupported;
             if (@as(usize, @intCast(count)) < capacity) {
@@ -1038,7 +1037,7 @@ pub const DarwinProcess = struct {
         }
 
         var held: std.ArrayList(DarwinProcess) = .empty;
-        defer held.deinit(allocator);
+        defer held.deinit(gpa);
         for (pids.items) |pid| {
             if (pid <= 1 or pid == process.pid or pid == c.getpid()) continue;
             const member = DarwinProcess.capture(pid) orelse continue;
@@ -1047,7 +1046,7 @@ pub const DarwinProcess = struct {
                 info.pgid != @as(u32, @intCast(group)) or
                 info.start_tvsec *% std.time.us_per_s +% info.start_tvusec < since or
                 getsid(pid) != process.pid or !member.alive()) continue;
-            try held.append(allocator, member);
+            try held.append(gpa, member);
         }
         // The group and session may be re-used only after the original one
         // has gone. Check the stable unique id after enumeration and before
@@ -1060,8 +1059,8 @@ pub const DarwinProcess = struct {
         return reached;
     }
 
-    pub fn wait(process: *const DarwinProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
-        return waitCaptured(io, process, timeout_ms);
+    pub fn wait(process: *const DarwinProcess, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        return waitCaptured(io, process, .of(io, timeout));
     }
 
     /// Look up the current executable only while the stable process identity
@@ -1136,10 +1135,10 @@ const NoProcess = struct {
         return error.Unsupported;
     }
 
-    pub fn wait(process: *const NoProcess, io: std.Io, timeout_ms: u32) std.Io.Cancelable!bool {
+    pub fn wait(process: *const NoProcess, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
         _ = process;
         _ = io;
-        _ = timeout_ms;
+        _ = timeout;
         return true;
     }
 
@@ -1158,20 +1157,20 @@ extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *anyopaq
 extern "c" fn proc_signal_with_audittoken(token: *AuditToken, sig: c_int) c_int;
 
 /// The immediate children of `pid`.
-fn childrenOf(allocator: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
+fn childrenOf(gpa: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
     return switch (builtin.target.os.tag) {
-        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => childrenOfDarwin(allocator, pid, into),
+        .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => childrenOfDarwin(gpa, pid, into),
         // No cheap way to ask, so the process group is the whole of the reach.
-        else => childrenOfNobody(allocator, pid, into),
+        else => childrenOfNobody(gpa, pid, into),
     };
 }
 
 fn childrenOfNobody(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     pid: posix.pid_t,
     into: *std.ArrayList(posix.pid_t),
 ) std.mem.Allocator.Error!void {
-    _ = allocator;
+    _ = gpa;
     _ = pid;
     _ = into;
 }
@@ -1185,8 +1184,8 @@ fn childrenOfNobody(
 /// number.
 extern "c" fn proc_listchildpids(ppid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
-fn childrenOfDarwin(allocator: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
-    observedChildrenOfDarwin(allocator, pid, into) catch |err| switch (err) {
+fn childrenOfDarwin(gpa: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
+    observedChildrenOfDarwin(gpa, pid, into) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.SystemResources => return,
     };
@@ -1194,7 +1193,7 @@ fn childrenOfDarwin(allocator: std.mem.Allocator, pid: posix.pid_t, into: *std.A
 
 /// An observer must distinguish an unreadable list from an empty one.
 pub fn observedChildrenOfDarwin(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     pid: posix.pid_t,
     into: *std.ArrayList(posix.pid_t),
 ) error{ OutOfMemory, SystemResources }!void {
@@ -1207,7 +1206,7 @@ pub fn observedChildrenOfDarwin(
     if (written == 0) return;
     const local_count: usize = @intCast(written);
     if (local_count < local.len) {
-        try into.appendSlice(allocator, local[0..local_count]);
+        try into.appendSlice(gpa, local[0..local_count]);
         return;
     }
 
@@ -1217,7 +1216,7 @@ pub fn observedChildrenOfDarwin(
     var capacity: usize = @max(@as(usize, @intCast(estimate)), local.len * 2);
     while (true) {
         const first = into.items.len;
-        try into.resize(allocator, first + capacity);
+        try into.resize(gpa, first + capacity);
         const bytes: c_int = @intCast(capacity * @sizeOf(posix.pid_t));
         const count = proc_listchildpids(pid, into.items[first..].ptr, bytes);
         if (count <= 0) {
@@ -1639,7 +1638,7 @@ test "a descendant that escaped the process group is still killed" {
     try std.testing.expectEqual(@as(usize, 1), try held.signalDescendants(.KILL, root));
     _ = c.kill(-root, .KILL);
 
-    const deadline: Deadline = .in(std.testing.io, 5000);
+    const deadline: Deadline = .in(std.testing.io, .fromMilliseconds(5000));
     while (deadline.remainingMs(std.testing.io) > 0) {
         if (c.kill(escaped, @as(posix.SIG, @fromBackingInt(@intCast(0)))) != 0 and
             c.errno(@as(c_int, -1)) == .SRCH) return;

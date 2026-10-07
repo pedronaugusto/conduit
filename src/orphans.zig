@@ -107,7 +107,7 @@ pub const Orphans = struct {
     // Fields are private: read and change them only through the methods.
     /// Every list here. Must be safe to use from more than one thread: spawns and
     /// reaps on any thread add to and look at them.
-    allocator: Allocator,
+    gpa: Allocator,
     /// The children conduit started while this runs, and the ones this process
     /// had when `start` was called: not this one's to reap. Added to by spawns,
     /// which hold `gate` shared and `own_lock`; pruned by `look`, which holds
@@ -137,9 +137,9 @@ pub const Orphans = struct {
     pub const supported = builtin.target.os.tag == .linux;
 
     /// An `Orphans` that is not running. `start` makes it run.
-    pub fn init(allocator: Allocator) Orphans {
+    pub fn init(gpa: Allocator) Orphans {
         return .{
-            .allocator = allocator,
+            .gpa = gpa,
             .own = .empty,
             .own_lock = .{},
             .adopted = .empty,
@@ -206,7 +206,7 @@ pub const Orphans = struct {
         // somebody's, and not an orphan's.
         errdefer {
             orphans.releaseAll();
-            orphans.own.deinit(orphans.allocator);
+            orphans.own.deinit(orphans.gpa);
             orphans.own = .empty;
         }
         try forEachChild(orphans, claim);
@@ -223,7 +223,7 @@ pub const Orphans = struct {
     /// look finds none left.
     ///
     /// Each adopted process and what it started are asked with `SIGTERM`, deepest
-    /// first, given `grace_ms`, and then sent `SIGKILL`; a grace of zero is
+    /// first, given `grace`, and then sent `SIGKILL`; a grace of zero is
     /// `SIGKILL` at once. An adopted process's own children are reached by the
     /// walk `Child.kill` uses, and whatever that misses is adopted when its parent
     /// ends and ended in its turn. Every signal to an adopted process goes
@@ -233,10 +233,10 @@ pub const Orphans = struct {
     /// `kill`. What is adopted while this runs is ended too, so a program that is
     /// still leaving orphans keeps this busy; it is the call for the end of a
     /// program. It waits by sleeping between looks, and is a cancelation point.
-    pub fn killAll(orphans: *Orphans, io: std.Io, grace_ms: u32) KillError!void {
+    pub fn killAll(orphans: *Orphans, io: std.Io, grace: std.Io.Duration) KillError!void {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return;
-        const deadline: wait_for.Deadline = .in(io, grace_ms);
+        const deadline: wait_for.Deadline = .in(io, grace);
         var interval_ms: u32 = 1;
         // A `children` file read while a child is being reaped elsewhere may pass
         // over another child, so "nothing left" is believed after two looks.
@@ -251,7 +251,7 @@ pub const Orphans = struct {
                     try orphans.look();
                 }
                 orphans.reapEnded();
-                const insisting = grace_ms == 0 or deadline.remainingMs(io) == 0;
+                const insisting = grace.nanoseconds <= 0 or deadline.remainingMs(io) == 0;
                 for (orphans.adopted.items) |*held| held.ask(if (insisting) .kill else .terminate);
                 break :left orphans.adopted.items.len;
             };
@@ -342,8 +342,8 @@ pub const Orphans = struct {
         current = null;
         orphans.running = false;
         orphans.releaseAll();
-        orphans.own.deinit(orphans.allocator);
-        orphans.adopted.deinit(orphans.allocator);
+        orphans.own.deinit(orphans.gpa);
+        orphans.adopted.deinit(orphans.gpa);
         orphans.own = .empty;
         orphans.adopted = .empty;
     }
@@ -435,7 +435,7 @@ pub const Orphans = struct {
             };
             orphans.own_lock.lock();
             defer orphans.own_lock.unlock();
-            orphans.own.append(orphans.allocator, held) catch {
+            orphans.own.append(orphans.gpa, held) catch {
                 held.close();
                 return error.OutOfMemory;
             };
@@ -702,7 +702,7 @@ pub const Orphans = struct {
             error.Gone => return,
             else => |e| return e,
         };
-        orphans.adopted.append(orphans.allocator, held) catch {
+        orphans.adopted.append(orphans.gpa, held) catch {
             held.close();
             return error.OutOfMemory;
         };
@@ -716,7 +716,7 @@ pub const Orphans = struct {
             error.Gone => return,
             else => |e| return e,
         };
-        orphans.own.append(orphans.allocator, held) catch {
+        orphans.own.append(orphans.gpa, held) catch {
             held.close();
             return error.OutOfMemory;
         };

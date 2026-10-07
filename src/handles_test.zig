@@ -1,4 +1,5 @@
 const std = @import("std");
+const Deadline = @import("conduit.tty").Deadline;
 const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
@@ -17,10 +18,10 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer {
-        _ = child.killWait(io, 0) catch {};
-        child.release(io) catch unreachable;
+        _ = child.killWait(io, .zero) catch {};
+        child.deinit(io);
     }
-    try testing.expect((try child.waitTimeout(io, 5000)) != null);
+    try testing.expect((try child.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) != null);
     try testing.expectError(error.BrokenPipe, writeStreamingAll(io, child.stdinFile().?, "closed"));
 
     var tmp = testing.tmpDir(.{});

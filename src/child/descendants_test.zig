@@ -13,6 +13,8 @@ const Reaper = @import("../reaper.zig").Reaper;
 const lineage = @import("../lineage.zig");
 const test_options = @import("conduit_test_options");
 const budget_ms = 5000;
+const budget: std.Io.Duration = .fromMilliseconds(budget_ms);
+const within_budget: std.Io.Timeout = .{ .duration = .{ .raw = budget, .clock = .awake } };
 extern "c" fn getpgid(pid: std.posix.pid_t) std.posix.pid_t;
 extern "c" fn getsid(pid: std.posix.pid_t) std.posix.pid_t;
 
@@ -40,7 +42,7 @@ const Process = if (windows) struct {
     fn end(process: *Process) void {
         _ = process.held.signal(.KILL);
         // ziglint-ignore: Z026 cleanup after SIGKILL; what the test asserts was asserted before it
-        _ = process.held.wait(io, budget_ms) catch {};
+        _ = process.held.wait(io, within_budget) catch {};
         process.held.deinit();
     }
 };
@@ -49,8 +51,8 @@ const Fixture = struct {
     child: Child,
     daemon: Process,
     tmp: std.testing.TmpDir,
-    /// Whether a test released the child itself; release ends a Child.
-    released: bool = false,
+    /// Whether a test finished and deinited the child itself.
+    finished: bool = false,
 
     fn start(policy: Child.Descendants, argument: []const u8) !Fixture {
         var tmp = std.testing.tmpDir(.{});
@@ -67,8 +69,8 @@ const Fixture = struct {
         };
         if (policy == .contain) options.descendants = .contain;
         var child = try Child.spawn(gpa, io, options);
-        errdefer child.release(io) catch unreachable;
-        errdefer _ = child.killWait(io, 0) catch {};
+        errdefer child.deinit(io);
+        errdefer _ = child.killWait(io, .zero) catch {};
         var buffer: [64]u8 = undefined;
         var reader = child.stdoutReader(io, &buffer).?;
         const line = try reader.interface.takeDelimiterExclusive('\n');
@@ -84,16 +86,17 @@ const Fixture = struct {
         return .{ .child = child, .daemon = daemon, .tmp = tmp };
     }
 
-    fn release(fixture: *Fixture) Child.ReleaseError!void {
-        try fixture.child.release(io);
-        fixture.released = true;
+    fn finish(fixture: *Fixture) Child.FinishError!void {
+        try fixture.child.finish(io);
+        fixture.child.deinit(io);
+        fixture.finished = true;
     }
 
     fn deinit(fixture: *Fixture) void {
-        if (!fixture.released) {
-            // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
-            _ = fixture.child.killWait(io, 0) catch {};
-            fixture.child.release(io) catch unreachable;
+        if (!fixture.finished) {
+            // ziglint-ignore: Z026 cleanup; finish asserts the child is reaped
+            _ = fixture.child.killWait(io, .zero) catch {};
+            fixture.child.deinit(io);
         }
         fixture.daemon.end();
         fixture.tmp.cleanup();
@@ -101,7 +104,7 @@ const Fixture = struct {
     }
 
     fn expectEnded(fixture: *Fixture) !void {
-        const deadline: Deadline = .in(io, budget_ms);
+        const deadline: Deadline = .in(io, budget);
         while (fixture.daemon.alive() and deadline.remainingMs(io) > 0)
             try io.sleep(.fromMilliseconds(2), .awake);
         try std.testing.expect(!fixture.daemon.alive());
@@ -114,22 +117,22 @@ test "normal reap and deinit leave a detached daemon alive by default" {
         defer fixture.deinit();
         fixture.child.closeStdin(io);
         const term = if (comptime std.mem.eql(u8, method, "tryWait")) term: {
-            const deadline: Deadline = .in(io, budget_ms);
+            const deadline: Deadline = .in(io, budget);
             while (deadline.remainingMs(io) > 0) {
                 if (try fixture.child.tryWait()) |term| break :term term;
                 try io.sleep(.fromMilliseconds(2), .awake);
             }
             return error.TestChildDidNotExit;
         } else if (comptime std.mem.eql(u8, method, "output")) term: {
-            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
-            defer output.deinit(gpa);
+            var output = try fixture.child.output(gpa, io, .{ .timeout = within_budget });
+            defer output.deinit();
             break :term output.term();
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io);
-            break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
-        } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+            break :term (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
+        } else (try fixture.child.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .exited = if (comptime std.mem.eql(u8, method, "exit-7")) 7 else 0 }, term);
         if (windows) {
             var limits: win32.JobObjectExtendedLimitInformation = undefined;
@@ -138,7 +141,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_active_process != 0);
             try std.testing.expect(limits.BasicLimitInformation.LimitFlags & win32.job_object_limit_kill_on_job_close == 0);
         }
-        fixture.release() catch unreachable;
+        fixture.finish() catch unreachable;
         try std.testing.expect(fixture.daemon.alive());
         // Observe beyond the asynchronous termination boundary as well.
         try io.sleep(.fromMilliseconds(50), .awake);
@@ -152,25 +155,25 @@ test "containment ends a daemon after normal completion through every reap" {
         defer fixture.deinit();
         fixture.child.closeStdin(io);
         if (comptime std.mem.eql(u8, method, "wait")) {
-            try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
+            try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, within_budget)).?));
         } else if (comptime std.mem.eql(u8, method, "tryWait")) {
-            const deadline: Deadline = .in(io, budget_ms);
+            const deadline: Deadline = .in(io, budget);
             const term = while (deadline.remainingMs(io) > 0) {
                 if (try fixture.child.tryWait()) |term| break term;
                 try io.sleep(.fromMilliseconds(2), .awake);
             } else return error.TestChildDidNotExit;
             try std.testing.expect(Child.succeeded(term));
         } else if (comptime std.mem.eql(u8, method, "output")) {
-            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
-            defer output.deinit(gpa);
+            var output = try fixture.child.output(gpa, io, .{ .timeout = within_budget });
+            defer output.deinit();
             try std.testing.expect(Child.succeeded(output.term()));
         } else {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io);
-            try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
+            try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, within_budget)).?));
         }
-        fixture.release() catch unreachable;
+        fixture.finish() catch unreachable;
         try fixture.expectEnded();
     }
 }
@@ -181,21 +184,21 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
             var fixture = try Fixture.start(policy, "--escape");
             defer fixture.deinit();
             if (comptime std.mem.eql(u8, operation, "timeout")) {
-                var output = try fixture.child.output(gpa, io, .{ .timeout_ms = 50, .grace_ms = 50 });
-                defer output.deinit(gpa);
+                var output = try fixture.child.output(gpa, io, .{ .timeout = Deadline.within(.fromMilliseconds(50)), .grace = .fromMilliseconds(50) });
+                defer output.deinit();
                 try std.testing.expect(output.timedOut());
             } else if (comptime std.mem.eql(u8, operation, "kill")) {
                 try fixture.child.kill(.kill);
-                _ = (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+                _ = (try fixture.child.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
             } else if (comptime std.mem.eql(u8, operation, "killWait")) {
-                _ = try fixture.child.killWait(io, 50);
+                _ = try fixture.child.killWait(io, .fromMilliseconds(50));
             } else {
                 fixture.child.stdoutFile().?.close(io);
                 fixture.child.state.stdout.?.handle = if (windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
                 defer _ = fixture.child.takeStdout();
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }
-            fixture.release() catch unreachable;
+            fixture.finish() catch unreachable;
             try fixture.expectEnded();
         }
     }
@@ -212,13 +215,13 @@ test "a walk too large to hold still kills and reaps the child itself" {
         var fixture = try Fixture.start(.survive, "--escape");
         defer fixture.deinit();
         try std.testing.expectError(error.OutOfMemory, fixture.child.kill(.kill));
-        const term = (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+        const term = (try fixture.child.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term);
     }
     {
         var fixture = try Fixture.start(.survive, "--escape");
         defer fixture.deinit();
-        try std.testing.expectError(error.OutOfMemory, fixture.child.killWait(io, 0));
+        try std.testing.expectError(error.OutOfMemory, fixture.child.killWait(io, .zero));
         try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try fixture.child.tryWait()).?);
     }
 }
@@ -240,30 +243,30 @@ test "containment ends a double-forked session after normal exit" {
         // immediate parent exit is measured separately below.
         if (builtin.target.os.tag == .macos) {
             const tracker = fixture.child.state.lineage.?;
-            const deadline: Deadline = .in(io, budget_ms);
+            const deadline: Deadline = .in(io, budget);
             while (tracker.observed.load(.acquire) < 3 and deadline.remainingMs(io) > 0)
                 try io.sleep(.fromMilliseconds(2), .awake);
             try std.testing.expect(tracker.observed.load(.acquire) >= 3);
         }
         fixture.child.closeStdin(io);
         if (comptime std.mem.eql(u8, method, "tryWait")) {
-            const deadline: Deadline = .in(io, budget_ms);
+            const deadline: Deadline = .in(io, budget);
             const term = while (deadline.remainingMs(io) > 0) {
                 if (try fixture.child.tryWait()) |term| break term;
                 try io.sleep(.fromMilliseconds(2), .awake);
             } else return error.TestChildDidNotExit;
             try std.testing.expect(Child.succeeded(term));
         } else if (comptime std.mem.eql(u8, method, "output")) {
-            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
-            defer output.deinit(gpa);
+            var output = try fixture.child.output(gpa, io, .{ .timeout = within_budget });
+            defer output.deinit();
             try std.testing.expect(Child.succeeded(output.term()));
         } else if (comptime std.mem.eql(u8, method, "Reaper")) {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io);
-            try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
-        } else try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
-        fixture.release() catch unreachable;
+            try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, within_budget)).?));
+        } else try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, within_budget)).?));
+        fixture.finish() catch unreachable;
         try fixture.expectEnded();
     }
 }
@@ -283,7 +286,7 @@ test "Darwin measures the fork then exit registration race" {
             var fixture = try Fixture.start(.contain, "--race");
             defer fixture.deinit();
             fixture.child.closeStdin(io);
-            try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, budget_ms)).?));
+            try std.testing.expect(Child.succeeded((try fixture.child.waitTimeout(io, within_budget)).?));
             // A survivor is counted, then ended through the fixture's captured
             // identity. Measuring a race does not turn it into a guarantee.
             if (fixture.daemon.alive()) escapes += 1;
@@ -314,20 +317,20 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
         .argv = &.{ "/bin/sh", "-c", "read x; exit 7" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer unrelated.release(io) catch unreachable;
-    defer _ = unrelated.killWait(io, 0) catch {};
+    defer unrelated.deinit(io);
+    defer _ = unrelated.killWait(io, .zero) catch {};
     try std.testing.expect(!fixture.child.state.cgroup.active());
     const daemon_id = fixture.daemon.held.processId();
     try reaper.start(io);
     fixture.child.closeStdin(io);
-    try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
+    try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, within_budget)).?));
     try fixture.expectEnded();
     var status: c_int = 0;
     try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(daemon_id, &status, std.posix.W.NOHANG));
     try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
     try std.testing.expectEqual(@as(?Child.Term, null), try unrelated.tryWait());
     unrelated.closeStdin(io);
-    try std.testing.expectEqual(Child.Term{ .exited = 7 }, (try unrelated.waitTimeout(io, budget_ms)).?);
+    try std.testing.expectEqual(Child.Term{ .exited = 7 }, (try unrelated.waitTimeout(io, within_budget)).?);
 }
 
 test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
@@ -347,8 +350,8 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     var holding = true;
     defer {
         if (holding) held.release();
-        reaper.kill(io, 0);
-        _ = fixture.child.killWait(io, 0) catch {};
+        reaper.kill(io, .zero);
+        _ = fixture.child.killWait(io, .zero) catch {};
         reaper.stop(io) catch unreachable;
         reaper.deinit(io);
         fixture.deinit();
@@ -364,7 +367,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     // This proves adoption before CHILD could be used as evidence of a reap.
     try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null)));
     try std.testing.expect(fixture.daemon.held.signal(.KILL));
-    const deadline: Deadline = .in(io, budget_ms);
+    const deadline: Deadline = .in(io, budget);
     while (deadline.remainingMs(io) > 0) {
         const result = linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null));
         if (result == .CHILD) break;
@@ -376,7 +379,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     held.release();
     holding = false;
     fixture.child.closeStdin(io);
-    try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, budget_ms)).?));
+    try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, within_budget)).?));
 }
 
 test "independent contained Linux children end only their own detached orphans" {
@@ -388,12 +391,12 @@ test "independent contained Linux children end only their own detached orphans" 
     var second = try Fixture.start(.contain, "--race");
     defer second.deinit();
     first.child.closeStdin(io);
-    try std.testing.expect(Child.succeeded((try first.child.waitTimeout(io, budget_ms)).?));
+    try std.testing.expect(Child.succeeded((try first.child.waitTimeout(io, within_budget)).?));
     try first.expectEnded();
     try std.testing.expect(second.daemon.alive());
     try std.testing.expectEqual(@as(?Child.Term, null), try second.child.tryWait());
     second.child.closeStdin(io);
-    try std.testing.expect(Child.succeeded((try second.child.waitTimeout(io, budget_ms)).?));
+    try std.testing.expect(Child.succeeded((try second.child.waitTimeout(io, within_budget)).?));
     try second.expectEnded();
 }
 
@@ -401,8 +404,8 @@ test "a private supervisor preserves the root exit code and signal" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     inline for (.{ "exit 7", "kill -TERM $$" }, .{ Child.Term{ .exited = 7 }, Child.Term{ .signal = .TERM } }) |script, expected| {
         var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
-        defer child.release(io) catch unreachable;
-        try std.testing.expectEqual(expected, (try child.waitTimeout(io, budget_ms)).?);
+        defer child.deinit(io);
+        try std.testing.expectEqual(expected, (try child.waitTimeout(io, within_budget)).?);
         try std.testing.expectEqual(expected, (try child.tryWait()).?);
     }
 }
@@ -421,10 +424,10 @@ test "a saved private supervisor ends only its recorded scope" {
     try std.testing.expect(record.supervisor.?.pid != first.child.processId().?);
     var wrong = record.supervisor.?;
     wrong.start += 1;
-    try std.testing.expect(!try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = wrong, .grace_ms = 0 }));
+    try std.testing.expect(!try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = wrong, .grace = .zero }));
     try std.testing.expect(first.daemon.alive());
-    try std.testing.expect(try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = record.supervisor, .grace_ms = 0 }));
-    try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try first.child.waitTimeout(io, budget_ms)).?);
+    try std.testing.expect(try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = record.supervisor, .grace = .zero }));
+    try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try first.child.waitTimeout(io, within_budget)).?);
     try first.expectEnded();
     try std.testing.expect(second.daemon.alive());
 }
@@ -454,7 +457,7 @@ test "dropping a contained child ends and reaps its private supervisor" {
     defer {
         while (std.c.waitpid(scope, &status, 0) < 0 and std.posix.errno(-1) == .INTR) {}
     }
-    child.release(io) catch unreachable;
+    child.deinit(io);
     try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(scope, &status, std.posix.W.NOHANG));
     try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
 }
@@ -478,13 +481,13 @@ test "every catchable supervisor stop ends and reaps its detached adoptee" {
         var fixture = try Fixture.start(.contain, "--race");
         defer fixture.deinit();
         try std.testing.expectEqual(@as(c_int, 0), std.c.kill(fixture.child.state.id, signal));
-        const term = try fixture.child.waitTimeout(io, budget_ms);
+        const term = try fixture.child.waitTimeout(io, within_budget);
         try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term.?);
         try std.testing.expect(!fixture.daemon.alive());
     }
 }
 
-test "a failed private scope release keeps ownership for retry" {
+test "a failed private scope finish keeps ownership for retry" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const supervisor = @import("../supervisor.zig");
     var fixture = try Fixture.start(.contain, "--race");
@@ -492,11 +495,11 @@ test "a failed private scope release keeps ownership for retry" {
     const scope = fixture.child.state.id;
     supervisor.testing_hook.fail_request = true;
     defer supervisor.testing_hook.fail_request = false;
-    try std.testing.expectError(error.Unexpected, fixture.release());
+    try std.testing.expectError(error.Unexpected, fixture.finish());
     try std.testing.expectEqual(scope, fixture.child.state.id);
     try std.testing.expect(fixture.daemon.alive());
     supervisor.testing_hook.fail_request = false;
-    try fixture.release();
+    try fixture.finish();
     try std.testing.expect(!fixture.daemon.alive());
 }
 
@@ -508,24 +511,24 @@ test "a contained Windows wait confirms every Job member ended before returning"
         defer fixture.deinit();
         fixture.child.closeStdin(io);
         const term = if (comptime std.mem.eql(u8, method, "tryWait")) term: {
-            const deadline: Deadline = .in(io, budget_ms);
+            const deadline: Deadline = .in(io, budget);
             while (deadline.remainingMs(io) > 0) {
                 if (try fixture.child.tryWait()) |ended| break :term ended;
                 try io.sleep(.fromMilliseconds(2), .awake);
             }
             return error.TestChildDidNotExit;
         } else if (comptime std.mem.eql(u8, method, "output")) term: {
-            var output = try fixture.child.output(gpa, io, .{ .timeout_ms = budget_ms });
-            defer output.deinit(gpa);
+            var output = try fixture.child.output(gpa, io, .{ .timeout = within_budget });
+            defer output.deinit();
             break :term output.term();
         } else if (comptime std.mem.eql(u8, method, "Reaper")) term: {
             var reaper: Reaper = .init(&fixture.child, .{});
             try reaper.start(io);
             defer reaper.deinit(io);
-            break :term (try reaper.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
-        } else (try fixture.child.waitTimeout(io, budget_ms)) orelse return error.TestChildDidNotExit;
+            break :term (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
+        } else (try fixture.child.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .exited = 7 }, term);
         try std.testing.expect(!fixture.daemon.alive());
-        try std.testing.expect(try fixture.child.waitTree(io, 0));
+        try std.testing.expect(try fixture.child.waitTree(io, Deadline.within(.fromMilliseconds(0))));
     }
 }

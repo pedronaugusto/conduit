@@ -1,6 +1,7 @@
 //! The private Linux supervisor, driven by hand: a scope stop it saved
 //! before its first poll still ends the scope.
 const std = @import("std");
+const Deadline = @import("conduit.tty").Deadline;
 const c = std.c;
 const posix = std.posix;
 const linux = std.os.linux;
@@ -45,9 +46,9 @@ test "a saved scope stop before its first poll still ends the scope" {
     defer root_held.deinit();
     defer _ = root_held.signal(.KILL);
     try t.expectEqual(@as(isize, 1), c.write(ends[0], "1", 1));
-    try t.expect(try owner.wait(t.io, 5000));
+    try t.expect(try owner.wait(t.io, Deadline.within(.fromSeconds(5))));
     var answer: supervisor.Result = undefined;
     try t.expectEqual(@as(isize, @sizeOf(supervisor.Result)), c.read(ends[0], std.mem.asBytes(&answer).ptr, @sizeOf(supervisor.Result)));
     try t.expectEqual(@as(u32, 0), answer.failed);
-    try t.expect(try root_held.wait(t.io, 5000));
+    try t.expect(try root_held.wait(t.io, Deadline.within(.fromMilliseconds(5000))));
 }

@@ -249,7 +249,7 @@ pub const Child = struct {
 
     /// Starts `options.argv` as a child process.
     ///
-    /// `allocator` builds the arguments and environment and owns the lifecycle
+    /// `gpa` builds the arguments and environment and owns the lifecycle
     /// state until `deinit`. It must outlive the Child. `io` closes every handle
     /// the parent opened here and does not keep.
     ///
@@ -272,7 +272,7 @@ pub const Child = struct {
     /// nor an ignored one, so without this a program started from, say, a shell's
     /// background job would inherit an ignored `SIGINT` and be deaf to Ctrl-C on
     /// its own terminal.
-    pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions) SpawnError!Child {
+    pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions) SpawnError!Child {
         if (options.argv.len == 0) return error.InvalidArgv;
         // An argument is passed on as a string that ends at a NUL: the child
         // would receive less of it than was given, and on Windows none of the
@@ -283,42 +283,42 @@ pub const Child = struct {
         // A private POSIX group belongs to the held child until the reap. It
         // must never be the caller's group, even when detach was not requested.
         if (!is_windows and options.descendants == .contain) configured.detach = true;
-        const state = try allocator.create(State);
-        errdefer allocator.destroy(state);
-        state.allocator = allocator;
-        if (is_windows) return .{ .state = try child_windows.spawn(allocator, io, configured, state) };
+        const state = try gpa.create(State);
+        errdefer gpa.destroy(state);
+        state.gpa = gpa;
+        if (is_windows) return .{ .state = try child_windows.spawn(gpa, io, configured, state) };
         // A job object is what these bound, and POSIX has no such container.
         // `resource_limits` is the option that exists here.
         if (options.job_limits.any()) return error.Unsupported;
-        return .{ .state = try child_posix.spawn(allocator, io, configured, state) };
+        return .{ .state = try child_posix.spawn(gpa, io, configured, state) };
     }
 
-    pub const ReleaseError = contract.ReleaseError;
+    pub const FinishError = contract.FinishError;
 
-    /// Ends an unfinished contained scope, confirms completion, then does what
-    /// `deinit` does. A failure keeps the Child and its scope whole, so the
-    /// call can be made again; a success leaves the Child undefined, like
-    /// `deinit`, so a Child is released or deinited, never both. A
-    /// survival-policy child is simply deinited. Join every task borrowing
-    /// this Child before releasing it.
-    pub fn release(child: *Child, io: std.Io) ReleaseError!void {
+    /// Ends an unfinished contained scope and confirms that it has ended,
+    /// reporting what its cleanup met. The Child stays valid either way, and
+    /// `deinit` is still owed: a failure keeps the Child and its scope whole,
+    /// so the call can be made again. A survival-policy child, or a scope
+    /// already confirmed, has nothing to finish. Join every task borrowing
+    /// this Child before finishing it.
+    pub fn finish(child: *Child, io: std.Io) FinishError!void {
         const state = child.state;
         if (state.descendants == .contain and !state.scope_complete) {
-            _ = try child.killWait(io, 0);
+            _ = try child.killWait(io, .zero);
         }
-        child.deinit(io);
     }
 
     /// Closes owned streams and lifecycle resources; supplied streams stay
-    /// open. The Child is undefined afterwards. A contained scope must
-    /// already have confirmed completion: `release` ends an unfinished one
-    /// and reports what its cleanup met. Join every task borrowing this Child
-    /// first. A reaped survival-policy child leaves descendants alone. Linux
-    /// cgroups with surviving members remain until empty and a later cleanup
-    /// removes them.
+    /// open. The Child is undefined afterwards. A contained scope that
+    /// `finish` has not confirmed is ended here as the end of a run nobody
+    /// will finish is: `.kill` and the reap, with cancelation held off, and
+    /// with nothing reported. Call `finish` first to hear what that met.
+    /// Join every task borrowing this Child first. A reaped survival-policy
+    /// child leaves descendants alone. Linux cgroups with surviving members
+    /// remain until empty and a later cleanup removes them.
     pub fn deinit(child: *Child, io: std.Io) void {
+        if (child.state.descendants == .contain and !child.state.scope_complete) child.abandon(io);
         const state = child.state;
-        std.debug.assert(state.descendants != .contain or state.scope_complete);
         if (state.stdin) |f| f.close(io);
         if (state.stdout) |f| f.close(io);
         if (state.stderr) |f| f.close(io);
@@ -329,9 +329,9 @@ pub const Child = struct {
             if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| owner.close();
             if (state.lineage) |tracker| tracker.destroy();
             state.forks.close();
-            state.cgroup.release();
+            state.cgroup.close();
         }
-        state.allocator.destroy(state);
+        state.gpa.destroy(state);
         child.* = undefined;
     }
 
@@ -363,8 +363,8 @@ pub const Child = struct {
     /// null: the InputWriter alone writes and closes it, independently of this
     /// Child's lifetime. On error this Child still owns the untouched pipe.
     /// Only a pipe can be transferred; a terminal is error.NoStdinPipe.
-    pub fn inputWriter(child: *Child, allocator: Allocator, io: std.Io, options: InputWriter.Options) InputWriter.StartError!InputWriter {
-        return InputWriter.init(allocator, io, child, options);
+    pub fn inputWriter(child: *Child, gpa: Allocator, io: std.Io, options: InputWriter.Options) InputWriter.StartError!InputWriter {
+        return InputWriter.init(gpa, io, child, options);
     }
 
     /// The live identity as a number, or null after retirement.
@@ -458,11 +458,11 @@ pub const Child = struct {
     /// `wait` for a caller that already holds the reap.
     fn waitClaimed(child: *Child, io: std.Io) WaitError!Term {
         // One implementation owns final reaping for bounded and unbounded waits.
-        // Renew the largest bounded wait until an answer arrives: a child may
-        // run longer than one u32 millisecond span. Exit observation keeps the
-        // zombie (or Windows handles) intact until tryWaitClaimed takes identity.
+        // A wait with no deadline still asks again whenever the system wait
+        // under it returns. Exit observation keeps the zombie (or Windows
+        // handles) intact until tryWaitClaimed takes identity.
         while (true) {
-            const term = try child.reapWithin(io, .in(io, std.math.maxInt(u32)));
+            const term = try child.reapWithin(io, .never);
             if (term) |ended| return ended;
         }
     }
@@ -521,7 +521,7 @@ pub const Child = struct {
 
     pub const WaitTimeoutError = contract.WaitTimeoutError;
 
-    /// Reaps the child if it ends within `timeout_ms`, and returns `null` if it
+    /// Reaps the child if it ends within `timeout`, and returns `null` if it
     /// does not.
     ///
     /// Unlike `killWait` this does nothing to the child when the time runs out:
@@ -545,8 +545,12 @@ pub const Child = struct {
     /// and it has not published a term by the deadline: the child is not this
     /// call's to reap, and it says the same thing it says about a child that is
     /// still running.
-    pub fn waitTimeout(child: *Child, io: std.Io, timeout_ms: u32) WaitTimeoutError!?Term {
-        const deadline: Deadline = .in(io, timeout_ms);
+    pub fn waitTimeout(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTimeoutError!?Term {
+        return child.waitWithin(io, .of(io, timeout));
+    }
+
+    /// `waitTimeout` to a deadline.
+    fn waitWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         if (child.settled()) |term| return term;
         if (!child.claimReap()) return child.settledWithin(io, deadline);
         defer child.releaseReap();
@@ -646,11 +650,11 @@ pub const Child = struct {
             .detach = true,
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, 0) catch {};
+        defer _ = child.killWait(io, .zero) catch {};
         const Exit = struct {
             fn beforeWatch(owner: *Child) void {
                 owner.closeStdin(testing.io);
-                const until: Deadline = .in(testing.io, 5000);
+                const until: Deadline = .in(testing.io, .fromMilliseconds(5000));
                 while (wait_for.endedUnreaped(owner.state.id) == .running) {
                     if (until.remainingMs(testing.io) == 0) @panic("fixture did not exit");
                     spin.yield();
@@ -683,7 +687,7 @@ pub const Child = struct {
             .detach = true,
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, 0) catch {};
+        defer _ = child.killWait(io, .zero) catch {};
         const before = tree.testing_hook.group_forces.load(.acquire);
         try child.kill(.kill);
         _ = try child.wait(io);
@@ -1086,11 +1090,11 @@ pub const Child = struct {
 
     pub const KillWaitError = contract.KillWaitError;
 
-    /// Asks the child to end, insists after `grace_ms`, and reaps it.
+    /// Asks the child to end, insists after `grace`, and reaps it.
     ///
     /// `.terminate` first, so a program that cleans up gets to; then `.kill` once
     /// the grace has passed, which nothing survives; then a wait, which therefore
-    /// terminates. A `grace_ms` of zero goes straight to `.kill`.
+    /// terminates. A zero grace goes straight to `.kill`.
     ///
     /// A `.terminate` that the operating system refuses is not an error here: on
     /// Windows a console control event fails for a child that shares no console
@@ -1107,7 +1111,7 @@ pub const Child = struct {
     /// on its own terms and reports whatever status *it* chose — for one that does
     /// not handle the control event, the system's control-exit status, which
     /// reaches `Term` in full. A caller that wants a number of its own on
-    /// that system should pass a `grace_ms` of zero; a caller that wants to know
+    /// that system should pass a zero grace; a caller that wants to know
     /// whether the child ended well should ask `succeeded`.
     ///
     /// The grace is `waitTimeout`, so a child that obeys the `.terminate` is
@@ -1115,14 +1119,14 @@ pub const Child = struct {
     ///
     /// `error.OutOfMemory` is `kill`'s: the walk could not hold the child's
     /// tree. The child itself was killed and has been reaped when it returns.
-    pub fn killWait(child: *Child, io: std.Io, grace_ms: u32) KillWaitError!Term {
+    pub fn killWait(child: *Child, io: std.Io, grace: std.Io.Duration) KillWaitError!Term {
         // A child that has already ended is reaped rather than signalled.
         if (try child.tryWait()) |term| return term;
 
-        if (grace_ms > 0) {
+        if (grace.nanoseconds > 0) {
             // ziglint-ignore: Z026 a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
             child.kill(.terminate) catch {};
-            if (try child.waitTimeout(io, grace_ms)) |term| return term;
+            if (try child.waitWithin(io, .in(io, grace))) |term| return term;
         }
 
         // A walk too large to hold still killed the child itself, so it is
@@ -1139,7 +1143,7 @@ pub const Child = struct {
 
     pub const WaitTreeError = contract.WaitTreeError;
 
-    /// Waits up to `timeout_ms` for everything the child started to end, and says
+    /// Waits up to `timeout` for everything the child started to end, and says
     /// whether it did. **Windows, and Linux for a child in a cgroup of its own.**
     ///
     /// `true` means the container the child was put in holds no process any
@@ -1162,7 +1166,7 @@ pub const Child = struct {
     /// Ask it before `deinit`, which releases the job and its port, or the
     /// cgroup, under the chosen descendant policy.
     ///
-    /// A zero `timeout_ms` asks and does not wait, which is how to poll. On
+    /// A zero timeout asks and does not wait, which is how to poll. On
     /// Windows the job's message is posted once and taking it off the port
     /// consumes it, so this remembers: once it has answered `true` it answers
     /// `true` thereafter. A Linux cgroup is asked again each time.
@@ -1183,20 +1187,20 @@ pub const Child = struct {
     /// children only through the whole process table, it would mean neither. So
     /// this is a compile error there rather than an answer that is right on one
     /// system and wrong on three.
-    pub fn waitTree(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
-        if (is_windows) return child.waitTreeWindows(io, timeout_ms);
+    pub fn waitTree(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTreeError!bool {
+        if (is_windows) return child.waitTreeWindows(io, timeout);
         if (builtin.target.os.tag != .linux) @compileError(
             "Child.waitTree is Windows and Linux only: a job object and a cgroup " ++
                 "are containers the system accounts for, and this system has no " ++
                 "such thing to ask. See Child.kill for what a signal reaches there.",
         );
-        return child.waitTreeLinux(io, timeout_ms);
+        return child.waitTreeLinux(io, timeout);
     }
 
-    fn waitTreeLinux(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
+    fn waitTreeLinux(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTreeError!bool {
         const contained = &child.state.cgroup;
         if (!contained.active()) return error.Unsupported;
-        return contained.waitEmpty(io, timeout_ms);
+        return contained.waitEmpty(io, timeout);
     }
 
     /// How long one wait on the completion port lasts before the caller is given a
@@ -1208,11 +1212,11 @@ pub const Child = struct {
     /// reason.
     const tree_slice_ms: u32 = 5;
 
-    fn waitTreeWindows(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
+    fn waitTreeWindows(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTreeError!bool {
         if (child.state.tree_ended) return true;
         const port = child.state.job_port orelse return false;
         const job = child.state.job orelse return false;
-        const deadline: Deadline = .in(io, timeout_ms);
+        const deadline: Deadline = .of(io, timeout);
 
         while (true) {
             const left = deadline.remainingMs(io);
@@ -1367,9 +1371,9 @@ pub const Child = struct {
     /// that polls the pipes and the child's exit together where the system has
     /// a handle for the exit, and on reader tasks elsewhere (Windows).
     ///
-    /// `allocator` need not be safe to use from several threads: where the
+    /// `gpa` need not be safe to use from several threads: where the
     /// streams are read on tasks, their allocations are serialized. The
-    /// returned `Output` is freed with `allocator`.
+    /// returned `Output` is freed with `gpa`.
     ///
     /// The child is reaped when this returns, whether it ended on its own or was
     /// killed, so `wait` afterwards answers from the same term. That holds for a
@@ -1379,18 +1383,18 @@ pub const Child = struct {
     /// can no longer wait for. `deinit` is still the caller's to make.
     pub fn output(
         child: *Child,
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         options: OutputOptions,
     ) OutputError!Output {
-        return child.outputUntil(allocator, io, options, null);
+        return child.outputUntil(gpa, io, options, null);
     }
 
     /// `output`, with `until` a deadline over the whole of it: the run's own
     /// timeout and every drain end by it at the latest.
     fn outputUntil(
         child: *Child,
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
@@ -1404,18 +1408,14 @@ pub const Child = struct {
         if (!is_windows) {
             // A published term needs only stream draining. Never register an OS
             // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(allocator, io, options, until, null, published, false);
+            if (published != null) return child.outputPolled(gpa, io, options, until, null, published, false);
             if (comptime tree.Forks.supported) {
                 if (child.state.forks.queue) |queue|
-                    return child.outputPolled(allocator, io, options, until, .{ .handle = queue }, null, true);
+                    return child.outputPolled(gpa, io, options, until, .{ .handle = queue }, null, true);
             }
-            if (wait_for.Watch.open(child.state.id)) |watch| return child.outputPolled(allocator, io, options, until, watch, null, false);
+            if (wait_for.Watch.open(child.state.id)) |watch| return child.outputPolled(gpa, io, options, until, watch, null, false);
         }
-        // The readers grow the collected streams on tasks of their own; their
-        // allocations are made one at a time, so the caller's allocator need
-        // not be safe to share.
-        var serial: SerialAllocator = .{ .parent = allocator, .io = io };
-        return child.outputOnTasks(serial.allocator(), io, options, until);
+        return child.outputOnTasks(gpa, io, options, until);
     }
 
     pub const ExchangeOptions = contract.ExchangeOptions;
@@ -1434,22 +1434,22 @@ pub const Child = struct {
     /// input is closed at once; input for a child whose standard input is not
     /// a pipe this `Child` holds is `error.NoStdinPipe`.
     ///
-    /// `ExchangeOptions.timeout_ms` bounds the whole call: the input, the run,
+    /// `ExchangeOptions.timeout` bounds the whole call: the input, the run,
     /// the reap and the drain after it. A child still running then is killed
     /// with no grace and `Output.timedOut` is true; a write still blocked —
     /// on something the child started that holds its input and never reads —
     /// is interrupted. The call returns by the deadline, give or take the
     /// moment a kill takes.
     ///
-    /// `allocator` need not be safe to use from several threads: every
+    /// `gpa` need not be safe to use from several threads: every
     /// allocation of the call is serialized, and grows only the two collected
     /// streams, each bounded by `max_bytes`. The returned `Output` is freed
-    /// with `allocator`. As with `output`, the child is reaped when this
+    /// with `gpa`. As with `output`, the child is reaped when this
     /// returns, an error included — except `error.NoStdinPipe`, which refuses
     /// the call before it starts and leaves the child running.
     pub fn exchange(
         child: *Child,
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         input: []const u8,
         options: ExchangeOptions,
@@ -1458,7 +1458,7 @@ pub const Child = struct {
         const state = child.state;
         if (input.len != 0 and state.stdin == null) return error.NoStdinPipe;
         errdefer child.abandon(io);
-        const until: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
+        const until = Deadline.fromTimeout(io, options.timeout);
         var feed: Feed = .{};
         var group: std.Io.Group = .init;
         defer group.cancel(io);
@@ -1470,12 +1470,12 @@ pub const Child = struct {
             // The task closes it once written.
             state.stdin = null;
         }
-        var collected = try child.outputUntil(allocator, io, .{
+        var collected = try child.outputUntil(gpa, io, .{
             .max_bytes = options.max_bytes,
-            .grace_ms = 0,
-            .drain_ms = options.drain_ms,
+            .grace = .zero,
+            .drain = options.drain,
         }, until);
-        errdefer collected.deinit(allocator);
+        errdefer collected.deinit();
         // The child has ended. What still holds its input is not the child,
         // and a write to it is not waited for.
         group.cancel(io);
@@ -1512,20 +1512,24 @@ pub const Child = struct {
             if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
         } else if (state.cgroup.active()) _ = state.cgroup.kill();
         // ziglint-ignore: Z026 the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
-        _ = child.killWait(io, 0) catch {};
+        _ = child.killWait(io, .zero) catch {};
     }
 
     fn outputOnTasks(
         child: *Child,
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
     ) OutputError!Output {
+        // The readers grow the collected streams on tasks of their own; their
+        // allocations are made one at a time, so the caller's allocator need
+        // not be safe to share.
+        var serial: SerialAllocator = .{ .parent = gpa, .io = io };
         var out: Collector = .init;
         var err: Collector = .init;
-        errdefer out.list.deinit(allocator);
-        errdefer err.list.deinit(allocator);
+        errdefer out.list.deinit(gpa);
+        errdefer err.list.deinit(gpa);
 
         var group: std.Io.Group = .init;
         // Unconditional: the group owns resources as soon as one task starts, and
@@ -1538,10 +1542,10 @@ pub const Child = struct {
         // before it starts. Saying so here is what keeps the drain below from
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
-            try group.concurrent(io, collect, .{ allocator, io, f, options.max_bytes, &out });
+            try group.concurrent(io, collect, .{ serial.allocator(), io, f, options.max_bytes, &out });
         } else out.done.store(true, .release);
         if (child.state.stderr) |f| {
-            try group.concurrent(io, collect, .{ allocator, io, f, options.max_bytes, &err });
+            try group.concurrent(io, collect, .{ serial.allocator(), io, f, options.max_bytes, &err });
         } else err.done.store(true, .release);
 
         var timed_out = false;
@@ -1551,18 +1555,18 @@ pub const Child = struct {
             // block on. Notice it while the child is still running, end the child,
             // and report the read failure after both tasks have joined.
             if (out.readFailed() or err.readFailed()) {
-                break :term try child.killWait(io, 0);
+                break :term try child.killWait(io, .zero);
             }
 
             const slice_ms = if (deadline) |run_end| slice: {
                 const left = run_end.remainingMs(io);
                 if (left == 0) {
                     timed_out = true;
-                    break :term try child.killWait(io, options.grace_ms);
+                    break :term try child.killWait(io, options.grace);
                 }
                 break :slice @min(left, output_wait_slice_ms);
             } else output_wait_slice_ms;
-            if (try child.waitTimeout(io, slice_ms)) |finished| break :term finished;
+            if (try child.waitWithin(io, .in(io, .fromMilliseconds(slice_ms)))) |finished| break :term finished;
         };
 
         // The child is gone, so its ends of the pipes are closed and the readers
@@ -1578,7 +1582,7 @@ pub const Child = struct {
         // Joins the tasks, so the lists below are this task's alone again.
         group.cancel(io);
 
-        return Collector.output(allocator, &out, &err, term, timed_out);
+        return Collector.output(gpa, &out, &err, term, timed_out);
     }
 
     /// One stream's worth of collected bytes, shared between the task reading it
@@ -1605,15 +1609,15 @@ pub const Child = struct {
 
         /// What the two collectors hold, as the `Output` of a run that ended
         /// with `term`: theirs no longer, and the first failure either met.
-        fn output(allocator: Allocator, out: *Collector, err: *Collector, term: Term, timed_out: bool) OutputError!Output {
+        fn output(gpa: Allocator, out: *Collector, err: *Collector, term: Term, timed_out: bool) OutputError!Output {
             const out_failure = out.failure.load(.acquire);
             const err_failure = err.failure.load(.acquire);
             if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
             if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
-            const stdout_bytes = try out.list.toOwnedSlice(allocator);
-            errdefer allocator.free(stdout_bytes);
-            const stderr_bytes = try err.list.toOwnedSlice(allocator);
-            return Output.init(.{
+            const stdout_bytes = try out.list.toOwnedSlice(gpa);
+            errdefer gpa.free(stdout_bytes);
+            const stderr_bytes = try err.list.toOwnedSlice(gpa);
+            return Output.init(gpa, .{
                 .stdout = stdout_bytes,
                 .stderr = stderr_bytes,
                 .stdout_truncated = out.truncated or !out.done.load(.acquire),
@@ -1636,7 +1640,7 @@ pub const Child = struct {
         /// reports on: it is read here, directly, so that the read says what
         /// is wrong.
         fn init(
-            allocator: Allocator,
+            gpa: Allocator,
             io: std.Io,
             streams: [2]?std.Io.File,
             collectors: [2]*Collector,
@@ -1647,7 +1651,7 @@ pub const Child = struct {
             for (streams, collectors, 0..) |stream, collector, i| {
                 if (collector.done.load(.acquire)) continue;
                 if (stream.?.handle < 0) {
-                    _ = try collectOnce(allocator, io, stream.?, max_bytes, collector);
+                    _ = try collectOnce(gpa, io, stream.?, max_bytes, collector);
                     continue;
                 }
                 set.add(stream.?.handle, @intCast(i));
@@ -1667,20 +1671,18 @@ pub const Child = struct {
     /// When a run collecting output is ended: its own timeout, or `until`,
     /// whichever comes first.
     fn runDeadline(io: std.Io, options: OutputOptions, until: ?Deadline) ?Deadline {
-        const own: ?Deadline = if (options.timeout_ms) |timeout_ms| .in(io, timeout_ms) else null;
-        return earlier(io, own, until);
+        return earlier(Deadline.fromTimeout(io, options.timeout), until);
     }
 
-    /// When reading stops after the child has ended: `drain_ms` from now, or
+    /// When reading stops after the child has ended: `drain` from now, or
     /// `until`, whichever comes first.
     fn drainDeadline(io: std.Io, options: OutputOptions, until: ?Deadline) Deadline {
-        return earlier(io, Deadline.in(io, options.drain_ms), until).?;
+        return earlier(Deadline.in(io, options.drain), until).?;
     }
 
-    fn earlier(io: std.Io, a: ?Deadline, b: ?Deadline) ?Deadline {
+    fn earlier(a: ?Deadline, b: ?Deadline) ?Deadline {
         const first = a orelse return b;
-        const second = b orelse return first;
-        return if (second.remainingMs(io) < first.remainingMs(io)) second else first;
+        return first.min(b orelse return first);
     }
 
     /// How often an unbounded `output` wait gives its readers a chance to report
@@ -1689,19 +1691,19 @@ pub const Child = struct {
     const output_wait_slice_ms: u32 = 10;
 
     fn collect(
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         f: std.Io.File,
         max_bytes: usize,
         into: *Collector,
     ) std.Io.Cancelable!void {
-        while (!try collectOnce(allocator, io, f, max_bytes, into)) {}
+        while (!try collectOnce(gpa, io, f, max_bytes, into)) {}
     }
 
     /// One read of a stream into its collector. True once the stream is finished,
     /// by its end or by a failure the collector now records; `done` is set then.
     fn collectOnce(
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         f: std.Io.File,
         max_bytes: usize,
@@ -1719,7 +1721,7 @@ pub const Child = struct {
                     // and after a growth there is no allocation in the steady
                     // state.
                     const additional = @min(room, @max(@as(usize, 16 * 1024), into.list.items.len));
-                    into.list.ensureUnusedCapacity(allocator, additional) catch {
+                    into.list.ensureUnusedCapacity(gpa, additional) catch {
                         into.failure.store(.out_of_memory, .release);
                         into.truncated = true;
                         keeping = false;
@@ -1754,11 +1756,11 @@ pub const Child = struct {
     /// as either has bytes, so a child that fills one while the other is being
     /// read is never blocked; a timeout is a bound on the poll and not on a read
     /// that may never return; after the child ends the streams are drained for
-    /// `drain_ms` and no longer, because whatever still holds them open is not
+    /// `drain` and no longer, because whatever still holds them open is not
     /// the child.
     fn outputPolled(
         child: *Child,
-        allocator: Allocator,
+        gpa: Allocator,
         io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
@@ -1769,8 +1771,8 @@ pub const Child = struct {
         defer if (!borrowed_exit) if (watch) |opened| opened.close();
         var out: Collector = .init;
         var err: Collector = .init;
-        errdefer out.list.deinit(allocator);
-        errdefer err.list.deinit(allocator);
+        errdefer out.list.deinit(gpa);
+        errdefer err.list.deinit(gpa);
 
         const streams = [2]?std.Io.File{ child.stdoutFile(), child.state.stderr };
         const collectors = [2]*Collector{ &out, &err };
@@ -1797,10 +1799,10 @@ pub const Child = struct {
                 // and block on: end the child now and report the failure once
                 // the other stream is drained.
                 if (out.readFailed() or err.readFailed()) {
-                    term = try child.killWait(io, 0);
+                    term = try child.killWait(io, .zero);
                 } else if (deadline != null and deadline.?.remainingMs(io) == 0) {
                     timed_out = true;
-                    term = try child.killWait(io, options.grace_ms);
+                    term = try child.killWait(io, options.grace);
                 } else if (ended) {
                     // Through the reap claim: a task holding it (a `Reaper`,
                     // or a `HeldReap`) reaps, and this reads what it publishes.
@@ -1810,7 +1812,7 @@ pub const Child = struct {
             }
             if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
 
-            var set = try PollSet.init(allocator, io, streams, collectors, options.max_bytes, if (term == null and !ended) watch.?.handle else null);
+            var set = try PollSet.init(gpa, io, streams, collectors, options.max_bytes, if (term == null and !ended) watch.?.handle else null);
             const fds = set.fds[0..set.count];
             const which = set.which[0..set.count];
             const count = set.count;
@@ -1821,7 +1823,7 @@ pub const Child = struct {
             if (count == 0) {
                 // The streams are finished and the child has been told to end;
                 // it is only its own exit that is waited for now.
-                if (try child.waitTimeout(io, slice)) |finished| {
+                if (try child.waitWithin(io, .in(io, .fromMilliseconds(slice)))) |finished| {
                     term = finished;
                     drain = drainDeadline(io, options, until);
                 }
@@ -1845,11 +1847,11 @@ pub const Child = struct {
                     ended = true;
                     continue;
                 }
-                _ = try collectOnce(allocator, io, streams[i].?, options.max_bytes, collectors[i]);
+                _ = try collectOnce(gpa, io, streams[i].?, options.max_bytes, collectors[i]);
             }
         }
 
-        return Collector.output(allocator, &out, &err, term.?, timed_out);
+        return Collector.output(gpa, &out, &err, term.?, timed_out);
     }
 
     //======================================================================
@@ -2078,8 +2080,8 @@ pub const Child = struct {
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, 0) catch {};
-        const until: Deadline = .in(io, 5000);
+        defer _ = child.killWait(io, .zero) catch {};
+        const until: Deadline = .in(io, .fromSeconds(5));
         while (wait_for.endedUnreaped(child.state.id) == .running) {
             if (until.remainingMs(io) == 0) return error.TestChildDidNotExit;
             try std.Io.sleep(io, .fromMilliseconds(1), .awake);
@@ -2095,7 +2097,7 @@ pub const Child = struct {
         vtable.groupConcurrent = Refuse.concurrent;
         const no_tasks: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
         var collected = try child.output(testing.allocator, no_tasks, .{});
-        defer collected.deinit(testing.allocator);
+        defer collected.deinit();
         try testing.expectEqualStrings("retained\n", collected.stdout());
         try testing.expect(succeeded(collected.term()));
     }
@@ -2108,10 +2110,10 @@ pub const Child = struct {
             .argv = argv,
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
-        defer child.release(io) catch unreachable;
-        defer _ = child.killWait(io, 0) catch {};
+        defer child.deinit(io);
+        defer _ = child.killWait(io, .zero) catch {};
         child.closeStdin(io);
-        _ = (try child.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+        _ = (try child.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) orelse return error.TestChildDidNotExit;
 
         // A live writer keeps the output open after the child has ended, as an
         // inherited pipe in a grandchild would, without leaving an orphan behind.
@@ -2120,7 +2122,7 @@ pub const Child = struct {
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         });
         defer writer.deinit(io);
-        defer _ = writer.killWait(io, 0) catch {};
+        defer _ = writer.killWait(io, .zero) catch {};
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
@@ -2143,8 +2145,8 @@ pub const Child = struct {
         vtable.now = Clock.now;
         vtable.sleep = Clock.sleep;
         const delayed_io: std.Io = .{ .vtable = &vtable, .userdata = io.userdata };
-        var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain_ms = 20 }, null);
-        defer collected.deinit(testing.allocator);
+        var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .fromMilliseconds(20) }, null);
+        defer collected.deinit();
         try testing.expect(collected.stdoutTruncated());
         try testing.expectEqual(@as(u32, 20), Clock.elapsed.load(.acquire));
     }
@@ -2158,7 +2160,7 @@ pub const Child = struct {
             .argv = &.{ "/bin/sh", "-c", "exit 7" },
             .stdio = .ignore,
         });
-        defer child.release(io) catch unreachable;
+        defer child.deinit(io);
         var status: c_int = undefined;
         while (c.waitpid(child.state.id, &status, 0) < 0) {
             if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
@@ -2171,13 +2173,13 @@ pub const Child = struct {
             .argv = &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
-        defer witness.release(io) catch unreachable;
-        defer _ = witness.killWait(io, 0) catch {};
+        defer witness.deinit(io);
+        defer _ = witness.killWait(io, .zero) catch {};
         // Substitute an unrelated live process's number for the retired label:
         // exercise PID reuse without relying on the kernel to recycle a pid.
         child.state.id = witness.state.id;
         try child.kill(.kill);
-        try testing.expectEqual(@as(?Term, null), try witness.waitTimeout(io, 20));
+        try testing.expectEqual(@as(?Term, null), try witness.waitTimeout(io, Deadline.within(.fromMilliseconds(20))));
     }
 
     test {

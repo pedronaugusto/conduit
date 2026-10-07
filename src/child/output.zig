@@ -19,11 +19,13 @@ pub const Parts = struct {
 pub const Output = struct {
     /// Private: read it through the methods.
     parts: Parts,
+    /// Private: the allocator that made both slices, which `deinit` frees
+    /// them with.
+    gpa: Allocator,
 
-    /// Takes ownership of both slices, which `deinit` frees with the
-    /// allocator that made them.
-    pub fn init(parts: Parts) Output {
-        return .{ .parts = parts };
+    /// Takes ownership of both slices, which `gpa` made.
+    pub fn init(gpa: Allocator, parts: Parts) Output {
+        return .{ .parts = parts, .gpa = gpa };
     }
 
     /// Borrows retained standard output until transfer or deinit.
@@ -71,32 +73,31 @@ pub const Output = struct {
         return collected.parts.timed_out;
     }
 
-    /// Frees what is still retained with the collecting allocator. The
-    /// `Output` is undefined afterwards.
-    pub fn deinit(collected: *Output, allocator: Allocator) void {
+    /// Frees what is still retained. The `Output` is undefined afterwards.
+    pub fn deinit(collected: *Output) void {
         const state = &collected.parts;
-        allocator.free(state.stdout);
-        allocator.free(state.stderr);
+        collected.gpa.free(state.stdout);
+        collected.gpa.free(state.stderr);
         collected.* = undefined;
     }
 };
 
 test "Output frees what was not taken and hands over what was" {
-    const allocator = std.testing.allocator;
-    var collected: Output = .init(.{
-        .stdout = try allocator.dupe(u8, "out"),
-        .stderr = try allocator.dupe(u8, "err"),
+    const gpa = std.testing.allocator;
+    var collected: Output = .init(gpa, .{
+        .stdout = try gpa.dupe(u8, "out"),
+        .stderr = try gpa.dupe(u8, "err"),
         .stdout_truncated = false,
         .stderr_truncated = true,
         .term = .{ .exited = 3 },
         .timed_out = false,
     });
     const taken = collected.takeStdout();
-    defer allocator.free(taken);
+    defer gpa.free(taken);
     try std.testing.expectEqualStrings("out", taken);
     try std.testing.expectEqualStrings("", collected.stdout());
     try std.testing.expectEqualStrings("err", collected.stderr());
     try std.testing.expect(collected.stderrTruncated());
     try std.testing.expectEqual(contract.Term{ .exited = 3 }, collected.term());
-    collected.deinit(allocator);
+    collected.deinit();
 }

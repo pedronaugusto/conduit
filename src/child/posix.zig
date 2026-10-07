@@ -44,7 +44,7 @@ const Plan = stdio_plan.Plan(struct {
 });
 
 /// See `Child.spawn`.
-pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
+pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
     // `Child.spawn` has refused an empty `argv`, and made a contained child
     // a group of its own.
     std.debug.assert(options.argv.len > 0);
@@ -52,7 +52,7 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.
-    var arena_state: std.heap.ArenaAllocator = .init(allocator);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const exec: Exec = try .prepare(arena_state.allocator(), options);
 
@@ -436,7 +436,7 @@ fn started(
     options: SpawnOptions,
 ) *State {
     state.* = .{
-        .allocator = state.allocator,
+        .gpa = state.gpa,
         .descendants = options.descendants,
         .process_id = pid,
         .id = pid,

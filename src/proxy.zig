@@ -42,7 +42,7 @@
 //! console resize records — can hand over `Options.Resize.ticket` and bump it
 //! from there, and the forwarder will pick the change up on its next tick
 //! instead of waiting out the interval. Either way the cost is one ioctl or
-//! one `GetConsoleScreenBufferInfo` every `interval_ms`, and `Pty.resize` is
+//! one `GetConsoleScreenBufferInfo` every `interval`, and `Pty.resize` is
 //! safe to call while the master is being read and written.
 
 const std = @import("std");
@@ -90,16 +90,16 @@ pub const Resize = struct {
     /// A counter the program bumps when it learns of a resize some other way:
     /// from its own `SIGWINCH` handler on POSIX, or from a console window
     /// event on Windows. Any change to the value makes the forwarder look at
-    /// the size on its next tick rather than at the end of `interval_ms`.
+    /// the size on its next tick rather than at the end of `interval`.
     ///
     /// `null` polls, which is correct and costs one call per interval.
     ticket: ?*const std.atomic.Value(u32) = null,
     /// How often the size is re-read when nothing has bumped `ticket`.
-    /// Zero uses one millisecond, so an idle forwarder still yields.
-    interval_ms: u32 = 50,
+    /// Less than a millisecond uses one, so an idle forwarder still yields.
+    interval: std.Io.Duration = .fromMilliseconds(50),
     /// How often `ticket` is looked at. Only meaningful when there is one.
-    /// Zero uses one millisecond.
-    tick_ms: u32 = 5,
+    /// Less than a millisecond uses one.
+    tick: std.Io.Duration = .fromMilliseconds(5),
 };
 
 pub const RunError = error{
@@ -259,22 +259,29 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     }
 }
 
+/// A span of at least one millisecond, so an idle forwarder still yields.
+fn atLeastOneMs(span: std.Io.Duration) std.Io.Duration {
+    const one: std.Io.Duration = .fromMilliseconds(1);
+    return if (span.nanoseconds < one.nanoseconds) one else span;
+}
+
 /// One cancelable interval, even when tickets change continuously. The
 /// deadline owns the budget; a delayed tick never spends it a second time.
 fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!void {
     try std.Io.checkCancel(io);
-    const interval_ms = @max(1, resize.interval_ms);
-    const ticket = resize.ticket orelse return std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
-    const deadline: Deadline = .in(io, interval_ms);
+    const interval = atLeastOneMs(resize.interval);
+    const ticket = resize.ticket orelse return std.Io.sleep(io, interval, .awake);
+    const deadline: Deadline = .in(io, interval);
     while (true) {
         const now = ticket.load(.acquire);
         if (now != seen_ticket.*) {
             seen_ticket.* = now;
             return;
         }
-        const left = deadline.remainingMs(io);
-        if (left == 0) return;
-        try std.Io.sleep(io, .fromMilliseconds(@min(@max(1, resize.tick_ms), left)), .awake);
+        const left = deadline.remaining(io);
+        if (left.nanoseconds == 0) return;
+        const tick = atLeastOneMs(resize.tick);
+        try std.Io.sleep(io, if (tick.nanoseconds < left.nanoseconds) tick else left, .awake);
     }
 }
 
@@ -332,7 +339,7 @@ test "Proxy resize waits remain cancelable with a zero interval or a changing ti
     var ticket: std.atomic.Value(u32) = .init(0);
     var seen: u32 = 0;
     var pair: Pty = undefined; // The wait borrows but never accesses the pair.
-    const resize: Resize = .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval_ms = 0 };
+    const resize: Resize = .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .zero };
     try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
     try testing.expectEqual(@as(usize, 1), backend.sleeps);
     ticket.store(1, .release);
@@ -366,7 +373,7 @@ test "Proxy resize intervals count delayed sleeps once" {
     var ticket: std.atomic.Value(u32) = .init(0);
     var seen: u32 = 0;
     var pair: Pty = undefined;
-    try waitResize(clock_io, .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval_ms = 50, .tick_ms = 5 }, &seen);
+    try waitResize(clock_io, .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .fromMilliseconds(50), .tick = .fromMilliseconds(5) }, &seen);
     try testing.expectEqual(@as(usize, 2), clock.sleeps);
     try testing.expectEqual(@as(u32, 60), clock.ms);
 }

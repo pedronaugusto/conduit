@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const Deadline = @import("conduit.tty").Deadline;
 const posix = std.posix;
 const windows = std.os.windows;
 const c = std.c;
@@ -21,7 +22,7 @@ const Observer = struct {
         // paused. With a held identity it must leave the status and handles
         // alone until delivery resumes.
         // ziglint-ignore: Z026 only a pause for the Reaper; the assertion is what it did meanwhile, read below
-        _ = probe.reaper.waitTimeout(std.testing.io, 20) catch {};
+        _ = probe.reaper.waitTimeout(std.testing.io, Deadline.within(.fromMilliseconds(20))) catch {};
         probe.retired = child.state.reaped.load(.acquire) or if (is_windows) retired: {
             var code: windows.DWORD = undefined;
             break :retired win32.GetExitCodeProcess(child.state.id, &code) == .FALSE;
@@ -40,8 +41,8 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
             .detach = iteration % 2 == 0,
         });
-        defer child.release(io) catch unreachable;
-        defer _ = child.killWait(io, 0) catch {};
+        defer child.deinit(io);
+        defer _ = child.killWait(io, .zero) catch {};
         var reaper: Reaper = .init(&child, .{});
         stage = "starting Reaper";
         try reaper.start(io);
@@ -57,7 +58,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         stage = "checking retirement during delivery";
         try testing.expect(!probe.retired);
         stage = "waiting for publication";
-        const term = (try reaper.waitTimeout(io, 5000)) orelse return error.TestChildDidNotExit;
+        const term = (try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) orelse return error.TestChildDidNotExit;
         stage = "comparing the published answer";
         try testing.expectEqual(term, try child.wait(io));
         stage = "ignoring a retired kill";
@@ -70,7 +71,7 @@ const HeldOutput = struct {
     result: ?(Child.OutputError!Child.Output) = null,
 
     fn run(held: *HeldOutput) std.Io.Cancelable!void {
-        held.result = held.child.output(std.testing.allocator, std.testing.io, .{ .timeout_ms = 10_000 });
+        held.result = held.child.output(std.testing.allocator, std.testing.io, .{ .timeout = Deadline.within(.fromMilliseconds(10_000)) });
     }
 };
 
@@ -84,8 +85,8 @@ test "output leaves the reap to the task that holds it" {
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
-    defer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    defer _ = child.killWait(io, .zero) catch {};
     const held = child.holdReap().?;
     var released = false;
     defer if (!released) held.release();
@@ -93,7 +94,7 @@ test "output leaves the reap to the task that holds it" {
     var output: HeldOutput = .{ .child = &child };
     defer if (output.result) |result| if (result) |collected| {
         var owned = collected;
-        owned.deinit(testing.allocator);
+        owned.deinit();
     } else |_| {};
     var group: std.Io.Group = .init;
     defer group.cancel(io);

@@ -37,12 +37,12 @@ pub fn Writer(comptime Child: type) type {
             /// the same operation. On error the pipe remains the child's, untouched.
             /// A terminal has no separate input to close and is `error.NoStdinPipe`.
             /// Do not use an earlier copy of the pipe after this succeeds.
-            pub fn init(allocator: std.mem.Allocator, io: std.Io, child: *Child, options: Options) StartError!InputWriter {
+            pub fn init(gpa: std.mem.Allocator, io: std.Io, child: *Child, options: Options) StartError!InputWriter {
                 const child_state = child.state;
                 const file = child_state.stdin orelse return error.NoStdinPipe;
-                const state = try allocator.create(State);
-                errdefer allocator.destroy(state);
-                state.* = .{ .allocator = allocator, .file = file, .max_backlog = options.max_backlog };
+                const state = try gpa.create(State);
+                errdefer gpa.destroy(state);
+                state.* = .{ .gpa = gpa, .file = file, .max_backlog = options.max_backlog };
                 try state.group.concurrent(io, State.run, .{ state, io });
                 child.state.stdin = null;
                 return .{ .state = state };
@@ -71,9 +71,9 @@ pub fn Writer(comptime Child: type) type {
                 if (state.ending) return error.InputClosed;
                 if (bytes.len > state.max_backlog - state.backlog) return error.BacklogFull;
                 if (bytes.len == 0) return;
-                const node = try state.allocator.create(Node);
-                errdefer state.allocator.destroy(node);
-                node.* = .{ .bytes = try state.allocator.dupe(u8, bytes) };
+                const node = try state.gpa.create(Node);
+                errdefer state.gpa.destroy(node);
+                node.* = .{ .bytes = try state.gpa.dupe(u8, bytes) };
                 if (state.tail) |tail| tail.next = node else state.head = node;
                 state.tail = node;
                 state.backlog += bytes.len;
@@ -122,7 +122,7 @@ pub fn Writer(comptime Child: type) type {
             pub fn deinit(writer: *InputWriter, io: std.Io) void {
                 writer.cancel(io);
                 const state = writer.state;
-                state.allocator.destroy(state);
+                state.gpa.destroy(state);
                 writer.* = undefined;
             }
         };
@@ -138,7 +138,7 @@ const Node = struct {
 /// What an `InputWriter` and its writing task share. `mutex` guards every
 /// field but the file, which only the task uses once it has started.
 const State = struct {
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     file: std.Io.File,
     max_backlog: usize,
     mutex: std.Io.Mutex = .init,
@@ -153,8 +153,8 @@ const State = struct {
     group: std.Io.Group = .init,
 
     fn free(state: *State, node: *Node) void {
-        state.allocator.free(node.bytes);
-        state.allocator.destroy(node);
+        state.gpa.free(node.bytes);
+        state.gpa.destroy(node);
     }
 
     fn next(state: *State, io: std.Io) std.Io.Cancelable!?*Node {
@@ -234,7 +234,7 @@ test "InputWriter isOpen takes a contended mutex without cancellation" {
         }
         fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
     };
-    var state: State = .{ .allocator = std.testing.allocator, .file = undefined, .max_backlog = 0 };
+    var state: State = .{ .gpa = std.testing.allocator, .file = undefined, .max_backlog = 0 };
     var writer: TestWriter = .{ .state = &state };
     var backend: Backend = .{ .mutex = &state.mutex };
     var vtable = std.testing.io.vtable.*;

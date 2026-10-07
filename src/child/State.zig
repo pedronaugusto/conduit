@@ -19,7 +19,7 @@ stdin: ?std.Io.File = null,
 stdout: ?std.Io.File = null,
 stderr: ?std.Io.File = null,
 pty: ?Pty.Master = null,
-allocator: std.mem.Allocator,
+gpa: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.
 descendants: Child.Descendants = .survive,
 /// Completion of the platform scope, independent of recovering root status.

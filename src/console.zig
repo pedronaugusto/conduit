@@ -12,6 +12,7 @@
 //! types `std.os.windows` declares are taken from there.
 
 const std = @import("std");
+const Deadline = @import("deadline.zig").Deadline;
 const windows = std.os.windows;
 const log = std.log.scoped(.conduit);
 
@@ -143,13 +144,31 @@ extern "kernel32" fn ReadConsoleInputW(handle: windows.HANDLE, buffer: [*]InputR
 
 pub const WaitResult = enum { ready, timed_out };
 
-/// Wait for any console input record to arrive, up to `milliseconds`.
-pub fn waitInput(handle: windows.HANDLE, milliseconds: u32) std.Io.UnexpectedError!WaitResult {
-    return switch (WaitForSingleObject(handle, milliseconds)) {
-        0 => .ready,
-        0x102 => .timed_out,
-        else => unexpected(windows.GetLastError()),
-    };
+/// What `waitInput` can meet.
+pub const WaitInputError = error{
+    /// The wait failed for a reason the system did not name.
+    Unexpected,
+    /// The task was cancelled.
+    Canceled,
+};
+
+/// How long one system wait lasts before cancelation is asked about.
+const slice_ms: u32 = 5;
+
+/// Wait for any console input record to arrive, up to `timeout`. A zero
+/// timeout asks and does not wait. The wait is spent in five millisecond
+/// slices, between which cancelation is asked about.
+pub fn waitInput(io: std.Io, handle: windows.HANDLE, timeout: std.Io.Timeout) WaitInputError!WaitResult {
+    const deadline: Deadline = .of(io, timeout);
+    while (true) {
+        switch (WaitForSingleObject(handle, @min(deadline.windowsMs(io), slice_ms))) {
+            0 => return .ready,
+            0x102 => {},
+            else => return unexpected(windows.GetLastError()),
+        }
+        if (deadline.remainingMs(io) == 0) return .timed_out;
+        try std.Io.checkCancel(io);
+    }
 }
 
 /// Look at queued records without consuming them. A caller can ignore

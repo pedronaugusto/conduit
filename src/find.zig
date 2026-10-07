@@ -30,28 +30,28 @@ const child_windows = @import("child/windows.zig");
 /// extension; a name with a separator or a drive is itself if it is a file.
 /// Batch scripts are refused here as they are by spawn.
 ///
-/// The path is allocated with `allocator` and is the caller's.
+/// The path is allocated with `gpa` and is the caller's.
 pub fn findProgram(
-    allocator: Allocator,
+    gpa: Allocator,
     io: std.Io,
     environ: *const std.process.Environ.Map,
     name: []const u8,
 ) Allocator.Error!?[]u8 {
     if (name.len == 0) return null;
     if (is_windows) {
-        var arena_state: std.heap.ArenaAllocator = .init(allocator);
+        var arena_state: std.heap.ArenaAllocator = .init(gpa);
         defer arena_state.deinit();
         if (!child_windows.isBareProgram(name)) {
-            return directWindowsProgram(allocator, io, name);
+            return directWindowsProgram(gpa, io, name);
         }
         if (windows_search.isBatchFile(name)) return null;
         const found = try child_windows.findBare(arena_state.allocator(), io, name, environ) orelse return null;
-        const program = try allocator.dupe(u8, found);
+        const program = try gpa.dupe(u8, found);
         return program;
     }
 
     if (std.mem.findScalar(u8, name, '/') != null) {
-        return if (runnable(io, name)) try allocator.dupe(u8, name) else null;
+        return if (runnable(io, name)) try gpa.dupe(u8, name) else null;
     }
     // As `spawn`'s own search: what `confstr(_CS_PATH)` reports on the
     // systems this package supports.
@@ -62,7 +62,7 @@ pub fn findProgram(
         const prefix = if (dir.len == 0) "." else dir;
         const candidate = std.mem.print(&buffer, "{s}/{s}", .{ prefix, name }) catch continue;
         if (runnable(io, candidate)) {
-            const program = try allocator.dupe(u8, candidate);
+            const program = try gpa.dupe(u8, candidate);
             return program;
         }
     }
@@ -71,11 +71,11 @@ pub fn findProgram(
 
 /// A program that already names a Windows path still has to be a file.
 /// This check uses the Io filesystem, so it is exercised on every host.
-fn directWindowsProgram(allocator: Allocator, io: std.Io, name: []const u8) Allocator.Error!?[]u8 {
+fn directWindowsProgram(gpa: Allocator, io: std.Io, name: []const u8) Allocator.Error!?[]u8 {
     if (windows_search.isBatchFile(name)) return null;
     const stat = std.Io.Dir.cwd().statFile(io, name, .{}) catch return null;
     if (stat.kind == .directory) return null;
-    const program = try allocator.dupe(u8, name);
+    const program = try gpa.dupe(u8, name);
     return program;
 }
 

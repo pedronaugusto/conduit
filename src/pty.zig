@@ -164,15 +164,15 @@ pub const Pty = struct {
     ///
     /// On success the caller owns every end and must eventually call `close`, or
     /// `closeSlave` and `closeMaster` separately. On failure nothing is leaked.
-    /// Windows geometry uses `allocator` until every end closes; it must outlive
+    /// Windows geometry uses `gpa` until every end closes; it must outlive
     /// the pair. POSIX uses no allocation.
     ///
     /// On POSIX both ends are close-on-exec, so a pair held open while some
     /// unrelated child is spawned is not handed to it. `Child.spawn` puts the
     /// slave on the child's standard streams with `dup2`, which clears the flag on
     /// the copies, so the child it *is* for still gets its terminal.
-    pub fn open(allocator: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
-        if (is_windows) return openWindows(allocator, options);
+    pub fn open(gpa: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
+        if (is_windows) return openWindows(gpa, options);
         return openPosix(options);
     }
 
@@ -421,7 +421,7 @@ pub const Pty = struct {
     const Geometry = struct {
         mutex: std.atomic.Mutex = .unlocked,
         size: Size,
-        allocator: std.mem.Allocator,
+        gpa: std.mem.Allocator,
 
         fn lock(geometry: *Geometry) void {
             spin.lock(&geometry.mutex);
@@ -436,7 +436,7 @@ pub const Pty = struct {
         if (pty.slave != null or pty.read != null or pty.write != null) return;
         const geometry = pty.geometryState() orelse return;
         pty.geometry = null;
-        geometry.allocator.destroy(geometry);
+        geometry.gpa.destroy(geometry);
     }
 
     //======================================================================
@@ -562,10 +562,10 @@ pub const Pty = struct {
     /// enough for a repaint of a window far larger than anyone runs.
     const pipe_bytes: windows.DWORD = 256 * 1024;
 
-    fn openWindows(allocator: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
-        const remembered = try allocator.create(Geometry);
-        errdefer allocator.destroy(remembered);
-        remembered.* = .{ .size = options.size(), .allocator = allocator };
+    fn openWindows(gpa: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
+        const remembered = try gpa.create(Geometry);
+        errdefer gpa.destroy(remembered);
+        remembered.* = .{ .size = options.size(), .gpa = gpa };
         // Two pipes. Each has an end for the console and an end for this program,
         // and neither end is inheritable -- `null` security attributes is what
         // says so -- which is the Windows counterpart of the close-on-exec the
@@ -900,22 +900,22 @@ pub const Pty = struct {
     }
 
     test "open uses the caller allocator until every end closes" {
-        var allocator: testing.FailingAllocator = .init(testing.allocator, .{});
-        var pty = try Pty.open(allocator.allocator(), .{});
+        var failing: testing.FailingAllocator = .init(testing.allocator, .{});
+        var pty = try Pty.open(failing.allocator(), .{});
         defer pty.close(testing.io);
-        try testing.expectEqual(@as(usize, if (is_windows) 1 else 0), allocator.allocations);
+        try testing.expectEqual(@as(usize, if (is_windows) 1 else 0), failing.allocations);
         pty.closeSlave(testing.io);
-        try testing.expectEqual(@as(usize, 0), allocator.deallocations);
+        try testing.expectEqual(@as(usize, 0), failing.deallocations);
         pty.closeMaster(testing.io);
-        try testing.expectEqual(allocator.allocations, allocator.deallocations);
+        try testing.expectEqual(failing.allocations, failing.deallocations);
         pty.close(testing.io);
-        try testing.expectEqual(allocator.allocations, allocator.deallocations);
+        try testing.expectEqual(failing.allocations, failing.deallocations);
     }
 
     test "open reports caller allocation refusal before opening a Windows pair" {
         if (!is_windows) return error.SkipZigTest;
-        var allocator: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
-        try testing.expectError(error.OutOfMemory, Pty.open(allocator.allocator(), .{}));
+        var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+        try testing.expectError(error.OutOfMemory, Pty.open(failing.allocator(), .{}));
     }
 };
 

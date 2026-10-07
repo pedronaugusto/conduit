@@ -26,7 +26,7 @@ test "input at end of file leaves the child's output flowing" {
         .stdio = .{ .pty = &terminal },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
+    defer child.deinit(io);
     terminal.closeSlave(io);
 
     var tmp = testing.tmpDir(.{});
@@ -104,7 +104,7 @@ test "bytes written to one terminal reach the program on the other, and back" {
         .stdio = .{ .pty = &terminal },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
+    defer child.deinit(io);
     terminal.closeSlave(io);
 
     var input_buffer: [256]u8 = undefined;
@@ -126,7 +126,7 @@ test "bytes written to one terminal reach the program on the other, and back" {
 
     // Ending the child closes the last descriptor for its terminal, which is
     // what makes `run` return.
-    _ = try child.killWait(io, 500);
+    _ = try child.killWait(io, .fromMilliseconds(500));
 }
 
 test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
@@ -149,8 +149,8 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
         .stdio = .{ .pty = &terminal },
         .detach = true,
     });
-    defer child.release(io) catch unreachable;
-    errdefer _ = child.killWait(io, 0) catch {};
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
     terminal.closeSlave(io);
 
     var input_buffer: [256]u8 = undefined;
@@ -169,7 +169,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     // proxy is reading, exactly as if it had been typed.
     try user.writeFile().writeStreamingAll(io, "\x03");
 
-    const deadline: Deadline = .in(io, 5000);
+    const deadline: Deadline = .in(io, .fromMilliseconds(5000));
     const term = while (deadline.remainingMs(io) > 0) {
         if (try child.tryWait()) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
@@ -204,8 +204,8 @@ test "the window size is forwarded onto the pair" {
             .pty = &terminal,
             .source = user.slaveHandle().?,
             .ticket = &ticket,
-            .interval_ms = 1000,
-            .tick_ms = 1,
+            .interval = .fromSeconds(1),
+            .tick = .fromMilliseconds(1),
         },
     } });
     defer group.cancel(io);
@@ -221,7 +221,7 @@ test "the window size is forwarded onto the pair" {
 }
 
 fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
-    const deadline: Deadline = .in(io, 5000);
+    const deadline: Deadline = .in(io, .fromMilliseconds(5000));
     while (deadline.remainingMs(io) > 0) {
         const now = try pty.size();
         if (now.rows == want.rows and now.cols == want.cols) return;

@@ -40,13 +40,13 @@ pub const InheritError = error{
 /// `Child.spawn` returns, which copies everything it needs before it starts
 /// the child.
 pub fn inherit(
-    allocator: Allocator,
+    gpa: Allocator,
     overrides: []const Override,
 ) InheritError!std.process.Environ.Map {
     var map = if (is_windows)
-        try current().createMap(allocator)
+        try current().createMap(gpa)
     else
-        try mapOfBlock(allocator, posixBlock());
+        try mapOfBlock(gpa, posixBlock());
     errdefer map.deinit();
     try apply(&map, overrides);
     return map;
@@ -71,10 +71,10 @@ pub fn inherit(
 /// on POSIX. `.parent_environ` selects the parent's `PATH` on POSIX, when a
 /// scrubbed environment should still find a program installed there.
 pub fn only(
-    allocator: Allocator,
+    gpa: Allocator,
     variables: []const Override,
 ) Allocator.Error!std.process.Environ.Map {
-    var map: std.process.Environ.Map = .init(allocator);
+    var map: std.process.Environ.Map = .init(gpa);
     errdefer map.deinit();
     try apply(&map, variables);
     return map;
@@ -106,8 +106,8 @@ pub fn apply(
 /// first and refuses the empty name of the second by assertion. A name given
 /// twice is the first one, the value `getenv` returns to this process and so
 /// the one its child should inherit.
-fn mapOfBlock(allocator: Allocator, entries: []const [*:0]const u8) Allocator.Error!std.process.Environ.Map {
-    var map: std.process.Environ.Map = .init(allocator);
+fn mapOfBlock(gpa: Allocator, entries: []const [*:0]const u8) Allocator.Error!std.process.Environ.Map {
+    var map: std.process.Environ.Map = .init(gpa);
     errdefer map.deinit();
     for (entries) |pointer| {
         const entry = std.mem.span(pointer);
