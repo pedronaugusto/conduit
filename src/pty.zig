@@ -771,17 +771,22 @@ pub const Pty = struct {
         var pty = try Pty.open(std.testing.allocator, .{});
         defer pty.close(io);
 
-        const before = try posix.tcgetattr(pty.slave.?);
+        // `rawMode` answers what the attributes were when it was called, so
+        // calling it again, and restoring what that answered, reads them.
+        const saved = try tty.rawMode(pty.slave.?);
+        const before = saved.termios;
         try testing.expect(before.lflag.ECHO);
 
-        const saved = try tty.rawMode(pty.slave.?);
-        const during = try posix.tcgetattr(pty.slave.?);
+        const again = try tty.rawMode(pty.slave.?);
+        const during = again.termios;
         try testing.expect(!during.lflag.ECHO);
         try testing.expect(!during.lflag.ICANON);
         try testing.expect(!during.oflag.OPOST);
 
         try tty.restore(pty.slave.?, saved);
-        var after = try posix.tcgetattr(pty.slave.?);
+        const restored = try tty.rawMode(pty.slave.?);
+        try tty.restore(pty.slave.?, restored);
+        var after = restored.termios;
         // A BSD kernel marks input for retyping whenever canonical mode comes
         // back without a flush that waits on the output, which `restore` never
         // does; the mark clears on the next read and is not part of the mode

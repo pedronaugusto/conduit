@@ -189,7 +189,7 @@ pub const RawModeError = error{
 pub fn rawMode(handle: Handle) RawModeError!Saved {
     if (is_windows) return rawModeWindows(handle);
 
-    const saved = posix.tcgetattr(handle) catch |err| return termiosError(err);
+    const saved = getTermios(handle) catch |err| return termiosError(err);
 
     var raw = saved;
     raw.iflag.IGNBRK = false;
@@ -214,8 +214,40 @@ pub fn rawMode(handle: Handle) RawModeError!Saved {
     raw.cc[@backingInt(posix.V.TIME)] = 0;
 
     discardInput(handle);
-    posix.tcsetattr(handle, .NOW, raw) catch |err| return termiosError(err);
+    setTermios(handle, raw) catch |err| return termiosError(err);
     return .{ .termios = saved };
+}
+
+/// A terminal's attributes. On Linux through the kernel's own `TCGETS`,
+/// whichever C library is linked: there `posix.termios` has the kernel's
+/// layout, which is smaller than glibc's `struct termios`, and the C
+/// library's `tcgetattr` would write past the end of it.
+fn getTermios(handle: Handle) posix.TermiosGetError!posix.termios {
+    if (!is_linux) return posix.tcgetattr(handle);
+    var term = std.mem.zeroes(posix.termios);
+    while (true) {
+        switch (std.os.linux.errno(std.os.linux.ioctl(handle, std.os.linux.T.CGETS, @intFromPtr(&term)))) { // safe: the address of a local termios the ioctl writes, alive across it
+            .SUCCESS => return term,
+            .INTR => continue,
+            .NOTTY, .BADF => return error.NotATerminal,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+    }
+}
+
+/// Sets a terminal's attributes at once, as `tcsetattr` with `TCSANOW`
+/// does; on Linux through the kernel's `TCSETS`, for `getTermios`'s reason.
+fn setTermios(handle: Handle, term: posix.termios) posix.TermiosSetError!void {
+    if (!is_linux) return posix.tcsetattr(handle, .NOW, term);
+    while (true) {
+        switch (std.os.linux.errno(std.os.linux.ioctl(handle, std.os.linux.T.CSETS, @intFromPtr(&term)))) { // safe: the address of a parameter the ioctl reads, alive across it
+            .SUCCESS => return,
+            .INTR => continue,
+            .NOTTY, .BADF => return error.NotATerminal,
+            .IO => return error.ProcessOrphaned,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+    }
 }
 
 pub const RestoreError = RawModeError;
@@ -235,7 +267,7 @@ pub fn restore(handle: Handle, saved: Saved) RestoreError!void {
         return;
     }
     discardInput(handle);
-    posix.tcsetattr(handle, .NOW, saved.termios) catch |err| return termiosError(err);
+    setTermios(handle, saved.termios) catch |err| return termiosError(err);
 }
 
 /// Throws away what the terminal sent that nobody read, without waiting on
@@ -328,7 +360,7 @@ pub fn isTty(handle: Handle) bool {
         var mode: windows.DWORD = undefined;
         return win32.GetConsoleMode(handle, &mode) != .FALSE;
     }
-    _ = posix.tcgetattr(handle) catch return false;
+    _ = getTermios(handle) catch return false;
     return true;
 }
 

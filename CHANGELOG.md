@@ -379,6 +379,8 @@ The subreaper scope requires conduit for every new direct child, no outside glob
 
 ### Fixed
 
+- On Linux, `rawMode`, `restore` and `isTty` read and set a terminal's attributes with the kernel's own `TCGETS` and `TCSETS`, whichever C library is linked. On Zig 0.17 the standard library's `termios` has the kernel's layout, smaller than glibc's `struct termios`, and glibc's `tcgetattr` wrote past the end of it.
+
 - `Pty.open` on musl reports a failed `ptsname_r` by the error number musl returns. It read `errno`, which musl leaves as it was, so the error was whatever an earlier call had left there.
 
 - `Child.exchange` refuses input for a child with no stdin pipe (`NoStdinPipe`) before it starts, and leaves the child running instead of killing and reaping it.
