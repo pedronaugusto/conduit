@@ -1077,6 +1077,12 @@ pub const Pending = struct {
         return pending.procs;
     }
 
+    /// Borrows the cgroup's directory, which a child is started in with
+    /// `CLONE_INTO_CGROUP`, until started or abandon consumes it.
+    pub fn intoDescriptor(pending: Pending) posix.fd_t {
+        return pending.cgroup.dir;
+    }
+
     /// The child is running, having joined or not. The cgroup to keep, or
     /// none if it did not join, and then no more cgroups for this process.
     /// Consumes the handoff; later calls own neither descriptor nor cgroup.

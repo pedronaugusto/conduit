@@ -45,6 +45,7 @@ const win32 = @import("../win32.zig");
 const windows = std.os.windows;
 const placeMasterForTest = @import("../pty.zig").placeMasterForTest;
 const spawn_path = @import("posix/spawn.zig");
+const child_posix = @import("posix.zig");
 
 /// How long any one test will wait for a child to say or do something before
 /// it gives up. Generous, because it is a failure budget and not a timing
@@ -1573,6 +1574,28 @@ fn expectGone(pid: posix.pid_t) !void {
 
 fn cgroupExists(path: [:0]const u8) bool {
     return c.access(path, 0) == 0;
+}
+
+test "a child with a cgroup of its own is born in it, with no fork, where the C library can say so" {
+    if (!spawn_path.into_cgroup or !try cgroupsHere()) return error.SkipZigTest;
+    const forks = &child_posix.testing_hook.forks;
+    const before = forks.load(.monotonic);
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/cat", "/proc/self/cgroup" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    var said = try child.output(gpa, io, .{ .timeout = within_budget });
+    defer said.deinit();
+    try testing.expect(Child.succeeded(said.term()));
+    try testing.expectEqual(before, forks.load(.monotonic));
+    // In the cgroup made for it, by the name that cgroup has below the
+    // hierarchy's root: `0::/...` on a cgroup v2 system.
+    var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
+    const path = child.state.cgroup.path(&where).?;
+    const line = std.mem.trimEnd(u8, said.stdout(), "\n");
+    try testing.expectStringStartsWith(line, "0::/");
+    try testing.expectStringEndsWith(path, line["0::".len..]);
 }
 
 test "a recorded cgroup opens only at its original directory identity and removes when empty" {

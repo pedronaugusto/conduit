@@ -38,6 +38,17 @@
 //! an environment, a search path, `detach` — is expressible, and the child
 //! this path produces is the same child in every way a caller can observe.
 //!
+//! # A cgroup of the child's own
+//!
+//! On Linux a child that gets a cgroup is born in it where the C library can
+//! say so: glibc 2.39 and later take the cgroup as an attribute
+//! (`posix_spawnattr_setcgroup_np`) and start the child with `clone3`'s
+//! `CLONE_INTO_CGROUP` (Linux 5.7). That is no fork, and no move of a running
+//! process between cgroups, which takes a lock every fork on the system
+//! waits for. With musl or an older glibc there is no attribute, and the
+//! child is forked and joins its cgroup with a write; so it is too where the
+//! kernel refuses the cgroup, which this path answers with `null`.
+//!
 //! # Where it runs
 //!
 //! Linux and Darwin. The attribute flags `posix_spawn` takes have the same
@@ -71,6 +82,12 @@ pub const available = !options_for_build.force_fork_spawn and switch (builtin.ta
     => true,
     else => false,
 };
+
+/// Whether `spawn` can start a child in a cgroup: glibc 2.39 and later, which
+/// have `posix_spawnattr_setcgroup_np`. Decided by the target the program is
+/// built for, whose glibc version is the oldest it runs on.
+pub const into_cgroup = available and builtin.target.os.tag == .linux and builtin.target.abi.isGnu() and
+    builtin.target.os.version_range.linux.glibc.order(.{ .major = 2, .minor = 39, .patch = 0 }) != .lt;
 
 /// Whether the options ask for anything that has to happen between a fork and
 /// an exec.
@@ -112,6 +129,12 @@ pub const Started = struct {
 /// `null` is not a failure: the caller starts the same child through `fork`
 /// and `execve` instead, and nothing the child sees is different.
 ///
+/// With `into`, a cgroup directory and only where `into_cgroup` holds, the
+/// child is born in that cgroup. Any failure but a program not found is then
+/// `null` too: `posix_spawn` reports a kernel that refuses the cgroup and a
+/// program that cannot run alike, and the fork, which joins the cgroup
+/// with a write of its own, tells the two apart.
+///
 /// Where `tree.Forks` has a watch (Darwin), the child is started suspended,
 /// with `POSIX_SPAWN_START_SUSPENDED`, the watch is registered, and only then
 /// is it resumed with `SIGCONT`: so the watch is in before the program runs
@@ -127,7 +150,9 @@ pub fn spawn(
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
     options: SpawnOptions,
+    into: ?posix.fd_t,
 ) SpawnError!?Started {
+    std.debug.assert(into == null or into_cgroup);
     var actions: FileActions = undefined;
     if (posix_spawn_file_actions_init(&actions) != 0) return error.SystemResources;
     defer _ = posix_spawn_file_actions_destroy(&actions);
@@ -189,6 +214,10 @@ pub fn spawn(
         // `setpgid(0, 0)` says in the fork child.
         if (posix_spawnattr_setpgroup(&attr, 0) != 0) return error.Unexpected;
     }
+    if (comptime into_cgroup) if (into) |cgroup| {
+        flags.setcgroup = true;
+        if (posix_spawnattr_setcgroup_np(&attr, cgroup) != 0) return error.Unexpected;
+    };
     if (posix_spawnattr_setflags(&attr, flags) != 0) return error.Unexpected;
 
     // The same clean slate the fork child is given, said as two attributes.
@@ -216,7 +245,10 @@ pub fn spawn(
         }
         switch (@as(posix.E, @fromBackingInt(@intCast(rc)))) {
             .NOENT, .NOTDIR => {},
-            else => |err| best = err,
+            else => |err| {
+                if (into != null) return null;
+                best = err;
+            },
         }
     }
     return spawnError(best);
@@ -270,6 +302,7 @@ const FileActions = extern struct { opaque_storage: [256]u8 align(16) };
 
 /// The attribute flags this file sets. The first four Linux and Darwin number
 /// the same way; the BSDs do not, and `available` is false there.
+/// `setcgroup` is glibc's alone, and set only where `into_cgroup` holds.
 const Flags = packed struct(c_short) {
     resetids: bool = false,
     setpgroup: bool = false,
@@ -280,7 +313,9 @@ const Flags = packed struct(c_short) {
     /// glibc and musl, which number the one bit each their own way: read
     /// through `start_suspended` and `setsid`, each set only on its system.
     bit7: bool = false,
-    _rest: u8 = 0,
+    /// `POSIX_SPAWN_SETCGROUP`, glibc 2.39.
+    setcgroup: bool = false,
+    _rest: u7 = 0,
 
     fn set(f: *Flags, comptime field: enum { start_suspended, setsid }, on: bool) void {
         const here = switch (field) {
@@ -298,6 +333,9 @@ extern "c" fn posix_spawnattr_setflags(attr: *Attr, flags: Flags) c_int;
 extern "c" fn posix_spawnattr_setpgroup(attr: *Attr, pgroup: posix.pid_t) c_int;
 extern "c" fn posix_spawnattr_setsigdefault(attr: *Attr, sigdefault: *const posix.sigset_t) c_int;
 extern "c" fn posix_spawnattr_setsigmask(attr: *Attr, sigmask: *const posix.sigset_t) c_int;
+/// glibc 2.39; referenced only where `into_cgroup` holds, so a program built
+/// for an older glibc never links it.
+extern "c" fn posix_spawnattr_setcgroup_np(attr: *Attr, cgroup: c_int) c_int;
 
 extern "c" fn posix_spawn_file_actions_init(actions: *FileActions) c_int;
 extern "c" fn posix_spawn_file_actions_destroy(actions: *FileActions) c_int;

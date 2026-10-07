@@ -263,6 +263,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- On Linux with glibc 2.39 or later, a child given a cgroup of its own is started with `posix_spawn` and born in that cgroup (`CLONE_INTO_CGROUP`, Linux 5.7), instead of forked and moved into it: no copy of the parent's page tables and no move between cgroups. With musl, an older glibc, or a kernel that refuses, it is forked and joins its cgroup as before. Which glibc counts is the one the program is built for.
+
 - Windows whole writes report `BrokenPipe` for a pipe whose reader has closed, including the closing state Zig 0.16 reported as `Unexpected`. The standard library now maps that state itself, so conduit no longer asks the pipe before and after each write.
 
 - Named error sets, the same on every POSIX target: `StartTimeError`, `CaptureError`, `EndRecordedError` and `SignalGroupError`, returned by `startTime`, `captureStarted`, `endRecorded` and `CapturedPid.signalGroupSince`. `Child.FinishError` is `Child.KillWaitError`; `finish` never returns a `waitTree` error.

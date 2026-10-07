@@ -132,8 +132,9 @@ and stays there whatever it does with its group, its session or its parent.
 So where this process may make a cgroup below its own — a subtree delegated to
 it, as systemd does for a user's session manager and for `Delegate=yes` units,
 or a container with a writable cgroup mount — `spawn` makes one per child and
-the fork child joins it before it does anything else, so nothing the child
-ever starts is outside it. `kill(.kill)` is then one write to `cgroup.kill`
+the child is born in it (`CLONE_INTO_CGROUP`, through glibc 2.39's
+`posix_spawn`) or, where that is not to be had, joins it as a fork child before
+it does anything else, so nothing the child ever starts is outside it. `kill(.kill)` is then one write to `cgroup.kill`
 (Linux 5.14), which ends everything in it and is safe against a fork while it
 is being delivered; `.terminate` and `.interrupt` go to each member through a
 pidfd, the member confirmed still in the cgroup after the pidfd was opened. A
@@ -144,9 +145,10 @@ assumed; a refusal (a read-only cgroup mount, as in a default container; a
 cgroup owned by root, as in an SSH session; a cgroup v1 system; a kernel
 before 5.14) is remembered, and every child is started as before and reached
 as below. The cgroup is owned by the child's lifecycle; a
-contained spawn always takes the fork, never `posix_spawn`, since joining a
-cgroup is a write and there is no file action for one; this process holds
-one more descriptor per child, and makes and removes one directory per child
+contained spawn takes `posix_spawn` only where the C library can start a child
+in a cgroup — glibc 2.39 and later, as built for — and the fork otherwise,
+since joining a cgroup is a write and there is no file action for one; this
+process holds one more descriptor per child, and makes and removes one directory per child
 under its own cgroup, named `conduit-<pid>-<n>`; `deinit` removes it, and
 one whose processes outlive the child is left to them and removed by a later
 spawn or `deinit` once they have ended. Up to sixteen such cgroups retain
@@ -232,7 +234,8 @@ fork: a terminal becomes controlling there only through `TIOCSCTTY`, an ioctl
 no file action can make. The fast path runs on Linux and macOS, which are the
 systems the suite runs on; the BSDs number the attribute flags differently and
 keep the fork. A child put in a
-cgroup of its own on Linux is forked too (above). `zig build test
+cgroup of its own on Linux is forked too, unless the C library can start it in
+the cgroup (above). `zig build test
 -Dfork-spawn` runs the whole suite with it turned off.
 
 **A spawn that cannot run the program is an error**, not a child that exits

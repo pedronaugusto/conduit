@@ -25,6 +25,12 @@ const lineage = @import("../lineage.zig");
 
 const file = handles.file;
 
+/// What the tests read of how a child was started.
+pub const testing_hook = if (builtin.is_test) struct {
+    /// Spawns that took the fork, from this process's start.
+    pub var forks: std.atomic.Value(u32) = .init(0);
+} else struct {};
+
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
 
@@ -80,12 +86,13 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     // Nothing has to happen between a fork and an exec for this one, so it
     // need not be a fork at all. `posix_spawn` describes the child with file
     // actions instead, without copying the parent's page tables. It answers
-    // `null` for a set of descriptors it cannot
-    // describe, and then this falls through to the fork below. A contained
-    // child is always forked: joining its cgroup is a write, and there is no
-    // file action for one.
-    if (contained == null and posix_spawn.suits(options)) {
-        if (try spawnWithoutFork(io, options, exec, &plan, &adoption, state)) |child| return child;
+    // `null` for a set of descriptors it cannot describe, and then this falls
+    // through to the fork below. A child with a cgroup is born in it where
+    // the C library can ask the kernel for that (`posix_spawn.into_cgroup`);
+    // elsewhere, and where the kernel refuses, it is forked and joins it,
+    // which is a write, and there is no file action for one.
+    if (posix_spawn.suits(options) and (contained == null or posix_spawn.into_cgroup)) {
+        if (try spawnWithoutFork(io, options, exec, &plan, &adoption, state, if (contained) |*pending| pending else null)) |child| return child;
     }
 
     // How the fork child reports a failure that happens after the fork. The
@@ -190,6 +197,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
     // was gone before it.
     const parent = c.getpid();
 
+    if (builtin.is_test) _ = testing_hook.forks.fetchAdd(1, .monotonic);
     const pid = tty.ForkGap.hold(forkRunning, .{ options, plan, exec, ends, parent });
     if (pid > 0) return pid;
     return switch (c.errno(@as(c_int, -1))) {
@@ -307,8 +315,10 @@ fn spawnWithoutFork(
     plan: *Plan,
     adoption: *Orphans.Spawn,
     state: *State,
+    contained: ?*cgroup.Pending,
 ) SpawnError!?*State {
-    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options }) orelse return null;
+    const into: ?posix.fd_t = if (!posix_spawn.into_cgroup) null else if (contained) |pending| pending.intoDescriptor() else null;
+    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options, into }) orelse return null;
     adoption.started(child.pid) catch |err| {
         var forks = child.forks;
         forks.close();
@@ -317,7 +327,9 @@ fn spawnWithoutFork(
     };
     adoption.finish(io);
     plan.closeChildSide(io);
-    return started(state, child.pid, child.forks, .none, plan, options);
+    // Born in its cgroup, which is the child's to keep from here.
+    const kept: cgroup.Cgroup = if (contained) |pending| pending.started(true) else .none;
+    return started(state, child.pid, child.forks, kept, plan, options);
 }
 
 /// In the fork child of a contained spawn on Linux: becomes the supervisor

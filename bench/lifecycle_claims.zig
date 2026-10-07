@@ -94,7 +94,9 @@ fn oneSpawn(init: std.process.Init, cwd: ?[]const u8) !i64 {
     });
     defer child.deinit(init.io);
     errdefer _ = child.killWait(init.io, .zero) catch {};
-    // Cgroup joining forces fork. Refuse to label two fork paths a comparison.
+    // A cgroup adds a join to the forked side, or forks both where the C
+    // library cannot start a child in one: either way the two would not
+    // differ by the fork alone. Refuse rather than label that a comparison.
     if (builtin.target.os.tag == .linux) {
         var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
         if ((try child.containment(&buffer)).cgroup != null) return error.CgroupForcesFork;
