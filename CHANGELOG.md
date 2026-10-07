@@ -263,6 +263,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A spawn `posix_spawn` starts passes over the places on the search path where the program is not, without starting a child for each: a bare name found ten directories down `PATH` no longer costs ten children made and ended first. On macOS `spawn` and `wait` of `true` went from 1171 to 890 µs.
+
 - On Linux with glibc 2.39 or later, a child given a cgroup of its own is started with `posix_spawn` and born in that cgroup (`CLONE_INTO_CGROUP`, Linux 5.7), instead of forked and moved into it: no copy of the parent's page tables and no move between cgroups. With musl, an older glibc, or a kernel that refuses, it is forked and joins its cgroup as before. Which glibc counts is the one the program is built for.
 
 - Windows whole writes report `BrokenPipe` for a pipe whose reader has closed, including the closing state Zig 0.16 reported as `Unexpected`. The standard library now maps that state itself, so conduit no longer asks the pipe before and after each write.

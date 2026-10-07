@@ -234,9 +234,13 @@ pub fn spawn(
 
     // Every candidate in turn, and the error worth reporting is the one from
     // the last attempt that got past "no such file" -- the same rule the fork
-    // child follows, for the same reason.
+    // child follows, for the same reason. A candidate that is not there is
+    // passed over without a spawn: a `posix_spawn` that fails is a child made
+    // and ended, where the fork child's `execve` that fails costs a system
+    // call, and a search path names many directories without the program.
     var best: posix.E = .NOENT;
     for (candidates) |candidate| {
+        if (absent(candidate)) continue;
         var pid: posix.pid_t = undefined;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) {
@@ -252,6 +256,18 @@ pub fn spawn(
         }
     }
     return spawnError(best);
+}
+
+/// Whether nothing is at `path` for an `execve` to find: what it would
+/// fail with as "no such file", asked without starting a child. Anything
+/// else, a file that cannot be run included, is left to `posix_spawn` to
+/// report.
+fn absent(path: [*:0]const u8) bool {
+    if (c.access(path, posix.F_OK) == 0) return false;
+    return switch (c.errno(@as(c_int, -1))) {
+        .NOENT, .NOTDIR => true,
+        else => false,
+    };
 }
 
 /// The watch on a child started suspended, and the child resumed.
