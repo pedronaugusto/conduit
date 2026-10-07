@@ -194,6 +194,42 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(examples_step);
 
     //=====================================================================
+    // Benchmarks.
+    //
+    // conduit's own measurements of its own calls, in bench/: `zig build
+    // bench -Doptimize=ReleaseFast` installs them under zig-out/bench, and
+    // `zig build check` compiles them, so they keep up with the API. They
+    // run on POSIX, on a quiet machine, never in CI; bench/README.md says how.
+    // Only in conduit's own tree: a package fetched by a consumer has no
+    // bench/.
+    //=====================================================================
+
+    if (b.pkg_hash.len == 0 and target.result.os.tag != .windows) {
+        const bench_step = b.step("bench", "Build the benchmarks into zig-out/bench");
+        const smoke = b.option(bool, "bench-smoke", "Benchmarks run every point once and read no clock") orelse false;
+        const bench_options = b.addOptions();
+        bench_options.addOption(bool, "smoke", smoke);
+        for (bench_sources) |source| {
+            const bench = b.addExecutable(.{
+                .name = source[0],
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(source[1]),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = true,
+                    .imports = &.{
+                        .{ .name = "conduit", .module = module },
+                        .{ .name = "bench_options", .module = bench_options.createModule() },
+                    },
+                }),
+            });
+            const install = b.addInstallArtifact(bench, .{ .dest_dir = .{ .override = .{ .custom = "bench" } } });
+            bench_step.dependOn(&install.step);
+            check_step.dependOn(&bench.step);
+        }
+    }
+
+    //=====================================================================
     // CI wiring
     //
     // Only in conduit's own tree. preflight is a lazy dependency, and a lazy
@@ -234,4 +270,11 @@ pub fn build(b: *std.Build) void {
 /// directory is not reproducible from the manifest alone.
 const example_sources = [_][]const u8{
     "examples/usage.zig",
+};
+
+/// The benchmark programs, by name and root source.
+const bench_sources = [_][2][]const u8{
+    .{ "conduit-bench", "bench/conduit_bench.zig" },
+    .{ "lifecycle-claims", "bench/lifecycle_claims.zig" },
+    .{ "orphans-cost", "bench/orphans_cost.zig" },
 };

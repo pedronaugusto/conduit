@@ -873,6 +873,10 @@ of it with the program on the end; and that an argument list survives the
 Windows command line it is written into, by the rules that parse it back. Each
 keeps a corpus of its own under `.zig-cache/f`.
 
+The package's own benchmarks are in `bench/`: `zig build bench` builds them,
+and [bench/README.md](bench/README.md) says how to run them. CI only compiles
+them.
+
 `zig build unit` is the suite without the examples, `-Dtest-filter` runs part
 of it, and `CONDUIT_TRACE` in the environment logs what this package asked
 the operating system for, through `std.log` at the info level under the
