@@ -1,7 +1,7 @@
 const std = @import("std");
 const conduit = @import("conduit");
 const coverage = @import("coverage.zig");
-const smoke = @import("bench_options").smoke;
+var smoke = false;
 const c = std.c;
 
 var true_program: []const u8 = "true";
@@ -18,12 +18,20 @@ pub fn main(init: std.process.Init) !void {
     shell_program = init.environ_map.get("BENCH_SH") orelse "sh";
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len == 2 and std.mem.eql(u8, args[1], "signal_child")) signalChild();
-    // conduit-bench <input> [workload] [count]: every workload by default,
-    // `default_count` times each.
-    if (args.len < 2 or args.len > 4) return error.Usage;
-    const path = args[1];
-    const workload = if (args.len > 2) args[2] else "all";
-    const n = if (args.len > 3) try std.fmt.parseInt(usize, args[3], 10) else default_count;
+    smoke = args.len == 2 and std.mem.eql(u8, args[1], "--smoke");
+    coverage.smoke = smoke;
+    // With no arguments (or --smoke), make the default 1 KiB line in the
+    // fresh working directory preflight gives this run.
+    const defaults = args.len == 1 or smoke;
+    if (!defaults and (args.len < 2 or args.len > 4)) return error.Usage;
+    if (defaults) {
+        const line: [1023]u8 = @splat('x');
+        try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "line.txt", .data = &line ++ "\n" });
+    }
+    const path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, if (defaults) "line.txt" else args[1], init.gpa);
+    defer init.gpa.free(path);
+    const workload = if (!defaults and args.len > 2) args[2] else "all";
+    const n = if (smoke) 1 else if (args.len > 3) try std.fmt.parseInt(usize, args[3], 10) else default_count;
     const input = try std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .unlimited);
     defer init.gpa.free(input);
 
@@ -372,7 +380,7 @@ fn oneLeafKill(init: std.process.Init) ![2]f64 {
 // Smoke exercises correctness without sampling a benchmark clock.
 var smoke_ticks = std.atomic.Value(i64).init(0);
 fn benchmarkNow(io: std.Io) std.Io.Timestamp {
-    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    if (smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
     return std.Io.Clock.awake.now(io);
 }
 

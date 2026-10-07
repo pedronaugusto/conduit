@@ -3,6 +3,7 @@
 //! elsewhere it says so and ends.
 const std = @import("std");
 const conduit = @import("conduit");
+var smoke = false;
 var true_program: []const u8 = "true";
 var sleep_program: []const u8 = "sleep";
 
@@ -26,8 +27,10 @@ pub fn main(init: std.process.Init) !void {
     sleep_program = init.environ_map.get("BENCH_SLEEP") orelse "sleep";
     const io = init.io;
     const gpa = std.heap.c_allocator;
-    const smoke = @import("bench_options").smoke;
-    const n = if (smoke) 1 else 2000;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    smoke = args.len == 2 and std.mem.eql(u8, args[1], "--smoke");
+    if (args.len != 1 and !smoke) return error.Usage;
+    const n: usize = if (smoke) 1 else 2000;
     if (!smoke) _ = try spawnWait(io, gpa, 200);
     var best_off: f64 = 1e9;
     var best_on: f64 = 1e9;
@@ -68,7 +71,7 @@ pub fn main(init: std.process.Init) !void {
 // Smoke exercises correctness without sampling a benchmark clock.
 var smoke_ticks = std.atomic.Value(i64).init(0);
 fn benchmarkNow(io: std.Io) std.Io.Timestamp {
-    if (@import("bench_options").smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
+    if (smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
     return std.Io.Clock.awake.now(io);
 }
 

@@ -50,6 +50,10 @@ const CapturedPid = conduit.CapturedPid;
 const captureStarted = conduit.captureStarted;
 const killRecorded = conduit.killRecorded;
 test {
+    _ = @import("child.zig");
+    _ = @import("handles.zig");
+    _ = @import("pty.zig");
+    _ = @import("reaper.zig");
     _ = @import("testing/support.zig");
     _ = @import("input_writer_test.zig");
     _ = @import("child/exchange_test.zig");

@@ -714,8 +714,7 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
     const FaultIo = shakedown.FaultIo;
-    // The wake pipe as it is when the task is asked for, which the inner
-    // layer then refuses.
+    // Record the wake pipe before refusing the task.
     const Seen = struct {
         const Self = @This();
         reaper: *Reaper,
@@ -729,15 +728,10 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     var seen: Seen = .{ .reaper = &reaper };
     const refused = try FaultIo.init(std.testing.allocator, io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
-        .fault = .{ .fail = error.ConcurrencyUnavailable },
+        .fault = .{ .call = .{ .ctx = &seen, .f = Seen.record, .then = &.{ .fail = error.ConcurrencyUnavailable } } },
     }} });
     defer refused.deinit();
-    const observed = try FaultIo.init(std.testing.allocator, refused.io(), .{ .plan = &.{.{
-        .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
-        .fault = .{ .call = .{ .ctx = &seen, .f = Seen.record } },
-    }} });
-    defer observed.deinit();
-    try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(observed.io()));
+    try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(refused.io()));
     for (seen.ends.?) |fd| {
         try std.testing.expectEqual(@as(c_int, -1), c.fcntl(fd, c.F.GETFD));
         try std.testing.expectEqual(std.c.E.BADF, c.errno(@as(c_int, -1)));
@@ -760,35 +754,40 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     defer _ = child.killWait(io, .zero) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
-    // Every futex wait returns at once, ten milliseconds of the clock
-    // later, as a spurious wake would, and always on the same word.
-    // shakedown's `Clock` waits through a spurious wake, and none of its
-    // faults returns from a wait without making it, so this one slot is a
-    // layer of the test's own.
-    const Spurious = struct {
-        const Self = @This();
-        const Layer = shakedown.Layer(Self, .{ .futexWait = futexWait });
-
-        clock: *shakedown.Clock,
-        /// The one word every wait is on.
-        event: ?*const u32 = null,
-
-        fn futexWait(userdata: ?*anyopaque, ptr: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const spurious = &Layer.of(userdata).state;
-            if (spurious.event) |event| std.debug.assert(event == ptr) else spurious.event = ptr;
-            spurious.clock.advance(.fromMilliseconds(10));
+    // Every futex wait wakes spuriously ten milliseconds of the clock later.
+    const Advance = struct {
+        fn spend(_: std.Io, context: *anyopaque) void {
+            const clock: *shakedown.Clock = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Clock as the context
+            clock.advance(.fromMilliseconds(10));
         }
     };
     var clock: shakedown.Clock = .init(io, .{});
-    var spurious: Spurious.Layer = .init(clock.io(), .{ .clock = &clock });
-    // No interval sleeps: any one would fail the wait.
-    const counted = try shakedown.FaultIo.init(testing.allocator, spurious.io(), .{ .plan = &.{.{
-        .at = .{ .nth = .{ .call = .sleep, .n = 1 } },
-        .fault = .cancel,
-        .times = 0,
-    }} });
+    const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{
+        .plan = &.{
+            .{
+                .at = .{ .nth = .{ .call = .futexWait, .n = 1 } },
+                .fault = .{ .call = .{ .ctx = &clock, .f = Advance.spend, .then = &.spurious_wake } },
+                .times = 0,
+            },
+            // No interval sleeps: any one would fail the wait.
+            .{ .at = .{ .nth = .{ .call = .sleep, .n = 1 } }, .fault = .cancel, .times = 0 },
+        },
+    });
     defer counted.deinit();
-    const clock_io = counted.io();
+    // FaultIo does not expose futex addresses. This observer only checks
+    // the word and forwards the wait; the plan supplies all fault behavior.
+    const Observed = struct {
+        const Observer = shakedown.Layer(@This(), .{ .futexWait = wait });
+        event: ?*const u32 = null,
+
+        fn wait(userdata: ?*anyopaque, ptr: *const u32, expected: u32, timeout: std.Io.Timeout) std.Io.Cancelable!void {
+            const observer = Observer.of(userdata);
+            if (observer.state.event) |word| std.debug.assert(word == ptr) else observer.state.event = ptr;
+            return std.Io.futexWaitTimeout(observer.base, u32, ptr, expected, timeout);
+        }
+    };
+    var observed: Observed.Observer = .init(counted.io(), .{});
+    const clock_io = observed.io();
     var start = clock.read(.awake);
     try testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(clock_io, Deadline.within(.fromMilliseconds(30))));
     try testing.expectEqual(@as(u64, 3), counted.count(.futexWait));
@@ -796,7 +795,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     try testing.expectEqual(std.Io.Duration.fromMilliseconds(30), start.durationTo(clock.read(.awake)));
     try testing.expectEqual(@as(?Term, null), try child.tryWait(io));
     counted.reset();
-    spurious.state.event = null;
+    observed.state.event = null;
     start = clock.read(.awake);
     reaper.insist(clock_io, .fromMilliseconds(40));
     try testing.expectEqual(@as(u64, 4), counted.count(.futexWait));

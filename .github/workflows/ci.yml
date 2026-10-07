@@ -25,16 +25,16 @@ permissions:
 jobs:
   skip:
     if: github.event_name != 'push'
-    uses: pedronaugusto/preflight/.github/workflows/skip.yml@f6a5191c42d8de76ab758465bf897e7acee931d9
+    uses: pedronaugusto/preflight/.github/workflows/skip.yml@87ff3275e65c154b714a6dedb15c1f121a8b9a91
     with:
       tier: ${{ github.event_name == 'workflow_dispatch' && inputs.tier || 'merge' }}
-      preflight-ref: f6a5191c42d8de76ab758465bf897e7acee931d9
+      preflight-ref: 87ff3275e65c154b714a6dedb15c1f121a8b9a91
   gate:
     needs: skip
     if: always() && (github.event_name == 'push' || (needs.skip.result == 'success' && needs.skip.outputs.docs-only != 'true'))
-    uses: pedronaugusto/preflight/.github/workflows/zig.yml@f6a5191c42d8de76ab758465bf897e7acee931d9
+    uses: pedronaugusto/preflight/.github/workflows/zig.yml@87ff3275e65c154b714a6dedb15c1f121a8b9a91
     with:
-      preflight-ref: f6a5191c42d8de76ab758465bf897e7acee931d9
+      preflight-ref: 87ff3275e65c154b714a6dedb15c1f121a8b9a91
       tier: ${{ github.event_name == 'workflow_dispatch' && inputs.tier || 'merge' }}
       adopt: ${{ github.event_name == 'workflow_dispatch' && inputs.adopt }}
       attest: ${{ github.event_name == 'push' }}
@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: f6a5191c42d8de76ab758465bf897e7acee931d9
+          ref: 87ff3275e65c154b714a6dedb15c1f121a8b9a91
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci -Dci-lint=false -Doptimize=safe -Dfork-spawn
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: f6a5191c42d8de76ab758465bf897e7acee931d9
+          ref: 87ff3275e65c154b714a6dedb15c1f121a8b9a91
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build ci -Dci-lint=false -Dtarget=x86_64-linux-musl -Doptimize=${{ matrix.optimize }}
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pedronaugusto/preflight
-          ref: f6a5191c42d8de76ab758465bf897e7acee931d9
+          ref: 87ff3275e65c154b714a6dedb15c1f121a8b9a91
           path: .preflight
       - uses: ./.preflight/.github/actions/setup
       - run: zig build install-unit -Drequire-cgroups

@@ -2126,27 +2126,11 @@ pub const Child = struct {
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
-        // Every drain sleep resumes ten milliseconds of the caller's clock
-        // later, whatever it asked for. Only that clock says how much of the
-        // drain budget was spent.
-        const Late = struct {
-            /// Moves the clock on by ten milliseconds each time something
-            /// sleeps on it, until canceled.
-            fn resumeLate(clock: *shakedown.Clock) std.Io.Cancelable!void {
-                while (true) {
-                    clock.awaitArmed(1, .none) catch |err| switch (err) {
-                        error.Canceled => return error.Canceled,
-                        error.Timeout => unreachable, // unreachable: `.none` never times out
-                    };
-                    clock.advance(.fromMilliseconds(10));
-                }
-            }
-        };
-        var clock: shakedown.Clock = .init(io, .{});
+        // Each two-millisecond drain sleep resumes eight milliseconds late.
+        // Only elapsed time determines how much of the drain budget was spent.
+        var clock: shakedown.Clock = .init(io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(8) } } });
         const delayed_io = clock.io();
         const start = clock.read(.awake);
-        var late = try io.concurrent(Late.resumeLate, .{&clock});
-        defer late.cancel(io) catch {};
         var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .fromMilliseconds(20) }, null);
         defer collected.deinit();
         try testing.expect(collected.stdoutTruncated());

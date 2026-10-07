@@ -4,14 +4,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const conduit = @import("conduit");
-const smoke = @import("bench_options").smoke;
+var smoke = false;
 /// How long one wait here may take before the run is wrong.
 const budget: std.Io.Timeout = conduit.Deadline.within(.fromSeconds(5));
 
 pub fn main(init: std.process.Init) !void {
     if (builtin.target.os.tag == .windows) return error.PosixHarness;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 2 or !std.mem.eql(u8, args[1], "--quiet-machine")) {
+    smoke = args.len == 2 and std.mem.eql(u8, args[1], "--smoke");
+    if (args.len != 1 and !smoke and (args.len != 2 or !std.mem.eql(u8, args[1], "--quiet-machine"))) {
         var buffer: [128]u8 = undefined;
         var err = std.Io.File.stderr().writerStreaming(init.io, &buffer);
         try err.interface.writeAll("lifecycle-claims --quiet-machine (exclusive idle machine only)\n");

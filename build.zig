@@ -183,70 +183,24 @@ pub fn build(b: *std.Build) void {
     // copies cannot drift from code CI executes.
     //=====================================================================
 
-    const examples_step = b.step("examples", "Build and run the examples");
-    for (example_sources) |source| {
-        const example = b.addExecutable(.{
-            .name = std.Io.Dir.path.stem(source),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(source),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = link_libc,
-                .imports = &.{.{ .name = "conduit", .module = module }},
-            }),
-        });
-        const run = b.addRunArtifact(example);
-        examples_step.dependOn(&run.step);
-        check_step.dependOn(&example.step);
-    }
-    test_step.dependOn(examples_step);
-
-    //=====================================================================
-    // Benchmarks.
-    //
-    // conduit's own measurements of its own calls, in bench/. `zig build
-    // bench` builds them in ReleaseFast under zig-out/bench and runs them:
-    // the claims, the cost of `Orphans`, and every workload over a 1 KiB
-    // line, or with `-- <workload> [count]` that workload alone. They want
-    // a quiet POSIX machine, so CI never times them: `check` compiles them,
-    // and `test` runs each once in smoke mode, every point once and no
-    // clock read, so they keep working with the API. Only in conduit's own
-    // tree: a package fetched by a consumer has no bench/.
-    //=====================================================================
-
-    if (b.pkg_hash.len == 0 and target.result.os.tag != .windows) {
-        const line_bytes: [1023]u8 = @splat('x');
-        const line = b.addWriteFiles().add("line.txt", &line_bytes ++ "\n");
-        const bench_step = b.step("bench", "Build the benchmarks in ReleaseFast under zig-out/bench and run them");
-        const timed = addBench(b, target, .fast, releaseModule(b, target, conduit_options), false);
-        for (timed) |bench| bench_step.dependOn(&b.addInstallArtifact(bench, .{ .dest_dir = .{ .override = .{ .custom = "bench" } } }).step);
-        // The claims, the cost of `Orphans`, then the workloads, one after
-        // another: a measurement taken beside another is of both.
-        const claims = b.addRunArtifact(timed[1]);
-        claims.addArg("--quiet-machine");
-        claims.has_side_effects = true;
-        const orphans_cost = b.addRunArtifact(timed[2]);
-        orphans_cost.has_side_effects = true;
-        orphans_cost.step.dependOn(&claims.step);
-        const workload = b.addRunArtifact(timed[0]);
-        workload.addFileArg(line);
-        workload.addPassthruArgs();
-        workload.has_side_effects = true;
-        workload.step.dependOn(&orphans_cost.step);
-        bench_step.dependOn(&workload.step);
-        for (addBench(b, target, optimize, module, false)) |bench| check_step.dependOn(&bench.step);
-        const smoke = addBench(b, target, optimize, module, true);
-        const smoke_workloads = b.addRunArtifact(smoke[0]);
-        smoke_workloads.addFileArg(line);
-        smoke_workloads.addArgs(&.{ "all", "1" });
-        const smoke_claims = b.addRunArtifact(smoke[1]);
-        smoke_claims.addArg("--quiet-machine");
-        const smoke_orphans = b.addRunArtifact(smoke[2]);
-        for ([_]*std.Build.Step.Run{ smoke_workloads, smoke_claims, smoke_orphans }) |run| {
-            // Captured, not printed: smoke numbers mean nothing.
-            run.expectExitCode(0);
-            test_step.dependOn(&run.step);
+    if (b.pkg_hash.len == 0) {
+        const examples_step = b.step("examples", "Build and run the examples");
+        for (example_sources) |source| {
+            const example = b.addExecutable(.{
+                .name = std.Io.Dir.path.stem(source),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(source),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = link_libc,
+                    .imports = &.{.{ .name = "conduit", .module = module }},
+                }),
+            });
+            const run = b.addRunArtifact(example);
+            examples_step.dependOn(&run.step);
+            check_step.dependOn(&example.step);
         }
+        test_step.dependOn(examples_step);
     }
 
     //=====================================================================
@@ -264,8 +218,41 @@ pub fn build(b: *std.Build) void {
         // its Io teardown included, by name and phase. `check-runner` sets a
         // short one, to watch that happen.
         const watchdog_ms = b.option(u32, "test-watchdog-ms", "Per-test hang budget, including Io teardown; preflight's default when unset");
+        const BenchModules = struct {
+            var options: *std.Build.Step.Options = undefined;
+
+            fn imports(build_: *std.Build, target_: std.Build.ResolvedTarget, optimize_: std.lang.Optimize) []const std.Build.Module.Import {
+                return benchImports(build_, target_, optimize_, options);
+            }
+        };
+        BenchModules.options = conduit_options;
+        const programs: []const preflight.Bench.Program = if (target.result.os.tag == .windows) &.{} else &.{
+            .{ .name = "lifecycle-claims", .source = "bench/lifecycle_claims.zig" },
+            .{ .name = "orphans-cost", .source = "bench/orphans_cost.zig" },
+            .{ .name = "conduit-bench", .source = "bench/conduit_bench.zig" },
+        };
+        for (programs) |program| {
+            const executable = b.addExecutable(.{
+                .name = program.name,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(program.source),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc = link_libc,
+                    .imports = BenchModules.imports(b, target, optimize),
+                }),
+            });
+            check_step.dependOn(&executable.step);
+        }
         preflight.addCi(b, .{
             .tests = test_step,
+            .bench = .{
+                .programs = programs,
+                .imports = BenchModules.imports,
+                .target = target,
+                .optimize = optimize,
+                .link_libc = link_libc,
+            },
             .test_timeout = if (watchdog_ms) |ms| .{ .bound = .{
                 .limit = .fromMilliseconds(ms),
                 .reason = "asked for by -Dtest-watchdog-ms",
@@ -273,6 +260,13 @@ pub fn build(b: *std.Build) void {
             // What `CONDUIT_TRACE` prints is at the info level.
             .test_log_level = .info,
         });
+        if (b.dependencyLazy("preflight", .{ .@"repo-root" = "." })) |dependency| {
+            const plan = b.addRunArtifact(dependency.artifact("preflight"));
+            plan.addArg("plan");
+            plan.addPassthruArgs();
+            plan.setCwd(b.path("."));
+            b.step("plan", "Generate CI matrices from ci/workflow.json").dependOn(&plan.step);
+        } else |_| {}
         const containment = preflight.addCheck(b, "check-containment", "ci/containment.zig");
         const probe = b.addRunArtifact(containment);
         probe.addArg("runner");
@@ -292,60 +286,23 @@ const example_sources = [_][]const u8{
     "examples/usage.zig",
 };
 
-/// The benchmark programs, by name and root source: the workloads, the
-/// claims and the cost of `Orphans`, in the order `addBench` returns them.
-const bench_sources = [_][2][]const u8{
-    .{ "conduit-bench", "bench/conduit_bench.zig" },
-    .{ "lifecycle-claims", "bench/lifecycle_claims.zig" },
-    .{ "orphans-cost", "bench/orphans_cost.zig" },
-};
-
-/// The `conduit` module again, in ReleaseFast, for the timed benchmarks: an
-/// imported module keeps its own optimization mode, so the published one
-/// would time a Debug conduit under a ReleaseFast program.
-fn releaseModule(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Build.Step.Options) *std.Build.Module {
+/// Build each benchmark's imports in its own optimization mode.
+fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, options: *std.Build.Step.Options) []const std.Build.Module.Import {
     const tty = b.createModule(.{
         .root_source_file = b.path("src/tty.zig"),
         .target = target,
-        .optimize = .fast,
+        .optimize = optimize,
         .link_libc = true,
     });
     const module = b.createModule(.{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
-        .optimize = .fast,
+        .optimize = optimize,
         .link_libc = true,
         .imports = &.{.{ .name = "conduit.tty", .module = tty }},
     });
     module.addOptions("conduit_options", options);
-    return module;
-}
-
-/// The benchmark programs built in one mode, timed or smoke.
-fn addBench(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.lang.Optimize,
-    module: *std.Build.Module,
-    smoke: bool,
-) [bench_sources.len]*std.Build.Step.Compile {
-    const options = b.addOptions();
-    options.addOption(bool, "smoke", smoke);
-    var programs: [bench_sources.len]*std.Build.Step.Compile = undefined;
-    for (bench_sources, &programs) |source, *program| {
-        program.* = b.addExecutable(.{
-            .name = source[0],
-            .root_module = b.createModule(.{
-                .root_source_file = b.path(source[1]),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-                .imports = &.{
-                    .{ .name = "conduit", .module = module },
-                    .{ .name = "bench_options", .module = options.createModule() },
-                },
-            }),
-        });
-    }
-    return programs;
+    const imports = b.allocator.alloc(std.Build.Module.Import, 1) catch @panic("OOM");
+    imports[0] = .{ .name = "conduit", .module = module };
+    return imports;
 }

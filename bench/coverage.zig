@@ -3,7 +3,8 @@
 //! `unavailable` instead of a number.
 const std = @import("std");
 const conduit = @import("conduit");
-const smoke = @import("bench_options").smoke;
+/// Set by the benchmark entry point before any workload runs.
+pub var smoke = false;
 /// How long one wait for the child may take before the run is wrong.
 const budget: std.Io.Timeout = conduit.Deadline.within(.fromSeconds(5));
 const c = std.c;
@@ -491,7 +492,7 @@ fn ttyOps(x: Ctx) !void {
     const size: conduit.Size = .{ .rows = 24, .cols = 80 };
     var name_buffer: [256]u8 = undefined;
     const count: f64 = @floatFromInt(x.n);
-    const rounds = if (smoke) 1 else 2;
+    const rounds: usize = if (smoke) 1 else 2;
     for (0..rounds) |round| {
         const timed = round + 1 == rounds;
         var start = now(io);
@@ -530,7 +531,7 @@ fn findProgram(x: Ctx) !void {
     const env = x.init.environ_map;
     const found = (try conduit.findProgram(x.gpa(), io, env, x.cat)) orelse return error.NotFound;
     defer x.gpa().free(found);
-    const rounds = if (smoke) 1 else 2;
+    const rounds: usize = if (smoke) 1 else 2;
     const count: f64 = @floatFromInt(x.n);
     for (0..rounds) |round| {
         const timed = round + 1 == rounds;
@@ -567,7 +568,7 @@ fn environ(x: Ctx) !void {
     var probe = try conduit.environ.inherit(x.gpa(), changes);
     const inherited = probe.count();
     probe.deinit();
-    const rounds = if (smoke) 1 else 2;
+    const rounds: usize = if (smoke) 1 else 2;
     const count: f64 = @floatFromInt(x.n);
     for (0..rounds) |round| {
         const timed = round + 1 == rounds;
@@ -598,7 +599,7 @@ fn processIdentity(x: Ctx) !void {
     defer _ = child.killWait(io, .zero) catch {};
     const pid = child.processId().?;
     const started = (try conduit.startTime(pid)) orelse return error.NoStartTime;
-    const rounds = if (smoke) 1 else 2;
+    const rounds: usize = if (smoke) 1 else 2;
     const count: f64 = @floatFromInt(x.n);
     for (0..rounds) |round| {
         const timed = round + 1 == rounds;

@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Pin shakedown's fault callbacks, spurious wakes and automatic late timers; replace the Reaper fault layer, stacked refusal wrappers and late-resume tasks while retaining their assertions.
+- Pin preflight's package, test dependency and benchmark contracts. Benchmarks accept `--smoke`; `zig build bench` builds ReleaseFast programs under `zig-out/bench` and runs them with default fixtures.
+
 ### Breaking
 
 - Every wait with a bound takes a `std.Io.Timeout` instead of milliseconds, and every span (a grace, a drain, an interval) is a `std.Io.Duration`. `.none` waits as long as it takes; `Deadline.within(span)` is a timeout on the awake clock.

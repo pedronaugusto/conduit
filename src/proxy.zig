@@ -334,26 +334,11 @@ test "Proxy resize waits remain cancelable with a zero interval or a changing ti
 }
 
 test "Proxy resize intervals count delayed sleeps once" {
-    const Late = struct {
-        /// Moves the clock on by thirty milliseconds each time something
-        /// sleeps on it, until canceled: a five-millisecond tick that
-        /// resumed late.
-        fn resumeLate(clock: *shakedown.Clock) std.Io.Cancelable!void {
-            while (true) {
-                clock.awaitArmed(1, .none) catch |err| switch (err) {
-                    error.Canceled => return error.Canceled,
-                    error.Timeout => unreachable, // unreachable: `.none` never times out
-                };
-                clock.advance(.fromMilliseconds(30));
-            }
-        }
-    };
-    var clock: shakedown.Clock = .init(testing.io, .{});
+    // A five-millisecond tick resumes twenty-five milliseconds late.
+    var clock: shakedown.Clock = .init(testing.io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(25) } } });
     const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{});
     defer counted.deinit();
     const start = clock.read(.awake);
-    var late = try testing.io.concurrent(Late.resumeLate, .{&clock});
-    defer late.cancel(testing.io) catch {};
     var ticket: std.atomic.Value(u32) = .init(0);
     var seen: u32 = 0;
     var pair: Pty = undefined;
