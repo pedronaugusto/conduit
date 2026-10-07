@@ -8,6 +8,7 @@ const testing = std.testing;
 const test_options = @import("conduit_test_options");
 const io = testing.io;
 const gpa = testing.allocator;
+const shakedown = @import("shakedown");
 const budget_ms = 5000;
 const budget: std.Io.Duration = .fromMilliseconds(budget_ms);
 const within_budget: std.Io.Timeout = .{ .duration = .{ .raw = budget, .clock = .awake } };
@@ -32,48 +33,61 @@ fn output(child: *Child, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, result.stdout());
 }
 
-// Tests run serially. The copied vtable keeps the original userdata, so every
-// other operation, including task creation and cancellation, uses the real Io.
+/// The writer's first write held on a clock that only the test moves: the
+/// test waits for it to start with `entered` and lets it go with `release`.
+/// Everything else, task creation and cancellation included, reaches the
+/// real `Io`, and a cancel lands in the held write.
 const WriteGate = struct {
-    var active: *WriteGate = undefined;
-    file: std.Io.File,
-    entered: std.Io.Event = .unset,
-    release: std.Io.Event = .unset,
-    block: bool = true,
+    clock: shakedown.Clock,
+    faults: *shakedown.FaultIo,
 
-    fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-        if (operation == .file_write_streaming and operation.file_write_streaming.file.handle == active.file.handle) {
-            active.entered.set(io);
-            if (active.block) try active.release.wait(io);
-        }
-        return io.vtable.operate(userdata, operation);
+    const hold: std.Io.Duration = .fromSeconds(1);
+
+    /// `gate` must not move once this returns.
+    fn init(gate: *WriteGate) !void {
+        gate.clock = .init(io, .{});
+        gate.faults = try .init(gpa, gate.clock.io(), .{ .plan = &.{.{
+            .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } },
+            .fault = .{ .delay = hold },
+        }} });
     }
 
-    fn backend(gate: *WriteGate, vtable: *std.Io.VTable) std.Io {
-        active = gate;
-        vtable.* = io.vtable.*;
-        vtable.operate = operate;
-        return .{ .userdata = io.userdata, .vtable = vtable };
+    fn deinit(gate: *WriteGate) void {
+        gate.faults.deinit();
+        gate.* = undefined;
+    }
+
+    fn gated(gate: *WriteGate) std.Io {
+        return gate.faults.io();
+    }
+
+    fn entered(gate: *WriteGate) !void {
+        try gate.clock.awaitArmed(1, within_budget);
+    }
+
+    fn release(gate: *WriteGate) void {
+        gate.clock.advance(hold);
     }
 };
 
 test "InputWriter delivers copied bytes in queue order" {
     var child = try spawn("echo");
     defer reap(&child);
-    var gate: WriteGate = .{ .file = child.stdinFile().? };
-    var vtable: std.Io.VTable = undefined;
-    const gated_io = gate.backend(&vtable);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
     var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 1024 });
     defer writer.deinit(gated_io);
     try testing.expect(child.stdinFile() == null);
     var bytes = "first".*;
     try writer.queue(gated_io, &bytes);
-    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    try gate.entered();
     @memset(&bytes, 'x');
     try writer.queue(gated_io, "second");
     try writer.queue(gated_io, "third");
     try writer.close(gated_io);
-    gate.release.set(io);
+    gate.release();
     try output(&child, "firstsecondthird");
     try writer.wait(gated_io);
 }
@@ -81,18 +95,19 @@ test "InputWriter delivers copied bytes in queue order" {
 test "InputWriter bounds queued bytes together with bytes being written" {
     var child = try spawn("echo");
     defer reap(&child);
-    var gate: WriteGate = .{ .file = child.stdinFile().? };
-    var vtable: std.Io.VTable = undefined;
-    const gated_io = gate.backend(&vtable);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
     var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
     defer writer.deinit(gated_io);
     try writer.queue(gated_io, "123456");
-    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    try gate.entered();
     try writer.queue(gated_io, "7890");
     try testing.expectError(error.BacklogFull, writer.queue(gated_io, "x"));
     try writer.queue(gated_io, "");
     try writer.close(gated_io);
-    gate.release.set(io);
+    gate.release();
     try output(&child, "1234567890");
     try writer.wait(gated_io);
 }
@@ -100,18 +115,19 @@ test "InputWriter bounds queued bytes together with bytes being written" {
 test "InputWriter closes input after every byte queued before its close" {
     var child = try spawn("end");
     defer reap(&child);
-    var gate: WriteGate = .{ .file = child.stdinFile().? };
-    var vtable: std.Io.VTable = undefined;
-    const gated_io = gate.backend(&vtable);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
     var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
     defer writer.deinit(gated_io);
     try writer.queue(gated_io, "before");
-    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    try gate.entered();
     try writer.queue(gated_io, "end");
     try writer.close(gated_io);
     try writer.close(gated_io);
     try testing.expectError(error.InputClosed, writer.queue(gated_io, "after"));
-    gate.release.set(io);
+    gate.release();
     try output(&child, "beforeendEOF");
     try writer.wait(gated_io);
 }
@@ -119,16 +135,27 @@ test "InputWriter closes input after every byte queued before its close" {
 test "InputWriter refuses a backlog without waiting for a child that stops reading" {
     var child = try spawn("stall");
     defer reap(&child);
-    var gate: WriteGate = .{ .file = child.stdinFile().?, .block = false };
-    var vtable: std.Io.VTable = undefined;
-    const observed_io = gate.backend(&vtable);
+    // Told when the write starts, which then blocks on the full pipe.
+    const Started = struct {
+        fn set(base: std.Io, context: *anyopaque) void {
+            const started: *std.Io.Event = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Event as the context
+            started.set(base);
+        }
+    };
+    var started: std.Io.Event = .unset;
+    const observed = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } },
+        .fault = .{ .call = .{ .ctx = &started, .f = Started.set } },
+    }} });
+    defer observed.deinit();
+    const observed_io = observed.io();
     const bytes = try gpa.alloc(u8, 2 * 1024 * 1024);
     defer gpa.free(bytes);
     @memset(bytes, 'x');
     var writer = try child.inputWriter(gpa, observed_io, .{ .max_backlog = bytes.len });
     defer writer.deinit(observed_io);
     try writer.queue(observed_io, bytes);
-    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    try started.waitTimeout(io, within_budget);
     try testing.expectError(error.BacklogFull, writer.queue(observed_io, "x"));
     writer.cancel(observed_io);
     try testing.expectError(error.Canceled, writer.wait(observed_io));
@@ -166,15 +193,16 @@ test "InputWriter cancellation closes an idle pipe and deinit joins an active wr
 
     var blocked = try spawn("end");
     defer reap(&blocked);
-    var gate: WriteGate = .{ .file = blocked.stdinFile().? };
-    var vtable: std.Io.VTable = undefined;
-    const gated_io = gate.backend(&vtable);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
     var active = try blocked.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
     active.queue(gated_io, "held") catch |err| {
         active.deinit(gated_io);
         return err;
     };
-    gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } }) catch |err| {
+    gate.entered() catch |err| {
         active.deinit(gated_io);
         return err;
     };
@@ -257,15 +285,12 @@ test "InputWriter failed startup leaves the pipe with the child" {
     var failing = testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
     try testing.expectError(error.OutOfMemory, child.inputWriter(failing.allocator(), io, .{ .max_backlog = 10 }));
     try testing.expectEqual(file.handle, child.stdinFile().?.handle);
-    const Refuse = struct {
-        fn start(_: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
-            return error.ConcurrencyUnavailable;
-        }
-    };
-    var vtable = io.vtable.*;
-    vtable.groupConcurrent = Refuse.start;
-    const refused_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    try testing.expectError(error.ConcurrencyUnavailable, child.inputWriter(gpa, refused_io, .{ .max_backlog = 10 }));
+    const refused = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
+        .fault = .{ .fail = error.ConcurrencyUnavailable },
+    }} });
+    defer refused.deinit();
+    try testing.expectError(error.ConcurrencyUnavailable, child.inputWriter(gpa, refused.io(), .{ .max_backlog = 10 }));
     try testing.expectEqual(file.handle, child.stdinFile().?.handle);
     try file.writeStreamingAll(io, "still open");
     child.closeStdin(io);
@@ -288,27 +313,15 @@ test "InputWriter a zero bound accepts only empty input" {
 }
 
 test "InputWriter checks cancellation when a write makes no progress" {
-    const NoProgress = struct {
-        var zero: std.atomic.Value(bool) = .init(false);
-
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            if (operation == .file_write_streaming) {
-                if (zero.swap(true, .acq_rel)) return .{ .file_write_streaming = error.InputOutput };
-                return .{ .file_write_streaming = 0 };
-            }
-            return io.vtable.operate(userdata, operation);
-        }
-
-        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
-            if (zero.load(.acquire)) return error.Canceled;
-            return io.vtable.checkCancel(userdata);
-        }
-    };
-    NoProgress.zero.store(false, .release);
-    var vtable = io.vtable.*;
-    vtable.operate = NoProgress.operate;
-    vtable.checkCancel = NoProgress.checkCancel;
-    const stalled_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+    // A write that makes no progress, then a look for a cancel that finds
+    // one; any write after it would fail.
+    const stalled = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{
+        .{ .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } }, .fault = .{ .short = 0 } },
+        .{ .at = .{ .nth = .{ .call = .file_write_streaming, .n = 2 } }, .fault = .{ .fail = error.InputOutput }, .times = 0 },
+        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 1 } }, .fault = .cancel, .times = 0 },
+    } });
+    defer stalled.deinit();
+    const stalled_io = stalled.io();
     var child = try spawn("echo");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, stalled_io, .{ .max_backlog = 10 });
@@ -316,24 +329,32 @@ test "InputWriter checks cancellation when a write makes no progress" {
     try writer.queue(stalled_io, "held");
     try testing.expectError(error.Canceled, writer.wait(io));
     try testing.expectError(error.Canceled, writer.queue(io, "later"));
+    // The cancel was found by the look after the write that made no
+    // progress, and no write came after it.
+    const fired = stalled.fired();
+    try testing.expectEqual(@as(u32, 0), fired[0].entry);
+    try testing.expectEqual(@as(u32, 2), fired[1].entry);
+    try testing.expect(fired[0].step < fired[1].step);
+    try testing.expectEqual(@as(u64, 1), stalled.count(.file_write_streaming));
 }
 
 test "InputWriter isOpen observes acceptance even with a full backlog" {
     var child = try spawn("end");
     defer reap(&child);
-    var gate: WriteGate = .{ .file = child.stdinFile().? };
-    var vtable: std.Io.VTable = undefined;
-    const gated_io = gate.backend(&vtable);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
     var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 4 });
     defer writer.deinit(gated_io);
     try testing.expect(writer.isOpen(gated_io));
     try writer.queue(gated_io, "held");
-    try gate.entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
+    try gate.entered();
     try testing.expect(writer.isOpen(gated_io));
     try testing.expectError(error.BacklogFull, writer.queue(gated_io, "x"));
     try writer.close(gated_io);
     try testing.expect(!writer.isOpen(gated_io));
-    gate.release.set(io);
+    gate.release();
     try writer.wait(gated_io);
     try testing.expect(!writer.isOpen(gated_io));
     try output(&child, "heldEOF");

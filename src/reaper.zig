@@ -594,10 +594,10 @@ pub const Reaper = struct {
 
     /// Sleeps `ms` unless the wake comes first. False when it did.
     fn pause(wake: posix.fd_t, ms: u32) bool {
-        if (builtin.is_test) if (pause_elapsed) |elapsed| {
-            // A poll interrupted after two milliseconds, before its requested
-            // slice elapsed. The test's clock advances by the time actually spent.
-            elapsed.* += 2;
+        if (builtin.is_test) if (interrupted_pause) |interrupted| {
+            // A poll interrupted before its requested slice elapsed: the
+            // test moves its clock by the time actually spent.
+            interrupted.spend(interrupted.context);
             return true;
         };
         var fds = [_]c.pollfd{.{ .fd = wake, .events = c.POLL.IN, .revents = 0 }};
@@ -634,7 +634,12 @@ pub const Reaper = struct {
     }
 };
 
-var pause_elapsed: if (builtin.is_test) ?*u32 else void = if (builtin.is_test) null else {};
+/// Tests only: the clocks and fault plans of the tests below.
+const shakedown = @import("shakedown");
+
+/// In a test, what a `pause` does instead of polling: an interrupted poll
+/// that spends what `spend` says on the test's clock.
+var interrupted_pause: if (builtin.is_test) ?struct { context: *anyopaque, spend: *const fn (*anyopaque) void } else void = if (builtin.is_test) null else {};
 
 test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
@@ -651,21 +656,21 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
 
-    const Clock = struct {
-        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            const elapsed: *u32 = @ptrCast(@alignCast(userdata.?));
-            return .{ .nanoseconds = @as(i96, elapsed.*) * std.time.ns_per_ms };
+    const Clock = shakedown.Clock;
+    const Interrupted = struct {
+        /// Each poll is interrupted after two milliseconds.
+        fn spend(context: *anyopaque) void {
+            const clock: *Clock = @ptrCast(@alignCast(context)); // safe: the test hands its Clock as the context
+            clock.advance(.fromMilliseconds(2));
         }
     };
-    var elapsed: u32 = 0;
-    var vtable = io.vtable.*;
-    vtable.now = Clock.now;
-    const clock_io: std.Io = .{ .vtable = &vtable, .userdata = &elapsed };
+    var clock: Clock = .init(io, .{});
+    const start = clock.read(.awake);
     var reaper: Reaper = .init(&child, .{ .tree_grace = .fromMilliseconds(100) });
-    pause_elapsed = &elapsed;
-    defer pause_elapsed = null;
-    try testing.expect(reaper.endGroup(clock_io, child.state.pgid.?, -1));
-    try testing.expect(elapsed >= 100);
+    interrupted_pause = .{ .context = &clock, .spend = Interrupted.spend };
+    defer interrupted_pause = null;
+    try testing.expect(reaper.endGroup(clock.io(), child.state.pgid.?, -1));
+    try testing.expect(start.durationTo(clock.read(.awake)).nanoseconds >= 100 * std.time.ns_per_ms);
 }
 
 test "every term survives the round trip through the atomic" {
@@ -708,23 +713,32 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     defer _ = child.killWait(io, .zero) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
-    const Reject = struct {
+    const FaultIo = shakedown.FaultIo;
+    // The wake pipe as it is when the task is asked for, which the inner
+    // layer then refuses.
+    const Seen = struct {
         const Self = @This();
         reaper: *Reaper,
         ends: ?[2]posix.fd_t = null,
 
-        fn concurrent(userdata: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
-            const reject: *Self = @ptrCast(@alignCast(userdata.?));
-            reject.ends = reject.reaper.wake;
-            return error.ConcurrencyUnavailable;
+        fn record(_: std.Io, context: *anyopaque) void {
+            const seen: *Self = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Seen as the context
+            seen.ends = seen.reaper.wake;
         }
     };
-    var reject: Reject = .{ .reaper = &reaper };
-    var vtable = io.vtable.*;
-    vtable.groupConcurrent = Reject.concurrent;
-    const rejected_io: std.Io = .{ .userdata = &reject, .vtable = &vtable };
-    try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(rejected_io));
-    for (reject.ends.?) |fd| {
+    var seen: Seen = .{ .reaper = &reaper };
+    const refused = try FaultIo.init(std.testing.allocator, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
+        .fault = .{ .fail = error.ConcurrencyUnavailable },
+    }} });
+    defer refused.deinit();
+    const observed = try FaultIo.init(std.testing.allocator, refused.io(), .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
+        .fault = .{ .call = .{ .ctx = &seen, .f = Seen.record } },
+    }} });
+    defer observed.deinit();
+    try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(observed.io()));
+    for (seen.ends.?) |fd| {
         try std.testing.expectEqual(@as(c_int, -1), c.fcntl(fd, c.F.GETFD));
         try std.testing.expectEqual(std.c.E.BADF, c.errno(@as(c_int, -1)));
     }
@@ -746,66 +760,62 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     defer _ = child.killWait(io, .zero) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
-    const Clock = struct {
+    // Every futex wait returns at once, ten milliseconds of the clock
+    // later, as a spurious wake would, and always on the same word.
+    // shakedown's `Clock` waits through a spurious wake, and none of its
+    // faults returns from a wait without making it, so this one slot is a
+    // layer of the test's own.
+    const Spurious = struct {
         const Self = @This();
-        ms: u32 = 0,
-        waits: usize = 0,
-        sleeps: usize = 0,
+        const Layer = shakedown.Layer(Self, .{ .futexWait = futexWait });
+
+        clock: *shakedown.Clock,
+        /// The one word every wait is on.
         event: ?*const u32 = null,
-        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            const clock: *Self = @ptrCast(@alignCast(userdata.?));
-            return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
-        }
+
         fn futexWait(userdata: ?*anyopaque, ptr: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const clock: *Self = @ptrCast(@alignCast(userdata.?));
-            if (clock.event) |event| std.debug.assert(event == ptr) else clock.event = ptr;
-            clock.waits += 1;
-            clock.ms += 10;
-        }
-        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const clock: *Self = @ptrCast(@alignCast(userdata.?));
-            clock.sleeps += 1;
-            return error.Canceled;
+            const spurious = &Layer.of(userdata).state;
+            if (spurious.event) |event| std.debug.assert(event == ptr) else spurious.event = ptr;
+            spurious.clock.advance(.fromMilliseconds(10));
         }
     };
-    var clock: Clock = .{};
-    var vtable = io.vtable.*;
-    vtable.now = Clock.now;
-    vtable.futexWait = Clock.futexWait;
-    vtable.sleep = Clock.sleep;
-    const clock_io: std.Io = .{ .userdata = &clock, .vtable = &vtable };
+    var clock: shakedown.Clock = .init(io, .{});
+    var spurious: Spurious.Layer = .init(clock.io(), .{ .clock = &clock });
+    // No interval sleeps: any one would fail the wait.
+    const counted = try shakedown.FaultIo.init(testing.allocator, spurious.io(), .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .sleep, .n = 1 } },
+        .fault = .cancel,
+        .times = 0,
+    }} });
+    defer counted.deinit();
+    const clock_io = counted.io();
+    var start = clock.read(.awake);
     try testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(clock_io, Deadline.within(.fromMilliseconds(30))));
-    try testing.expectEqual(@as(usize, 3), clock.waits);
-    try testing.expectEqual(@as(usize, 0), clock.sleeps);
-    try testing.expectEqual(@as(u32, 30), clock.ms);
+    try testing.expectEqual(@as(u64, 3), counted.count(.futexWait));
+    try testing.expectEqual(@as(u64, 0), counted.count(.sleep));
+    try testing.expectEqual(std.Io.Duration.fromMilliseconds(30), start.durationTo(clock.read(.awake)));
     try testing.expectEqual(@as(?Term, null), try child.tryWait(io));
-    clock = .{};
+    counted.reset();
+    spurious.state.event = null;
+    start = clock.read(.awake);
     reaper.insist(clock_io, .fromMilliseconds(40));
-    try testing.expectEqual(@as(usize, 4), clock.waits);
-    try testing.expectEqual(@as(usize, 0), clock.sleeps);
-    try testing.expectEqual(@as(u32, 40), clock.ms);
+    try testing.expectEqual(@as(u64, 4), counted.count(.futexWait));
+    try testing.expectEqual(@as(u64, 0), counted.count(.sleep));
+    try testing.expectEqual(std.Io.Duration.fromMilliseconds(40), start.durationTo(clock.read(.awake)));
     try testing.expectEqual(Term{ .signal = .KILL }, try child.wait(io));
 }
 
 test "a kill keeps its first deadline and a force expires the same grace" {
-    const Clock = struct {
-        var milliseconds: u32 = 100;
-        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            return .{ .nanoseconds = @as(i96, milliseconds) * std.time.ns_per_ms };
-        }
-    };
-    var vtable = std.testing.io.vtable.*;
-    vtable.now = Clock.now;
-    const io: std.Io = .{ .vtable = &vtable, .userdata = std.testing.io.userdata };
+    var clock: shakedown.Clock = .init(std.testing.io, .{});
+    const io = clock.io();
     var kill: Kill = .{};
-    Clock.milliseconds = 100;
     try std.testing.expect(kill.request(io, .fromMilliseconds(100)));
-    Clock.milliseconds = 150;
+    clock.advance(.fromMilliseconds(50));
     try std.testing.expect(!kill.request(io, .fromMilliseconds(100)));
     try std.testing.expectEqual(@as(?u32, 50), kill.current().?.remainingMs(io));
     try std.testing.expect(kill.request(io, .zero));
     try std.testing.expectEqual(@as(?u32, 0), kill.current().?.remainingMs(io));
-    Clock.milliseconds = 200;
+    clock.advance(.fromMilliseconds(50));
     try std.testing.expect(!kill.request(io, .fromMilliseconds(100)));
     try std.testing.expectEqual(@as(?u32, 0), kill.current().?.remainingMs(io));
 }

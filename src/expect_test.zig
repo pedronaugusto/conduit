@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const is_windows = builtin.target.os.tag == .windows;
 const Pty = @import("pty.zig").Pty;
-const handles = @import("handles.zig");
 const Expect = @import("expect.zig").Expect;
 const access = @import("expect.zig").test_access;
 const Search = access.Search;
@@ -23,6 +22,7 @@ const testing = std.testing;
 const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 const Deadline = @import("conduit.tty").Deadline;
+const FaultIo = @import("shakedown").FaultIo;
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;
@@ -31,24 +31,15 @@ const within_budget: std.Io.Timeout = .{ .duration = .{ .raw = budget, .clock = 
 
 test "a canceled reading task publishes that it finished" {
     const io = testing.io;
-    const CancelRead = struct {
-        const Self = @This();
-        base: std.Io,
-
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *Self = @ptrCast(@alignCast(userdata.?));
-            if (operation == .file_read_streaming) return error.Canceled;
-            return state.base.vtable.operate(state.base.userdata, operation);
-        }
-    };
-    var state: CancelRead = .{ .base = io };
-    var vtable = io.vtable.*;
-    vtable.operate = CancelRead.operate;
-    const cancel_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
+    const canceled = try FaultIo.init(testing.allocator, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .file_read_streaming, .n = 1 } },
+        .fault = .cancel,
+    }} });
+    defer canceled.deinit();
 
     var buffer: [32]u8 = undefined;
     var expect: Expect = .init(undefined, &buffer);
-    try testing.expectError(error.Canceled, access.read(&expect, cancel_io));
+    try testing.expectError(error.Canceled, access.read(&expect, canceled.io()));
     try testing.expect(expect.finished.load(.acquire));
 }
 
@@ -493,77 +484,57 @@ test "a stopped Expect refuses a start, and stopping again does nothing" {
 }
 
 test "a full Expect buffer waits for its consumer without interval sleeps" {
-    const Backend = struct {
-        const Self = @This();
-        sleeps: usize = 0,
-        waits: usize = 0,
-        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
-            backend.sleeps += 1;
-            return error.Canceled;
-        }
-        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
-            backend.waits += 1;
-            return error.Canceled;
-        }
-        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
-    };
-    var backend: Backend = .{};
-    var vtable = std.testing.io.vtable.*;
-    vtable.sleep = Backend.sleep;
-    vtable.futexWait = Backend.wait;
-    vtable.futexWake = Backend.wake;
-    const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    // Any interval sleep, and the wait for the consumer, are canceled.
+    const observed = try FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{
+        .{ .at = .{ .nth = .{ .call = .sleep, .n = 1 } }, .fault = .cancel, .times = 0 },
+        .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .cancel, .times = 0 },
+    } });
+    defer observed.deinit();
     var buffer: [1]u8 = .{'x'};
     var expect = Expect.init(undefined, &buffer);
     expect.filled = buffer.len;
-    try std.testing.expectError(error.Canceled, access.read(&expect, observed_io));
-    try std.testing.expectEqual(@as(usize, 0), backend.sleeps);
-    try std.testing.expectEqual(@as(usize, 1), backend.waits);
+    try testing.expectError(error.Canceled, access.read(&expect, observed.io()));
+    try testing.expectEqual(@as(u64, 0), observed.count(.sleep));
+    try testing.expectEqual(@as(u64, 1), observed.count(.futexWait));
 }
 
 test "Expect discard and consumption wake a full reader at the wait boundary" {
-    const Backend = struct {
+    const io = testing.io;
+    const Room = struct {
         const Self = @This();
         expect: *Expect,
-        io: std.Io = undefined,
         consume: bool,
-        waits: usize = 0,
-        reads: usize = 0,
-        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
-            backend.waits += 1;
-            if (backend.waits != 1) return error.Canceled;
-            // The reader has checked that it is full and is entering its
-            // wait. Make room here: this notification must not be lost.
-            if (backend.consume) {
-                backend.expect.consumed = 1;
-                access.compact(backend.io, &backend.expect);
-            } else backend.expect.discard(backend.io);
+
+        /// The reader has checked that it is full and is entering its
+        /// wait. Make room here: this notification must not be lost, or
+        /// the wait that follows never returns.
+        fn make(base: std.Io, context: *anyopaque) void {
+            const room: *Self = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Room as the context
+            if (room.consume) {
+                room.expect.consumed = 1;
+                access.compact(base, room.expect);
+            } else room.expect.discard(base);
         }
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
-            backend.reads += 1;
-            operation.file_read_streaming.data[0][0] = 'b';
-            return .{ .file_read_streaming = 1 };
-        }
-        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
     };
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "said", .data = "b" });
     for ([_]bool{ false, true }) |consume| {
+        // What the reader reads once there is room.
+        const f = try tmp.dir.openFile(io, "said", .{});
+        defer f.close(io);
         var buffer: [1]u8 = .{'a'};
-        const f = handles.file(if (is_windows) std.os.windows.INVALID_HANDLE_VALUE else -1);
         var expect = Expect.init(.{ .read = f, .write = f }, &buffer);
         expect.filled = buffer.len;
-        var backend: Backend = .{ .expect = &expect, .consume = consume };
-        var vtable = std.testing.io.vtable.*;
-        vtable.futexWait = Backend.wait;
-        vtable.futexWake = Backend.wake;
-        vtable.operate = Backend.operate;
-        backend.io = .{ .userdata = &backend, .vtable = &vtable };
-        try std.testing.expectError(error.Canceled, access.read(&expect, backend.io));
-        try std.testing.expectEqual(@as(usize, 2), backend.waits);
-        try std.testing.expectEqual(@as(usize, 1), backend.reads);
-        try std.testing.expectEqualStrings("b", expect.pending(backend.io));
+        var room: Room = .{ .expect = &expect, .consume = consume };
+        const observed = try FaultIo.init(testing.allocator, io, .{ .plan = &.{
+            .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .{ .call = .{ .ctx = &room, .f = Room.make } } },
+            .{ .at = .{ .nth = .{ .call = .futexWait, .n = 2 } }, .fault = .cancel },
+        } });
+        defer observed.deinit();
+        try testing.expectError(error.Canceled, access.read(&expect, observed.io()));
+        try testing.expectEqual(@as(u64, 2), observed.count(.futexWait));
+        try testing.expectEqual(@as(u64, 1), observed.count(.file_read_streaming));
+        try testing.expectEqualStrings("b", expect.pending(io));
     }
 }

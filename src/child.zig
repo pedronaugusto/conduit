@@ -57,6 +57,8 @@ const contract = @import("child/contract.zig");
 const child_output = @import("child/output.zig");
 const child_posix = @import("child/posix.zig");
 const child_windows = @import("child/windows.zig");
+/// Tests only: the clocks and fault plans of the tests below.
+const shakedown = @import("shakedown");
 
 /// Owns the lifecycle and created pipes. A handle: copies name the same
 /// child, and exactly one of them is released or deinited.
@@ -662,19 +664,16 @@ pub const Child = struct {
                 // A fork check may consume NOTE_EXIT before the waiter runs.
                 _ = owner.state.forks.any();
             }
-            fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-                return error.Canceled;
-            }
         };
-        var vtable = io.vtable.*;
-        vtable.sleep = Exit.sleep;
-        const no_sleep: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
+        const counted = try shakedown.FaultIo.init(testing.allocator, io, .{});
+        defer counted.deinit();
         before_exit_watch = Exit.beforeWatch;
         defer before_exit_watch = null;
         // A termination request still owns the final group force before reap.
         child.state.end_descendants = true;
-        _ = try child.wait(no_sleep);
+        _ = try child.wait(counted.io());
         try testing.expect(child.state.scope_complete);
+        try testing.expectEqual(@as(u64, 0), counted.count(.sleep));
     }
 
     test "a child that never forked needs no final group enumeration" {
@@ -2091,15 +2090,13 @@ pub const Child = struct {
         }
         // Another fork check can consume the queued exit without reaping.
         _ = child.state.forks.any();
-        const Refuse = struct {
-            fn concurrent(_: ?*anyopaque, _: *std.Io.Group, _: []const u8, _: std.mem.Alignment, _: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
-                return error.ConcurrencyUnavailable;
-            }
-        };
-        var vtable = io.vtable.*;
-        vtable.groupConcurrent = Refuse.concurrent;
-        const no_tasks: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-        var collected = try child.output(testing.allocator, no_tasks, .{});
+        const no_tasks = try shakedown.FaultIo.init(testing.allocator, io, .{ .plan = &.{.{
+            .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
+            .fault = .{ .fail = error.ConcurrencyUnavailable },
+            .times = 0,
+        }} });
+        defer no_tasks.deinit();
+        var collected = try child.output(testing.allocator, no_tasks.io(), .{});
         defer collected.deinit();
         try testing.expectEqualStrings("retained\n", collected.stdout());
         try testing.expect(succeeded(collected.term()));
@@ -2129,29 +2126,31 @@ pub const Child = struct {
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
-        const Clock = struct {
-            var elapsed: std.atomic.Value(u32) = .init(0);
-
-            fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-                return .{ .nanoseconds = @as(i96, elapsed.load(.acquire)) * std.time.ns_per_ms };
-            }
-
-            fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-                // A two millisecond sleep that resumed after ten. Only the
-                // caller's clock says how much of the drain budget was spent.
-                _ = elapsed.fetchAdd(10, .release);
-                try std.Io.checkCancel(std.testing.io);
+        // Every drain sleep resumes ten milliseconds of the caller's clock
+        // later, whatever it asked for. Only that clock says how much of the
+        // drain budget was spent.
+        const Late = struct {
+            /// Moves the clock on by ten milliseconds each time something
+            /// sleeps on it, until canceled.
+            fn resumeLate(clock: *shakedown.Clock) std.Io.Cancelable!void {
+                while (true) {
+                    clock.awaitArmed(1, .none) catch |err| switch (err) {
+                        error.Canceled => return error.Canceled,
+                        error.Timeout => unreachable, // unreachable: `.none` never times out
+                    };
+                    clock.advance(.fromMilliseconds(10));
+                }
             }
         };
-        Clock.elapsed.store(0, .release);
-        var vtable = io.vtable.*;
-        vtable.now = Clock.now;
-        vtable.sleep = Clock.sleep;
-        const delayed_io: std.Io = .{ .vtable = &vtable, .userdata = io.userdata };
+        var clock: shakedown.Clock = .init(io, .{});
+        const delayed_io = clock.io();
+        const start = clock.read(.awake);
+        var late = try io.concurrent(Late.resumeLate, .{&clock});
+        defer late.cancel(io) catch {};
         var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .fromMilliseconds(20) }, null);
         defer collected.deinit();
         try testing.expect(collected.stdoutTruncated());
-        try testing.expectEqual(@as(u32, 20), Clock.elapsed.load(.acquire));
+        try testing.expectEqual(std.Io.Duration.fromMilliseconds(20), start.durationTo(clock.read(.awake)));
     }
 
     test "a reap reported elsewhere retires the identity before kill can use its number" {

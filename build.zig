@@ -90,6 +90,14 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
     });
     test_module.addOptions("conduit_options", conduit_options);
+    // The tests' clocks, fault plans and counts. A lazy, test-only
+    // dependency, asked for only in conduit's own tree: a project that
+    // depends on conduit neither builds these tests nor fetches it.
+    if (b.pkg_hash.len == 0) {
+        if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
+            test_module.addImport("shakedown", shakedown.module("shakedown"));
+        } else |_| {}
+    }
 
     // A native tree with a known descendant identity and stream lifetime.
     // Only tests depend on this executable; it is never part of the library.

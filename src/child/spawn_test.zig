@@ -34,6 +34,7 @@ const tree = @import("../tree.zig");
 const cgroup = @import("../cgroup.zig");
 const trace = @import("../trace.zig");
 const Watchdog = @import("../testing/support.zig").Watchdog;
+const FaultIo = @import("shakedown").FaultIo;
 
 const io = std.testing.io;
 const gpa = std.testing.allocator;
@@ -605,23 +606,14 @@ test "Reaper.kill returns at once and ends a child that ignores the request, by 
     defer reaper.deinit(io);
 
     const grace_ms = 300;
-    const Count = struct {
-        var tasks: usize = 0;
-        fn concurrent(userdata: ?*anyopaque, group: *std.Io.Group, context: []const u8, alignment: std.mem.Alignment, run: *const fn (*const anyopaque) void) std.Io.ConcurrentError!void {
-            tasks += 1;
-            return io.vtable.groupConcurrent(userdata, group, context, alignment, run);
-        }
-    };
-    Count.tasks = 0;
-    var vtable = io.vtable.*;
-    vtable.groupConcurrent = Count.concurrent;
-    const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    reaper.kill(counted_io, .fromMilliseconds(grace_ms));
-    try testing.expectEqual(@as(usize, 1), Count.tasks);
+    const counted = try FaultIo.init(gpa, io, .{});
+    defer counted.deinit();
+    reaper.kill(counted.io(), .fromMilliseconds(grace_ms));
+    try testing.expectEqual(@as(u64, 1), counted.count(.groupConcurrent));
     // Asked, not waited for: exactly one task owns the grace.
     // A second request with a grace changes nothing.
-    reaper.kill(counted_io, .fromMilliseconds(grace_ms));
-    try testing.expectEqual(@as(usize, 1), Count.tasks);
+    reaper.kill(counted.io(), .fromMilliseconds(grace_ms));
+    try testing.expectEqual(@as(u64, 1), counted.count(.groupConcurrent));
 
     const term = (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
@@ -977,19 +969,15 @@ test "waitTimeout uses the native exit wait without interval sleeps" {
         const watch = wait_for.Watch.open(child.processId().?) orelse return error.SkipZigTest;
         watch.close();
     }
-    const Count = struct {
-        var sleeps: usize = 0;
-        fn sleep(_: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            sleeps += 1;
-            return error.Canceled;
-        }
-    };
-    Count.sleeps = 0;
-    var vtable = io.vtable.*;
-    vtable.sleep = Count.sleep;
-    const counted_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(counted_io, Deadline.within(.fromMilliseconds(20))));
-    try testing.expectEqual(@as(usize, 0), Count.sleeps);
+    // Any interval sleep is canceled, and fails the wait.
+    const counted = try FaultIo.init(gpa, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .sleep, .n = 1 } },
+        .fault = .cancel,
+        .times = 0,
+    }} });
+    defer counted.deinit();
+    try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(counted.io(), Deadline.within(.fromMilliseconds(20))));
+    try testing.expectEqual(@as(u64, 0), counted.count(.sleep));
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 5 }, try waitWithin(&child));
 }
@@ -4466,34 +4454,16 @@ test "the Windows PID fixture keeps reading after a successful empty read" {
     written.close(io);
     const source = try tmp.dir.openFile(io, "pid", .{});
     defer source.close(io);
-    const EmptyOnce = struct {
-        const Self = @This();
-        base: std.Io,
-        empty: bool = true,
-
-        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
-            const state: *Self = @ptrCast(@alignCast(userdata.?));
-            return state.base.vtable.checkCancel(state.base.userdata);
-        }
-
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *Self = @ptrCast(@alignCast(userdata.?));
-            if (operation == .file_read_streaming and state.empty) {
-                state.empty = false;
-                return .{ .file_read_streaming = 0 };
-            }
-            return state.base.vtable.operate(state.base.userdata, operation);
-        }
-    };
-
-    var empty: EmptyOnce = .{ .base = io };
-    var vtable = io.vtable.*;
-    vtable.operate = EmptyOnce.operate;
-    vtable.checkCancel = EmptyOnce.checkCancel;
-    var sink: Sink = .{ .source_io = .{ .vtable = &vtable, .userdata = &empty } };
+    const empty = try FaultIo.init(gpa, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .file_read_streaming, .n = 1 } },
+        .fault = .{ .short = 0 },
+    }} });
+    defer empty.deinit();
+    var sink: Sink = .{ .source_io = empty.io() };
     defer sink.deinit();
     try sink.start(source);
     try testing.expectEqual(@as(u32, 12345), try readMarkedNumber(u32, &sink));
+    try testing.expectEqual(@as(usize, 1), empty.fired().len);
 }
 
 test "a containment snapshot survives reaping and deinit without owned handles" {

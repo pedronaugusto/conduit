@@ -18,5 +18,10 @@
             .hash = "preflight-0.1.0-LX1Zwv2WBQABkEzFUf5-MzYCtr0SSYHZrV097Vir7DYQ",
             .lazy = true,
         },
+        .shakedown = .{
+            .url = "git+https://github.com/pedronaugusto/shakedown#4f590164cf91ef9f244ee26b0a20444b9ecdcdae",
+            .hash = "shakedown-0.1.0-BR8U47zBAwCoNKX4gYuShFo5o5tCR_GSyQ3PVjzPDoPw",
+            .lazy = true,
+        },
     },
 }

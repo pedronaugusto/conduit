@@ -9,6 +9,7 @@ const writeStreamingAll = @import("handles.zig").writeStreamingAll;
 const pipe = @import("conduit.tty").pipe;
 const Child = @import("child.zig").Child;
 const test_options = @import("conduit_test_options");
+const FaultIo = @import("shakedown").FaultIo;
 test "Windows a closed pipe is a broken write and a file keeps its unexpected error" {
     if (!is_windows) return error.SkipZigTest;
     const testing = std.testing;
@@ -28,16 +29,12 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     defer tmp.cleanup();
     const f = try tmp.dir.createFile(io, "file", .{});
     defer f.close(io);
-    const FailWrite = struct {
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            if (operation == .file_write_streaming) return .{ .file_write_streaming = error.Unexpected };
-            return testing.io.vtable.operate(userdata, operation);
-        }
-    };
-    var vtable = io.vtable.*;
-    vtable.operate = FailWrite.operate;
-    const failed_io: std.Io = .{ .userdata = io.userdata, .vtable = &vtable };
-    try testing.expectError(error.Unexpected, writeStreamingAll(failed_io, f, "unchanged"));
+    const failed = try FaultIo.init(testing.allocator, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } },
+        .fault = .{ .fail = error.Unexpected },
+    }} });
+    defer failed.deinit();
+    try testing.expectError(error.Unexpected, writeStreamingAll(failed.io(), f, "unchanged"));
 }
 
 test "readAvailable reads what a pipe holds and returns rather than wait for the rest" {

@@ -77,6 +77,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
         "builtin",
         "conduit_options",
         "conduit_test_options",
+        "shakedown",
         "std",
     } },
     .{ .name = "source siblings", .suffix = ".zig", .relative = true, .except_targets = &.{"src/**"} },
@@ -134,4 +135,8 @@ pub const owned: []const gantry.rules.TokenRule = &.{
     .{ .name = "exec owner", .tokens = &.{"execve"}, .owners = &.{"src/child/posix.zig"} },
     .{ .name = "exec owner", .tokens = &.{"posix_spawn"}, .owners = &.{ "src/child/posix.zig", "src/child/posix/spawn.zig" } },
     .{ .name = "cgroup owner", .kind = .string, .tokens = &.{"/sys/fs/cgroup*"}, .owners = &.{"src/cgroup.zig"} },
+    // A test double is a shakedown `Clock`, `FaultIo` or `Layer`, never a
+    // copied `Io` vtable with a slot replaced: such a copy keeps its state in
+    // globals and cannot be stacked. The one vtable here is an allocator's.
+    .{ .name = "test doubles on shakedown", .tokens = &.{ "vtable", "VTable" }, .owners = &.{"src/serial_allocator.zig"} },
 };

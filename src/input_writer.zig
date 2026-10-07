@@ -219,30 +219,28 @@ const State = struct {
 /// is the queue, not the pipe.
 const TestWriter = Writer(struct {}).InputWriter;
 
+/// Tests only: the fault plans of the tests below.
+const shakedown = @import("shakedown");
+
 test "InputWriter isOpen takes a contended mutex without cancellation" {
-    const Backend = struct {
-        const Self = @This();
-        mutex: *std.Io.Mutex,
-        waits: usize = 0,
-        fn wait(userdata: ?*anyopaque, _: *const u32, _: u32) void {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?)); // safe: this test supplies its Backend as userdata.
-            backend.waits += 1;
-            backend.mutex.state.store(.unlocked, .release);
+    const Release = struct {
+        /// The holder lets go as the waiter enters its wait, so the wait
+        /// finds the word changed and returns.
+        fn unlock(_: std.Io, context: *anyopaque) void {
+            const mutex: *std.Io.Mutex = @ptrCast(@alignCast(context)); // safe: the plan hands this test's mutex as the context
+            mutex.state.store(.unlocked, .release);
         }
-        fn canceled(_: ?*anyopaque, _: *const u32, _: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-            return error.Canceled;
-        }
-        fn wake(_: ?*anyopaque, _: *const u32, _: u32) void {}
     };
     var state: State = .{ .gpa = std.testing.allocator, .file = undefined, .max_backlog = 0 };
     var writer: TestWriter = .{ .state = &state };
-    var backend: Backend = .{ .mutex = &state.mutex };
-    var vtable = std.testing.io.vtable.*;
-    vtable.futexWait = Backend.canceled;
-    vtable.futexWaitUncancelable = Backend.wait;
-    vtable.futexWake = Backend.wake;
-    const observed_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    // A cancelable wait would fail the test, through any cancel.
+    const observed = try shakedown.FaultIo.init(std.testing.allocator, std.testing.io, .{ .plan = &.{
+        .{ .at = .{ .nth = .{ .call = .futexWaitUncancelable, .n = 1 } }, .fault = .{ .call = .{ .ctx = &state.mutex, .f = Release.unlock } } },
+        .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .cancel, .times = 0 },
+    } });
+    defer observed.deinit();
     state.mutex.state.store(.locked_once, .release);
-    try std.testing.expect(writer.isOpen(observed_io));
-    try std.testing.expectEqual(@as(usize, 1), backend.waits);
+    try std.testing.expect(writer.isOpen(observed.io()));
+    try std.testing.expectEqual(@as(u64, 1), observed.count(.futexWaitUncancelable));
+    try std.testing.expectEqual(@as(u64, 0), observed.count(.futexWait));
 }

@@ -157,6 +157,9 @@ pub fn writeStreamingAll(io: std.Io, f: std.Io.File, bytes: []const u8) std.Io.F
     }
 }
 
+/// Tests only: the fault plans of the tests below.
+const shakedown = @import("shakedown");
+
 test "readStreaming retries a permitted zero-byte result" {
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -167,54 +170,34 @@ test "readStreaming retries a permitted zero-byte result" {
     var f = try tmp.dir.openFile(io, "bytes", .{});
     defer f.close(io);
 
-    const ZeroOnce = struct {
-        const Self = @This();
-        base: std.Io,
-        returned_zero: bool = false,
-
-        fn operate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            const state: *Self = @ptrCast(@alignCast(userdata.?));
-            if (operation == .file_read_streaming and !state.returned_zero) {
-                state.returned_zero = true;
-                return .{ .file_read_streaming = 0 };
-            }
-            return state.base.vtable.operate(state.base.userdata, operation);
-        }
-    };
-    var state: ZeroOnce = .{ .base = io };
-    var vtable = io.vtable.*;
-    vtable.operate = ZeroOnce.operate;
-    const zero_io: std.Io = .{ .userdata = &state, .vtable = &vtable };
+    // The first read makes no progress, without reading.
+    const zero = try shakedown.FaultIo.init(std.testing.allocator, io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .file_read_streaming, .n = 1 } },
+        .fault = .{ .short = 0 },
+    }} });
+    defer zero.deinit();
 
     var buffer: [32]u8 = undefined;
-    const n = try readStreaming(zero_io, f, &.{&buffer});
-    try std.testing.expect(state.returned_zero);
+    const n = try readStreaming(zero.io(), f, &.{&buffer});
+    try std.testing.expectEqual(@as(usize, 1), zero.fired().len);
     try std.testing.expectEqualStrings("after zero", buffer[0..n]);
 }
 
 test "writeStreamingAll retains short writes after zero progress" {
-    const ShortWrites = struct {
-        var calls: usize = 0;
-        var used: usize = 0;
-        var bytes: [6]u8 = undefined;
-
-        fn operate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-            std.debug.assert(operation == .file_write_streaming);
-            calls += 1;
-            if (calls == 1) return .{ .file_write_streaming = 0 };
-            const data = operation.file_write_streaming.data[0];
-            const n = @min(data.len, 2);
-            @memcpy(bytes[used..][0..n], data[0..n]);
-            used += n;
-            return .{ .file_write_streaming = n };
-        }
-    };
-    ShortWrites.calls = 0;
-    ShortWrites.used = 0;
-    var vtable = std.testing.io.vtable.*;
-    vtable.operate = ShortWrites.operate;
-    const io: std.Io = .{ .userdata = std.testing.io.userdata, .vtable = &vtable };
-    try writeStreamingAll(io, std.Io.File.stdout(), "abcdef");
-    try std.testing.expectEqual(4, ShortWrites.calls);
-    try std.testing.expectEqualStrings("abcdef", &ShortWrites.bytes);
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const f = try tmp.dir.createFile(io, "bytes", .{ .read = true });
+    defer f.close(io);
+    // No progress, then two bytes a write.
+    const short = try shakedown.FaultIo.init(std.testing.allocator, io, .{ .plan = &.{
+        .{ .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } }, .fault = .{ .short = 0 } },
+        .{ .at = .{ .nth = .{ .call = .file_write_streaming, .n = 2 } }, .fault = .{ .short = 2 }, .times = 0 },
+    } });
+    defer short.deinit();
+    try writeStreamingAll(short.io(), f, "abcdef");
+    try std.testing.expectEqual(@as(u64, 4), short.count(.file_write_streaming));
+    var bytes: [6]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 6), try f.readPositionalAll(io, &bytes, 0));
+    try std.testing.expectEqualStrings("abcdef", &bytes);
 }

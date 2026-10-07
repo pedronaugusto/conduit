@@ -290,6 +290,8 @@ fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!v
 //======================================================================
 
 const testing = std.testing;
+/// Tests only: the clocks and fault plans of the tests below.
+const shakedown = @import("shakedown");
 
 test "empty transfer buffers are rejected before either direction starts" {
     const io = testing.io;
@@ -311,69 +313,51 @@ test "empty transfer buffers are rejected before either direction starts" {
 }
 
 test "Proxy resize waits remain cancelable with a zero interval or a changing ticket" {
-    const io = testing.io;
-    const Backend = struct {
-        const Self = @This();
-        sleeps: usize = 0,
-        checks: usize = 0,
-        fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            return .{ .nanoseconds = 0 };
-        }
-        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?));
-            backend.sleeps += 1;
-            return error.Canceled;
-        }
-        fn checkCancel(userdata: ?*anyopaque) std.Io.Cancelable!void {
-            const backend: *Self = @ptrCast(@alignCast(userdata.?));
-            backend.checks += 1;
-            return if (backend.checks > 1) error.Canceled else {};
-        }
-    };
-    var backend: Backend = .{};
-    var vtable = io.vtable.*;
-    vtable.now = Backend.now;
-    vtable.sleep = Backend.sleep;
-    vtable.checkCancel = Backend.checkCancel;
-    const controlled_io: std.Io = .{ .userdata = &backend, .vtable = &vtable };
+    // A clock that never moves, so the wait always has time left; its first
+    // sleep is canceled, and so is its second look for a cancel.
+    var clock: shakedown.Clock = .init(testing.io, .{});
+    const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{ .plan = &.{
+        .{ .at = .{ .nth = .{ .call = .sleep, .n = 1 } }, .fault = .cancel },
+        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 2 } }, .fault = .cancel },
+    } });
+    defer counted.deinit();
+    const controlled_io = counted.io();
     var ticket: std.atomic.Value(u32) = .init(0);
     var seen: u32 = 0;
     var pair: Pty = undefined; // The wait borrows but never accesses the pair.
     const resize: Resize = .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .zero };
     try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
-    try testing.expectEqual(@as(usize, 1), backend.sleeps);
+    try testing.expectEqual(@as(u64, 1), counted.count(.sleep));
     ticket.store(1, .release);
     try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
-    try testing.expectEqual(@as(usize, 2), backend.checks);
+    try testing.expectEqual(@as(u64, 2), counted.count(.checkCancel));
 }
 
 test "Proxy resize intervals count delayed sleeps once" {
-    const io = testing.io;
-    const Clock = struct {
-        const Self = @This();
-        ms: u32 = 0,
-        sleeps: usize = 0,
-        fn now(userdata: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-            const clock: *Self = @ptrCast(@alignCast(userdata.?));
-            return .{ .nanoseconds = @as(i96, clock.ms) * std.time.ns_per_ms };
+    const Late = struct {
+        /// Moves the clock on by thirty milliseconds each time something
+        /// sleeps on it, until canceled: a five-millisecond tick that
+        /// resumed late.
+        fn resumeLate(clock: *shakedown.Clock) std.Io.Cancelable!void {
+            while (true) {
+                clock.awaitArmed(1, .none) catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    error.Timeout => unreachable, // unreachable: `.none` never times out
+                };
+                clock.advance(.fromMilliseconds(30));
+            }
         }
-        fn sleep(userdata: ?*anyopaque, _: std.Io.Timeout) std.Io.Cancelable!void {
-            const clock: *Self = @ptrCast(@alignCast(userdata.?));
-            clock.ms += 30;
-            clock.sleeps += 1;
-        }
-        fn checkCancel(_: ?*anyopaque) std.Io.Cancelable!void {}
     };
-    var clock: Clock = .{};
-    var vtable = io.vtable.*;
-    vtable.now = Clock.now;
-    vtable.sleep = Clock.sleep;
-    vtable.checkCancel = Clock.checkCancel;
-    const clock_io: std.Io = .{ .userdata = &clock, .vtable = &vtable };
+    var clock: shakedown.Clock = .init(testing.io, .{});
+    const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{});
+    defer counted.deinit();
+    const start = clock.read(.awake);
+    var late = try testing.io.concurrent(Late.resumeLate, .{&clock});
+    defer late.cancel(testing.io) catch {};
     var ticket: std.atomic.Value(u32) = .init(0);
     var seen: u32 = 0;
     var pair: Pty = undefined;
-    try waitResize(clock_io, .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .fromMilliseconds(50), .tick = .fromMilliseconds(5) }, &seen);
-    try testing.expectEqual(@as(usize, 2), clock.sleeps);
-    try testing.expectEqual(@as(u32, 60), clock.ms);
+    try waitResize(counted.io(), .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .fromMilliseconds(50), .tick = .fromMilliseconds(5) }, &seen);
+    try testing.expectEqual(@as(u64, 2), counted.count(.sleep));
+    try testing.expectEqual(std.Io.Duration.fromMilliseconds(60), start.durationTo(clock.read(.awake)));
 }
