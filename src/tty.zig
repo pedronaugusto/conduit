@@ -250,6 +250,7 @@ fn setTermios(handle: Handle, term: posix.termios) posix.TermiosSetError!void {
     }
 }
 
+/// What `restore` can meet: the same as `rawMode`.
 pub const RestoreError = RawModeError;
 
 /// Puts back the attributes `rawMode` captured, at once.
@@ -283,6 +284,7 @@ fn discardInput(handle: Handle) void {
     }
 }
 
+/// What `winSize` can meet.
 pub const WinSizeError = error{
     /// The handle is not a terminal. On Windows this is also what an input
     /// handle gets: the geometry belongs to the screen buffer.
@@ -317,6 +319,7 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
     }
 }
 
+/// What `setWinSize` can meet: the same as `winSize`.
 pub const SetWinSizeError = WinSizeError;
 
 /// Sets the terminal's window size. POSIX only.
@@ -455,6 +458,7 @@ fn openConsole(name: [*:0]const u16) error{NotATerminal}!windows.HANDLE {
     return handle;
 }
 
+/// What `ttyName` can meet.
 pub const TtyNameError = error{
     /// The handle is not a terminal.
     NotATerminal,
@@ -515,6 +519,7 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
     };
 }
 
+/// What `foregroundGroup` can meet.
 pub const ForegroundGroupError = error{
     /// The handle is not a terminal.
     NotATerminal,
