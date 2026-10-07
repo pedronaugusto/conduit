@@ -21,7 +21,7 @@ const win32 = @import("win32.zig");
 /// The longest program path `fromEnvironment` will take from the environment,
 /// in WTF-16 units.
 ///
-/// Windows allows a path of 32767 units, and `std.fs.max_path_bytes` is three
+/// Windows allows a path of 32767 units, and `std.Io.Dir.max_path_bytes` is three
 /// times that. Reserving it twice over as static buffers for the sake of a
 /// shell's pathname would be a third of a megabyte spent on a case nobody has:
 /// `%COMSPEC%` is twenty-odd characters, and a value longer than this is one

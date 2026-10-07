@@ -8,7 +8,7 @@ const std = @import("std");
 
 /// Safety follows this module's own optimization mode, not the standard
 /// library's.
-const safe = builtin.mode.runtimeSafety();
+const safe = builtin.optimize.runtimeSafety();
 
 pub const Pin = struct {
     at: if (safe) ?usize else void = if (safe) null else {},

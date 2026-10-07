@@ -391,7 +391,7 @@ pub const Child = struct {
     /// boot id and private supervisor identity. Available through retirement, until transfer or deinit. No cgroup is null;
     /// a cgroup whose identity cannot be read is IdentityUnavailable, so a ledger
     /// never silently records incomplete containment. An undersized path buffer
-    /// is BufferTooSmall; std.fs.max_path_bytes + 64 always holds our path.
+    /// is BufferTooSmall; std.Io.Dir.max_path_bytes + 64 always holds our path.
     ///
     /// Save processId and this record before starting a Reaper. Retain the saved
     /// id as the ledger key through retirement; it is not permission to signal.

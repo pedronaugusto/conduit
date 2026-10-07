@@ -456,7 +456,7 @@ pub const Pty = struct {
         if (grantpt(master_fd) != 0) return openErrno();
         if (unlockpt(master_fd) != 0) return openErrno();
 
-        var name_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var name_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const name = switch (slaveName(master_fd, &name_buffer)) {
             .name => |name| name,
             .failed => |err| return openError(err),
@@ -760,7 +760,7 @@ pub const Pty = struct {
         var pty = try Pty.open(std.testing.allocator, .{});
         defer pty.close(io);
 
-        var buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const name = try tty.ttyName(pty.slave.?, &buffer);
         try testing.expect(std.mem.startsWith(u8, name, "/dev/"));
     }

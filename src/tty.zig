@@ -468,7 +468,7 @@ pub const TtyNameError = error{
 /// it that was used. POSIX only.
 ///
 /// The result is a `/dev` path such as `/dev/pts/3` or `/dev/ttys004`. A
-/// buffer of `std.fs.max_path_bytes` is always enough.
+/// buffer of `std.Io.Dir.max_path_bytes` is always enough.
 ///
 /// Calling this on Windows is a compile error: a console is
 /// an object, not an entry in a namespace, and has no pathname to report.
