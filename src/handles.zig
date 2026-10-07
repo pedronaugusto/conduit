@@ -5,7 +5,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-/// This file, so a signature can name its         const n = try f.writeStreaming(io, &.{}, &.{bytes[offset..]}, 1);or sets as callers do.
+/// This file, so a signature can name its error sets as callers do.
 const handles = @This();
 const posix = std.posix;
 const c = std.c;
