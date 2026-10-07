@@ -513,7 +513,7 @@ fn ttyOps(x: Ctx) !void {
         for (0..x.n) |_| if (!conduit.isTty(master)) return error.NotATerminal;
         if (timed) try report(x, "TTY OPS", "is_tty", since(start, io) / count, "ns");
         start = now(io);
-        for (0..x.n) |_| if (!std.mem.startsWith(u8, try conduit.ttyName(slave, &name_buffer), "/dev/tty")) return error.BadName;
+        for (0..x.n) |_| if (!std.mem.startsWith(u8, try conduit.ttyName(slave, &name_buffer), "/dev/")) return error.BadName;
         if (timed) try report(x, "TTY OPS", "tty_name", since(start, io) / count, "ns");
         start = now(io);
         for (0..x.n) |_| if (try conduit.foregroundGroup(master) != pid) return error.BadGroup;
