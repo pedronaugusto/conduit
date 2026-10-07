@@ -1,7 +1,5 @@
 # conduit
 
-[![CI](https://github.com/pedronaugusto/conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/conduit/actions/workflows/ci.yml)
-
 conduit starts child processes and gives them pseudo-terminals. It is for
 programs that run another program the way a terminal emulator does — on a pty,
 in its own session, with a window size and a way to talk to it — and for
@@ -839,6 +837,17 @@ system directories and `PATH`, appending `.exe`; `PATHEXT` is not searched.
 With a supplied environment, conduit resolves the name against its `PATH`
 before `CreateProcessW`; otherwise Windows resolves it.
 
+## Built with
+
+- [Zig](https://ziglang.org) 0.17.0 and its standard library. Off Windows the
+  `conduit` module links libc, whose pseudo-terminal calls are the system's
+  interface; `conduit.tty` links it only where the C library is the system
+  interface, not on Linux. On Windows every call is a kernel32 import and
+  nothing is linked.
+- [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
+  the tests and CI.
+- **tycho**, every coding agent in one folder (in development).
+
 ## Testing
 
 Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap through preflight; run `zig build cache` before direct Zig builds (only a rebuild is lost).
@@ -881,10 +890,6 @@ them.
 of it, and `CONDUIT_TRACE` in the environment logs what this package asked
 the operating system for, through `std.log` at the info level under the
 `conduit` scope, which the suite prints.
-
-## Built with
-
-- tycho, a terminal station for coding agents (in development).
 
 ## Licence
 
