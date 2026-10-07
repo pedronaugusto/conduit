@@ -196,36 +196,48 @@ pub fn build(b: *std.Build) void {
     //=====================================================================
     // Benchmarks.
     //
-    // conduit's own measurements of its own calls, in bench/: `zig build
-    // bench -Doptimize=ReleaseFast` installs them under zig-out/bench, and
-    // `zig build check` compiles them, so they keep up with the API. They
-    // run on POSIX, on a quiet machine, never in CI; bench/README.md says how.
-    // Only in conduit's own tree: a package fetched by a consumer has no
-    // bench/.
+    // conduit's own measurements of its own calls, in bench/. `zig build
+    // bench` builds them in ReleaseFast under zig-out/bench and runs them:
+    // the claims, the cost of `Orphans`, and every workload over a 1 KiB
+    // line, or with `-- <workload> [count]` that workload alone. They want
+    // a quiet POSIX machine, so CI never times them: `check` compiles them,
+    // and `test` runs each once in smoke mode, every point once and no
+    // clock read, so they keep working with the API. Only in conduit's own
+    // tree: a package fetched by a consumer has no bench/.
     //=====================================================================
 
     if (b.pkg_hash.len == 0 and target.result.os.tag != .windows) {
-        const bench_step = b.step("bench", "Build the benchmarks into zig-out/bench");
-        const smoke = b.option(bool, "bench-smoke", "Benchmarks run every point once and read no clock") orelse false;
-        const bench_options = b.addOptions();
-        bench_options.addOption(bool, "smoke", smoke);
-        for (bench_sources) |source| {
-            const bench = b.addExecutable(.{
-                .name = source[0],
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path(source[1]),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = true,
-                    .imports = &.{
-                        .{ .name = "conduit", .module = module },
-                        .{ .name = "bench_options", .module = bench_options.createModule() },
-                    },
-                }),
-            });
-            const install = b.addInstallArtifact(bench, .{ .dest_dir = .{ .override = .{ .custom = "bench" } } });
-            bench_step.dependOn(&install.step);
-            check_step.dependOn(&bench.step);
+        const line_bytes: [1023]u8 = @splat('x');
+        const line = b.addWriteFiles().add("line.txt", &line_bytes ++ "\n");
+        const bench_step = b.step("bench", "Build the benchmarks in ReleaseFast under zig-out/bench and run them");
+        const timed = addBench(b, target, .fast, releaseModule(b, target, conduit_options), false);
+        for (timed) |bench| bench_step.dependOn(&b.addInstallArtifact(bench, .{ .dest_dir = .{ .override = .{ .custom = "bench" } } }).step);
+        // The claims, the cost of `Orphans`, then the workloads, one after
+        // another: a measurement taken beside another is of both.
+        const claims = b.addRunArtifact(timed[1]);
+        claims.addArg("--quiet-machine");
+        claims.has_side_effects = true;
+        const orphans_cost = b.addRunArtifact(timed[2]);
+        orphans_cost.has_side_effects = true;
+        orphans_cost.step.dependOn(&claims.step);
+        const workload = b.addRunArtifact(timed[0]);
+        workload.addFileArg(line);
+        workload.addPassthruArgs();
+        workload.has_side_effects = true;
+        workload.step.dependOn(&orphans_cost.step);
+        bench_step.dependOn(&workload.step);
+        for (addBench(b, target, optimize, module, false)) |bench| check_step.dependOn(&bench.step);
+        const smoke = addBench(b, target, optimize, module, true);
+        const smoke_workloads = b.addRunArtifact(smoke[0]);
+        smoke_workloads.addFileArg(line);
+        smoke_workloads.addArgs(&.{ "all", "1" });
+        const smoke_claims = b.addRunArtifact(smoke[1]);
+        smoke_claims.addArg("--quiet-machine");
+        const smoke_orphans = b.addRunArtifact(smoke[2]);
+        for ([_]*std.Build.Step.Run{ smoke_workloads, smoke_claims, smoke_orphans }) |run| {
+            // Captured, not printed: smoke numbers mean nothing.
+            run.expectExitCode(0);
+            test_step.dependOn(&run.step);
         }
     }
 
@@ -272,9 +284,60 @@ const example_sources = [_][]const u8{
     "examples/usage.zig",
 };
 
-/// The benchmark programs, by name and root source.
+/// The benchmark programs, by name and root source: the workloads, the
+/// claims and the cost of `Orphans`, in the order `addBench` returns them.
 const bench_sources = [_][2][]const u8{
     .{ "conduit-bench", "bench/conduit_bench.zig" },
     .{ "lifecycle-claims", "bench/lifecycle_claims.zig" },
     .{ "orphans-cost", "bench/orphans_cost.zig" },
 };
+
+/// The `conduit` module again, in ReleaseFast, for the timed benchmarks: an
+/// imported module keeps its own optimization mode, so the published one
+/// would time a Debug conduit under a ReleaseFast program.
+fn releaseModule(b: *std.Build, target: std.Build.ResolvedTarget, options: *std.Build.Step.Options) *std.Build.Module {
+    const tty = b.createModule(.{
+        .root_source_file = b.path("src/tty.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+    });
+    const module = b.createModule(.{
+        .root_source_file = b.path("src/conduit.zig"),
+        .target = target,
+        .optimize = .fast,
+        .link_libc = true,
+        .imports = &.{.{ .name = "conduit.tty", .module = tty }},
+    });
+    module.addOptions("conduit_options", options);
+    return module;
+}
+
+/// The benchmark programs built in one mode, timed or smoke.
+fn addBench(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.lang.Optimize,
+    module: *std.Build.Module,
+    smoke: bool,
+) [bench_sources.len]*std.Build.Step.Compile {
+    const options = b.addOptions();
+    options.addOption(bool, "smoke", smoke);
+    var programs: [bench_sources.len]*std.Build.Step.Compile = undefined;
+    for (bench_sources, &programs) |source, *program| {
+        program.* = b.addExecutable(.{
+            .name = source[0],
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(source[1]),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .imports = &.{
+                    .{ .name = "conduit", .module = module },
+                    .{ .name = "bench_options", .module = options.createModule() },
+                },
+            }),
+        });
+    }
+    return programs;
+}

@@ -27,27 +27,36 @@ pub const Ctx = struct {
     }
 };
 
+/// The workloads here, by name and function.
+const table = .{
+    .{ "exchange", exchange },
+    .{ "collect", collect },
+    .{ "input_writer", inputWriter },
+    .{ "read_available", readAvailable },
+    .{ "try_wait", tryWait },
+    .{ "reaper_wait", reaperWait },
+    .{ "expect", expect },
+    .{ "proxy", proxy },
+    .{ "shell_spawn", shellSpawn },
+    .{ "pty_open", ptyOpen },
+    .{ "tty_ops", ttyOps },
+    .{ "find_program", findProgram },
+    .{ "environ", environ },
+    .{ "process_identity", processIdentity },
+    .{ "signal", signal },
+    .{ "extra_fds", extraFds },
+    .{ "wait_tree", waitTree },
+};
+
+/// The name of every workload here, in order.
+pub const names = names: {
+    var out: [table.len][]const u8 = undefined;
+    for (&out, 0..) |*name, i| name.* = table[i][0];
+    break :names out;
+};
+
 /// Runs `workload` if it is one of these. False when it is not.
 pub fn run(x: Ctx, workload: []const u8) !bool {
-    const table = .{
-        .{ "exchange", exchange },
-        .{ "collect", collect },
-        .{ "input_writer", inputWriter },
-        .{ "read_available", readAvailable },
-        .{ "try_wait", tryWait },
-        .{ "reaper_wait", reaperWait },
-        .{ "expect", expect },
-        .{ "proxy", proxy },
-        .{ "shell_spawn", shellSpawn },
-        .{ "pty_open", ptyOpen },
-        .{ "tty_ops", ttyOps },
-        .{ "find_program", findProgram },
-        .{ "environ", environ },
-        .{ "process_identity", processIdentity },
-        .{ "signal", signal },
-        .{ "extra_fds", extraFds },
-        .{ "wait_tree", waitTree },
-    };
     inline for (table) |entry| {
         if (std.mem.eql(u8, workload, entry[0])) {
             try entry[1](x);

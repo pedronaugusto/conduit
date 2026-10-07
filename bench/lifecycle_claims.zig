@@ -159,7 +159,7 @@ fn reaperJoin(init: std.process.Init) !void {
     defer reaper.deinit(init.io);
     try init.io.sleep(.fromMilliseconds(20), .awake);
     const start = now(init.io);
-    reaper.deinit(init.io);
+    try reaper.stop(init.io);
     try report(init, "Reaper join with live child, us (before 5 s)", us(start, init.io), 5_000_000 - 1);
 }
 
@@ -180,6 +180,6 @@ fn readerJoin(init: std.process.Init) !void {
     defer expect.deinit(init.io);
     _ = try expect.until(init.io, "ready", budget);
     const start = now(init.io);
-    expect.deinit(init.io);
+    expect.stop(init.io);
     try report(init, "Expect join with open terminal, us (before 5 s)", us(start, init.io), 5_000_000 - 1);
 }

@@ -18,31 +18,60 @@ pub fn main(init: std.process.Init) !void {
     shell_program = init.environ_map.get("BENCH_SH") orelse "sh";
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len == 2 and std.mem.eql(u8, args[1], "signal_child")) signalChild();
-    if (args.len != 4) return error.Usage;
-    const n = try std.fmt.parseInt(usize, args[2], 10);
-    const input = try std.Io.Dir.cwd().readFileAlloc(init.io, args[3], init.gpa, .unlimited);
+    // conduit-bench <input> [workload] [count]: every workload by default,
+    // `default_count` times each.
+    if (args.len < 2 or args.len > 4) return error.Usage;
+    const path = args[1];
+    const workload = if (args.len > 2) args[2] else "all";
+    const n = if (args.len > 3) try std.fmt.parseInt(usize, args[3], 10) else default_count;
+    const input = try std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .unlimited);
     defer init.gpa.free(input);
 
-    if (std.mem.eql(u8, args[1], "spawn_wait")) return spawnWait(init, n);
-    if (std.mem.eql(u8, args[1], "spawn_collect")) return spawnCollect(init, n, input);
-    if (std.mem.eql(u8, args[1], "pty_spawn")) return ptySpawn(init, n, input, .tree);
-    if (std.mem.eql(u8, args[1], "pty_spawn_child_kill")) return ptySpawn(init, n, input, .child);
-    if (std.mem.eql(u8, args[1], "pty_throughput")) return ptyThroughput(init, input);
-    if (std.mem.eql(u8, args[1], "wait_timeout")) return waitTimeout(init, n);
-    if (std.mem.eql(u8, args[1], "tree_kill")) return treeKill(init, n);
-    if (std.mem.eql(u8, args[1], "leaf_kill")) return leafKill(init, n);
-    if (std.mem.eql(u8, args[1], "end_recorded")) return endRecorded(init, n);
+    if (std.mem.eql(u8, workload, "all")) {
+        for (own_workloads ++ coverage.names) |each| try runOne(init, each, n, input, path);
+        return;
+    }
+    return runOne(init, workload, n, input, path);
+}
+
+/// How many times a workload runs when the command line does not say.
+const default_count = 100;
+
+/// The workloads this file runs itself; `coverage.names` are the rest. `all`
+/// runs both lists, in order.
+const own_workloads = [_][]const u8{
+    "spawn_wait",
+    "spawn_collect",
+    "pty_spawn",
+    "pty_spawn_child_kill",
+    "pty_throughput",
+    "wait_timeout",
+    "tree_kill",
+    "leaf_kill",
+    "end_recorded",
+};
+
+fn runOne(init: std.process.Init, workload: []const u8, n: usize, input: []const u8, path: []const u8) !void {
+    if (std.mem.eql(u8, workload, "spawn_wait")) return spawnWait(init, n);
+    if (std.mem.eql(u8, workload, "spawn_collect")) return spawnCollect(init, n, input);
+    if (std.mem.eql(u8, workload, "pty_spawn")) return ptySpawn(init, n, input, .tree);
+    if (std.mem.eql(u8, workload, "pty_spawn_child_kill")) return ptySpawn(init, n, input, .child);
+    if (std.mem.eql(u8, workload, "pty_throughput")) return ptyThroughput(init, input);
+    if (std.mem.eql(u8, workload, "wait_timeout")) return waitTimeout(init, n);
+    if (std.mem.eql(u8, workload, "tree_kill")) return treeKill(init, n);
+    if (std.mem.eql(u8, workload, "leaf_kill")) return leafKill(init, n);
+    if (std.mem.eql(u8, workload, "end_recorded")) return endRecorded(init, n);
     if (try coverage.run(.{
         .init = init,
         .n = n,
         .input = input,
-        .path = args[3],
+        .path = path,
         .cat = cat_program,
         .echo = echo_program,
         .sleep = sleep_program,
         .sh = shell_program,
         .true_ = true_program,
-    }, args[1])) return;
+    }, workload)) return;
     return error.UnknownWorkload;
 }
 
