@@ -3,19 +3,24 @@
 //! moved after `start` is caught at its next call, not by whatever the task
 //! later does with the stale pointer.
 
+const builtin = @import("builtin");
 const std = @import("std");
 
+/// Safety follows this module's own optimization mode, not the standard
+/// library's.
+const safe = builtin.mode.runtimeSafety();
+
 pub const Pin = struct {
-    at: if (std.debug.runtime_safety) ?usize else void = if (std.debug.runtime_safety) null else {},
+    at: if (safe) ?usize else void = if (safe) null else {},
 
     /// Records where `owner` is now.
     pub fn set(pin: *Pin, owner: *const anyopaque) void {
-        if (std.debug.runtime_safety) pin.at = @intFromPtr(owner); // safe: the address is compared, never turned back into a pointer.
+        if (safe) pin.at = @intFromPtr(owner); // safe: the address is compared, never turned back into a pointer.
     }
 
     /// Asserts that `owner` is where `set` found it, if it was set.
     pub fn check(pin: *const Pin, owner: *const anyopaque) void {
-        if (std.debug.runtime_safety) if (pin.at) |at| std.debug.assert(at == @intFromPtr(owner)); // safe: compared only.
+        if (safe) if (pin.at) |at| std.debug.assert(at == @intFromPtr(owner)); // safe: compared only.
     }
 };
 

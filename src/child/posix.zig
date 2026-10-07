@@ -91,7 +91,7 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     // How the fork child reports a failure that happens after the fork. The
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
-    const supervised = builtin.os.tag == .linux and options.descendants == .contain;
+    const supervised = builtin.target.os.tag == .linux and options.descendants == .contain;
     var channel_ends: ?[2]posix.fd_t = if (supervised) try supervisor.channel() else null;
     errdefer if (channel_ends) |ends| {
         _ = c.close(ends[0]);
@@ -151,7 +151,7 @@ pub fn spawn(allocator: Allocator, io: std.Io, options: SpawnOptions, state: *St
     contained = null;
     const child = started(state, pid, watched.forks, kept, &plan, options);
     state.lineage = watched.tracker;
-    if (comptime builtin.os.tag == .linux) if (channel_ends) |ends| {
+    if (comptime builtin.target.os.tag == .linux) if (channel_ends) |ends| {
         state.supervisor = .{ .channel = ends[0], .record = watched.record.? };
         state.process_id = outcome.root_pid;
         state.pgid = if (options.detach) outcome.root_pid else null;
@@ -184,7 +184,7 @@ const ForkEnds = struct {
 /// Forks, and runs `childMain` in the child. Returns the child's pid in the
 /// parent; the pipes are the caller's to close if this fails.
 fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) SpawnError!posix.pid_t {
-    std.debug.assert(ends.channel == null or builtin.os.tag == .linux);
+    std.debug.assert(ends.channel == null or builtin.target.os.tag == .linux);
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -204,7 +204,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
 fn forkRunning(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds, parent: posix.pid_t) posix.pid_t {
     const pid = c.fork();
     if (pid == 0) {
-        const root_parent = if (comptime builtin.os.tag == .linux) if (ends.channel) |channel|
+        const root_parent = if (comptime builtin.target.os.tag == .linux) if (ends.channel) |channel|
             superviseFromForkChild(channel, ends.report, options.detach, ends.scope_kill)
         else
             parent else parent;
@@ -265,7 +265,7 @@ const Exec = struct {
     fn prepare(arena: Allocator, options: SpawnOptions) SpawnError!Exec {
         const argv = try arena.allocSentinel(?[*:0]const u8, options.argv.len, null);
         for (options.argv, argv[0..options.argv.len]) |arg, *slot| {
-            slot.* = (try arena.dupeZ(u8, arg)).ptr;
+            slot.* = (try arena.dupeSentinel(u8, arg, 0)).ptr;
         }
 
         const envp: [*:null]const ?[*:0]const u8 = if (options.environ) |map| envp: {
@@ -292,7 +292,7 @@ const Exec = struct {
             .argv = argv.ptr,
             .envp = envp,
             .candidates = candidates,
-            .cwd = if (options.cwd) |dir| (try arena.dupeZ(u8, dir)).ptr else null,
+            .cwd = if (options.cwd) |dir| (try arena.dupeSentinel(u8, dir, 0)).ptr else null,
             .extras = extras,
         };
     }
@@ -334,7 +334,7 @@ fn superviseFromForkChild(
     const prepared = switch (supervisor.prepare()) {
         .ready => |prepared| prepared,
         .failed => |errno| {
-            const record: Failure = .{ .stage = .supervisor, .errno = @intFromEnum(errno) };
+            const record: Failure = .{ .stage = .supervisor, .errno = @backingInt(errno) };
             _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
             c._exit(127);
         },
@@ -485,7 +485,7 @@ const Failure = extern struct {
     };
 
     fn toError(record: Failure) SpawnError {
-        const err: posix.E = @enumFromInt(record.errno);
+        const err: posix.E = @fromBackingInt(@intCast(record.errno));
         return switch (record.stage) {
             .detach => error.DetachFailed,
             .controlling_terminal => error.ControllingTerminalFailed,
@@ -602,10 +602,10 @@ fn childMain(
 /// The signal a contained child or one given `parent_death_signal` gets when
 /// this process ends. Linux only; `spawn` refuses the option anywhere else.
 fn armParentDeathSignal(options: SpawnOptions, report: posix.fd_t, parent: posix.pid_t) void {
-    if (builtin.os.tag != .linux) return;
+    if (builtin.target.os.tag != .linux) return;
     const signal = if (options.descendants == .contain) @as(?Child.Signal, .kill) else options.parent_death_signal;
     const sig = (signal orelse return).toPosix();
-    const rc = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.SET_PDEATHSIG), @intFromEnum(sig), 0, 0, 0);
+    const rc = std.os.linux.prctl(@backingInt(std.os.linux.PR.SET_PDEATHSIG), @backingInt(sig), 0, 0, 0);
     if (std.os.linux.errno(rc) != .SUCCESS) bail(report, .parent_death_signal);
     // The parent may have ended between the fork and the line above,
     // and then nothing will send it: the child is an orphan already.
@@ -667,7 +667,7 @@ fn execCandidates(exec: Exec, report: posix.fd_t) noreturn {
             else => best = err,
         }
     }
-    const record: Failure = .{ .stage = .exec, .errno = @intFromEnum(best) };
+    const record: Failure = .{ .stage = .exec, .errno = @backingInt(best) };
     _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
     c._exit(127);
 }
@@ -707,7 +707,7 @@ const SpawnSignals = struct {
 fn clearDispositions(comptime system: type) void {
     var number: u32 = 1;
     while (number < system.limit) : (number += 1) {
-        const signal: system.Signal = @enumFromInt(number);
+        const signal: system.Signal = @fromBackingInt(@intCast(number));
         // The two that cannot be caught cannot be reset either.
         if (signal == .KILL or signal == .STOP) continue;
         var current: system.Sigaction = undefined;
@@ -786,7 +786,7 @@ fn moveAbove(fd: posix.fd_t, lowest: c_int) ?posix.fd_t {
 /// anything here, because a descriptor that was not there is a descriptor the
 /// child does not have.
 fn closeFromExcept(first: posix.fd_t, kept: posix.fd_t) void {
-    if (builtin.os.tag == .linux) {
+    if (builtin.target.os.tag == .linux) {
         const before = if (kept > first)
             std.os.linux.close_range(first, @intCast(kept - 1), .{ .UNSHARE = false, .CLOEXEC = false })
         else
@@ -819,7 +819,7 @@ fn place(fd: posix.fd_t, target: posix.fd_t) bool {
 fn note(report: posix.fd_t, stage: Failure.Stage) void {
     const record: Failure = .{
         .stage = stage,
-        .errno = @intFromEnum(c.errno(@as(c_int, -1))),
+        .errno = @backingInt(c.errno(@as(c_int, -1))),
     };
     _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
 }
@@ -827,7 +827,7 @@ fn note(report: posix.fd_t, stage: Failure.Stage) void {
 fn bail(report: posix.fd_t, stage: Failure.Stage) noreturn {
     const record: Failure = .{
         .stage = stage,
-        .errno = @intFromEnum(c.errno(@as(c_int, -1))),
+        .errno = @backingInt(c.errno(@as(c_int, -1))),
     };
     _ = c.write(report, std.mem.asBytes(&record), @sizeOf(Failure));
     c._exit(127);
@@ -858,7 +858,7 @@ fn searchPath(
 ) Allocator.Error![]const [*:0]const u8 {
     if (!search or std.mem.findScalar(u8, program, '/') != null) {
         const one = try arena.alloc([*:0]const u8, 1);
-        one[0] = (try arena.dupeZ(u8, program)).ptr;
+        one[0] = (try arena.dupeSentinel(u8, program, 0)).ptr;
         return one;
     }
 
@@ -870,8 +870,8 @@ fn searchPath(
     var it = std.mem.splitScalar(u8, directories, ':');
     while (it.next()) |dir| {
         const prefix = if (dir.len == 0) "." else dir;
-        if (prefix.len + 1 + program.len >= std.fs.max_path_bytes) continue;
-        const joined = try std.fmt.allocPrintSentinel(arena, "{s}/{s}", .{ prefix, program }, 0);
+        if (prefix.len + 1 + program.len >= std.Io.Dir.max_path_bytes) continue;
+        const joined = try arena.printSentinel("{s}/{s}", .{ prefix, program }, 0);
         try list.append(arena, joined.ptr);
     }
     return list.items;
@@ -975,8 +975,8 @@ fn readAll(fd: posix.fd_t, buffer: []u8) usize {
 test "the supervisor's root record is read in whatever order it arrives" {
     const Order = []const Failure;
     const root: Failure = .{ .stage = .supervisor_root, .errno = 4321 };
-    const unjoined: Failure = .{ .stage = .containment, .errno = @intFromEnum(posix.E.ACCES) };
-    const failed: Failure = .{ .stage = .exec, .errno = @intFromEnum(posix.E.NOENT) };
+    const unjoined: Failure = .{ .stage = .containment, .errno = @backingInt(posix.E.ACCES) };
+    const failed: Failure = .{ .stage = .exec, .errno = @backingInt(posix.E.NOENT) };
     const cases = [_]struct { records: Order, joined: bool, failure: ?Failure.Stage }{
         .{ .records = &.{ root, unjoined }, .joined = false, .failure = null },
         .{ .records = &.{ unjoined, root }, .joined = false, .failure = null },
@@ -1018,7 +1018,7 @@ test "fork signal defaults include ignored real-time signals and leave reserved 
         var reserved_writes: usize = 0;
 
         fn sigaction(signal: Signal, action: ?*const Sigaction, previous: ?*Sigaction) c_int {
-            const number = @intFromEnum(signal);
+            const number = @backingInt(signal);
             if (number == 32 or number == 33) {
                 if (action != null) reserved_writes += 1;
                 return -1;
@@ -1124,7 +1124,7 @@ fn candidatesKeepTheirShape(_: void, smith: *std.testing.Smith) !void {
         const prefix = if (entry.len == 0) "." else entry;
         joined.clearRetainingCapacity();
         try joined.print(arena, "{s}/{s}", .{ prefix, program });
-        if (joined.items.len >= std.fs.max_path_bytes) continue;
+        if (joined.items.len >= std.Io.Dir.max_path_bytes) continue;
 
         try std.testing.expect(index < candidates.len);
         try std.testing.expectEqualStrings(joined.items, std.mem.span(candidates[index]));

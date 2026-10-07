@@ -10,7 +10,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const windows_search = @import("child/windows/search.zig");
 const child_windows = @import("child/windows.zig");
 
@@ -57,10 +57,10 @@ pub fn findProgram(
     // systems this package supports.
     const directories = environ.get("PATH") orelse "/usr/local/bin:/usr/bin:/bin";
     var it = std.mem.splitScalar(u8, directories, ':');
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     while (it.next()) |dir| {
         const prefix = if (dir.len == 0) "." else dir;
-        const candidate = std.fmt.bufPrint(&buffer, "{s}/{s}", .{ prefix, name }) catch continue;
+        const candidate = std.mem.print(&buffer, "{s}/{s}", .{ prefix, name }) catch continue;
         if (runnable(io, candidate)) {
             const program = try allocator.dupe(u8, candidate);
             return program;
@@ -98,7 +98,7 @@ test "a program on PATH is found where the search finds it, and a missing one is
     const testing = std.testing;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = path_buffer[0..try tmp.dir.realPath(testing.io, &path_buffer)];
 
     // Not executable, then executable; and a directory by the same name
@@ -110,7 +110,7 @@ test "a program on PATH is found where the search finds it, and a missing one is
 
     var environ: std.process.Environ.Map = .init(testing.allocator);
     defer environ.deinit();
-    const path = try std.fmt.allocPrint(testing.allocator, "{s}/early::{s}/late", .{ dir, dir });
+    const path = try testing.allocator.print("{s}/early::{s}/late", .{ dir, dir });
     defer testing.allocator.free(path);
     try environ.put("PATH", path);
 
@@ -118,7 +118,7 @@ test "a program on PATH is found where the search finds it, and a missing one is
     try tmp.dir.setFilePermissions(testing.io, "late/prog", .fromMode(0o755), .{});
     const found = (try findProgram(testing.allocator, testing.io, &environ, "prog")).?;
     defer testing.allocator.free(found);
-    const expected = try std.fmt.allocPrint(testing.allocator, "{s}/late/prog", .{dir});
+    const expected = try testing.allocator.print("{s}/late/prog", .{dir});
     defer testing.allocator.free(expected);
     try testing.expectEqualStrings(expected, found);
 
@@ -137,7 +137,7 @@ test "on Windows a bare name is found on PATH with .exe supplied, and a director
     const testing = std.testing;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const dir = path_buffer[0..try tmp.dir.realPath(testing.io, &path_buffer)];
 
     try tmp.dir.createDirPath(testing.io, "early\\conduit-find-probe.exe");
@@ -147,11 +147,11 @@ test "on Windows a bare name is found on PATH with .exe supplied, and a director
 
     var environ: std.process.Environ.Map = .init(testing.allocator);
     defer environ.deinit();
-    const path = try std.fmt.allocPrint(testing.allocator, "{s}\\early;{s}\\late", .{ dir, dir });
+    const path = try testing.allocator.print("{s}\\early;{s}\\late", .{ dir, dir });
     defer testing.allocator.free(path);
     try environ.put("PATH", path);
 
-    const expected = try std.fmt.allocPrint(testing.allocator, "{s}\\late\\conduit-find-probe.exe", .{dir});
+    const expected = try testing.allocator.print("{s}\\late\\conduit-find-probe.exe", .{dir});
     defer testing.allocator.free(expected);
     for ([_][]const u8{ "conduit-find-probe", "conduit-find-probe.exe" }) |name| {
         const found = (try findProgram(testing.allocator, testing.io, &environ, name)).?;
@@ -174,10 +174,10 @@ test "a Windows program path refuses directories and batch files" {
     try tmp.dir.createDirPath(io, "directory.exe");
     const batch = try tmp.dir.createFile(io, "program.CMD", .{});
     batch.close(io);
-    var buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const directory = buffer[0..try tmp.dir.realPath(io, &buffer)];
     for ([_][]const u8{ "directory.exe", "program.CMD" }) |name| {
-        const path = try std.fs.path.join(testing.allocator, &.{ directory, name });
+        const path = try std.Io.Dir.path.join(testing.allocator, &.{ directory, name });
         defer testing.allocator.free(path);
         const found = try directWindowsProgram(testing.allocator, io, path);
         defer if (found) |owned| testing.allocator.free(owned);

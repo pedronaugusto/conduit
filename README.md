@@ -870,7 +870,7 @@ the operating system for, through `std.log` at the info level under the
 
 ## Requirements
 
-Zig 0.16.0. libc on POSIX; none on Windows.
+Zig 0.17.0. libc on POSIX; none on Windows.
 
 ## Licence
 

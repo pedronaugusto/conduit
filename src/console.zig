@@ -26,7 +26,7 @@ const log = std.log.scoped(.conduit);
 pub fn unexpected(err: windows.Win32Error) std.Io.UnexpectedError {
     @branchHint(.cold);
     if (std.options.unexpected_error_tracing) {
-        log.warn("error.Unexpected: GetLastError({d})", .{@intFromEnum(err)});
+        log.warn("error.Unexpected: GetLastError({d})", .{@backingInt(err)});
         std.debug.dumpCurrentStackTrace(.{ .first_address = @returnAddress() });
     }
     return error.Unexpected;

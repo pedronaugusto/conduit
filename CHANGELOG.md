@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Requires Zig 0.17.0. Windows whole writes report `BrokenPipe` for a pipe whose reader has closed through the standard library, which now maps the closing state itself; conduit no longer asks the pipe before and after each write.
+
 - `pipe(options)`, `PipeOptions`, `PipeError` and `Deadline`, in `conduit` and in `conduit.tty`, for a program that waits on its own terminal without linking libc on Linux. `pipe(.{ .nonblocking = true })` makes both ends close-on-exec and, if asked, nonblocking: one `pipe2` where the system has it, and on Darwin `pipe` and `fcntl` under `ForkGap`, the lock conduit's spawns take, so no child conduit starts inherits it. `Deadline.fromTimeout(io, timeout)` reads a `std.Io.Timeout`; `remainingMs` and `windowsMs` (never `INFINITE`) round what is left up to whole milliseconds. `conduit.tty.ForkGap.hold(function, args)` makes a call inside that lock and leaves it however the call returns, for a program that opens a descriptor of its own in two calls; `opening_is_two_calls` says whether this system does.
 
 - `Pty.open` on musl reports a failed `ptsname_r` by the error number musl returns. It read `errno`, which musl leaves as it was, so the error was whatever an earlier call had left there.

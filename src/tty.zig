@@ -56,9 +56,9 @@ const close_on_exec = @import("close_on_exec.zig");
 const posix = std.posix;
 const system = posix.system;
 
-const is_windows = builtin.os.tag == .windows;
-const is_linux = builtin.os.tag == .linux;
-const is_darwin = builtin.os.tag.isDarwin();
+const is_windows = builtin.target.os.tag == .windows;
+const is_linux = builtin.target.os.tag == .linux;
+const is_darwin = builtin.target.os.tag.isDarwin();
 const win32 = if (is_windows) console else struct {};
 const windows = std.os.windows;
 
@@ -207,8 +207,8 @@ pub fn rawMode(handle: Handle) RawModeError!Saved {
     raw.cflag.CSIZE = .CS8;
     // A read of the terminal returns as soon as one byte is there, and never
     // waits on a timer.
-    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
+    raw.cc[@backingInt(posix.V.MIN)] = 1;
+    raw.cc[@backingInt(posix.V.TIME)] = 0;
 
     discardInput(handle);
     posix.tcsetattr(handle, .NOW, raw) catch |err| return termiosError(err);
@@ -378,8 +378,8 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
         };
     }
     const file = try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write });
-    if (builtin.os.tag == .macos) {
-        var path: [std.fs.max_path_bytes]u8 = undefined;
+    if (builtin.target.os.tag == .macos) {
+        var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
         if (deviceOf(file.handle, &path)) |device| {
             if (std.Io.Dir.openFileAbsolute(io, device, .{ .mode = .read_write })) |pollable| {
                 file.close(io);
@@ -449,7 +449,7 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
         // which is what the C library's ttyname reads too.
         var path_buf: [32]u8 = undefined;
         // unreachable: 14 bytes of prefix, at most 11 for an i32 and the NUL fit in 32
-        const path = std.fmt.bufPrintSentinel(&path_buf, "/proc/self/fd/{d}", .{handle}, 0) catch unreachable;
+        const path = std.mem.printSentinel(&path_buf, "/proc/self/fd/{d}", .{handle}, 0) catch unreachable;
         const rc = system.readlink(path.ptr, buffer.ptr, buffer.len);
         switch (posix.errno(rc)) {
             .SUCCESS => {},
@@ -471,7 +471,7 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
     const err: posix.E = if (rc < 0)
         std.c.errno(@as(c_int, -1))
     else
-        @enumFromInt(@as(u16, @truncate(@as(u32, @intCast(rc)))));
+        @fromBackingInt(@intCast(@as(u16, @truncate(@as(u32, @intCast(rc))))));
     return switch (err) {
         .NOTTY, .BADF, .INVAL => error.NotATerminal,
         .RANGE => error.NameTooLong,
@@ -540,7 +540,7 @@ fn foregroundGroupPosix(handle: Handle) ForegroundGroupError!posix.pid_t {
     // but may not be signalled by this process answers `EPERM`, which is still
     // an existing group.
     if (group <= 0) return error.NoForegroundGroup;
-    if (posix.errno(system.kill(-group, @enumFromInt(0))) == .SRCH) {
+    if (posix.errno(system.kill(-group, @fromBackingInt(@intCast(0)))) == .SRCH) {
         return error.NoForegroundGroup;
     }
     return group;
@@ -627,7 +627,7 @@ extern "c" fn tcgetpgrp(fd: posix.fd_t) posix.pid_t;
 /// An ioctl request as this system's `ioctl` spells its type: a `c_int`
 /// through a C library, where the high bit of a request is a sign bit, and a
 /// `u32` as a Linux system call.
-const IoctlRequest = if (is_windows) u32 else @typeInfo(@TypeOf(system.ioctl)).@"fn".params[1].type.?;
+const IoctlRequest = if (is_windows) u32 else @typeInfo(@TypeOf(system.ioctl)).@"fn".param_types[1].?;
 fn request(v: anytype) IoctlRequest {
     const bits: u32 = @bitCast(@as(if (@TypeOf(v) == comptime_int) u32 else @TypeOf(v), v));
     return if (@typeInfo(IoctlRequest).int.signedness == .signed) @bitCast(bits) else @intCast(bits);
@@ -637,7 +637,7 @@ fn request(v: anytype) IoctlRequest {
 ///
 /// The Darwin table in the standard library stops at `TIOCGWINSZ`, so the
 /// Darwin branch spells all three out from `<sys/ttycom.h>`.
-pub const T = switch (builtin.os.tag) {
+pub const T = switch (builtin.target.os.tag) {
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => struct {
         pub const GWINSZ: u32 = 0x40087468;
         pub const SWINSZ: u32 = 0x80087467;

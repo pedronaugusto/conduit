@@ -39,7 +39,7 @@ const io = std.testing.io;
 const gpa = std.testing.allocator;
 const testing = std.testing;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("../win32.zig");
 const windows = std.os.windows;
 const placeMasterForTest = @import("../pty.zig").placeMasterForTest;
@@ -827,8 +827,8 @@ test "end_tree on Windows ends the child's job at the reap, not at deinit" {
     var errors: Sink = .{};
     defer errors.deinit();
     var stage: []const u8 = "starting readers and reading the grandchild id";
-    errdefer |err| {
-        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), child.result() });
+    errdefer {
+        std.debug.print("\nWindows tree fixture failed at {s}; child id {?d}, result {any}\n", .{ stage, child.processId(), child.result() });
         sink.report("pid <number>.");
         errors.report("fixture stderr");
     }
@@ -1058,7 +1058,7 @@ test "shellStatus says an end as a shell's $? does, and signalNumber names every
         try testing.expectEqual(@as(u8, 128 + 15), conduit.shellStatus(.{ .signal = .TERM }));
         try testing.expectEqual(@as(?u8, 9), conduit.signalNumber(.{ .signal = .KILL }));
         // A signal with no name still has a number, and a status.
-        const unnamed: std.posix.SIG = @enumFromInt(40);
+        const unnamed: std.posix.SIG = @fromBackingInt(@intCast(40));
         try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(.{ .signal = unnamed }));
         try testing.expectEqual(@as(?u8, 40), conduit.signalNumber(.{ .signal = unnamed }));
         try testing.expectEqual(@as(u8, 168), conduit.shellStatus(.{ .signal = unnamed }));
@@ -1386,8 +1386,8 @@ test "a signal other than the three reaches a detached child and what it started
     for (sent) |entry| {
         try child.kill(entry[0]);
         var said: [32]u8 = undefined;
-        try sink.expect(try std.fmt.bufPrint(&said, "parent-{s}", .{entry[1]}));
-        try sink.expect(try std.fmt.bufPrint(&said, "child-{s}", .{entry[1]}));
+        try sink.expect(try std.mem.print(&said, "parent-{s}", .{entry[1]}));
+        try sink.expect(try std.mem.print(&said, "child-{s}", .{entry[1]}));
         // Caught, so delivered and not an end.
         try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
     }
@@ -1439,7 +1439,7 @@ test "a signal that is not a request to end leaves what the child started to its
         .{ .user1, "USR1", true },
     }) |entry| {
         var line: [512]u8 = undefined;
-        const text = try std.fmt.bufPrint(&line,
+        const text = try std.mem.print(&line,
             \\trap 'exit 0' {0s}
             \\sh -c "trap '' {0s}; echo child-ready; while :; do sleep 1; done" &
             \\printf 'pid %d.' "$!"
@@ -1485,8 +1485,8 @@ test "a signal with no meaning on this system is refused by name" {
         }
         try testing.expectError(error.Unsupported, child.kill(.{ .posix = .TERM }));
     } else {
-        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @enumFromInt(0) }));
-        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @enumFromInt(200) }));
+        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @fromBackingInt(@intCast(0)) }));
+        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @fromBackingInt(@intCast(200)) }));
     }
     // Refused before anything was sent: the child is still running.
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
@@ -1506,12 +1506,12 @@ fn expectStopped(pid: posix.pid_t, stopped: bool) !void {
 }
 
 fn isStopped(pid: posix.pid_t) ?bool {
-    if (builtin.os.tag == .linux) {
+    if (builtin.target.os.tag == .linux) {
         const state = stateOf(pid);
         if (state == 0) return null;
         return state == 'T' or state == 't';
     }
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         var info: DarwinBsdInfo = undefined;
         if (darwin_proc_pidinfo(pid, 3, 0, &info, @sizeOf(DarwinBsdInfo)) != @sizeOf(DarwinBsdInfo)) return null;
         // `SSTOP` from `<sys/proc.h>`.
@@ -1529,7 +1529,7 @@ const DarwinBsdInfo = extern struct {
 };
 
 extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: ?*anyopaque, size: c_int) c_int;
-const darwin_proc_pidinfo = if (builtin.os.tag == .macos) proc_pidinfo else struct {
+const darwin_proc_pidinfo = if (builtin.target.os.tag == .macos) proc_pidinfo else struct {
     fn unavailable(_: c_int, _: c_int, _: u64, _: ?*anyopaque, _: c_int) c_int {
         return 0;
     }
@@ -1590,7 +1590,7 @@ test "a recorded cgroup opens only at its original directory identity and remove
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
-    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     const path = child.state.cgroup.path(&where).?;
     const identity = child.state.cgroup.id().?;
     try testing.expect(cgroup.Cgroup.openRecorded(path, identity +% 1) == null);
@@ -1610,7 +1610,7 @@ test "a recorded cgroup whose name now holds another is not removed through it" 
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
-    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     const path = child.state.cgroup.path(&where).?;
     var recorded = cgroup.Cgroup.openRecorded(path, child.state.cgroup.id().?).?;
     defer recorded.release();
@@ -1630,7 +1630,7 @@ test "a recorded cgroup waits on population changes" {
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "sleep 30" }, .stdio = .ignore });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
-    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     var recorded = cgroup.Cgroup.openRecorded(child.state.cgroup.path(&where).?, child.state.cgroup.id().?).?;
     defer recorded.release();
     try testing.expect(!try recorded.waitEmpty(io, 20));
@@ -1647,7 +1647,7 @@ test "killRecorded ends a verified Linux cgroup and its detached grandchild" {
     });
     defer child.release(io) catch unreachable;
     defer _ = child.killWait(io, 0) catch {};
-    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     var recorded = cgroup.Cgroup.openRecorded(child.state.cgroup.path(&where).?, child.state.cgroup.id().?).?;
     defer recorded.release();
     const since = (try tree.startTime(child.state.id)).?;
@@ -1703,8 +1703,8 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         }
         try testing.expect(getpgid(orphan) != child.state.id);
 
-        var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-        const path = try gpa.dupeZ(u8, child.state.cgroup.path(&where).?);
+        var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
+        const path = try gpa.dupeSentinel(u8, child.state.cgroup.path(&where).?, 0);
         defer gpa.free(path);
         try testing.expect(cgroupExists(path));
 
@@ -1777,8 +1777,8 @@ test "deinit signals nothing in a child's cgroup, and the cgroup goes once what 
     defer if (alive(orphan)) {
         _ = c.kill(orphan, .KILL);
     };
-    var where: [std.fs.max_path_bytes + 64]u8 = undefined;
-    const path = try gpa.dupeZ(u8, child.state.cgroup.path(&where).?);
+    var where: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
+    const path = try gpa.dupeSentinel(u8, child.state.cgroup.path(&where).?, 0);
     defer gpa.free(path);
 
     try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
@@ -1805,9 +1805,9 @@ const Orphans = conduit.Orphans;
 
 /// Whether this process is a child subreaper now, as the kernel says.
 fn subreaperNow() bool {
-    if (builtin.os.tag != .linux) return false;
+    if (builtin.target.os.tag != .linux) return false;
     var flag: c_int = 0;
-    _ = std.os.linux.prctl(@intFromEnum(std.os.linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0);
+    _ = std.os.linux.prctl(@backingInt(std.os.linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0);
     return flag != 0;
 }
 
@@ -1863,7 +1863,7 @@ fn orphanOf(child: *Child) !posix.pid_t {
 /// when there is no such process.
 fn stateOf(pid: posix.pid_t) u8 {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return 0;
+    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return 0;
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return 0;
     defer _ = c.close(fd);
@@ -2073,7 +2073,7 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
     for (0..race_children) |i| {
         const status: u8 = @intCast(task * race_children + i + 1);
         var line: [64]u8 = undefined;
-        const said = std.fmt.bufPrint(&line, "(sleep 0 &); exit {d}", .{status}) catch unreachable;
+        const said = std.mem.print(&line, "(sleep 0 &); exit {d}", .{status}) catch unreachable;
         var child = Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", said }, .stdio = .ignore }) catch {
             _ = failures.fetchAdd(1, .monotonic);
             continue;
@@ -2097,7 +2097,7 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
 }
 
 test "with Orphans not started, an orphan goes where it always went" {
-    if (is_windows or builtin.os.tag != .linux) return error.SkipZigTest;
+    if (is_windows or builtin.target.os.tag != .linux) return error.SkipZigTest;
     if (setsidProgram() == null) return error.SkipZigTest;
     try testing.expect(!subreaperNow());
 
@@ -2124,7 +2124,7 @@ test "with Orphans not started, an orphan goes where it always went" {
 /// The parent a Linux process has now, from `/proc`.
 fn parentOf(pid: posix.pid_t) posix.pid_t {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return 0;
+    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return 0;
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return 0;
     defer _ = c.close(fd);
@@ -2178,7 +2178,7 @@ fn readMarkedNumber(comptime Number: type, sink: *Sink) !Number {
 /// Whether the operating system still knows that process id. A zombie counts
 /// as alive; nothing here reaps a process it did not start.
 fn alive(pid: posix.pid_t) bool {
-    if (c.kill(pid, @as(posix.SIG, @enumFromInt(0))) == 0) return true;
+    if (c.kill(pid, @as(posix.SIG, @fromBackingInt(@intCast(0)))) == 0) return true;
     return c.errno(@as(c_int, -1)) != .SRCH;
 }
 
@@ -2195,7 +2195,7 @@ fn openById(id: windows.DWORD) !windows.HANDLE {
         .FALSE,
         id,
     ) orelse {
-        std.debug.print("\nOpenProcess({d}) failed: Windows error {d}\n", .{ id, @intFromEnum(std.os.windows.GetLastError()) });
+        std.debug.print("\nOpenProcess({d}) failed: Windows error {d}\n", .{ id, @backingInt(std.os.windows.GetLastError()) });
         return error.TestProcessNotThere;
     };
 }
@@ -2210,7 +2210,7 @@ fn closeFixtureProcess(process: windows.HANDLE) void {
 fn expectFixtureInJob(process: windows.HANDLE, child: *Child) !void {
     var member: windows.BOOL = .FALSE;
     if (win32.IsProcessInJob(process, child.state.job.?, &member) == .FALSE) {
-        std.debug.print("\nIsProcessInJob failed: Windows error {d}\n", .{@intFromEnum(std.os.windows.GetLastError())});
+        std.debug.print("\nIsProcessInJob failed: Windows error {d}\n", .{@backingInt(std.os.windows.GetLastError())});
         return error.TestJobQueryFailed;
     }
     if (member == .FALSE or !runningNow(process)) {
@@ -2247,8 +2247,8 @@ test "waitTree says the tree has ended, and does not say it early" {
     var errors: Sink = .{};
     defer errors.deinit();
     var stage: []const u8 = "starting readers and reading the grandchild id";
-    errdefer |err| {
-        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), child.processId(), child.result() });
+    errdefer {
+        std.debug.print("\nWindows tree fixture failed at {s}; child id {?d}, result {any}\n", .{ stage, child.processId(), child.result() });
         sink.report("pid <number>.");
         errors.report("fixture stderr");
     }
@@ -2296,7 +2296,7 @@ test "waitTree says the tree has ended, and does not say it early" {
 
 test "waitTree on Linux says the child's cgroup has emptied, and does not say it early" {
     // Linux with a cgroup this process may make: the container is the cgroup.
-    if (builtin.os.tag != .linux or !try cgroupsHere()) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux or !try cgroupsHere()) return error.SkipZigTest;
 
     // The child leaves an orphan in a session of its own and ends normally,
     // and the survival policy leaves the orphan running: nothing but the
@@ -2327,7 +2327,7 @@ test "waitTree on Linux says the child's cgroup has emptied, and does not say it
 }
 
 test "waitTree on Linux refuses a child with no cgroup of its own" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
 
@@ -2357,8 +2357,8 @@ test "a contained wait ends a grandchild before lifecycle release" {
     var errors: Sink = .{};
     defer errors.deinit();
     var stage: []const u8 = "starting readers and reading the grandchild id";
-    errdefer |err| {
-        std.debug.print("\nWindows tree fixture failed at {s}: {s}; child id {?d}, result {any}\n", .{ stage, @errorName(err), if (released) null else child.processId(), if (released) @as(Child.TryWaitError!?Child.Term, null) else child.result() });
+    errdefer {
+        std.debug.print("\nWindows tree fixture failed at {s}; child id {?d}, result {any}\n", .{ stage, if (released) null else child.processId(), if (released) @as(Child.TryWaitError!?Child.Term, null) else child.result() });
         sink.report("pid <number>.");
         errors.report("fixture stderr");
     }
@@ -2956,7 +2956,7 @@ test "a uid and gid this process may take are taken, and one it may not is an er
     try testing.expect(std.mem.find(
         u8,
         result.stdout(),
-        try std.fmt.bufPrint(&wanted, "{d}", .{uid}),
+        try std.mem.print(&wanted, "{d}", .{uid}),
     ) != null);
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 
@@ -3168,7 +3168,7 @@ test "path_search decides which PATH a bare program name is looked up in" {
             io,
             .{},
         );
-        var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const path_len = try tmp.dir.realPath(io, &path_buffer);
         try conduit.environ.apply(&environment, &.{.{
             .name = "PATH",
@@ -3685,7 +3685,7 @@ fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
         if (code != .INVALID_HANDLE) {
             std.debug.print("DuplicateHandle of 0x{x} from the process: GetLastError({d})\n", .{
                 @intFromPtr(event),
-                @intFromEnum(code),
+                @backingInt(code),
             });
         }
         return .nothing;
@@ -3697,7 +3697,7 @@ fn probe(process: std.os.windows.HANDLE, event: std.os.windows.HANDLE) Probe {
     if (win32.SetEvent(copy) == .FALSE) {
         std.debug.print("SetEvent on the copy of 0x{x}: GetLastError({d})\n", .{
             @intFromPtr(event),
-            @intFromEnum(windows.GetLastError()),
+            @backingInt(windows.GetLastError()),
         });
         return .something_else;
     }
@@ -3733,7 +3733,7 @@ fn plainSpawn(argv: []const []const u8) !std.os.windows.HANDLE {
         &startup,
         &information,
     ) == .FALSE) {
-        std.debug.print("the control did not start: GetLastError({d})\n", .{@intFromEnum(windows.GetLastError())});
+        std.debug.print("the control did not start: GetLastError({d})\n", .{@backingInt(windows.GetLastError())});
         return error.ControlDidNotStart;
     }
     windows.CloseHandle(information.hThread);
@@ -4164,8 +4164,8 @@ const BorrowedDescriptor = struct {
 };
 
 test "a fork spawn resets an ignored real-time signal in the child" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
-    const signal: posix.SIG = @enumFromInt(std.os.linux.NSIG - 1);
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
+    const signal: posix.SIG = @fromBackingInt(@intCast(std.os.linux.NSIG - 1));
     var saved: posix.Sigaction = undefined;
     const ignored: posix.Sigaction = .{
         .handler = .{ .handler = posix.SIG.IGN },
@@ -4221,7 +4221,7 @@ test "a fork spawn reports exec failure even when all standard descriptors were 
 }
 
 test "a parent death signal is refused where the system has none" {
-    if (builtin.os.tag == .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag == .linux) return error.SkipZigTest;
     try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
         .argv = &script.greeting,
         .parent_death_signal = .kill,
@@ -4229,7 +4229,7 @@ test "a parent death signal is refused where the system has none" {
 }
 
 test "a child given a parent death signal ends with the thread that started it" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     // The parent the kernel watches is the thread that forked: a thread of
     // this test's own that spawns and ends stands in for a program that
     // crashes, since the test runner itself has to live on.
@@ -4301,7 +4301,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
 }
 
 test "a spawn with a parent death signal takes the fork, where the signal is set" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     try testing.expect(!spawn_path.suits(.{ .argv = &script.greeting, .parent_death_signal = .kill }));
     try testing.expectEqual(spawn_path.available, spawn_path.suits(.{ .argv = &script.greeting }));
 }
@@ -4449,7 +4449,7 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
         child.release(io) catch unreachable;
     };
     const key = child.processId().?;
-    var path_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var path_buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     const record = try child.containment(&path_buffer);
     try testing.expectEqual(key, record.group.?);
     if (record.cgroup) |contained| {
@@ -4465,7 +4465,7 @@ test "a containment snapshot survives reaping and deinit without owned handles" 
     try testing.expectEqual(Child.Term{ .exited = 5 }, try reaper.wait(io));
     try reaper.stop(io);
     try testing.expectEqual(@as(?Child.Id, null), child.processId());
-    var retired_buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var retired_buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     const retired = try child.containment(&retired_buffer);
     try testing.expectEqual(record.group, retired.group);
     if (record.cgroup) |contained| {

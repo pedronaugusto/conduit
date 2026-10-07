@@ -333,7 +333,7 @@ pub fn findBare(
     program: []const u8,
     environment: *const std.process.Environ.Map,
 ) Allocator.Error!?[]const u8 {
-    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const executable_dir: ?[]const u8 = if (std.process.executableDirPath(io, &path_buffer)) |len|
         try arena.dupe(u8, path_buffer[0..len])
     else |_|

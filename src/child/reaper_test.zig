@@ -4,7 +4,7 @@ const posix = std.posix;
 const windows = std.os.windows;
 const c = std.c;
 const Allocator = std.mem.Allocator;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const Child = @import("../child.zig").Child;
 const win32 = @import("../win32.zig");
 const access = @import("../child.zig").test_access;
@@ -25,7 +25,7 @@ const Observer = struct {
         probe.retired = child.state.reaped.load(.acquire) or if (is_windows) retired: {
             var code: windows.DWORD = undefined;
             break :retired win32.GetExitCodeProcess(child.state.id, &code) == .FALSE;
-        } else c.kill(child.state.id, @enumFromInt(0)) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
+        } else c.kill(child.state.id, @fromBackingInt(@intCast(0))) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
     }
 };
 test "a Reaper cannot retire the identity while kill is delivering a signal" {
@@ -34,7 +34,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
 
     for (0..64) |iteration| {
         var stage: []const u8 = "spawning";
-        errdefer |err| std.debug.print("identity fixture: iteration {d}, {s}: {s}\n", .{ iteration, stage, @errorName(err) });
+        errdefer std.debug.print("identity fixture: iteration {d}, {s}\n", .{ iteration, stage });
         var child = try Child.spawn(testing.allocator, io, .{
             .argv = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" },
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },

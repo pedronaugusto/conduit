@@ -5,7 +5,7 @@ const windows = std.os.windows;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 const Pty = @import("../pty.zig").Pty;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 /// A numeric process id on either platform, never a Windows handle.
 pub const Id = if (is_windows) windows.DWORD else posix.pid_t;
 
@@ -660,7 +660,7 @@ pub const Signal = union(enum) {
             .interrupt, .terminate, .kill => true,
             else => false,
         };
-        const number = @intFromEnum(signal.toPosix());
+        const number = @backingInt(signal.toPosix());
         return number > 0 and number < signal_limit;
     }
 

@@ -16,7 +16,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
 const log = std.log.scoped(.conduit);
 

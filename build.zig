@@ -87,14 +87,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = link_libc,
         .sanitize_thread = if (thread_sanitizer) true else null,
-        // Error return traces off, for `zig build test --fuzz`. The fuzzing
-        // test runner hands `@errorReturnTrace()` to a function that takes the
-        // other `StackTrace` of the two the standard library has, so a test
-        // binary built with `-ffuzz` does not compile while they are on. With
-        // them off the call is comptime-unreachable and the binary builds;
-        // what is lost is the chain of return sites printed under a failure,
-        // and every test here says in its own name what it was asserting.
-        .error_tracing = false,
         .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
     });
     test_module.addOptions("conduit_options", conduit_options);
@@ -186,7 +178,7 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Build and run the examples");
     for (example_sources) |source| {
         const example = b.addExecutable(.{
-            .name = std.fs.path.stem(source),
+            .name = std.Io.Dir.path.stem(source),
             .root_module = b.createModule(.{
                 .root_source_file = b.path(source),
                 .target = target,

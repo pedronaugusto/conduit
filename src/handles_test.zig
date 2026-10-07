@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const file = @import("handles.zig").file;
 const writeStreamingAll = @import("handles.zig").writeStreamingAll;
 const pipe = @import("conduit.tty").pipe;

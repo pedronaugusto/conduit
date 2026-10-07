@@ -44,18 +44,18 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
     const io = init.io;
     const root = try std.process.currentPathAlloc(io, a);
     const stamp = std.Io.Clock.awake.now(io).nanoseconds;
-    const scratch = try std.fmt.allocPrint(a, ".zig-cache/runner-probe-{d}", .{stamp});
+    const scratch = try a.print(".zig-cache/runner-probe-{d}", .{stamp});
     try std.Io.Dir.cwd().createDirPath(io, scratch);
     defer std.Io.Dir.cwd().deleteTree(io, scratch) catch |err| log.warn("runner scratch cleanup: {t}", .{err});
     var env = try init.environ_map.clone(a);
     defer env.deinit();
     for ([_][]const u8{ "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO" }) |key| _ = env.swapRemove(key);
     for ([_][]const u8{ "HOME", "XDG_CONFIG_HOME", "TMPDIR" }) |key| {
-        const path = try std.fs.path.join(a, &.{ root, scratch, key });
+        const path = try std.Io.Dir.path.join(a, &.{ root, scratch, key });
         try std.Io.Dir.cwd().createDirPath(io, path);
         try env.put(key, path);
     }
-    try env.put("ZIG_GLOBAL_CACHE_DIR", try std.fs.path.join(a, &.{ root, ".zig-cache", "runner-global" }));
+    try env.put("ZIG_GLOBAL_CACHE_DIR", try std.Io.Dir.path.join(a, &.{ root, ".zig-cache", "runner-global" }));
     try env.put("CONDUIT_TEARDOWN_PROBE", "1");
     // Compiler work precedes the probe's execution deadline. Its source
     // checks already run in the source gate; the probe verifies teardown.

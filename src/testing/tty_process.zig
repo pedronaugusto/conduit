@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const tty = @import("conduit.tty");
 
 pub fn main(init: std.process.Init) !void {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime builtin.target.os.tag == .windows) {
         const args = try init.minimal.args.toSlice(init.arena.allocator());
         if (args.len > 1 and std.mem.eql(u8, args[1], "cursor")) {
             const out = std.Io.File.stdout();

@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 const Expect = @import("expect.zig").Expect;

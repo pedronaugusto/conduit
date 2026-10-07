@@ -11,7 +11,7 @@ const Watchdog = @import("testing/support.zig").Watchdog;
 const Options = conduit.Proxy.Options;
 const run = conduit.Proxy.run;
 const testing = std.testing;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 test "input at end of file leaves the child's output flowing" {
     if (is_windows) return error.SkipZigTest;
@@ -49,7 +49,7 @@ test "input at end of file leaves the child's output flowing" {
 
     var seen: [128]u8 = undefined;
     const n = try output.readPositionalAll(io, &seen, 0);
-    try testing.expect(std.mem.indexOf(u8, seen[0..n], "hello-from-child") != null);
+    try testing.expect(std.mem.find(u8, seen[0..n], "hello-from-child") != null);
 }
 
 /// `run` under a `std.Io.Group`, which accepts only `error.Canceled`.

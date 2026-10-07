@@ -57,7 +57,7 @@ const Deadline = tty.Deadline;
 const tty = @import("conduit.tty");
 
 /// Whether this system has cgroups for `spawn` to use at all.
-pub const supported = builtin.os.tag == .linux;
+pub const supported = builtin.target.os.tag == .linux;
 
 /// The cgroup a child was put in, or none. Linux only; elsewhere a type
 /// that is always none.
@@ -101,7 +101,7 @@ test "a boot identity is a whole UUID and nothing else" {
     try std.testing.expect(parseBootIdentity(good[0..35]) == null);
     try std.testing.expect(parseBootIdentity(good ++ "\n") == null);
     // Thirty-six bytes, the length of one, and still not one.
-    try std.testing.expect(parseBootIdentity("b" ** 36) == null);
+    try std.testing.expect(parseBootIdentity(&@as([36]u8, @splat('b'))) == null);
     try std.testing.expect(parseBootIdentity("0f6c1c1e_8a3b-4d2e-9f10-2b7a5c4d3e21") == null);
     try std.testing.expect(parseBootIdentity("0f6c1c1e-8a3b-4d2e-9f10-2b7a5c4d3e2g") == null);
     if (comptime supported) {
@@ -129,7 +129,7 @@ const Place = struct {
     const Found = enum(u8) { unknown, finding, found, none };
     var found: std.atomic.Value(Found) = .init(.unknown);
     /// Written once, while `found` is `finding`, and read after `found`.
-    var path_buffer: [std.fs.max_path_bytes:0]u8 = undefined;
+    var path_buffer: [std.Io.Dir.max_path_bytes:0]u8 = undefined;
     var path_len: usize = 0;
     /// Set once a cgroup could not be made or joined here: no more are
     /// tried. Those already made are still where `path` says.
@@ -159,10 +159,10 @@ const Place = struct {
     }
 
     fn find() bool {
-        var own_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var own_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const own = ownCgroup(&own_buffer) orelse return false;
-        var mount_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var mount_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const mount = cgroup2Mount(&mount_buffer, &root_buffer) orelse return false;
 
         // The hierarchy may be mounted from below its root (a bind mount of a
@@ -174,7 +174,7 @@ const Place = struct {
             own[mount.root.len..]
         else
             return false;
-        const joined = std.fmt.bufPrintSentinel(&path_buffer, "{s}{s}", .{
+        const joined = std.mem.printSentinel(&path_buffer, "{s}{s}", .{
             mount.point,
             if (std.mem.eql(u8, below, "/")) "" else below,
         }, 0) catch return false;
@@ -182,8 +182,8 @@ const Place = struct {
 
         // A kernel with no `cgroup.kill` (before 5.14) has no way to end a
         // cgroup at once, and this file does not pretend otherwise.
-        var kill_buffer: [std.fs.max_path_bytes + 16]u8 = undefined;
-        const kill_path = std.fmt.bufPrintSentinel(&kill_buffer, "{s}/cgroup.kill", .{joined}, 0) catch return false;
+        var kill_buffer: [std.Io.Dir.max_path_bytes + 16]u8 = undefined;
+        const kill_path = std.mem.printSentinel(&kill_buffer, "{s}/cgroup.kill", .{joined}, 0) catch return false;
         return c.faccessat(c.AT.FDCWD, kill_path, 0, 0) == 0;
     }
 };
@@ -389,7 +389,7 @@ test "a mountinfo line reads back the paths it escapes" {
 /// fits it.
 fn mountinfoReadsThroughItsWindow(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
-    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    if (comptime builtin.target.os.tag == .windows) return error.SkipZigTest;
     // The test runner sets `std.testing.io` up around each test of an
     // ordinary run, and leaves it uninitialised around a fuzzing input.
     if (builtin.fuzz) std.testing.io_instance = .init(std.testing.allocator, .{});
@@ -432,8 +432,8 @@ fn mountinfoReadsThroughItsWindow(_: void, smith: *std.testing.Smith) anyerror!v
     try tmp.dir.writeFile(io, .{ .sub_path = "mountinfo", .data = file.items });
     const handle = try tmp.dir.openFile(io, "mountinfo", .{});
     defer handle.close(io);
-    var point_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var point_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const found = cgroup2MountIn(handle.handle, &point_buffer, &root_buffer);
     if (expected) |want| {
         try std.testing.expectEqualStrings(want.root, found.?.root);
@@ -544,12 +544,12 @@ const Name = struct {
 
     fn path(name: Name, buffer: []u8) ?[:0]const u8 {
         const base = Place.path() orelse return null;
-        return std.fmt.bufPrintSentinel(buffer, "{s}/conduit-{d}-{d}", .{ base, name.owner, name.sequence }, 0) catch null;
+        return std.mem.printSentinel(buffer, "{s}/conduit-{d}-{d}", .{ base, name.owner, name.sequence }, 0) catch null;
     }
 
     /// `true` once the cgroup is gone, whoever removed it.
     fn remove(name: Name) bool {
-        var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+        var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
         const at = name.path(&buffer) orelse return true;
         if (c.rmdir(at) == 0) return true;
         return c.errno(@as(c_int, -1)) != .BUSY;
@@ -657,7 +657,7 @@ const LinuxCgroup = struct {
         var tries: u8 = 0;
         const name: Name = while (tries < 8) : (tries += 1) {
             const candidate: Name = .{ .owner = owner, .sequence = sequence.fetchAdd(1, .monotonic) };
-            var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+            var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
             const at = candidate.path(&buffer) orelse return null;
             if (c.mkdir(at, 0o755) == 0) break candidate;
             switch (c.errno(@as(c_int, -1))) {
@@ -674,7 +674,7 @@ const LinuxCgroup = struct {
             }
         } else return null;
 
-        var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+        var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
         const at = name.path(&buffer) orelse return null;
         const dir = c.open(at, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .CLOEXEC = true });
         if (dir < 0) {
@@ -701,7 +701,7 @@ const LinuxCgroup = struct {
 
     fn namedIdentity(cgroup: *const LinuxCgroup) NamedIdentity {
         const owned_id = cgroup.id() orelse return .unknown;
-        var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+        var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
         const at = cgroup.path(&buffer) orelse return .unknown;
         const current = c.open(at, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .PATH = true, .NOFOLLOW = true, .CLOEXEC = true });
         if (current < 0) return if (c.errno(@as(c_int, -1)) == .NOENT) .gone else .unknown;
@@ -718,7 +718,7 @@ const LinuxCgroup = struct {
     pub fn remove(cgroup: *LinuxCgroup) bool {
         if (!cgroup.active()) return true;
         if (cgroup.namedIdentity() != .matching) return false;
-        var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+        var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
         const at = cgroup.path(&buffer) orelse return false;
         if (c.rmdir(at) != 0) return false;
         _ = c.close(cgroup.dir);
@@ -774,19 +774,19 @@ const LinuxRecorded = struct {
     // Fields are private: read and change them only through the methods.
     parent: posix.fd_t,
     dir: posix.fd_t,
-    name: [std.fs.max_name_bytes + 1]u8,
+    name: [std.Io.Dir.max_name_bytes + 1]u8,
     name_len: usize,
     recorded_id: u64,
 
     fn open(path_name: []const u8, recorded_id: u64) ?LinuxRecorded {
-        if (recorded_id == 0 or path_name.len < 2 or path_name.len >= std.fs.max_path_bytes or path_name[0] != '/' or
+        if (recorded_id == 0 or path_name.len < 2 or path_name.len >= std.Io.Dir.max_path_bytes or path_name[0] != '/' or
             std.mem.findScalar(u8, path_name, 0) != null) return null;
         const slash = std.mem.findScalarLast(u8, path_name, '/') orelse return null;
         const base = path_name[slash + 1 ..];
-        if (base.len == 0 or base.len > std.fs.max_name_bytes or
+        if (base.len == 0 or base.len > std.Io.Dir.max_name_bytes or
             std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return null;
 
-        var parent_name: [std.fs.max_path_bytes]u8 = undefined;
+        var parent_name: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const parent_len = if (slash == 0) 1 else slash;
         @memcpy(parent_name[0..parent_len], path_name[0..parent_len]);
         parent_name[parent_len] = 0;
@@ -1093,7 +1093,7 @@ pub const Pending = struct {
     }
 
     fn closeProcs(pending: *Pending) bool {
-        if (builtin.os.tag == .windows) return false; // No Windows prepare can create a join descriptor.
+        if (builtin.target.os.tag == .windows) return false; // No Windows prepare can create a join descriptor.
         const fd = pending.procs;
         pending.procs = -1;
         if (fd < 0) return false;
@@ -1240,7 +1240,7 @@ test "a cgroup2 line of mountinfo names its mount point and root, and nothing el
 }
 
 test "deferred cgroup cleanup keeps directory ownership instead of removing a replacement" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const Replacement = struct {
         var unlinks: usize = 0;
         var closes: usize = 0;
@@ -1277,7 +1277,7 @@ test "deferred cgroup cleanup keeps directory ownership instead of removing a re
 }
 
 test "a consumed cgroup handoff cannot close a recycled join descriptor" {
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const ends = try tty.pipe(.{});
     defer _ = c.close(ends[0]);
     var pending = Pending.init(.none, ends[1]);

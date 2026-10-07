@@ -43,7 +43,7 @@ pub const InputWriter = input_writer.Writer(Child).InputWriter;
 const Pty = @import("pty.zig").Pty;
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
 const tree = @import("tree.zig");
 const cgroups = @import("cgroup.zig");
@@ -123,7 +123,7 @@ pub const Child = struct {
     /// real-time signal is its number. Never set by a Windows wait.
     pub fn signalNumber(term: Term) ?u8 {
         return switch (term) {
-            .signal, .stopped => |signal| std.math.cast(u8, @intFromEnum(signal)),
+            .signal, .stopped => |signal| std.math.cast(u8, @backingInt(signal)),
             else => null,
         };
     }
@@ -278,7 +278,7 @@ pub const Child = struct {
         // would receive less of it than was given, and on Windows none of the
         // arguments after it.
         for (options.argv) |argument| if (std.mem.findScalar(u8, argument, 0) != null) return error.InvalidArgv;
-        if (options.parent_death_signal != null and builtin.os.tag != .linux) return error.Unsupported;
+        if (options.parent_death_signal != null and builtin.target.os.tag != .linux) return error.Unsupported;
         var configured = options;
         // A private POSIX group belongs to the held child until the reap. It
         // must never be the caller's group, even when detach was not requested.
@@ -326,7 +326,7 @@ pub const Child = struct {
             if (state.handles_open) child.closeHandles();
             child.closeJob();
         } else {
-            if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| owner.close();
+            if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| owner.close();
             if (state.lineage) |tracker| tracker.destroy();
             state.forks.close();
             state.cgroup.release();
@@ -398,7 +398,7 @@ pub const Child = struct {
     pub fn containment(child: *const Child, buffer: []u8) ContainmentError!Containment {
         const state = child.state;
         var record: Containment = .{ .group = state.pgid };
-        if (comptime builtin.os.tag == .linux) if (state.supervisor) |owner| {
+        if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| {
             record.supervisor = owner.record;
         };
         if (comptime !is_windows) if (state.cgroup.active()) {
@@ -743,7 +743,7 @@ pub const Child = struct {
             child.state.identity.unlock();
             // Adoption belongs to Orphans, after retirement has let go of the
             // identity. Its process-table look must not hold off signalling.
-            if (builtin.os.tag == .linux and published) orphans.event();
+            if (builtin.target.os.tag == .linux and published) orphans.event();
         }
         if (child.settled()) |term| return term;
         if (child.state.identity_retired) return error.ReapedElsewhere;
@@ -753,7 +753,7 @@ pub const Child = struct {
             return term;
         }
 
-        const supervised = if (builtin.os.tag == .linux) child.state.supervisor != null else false;
+        const supervised = if (builtin.target.os.tag == .linux) child.state.supervisor != null else false;
         if (!supervised and (child.state.force_tree or child.state.end_descendants or child.state.descendants == .contain)) {
             // Normal containment and every termination request share this
             // final force. Once waitid observes the root ended, its last fork
@@ -779,7 +779,7 @@ pub const Child = struct {
             const rc = c.waitpid(child.state.id, &status, c.W.NOHANG);
             if (rc == 0) return null;
             if (rc > 0) {
-                const root_status = if (builtin.os.tag == .linux) if (child.state.supervisor) |owner| owner.result() catch |err| {
+                const root_status = if (builtin.target.os.tag == .linux) if (child.state.supervisor) |owner| owner.result() catch |err| {
                     child.state.identity_retired = true;
                     return err;
                 } else @as(u32, @bitCast(status)) else @as(u32, @bitCast(status));
@@ -920,7 +920,7 @@ pub const Child = struct {
         if (is_windows) return child.killWindows(signal);
         const sig = signal.toPosix();
 
-        if (comptime builtin.os.tag == .linux) if (child.state.supervisor) |owner| {
+        if (comptime builtin.target.os.tag == .linux) if (child.state.supervisor) |owner| {
             if (sig == .KILL and child.state.cgroup.active()) _ = child.state.cgroup.kill();
             var cgroup_signalled = false;
             if (sig != .KILL and child.state.cgroup.active())
@@ -987,7 +987,7 @@ pub const Child = struct {
     ///
     /// **Elsewhere** it cannot be said, and the answer is the walk.
     fn mayHaveDescendants(child: *Child) bool {
-        if (builtin.os.tag == .linux) return tree.hasChildren(child.state.id);
+        if (builtin.target.os.tag == .linux) return tree.hasChildren(child.state.id);
         return child.state.forks.any();
     }
 
@@ -1185,7 +1185,7 @@ pub const Child = struct {
     /// system and wrong on three.
     pub fn waitTree(child: *Child, io: std.Io, timeout_ms: u32) WaitTreeError!bool {
         if (is_windows) return child.waitTreeWindows(io, timeout_ms);
-        if (builtin.os.tag != .linux) @compileError(
+        if (builtin.target.os.tag != .linux) @compileError(
             "Child.waitTree is Windows and Linux only: a job object and a cgroup " ++
                 "are containers the system accounts for, and this system has no " ++
                 "such thing to ask. See Child.kill for what a signal reaches there.",
@@ -2037,7 +2037,7 @@ pub const Child = struct {
             try std.testing.expectEqual(word >> 8, term.exited);
             try std.testing.expectEqual(@as(u8, @intCast(word >> 8)), shellStatus(term));
         } else if (word >> 8 == 0 and word & 0x7f != 0x7f) {
-            try std.testing.expectEqual(word & 0x7f, @intFromEnum(term.signal));
+            try std.testing.expectEqual(word & 0x7f, @backingInt(term.signal));
             try std.testing.expectEqual(@as(u8, @intCast(128 + (word & 0x7f))), shellStatus(term));
         }
         _ = shellStatus(term);

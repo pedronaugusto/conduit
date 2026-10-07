@@ -16,11 +16,11 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
     if (args.len > 1 and std.mem.eql(u8, args[1], "--daemon")) return daemonTree(init, args);
-    if (builtin.os.tag != .windows) return posixTree(init, args.len > 1 and std.mem.eql(u8, args[1], "--fail-report"));
+    if (builtin.target.os.tag != .windows) return posixTree(init, args.len > 1 and std.mem.eql(u8, args[1], "--fail-report"));
     if (args.len > 1 and std.mem.eql(u8, args[1], "--middle")) {
         const id = try daemonWindows(init, args[0], false);
         var buffer: [64]u8 = undefined;
-        const report = try std.fmt.bufPrint(&buffer, "{d}", .{id});
+        const report = try std.mem.print(&buffer, "{d}", .{id});
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "daemon-pid", .data = report });
         return;
     }
@@ -29,7 +29,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, args[0]);
-    const command = try std.fmt.allocPrint(allocator, "\"{s}\" --grandchild", .{args[0]});
+    const command = try allocator.print("\"{s}\" --grandchild", .{args[0]});
     const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
     var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
     startup.cb = @sizeOf(windows.STARTUPINFOW);
@@ -48,13 +48,13 @@ pub fn main(init: std.process.Init) !void {
         &startup,
         &process,
     ) == .FALSE) {
-        std.debug.print("fixture CreateProcessW failed: {d}\n", .{@intFromEnum(windows.GetLastError())});
+        std.debug.print("fixture CreateProcessW failed: {d}\n", .{@backingInt(windows.GetLastError())});
         return error.FixtureSpawnFailed;
     }
     defer windows.CloseHandle(process.hProcess);
     defer windows.CloseHandle(process.hThread);
     var buffer: [64]u8 = undefined;
-    const report = try std.fmt.bufPrint(&buffer, "pid {d}.\n", .{process.dwProcessId});
+    const report = try std.mem.print(&buffer, "pid {d}.\n", .{process.dwProcessId});
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
 }
 
@@ -83,7 +83,7 @@ fn posixTree(init: std.process.Init, fail_report: bool) !void {
     }
     if (!std.posix.W.IFSTOPPED(@bitCast(status))) return error.FixtureDescendantDidNotStop;
     var buffer: [64]u8 = undefined;
-    const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{descendant});
+    const report = try std.mem.print(&buffer, "{d}\n", .{descendant});
     if (fail_report) {
         try std.Io.File.stderr().writeStreamingAll(init.io, report);
         // Keep the child unreaped until the test has captured its identity.
@@ -103,7 +103,7 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
     const racing = args.len > 2 and std.mem.eql(u8, args[2], "--race");
     const double = racing or (args.len > 2 and std.mem.eql(u8, args[2], "--double-fork"));
     const escape = double or (args.len > 2 and std.mem.eql(u8, args[2], "--escape"));
-    const id = if (builtin.os.tag == .windows)
+    const id = if (builtin.target.os.tag == .windows)
         try daemonWindows(init, args[0], double)
     else posix: {
         const c = std.c;
@@ -146,7 +146,7 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
         break :posix daemon_pid;
     };
     var buffer: [64]u8 = undefined;
-    const report = try std.fmt.bufPrint(&buffer, "{d}\n", .{id});
+    const report = try std.mem.print(&buffer, "{d}\n", .{id});
     try std.Io.File.stdout().writeStreamingAll(init.io, report);
     var byte: [1]u8 = undefined;
     _ = std.Io.File.stdin().readStreaming(init.io, &.{&byte}) catch |err| switch (err) {
@@ -161,7 +161,7 @@ fn daemonTree(init: std.process.Init, args: []const [:0]const u8) !void {
 fn daemonWindows(init: std.process.Init, executable: []const u8, double: bool) !u32 {
     const allocator = init.arena.allocator();
     const program = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, executable);
-    const command = try std.fmt.allocPrint(allocator, "\"{s}\" {s}", .{ executable, if (double) "--middle" else "--grandchild" });
+    const command = try allocator.print("\"{s}\" {s}", .{ executable, if (double) "--middle" else "--grandchild" });
     const line = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
     var startup: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
     startup.cb = @sizeOf(windows.STARTUPINFOW);

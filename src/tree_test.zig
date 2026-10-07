@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const access = @import("tree.zig").test_access;
 const Deadline = access.Deadline;
 const wait_for = access.wait_for;
@@ -50,7 +50,7 @@ const test_options = @import("conduit_test_options");
 const membersLinux = access.membersLinux;
 const membersDarwin = access.membersDarwin;
 test "a descendant snapshot cannot authorize a signal to an unrelated captured identity" {
-    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
     const Child = @import("child.zig").Child;
@@ -77,7 +77,7 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
 }
 
 test "a group member held before KILL is accounted for while still visible" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(testing.allocator, testing.io, .{
@@ -92,9 +92,9 @@ test "a group member held before KILL is accounted for while still visible" {
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(child.state.id)).?;
     const descendant_start = (try startTime(descendant)).?;
-    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.state.id, child.state.id, since, @enumFromInt(0), &.{}));
-    try testing.expectEqual(@as(usize, 0), try signalGroupSinceImpl(child.state.id, child.state.id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start }}));
-    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.state.id, child.state.id, since, @enumFromInt(0), &.{.{ .pid = descendant, .start = descendant_start +% 1 }}));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.state.id, child.state.id, since, @fromBackingInt(@intCast(0)), &.{}));
+    try testing.expectEqual(@as(usize, 0), try signalGroupSinceImpl(child.state.id, child.state.id, since, @fromBackingInt(@intCast(0)), &.{.{ .pid = descendant, .start = descendant_start }}));
+    try testing.expectEqual(@as(usize, 1), try signalGroupSinceImpl(child.state.id, child.state.id, since, @fromBackingInt(@intCast(0)), &.{.{ .pid = descendant, .start = descendant_start +% 1 }}));
 }
 
 test "the descendants of this process include a child it just started" {
@@ -102,7 +102,7 @@ test "the descendants of this process include a child it just started" {
     const Child = @import("child.zig").Child;
     // The systems that cannot answer answer nothing, which is correct and not
     // something to assert a pid against.
-    const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
+    const can_list = builtin.target.os.tag == .linux or switch (builtin.target.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => true,
         else => false,
     };
@@ -133,7 +133,7 @@ test "the descendants of this process include a child it just started" {
 test "a group is empty but for its leader once what the leader started has ended" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
-    const can_list = builtin.os.tag == .linux or switch (builtin.os.tag) {
+    const can_list = builtin.target.os.tag == .linux or switch (builtin.target.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => true,
         else => false,
     };
@@ -164,7 +164,7 @@ test "a group is empty but for its leader once what the leader started has ended
 }
 
 test "a Linux process with a child of its own is said to have one, and one without is not" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
     const Child = @import("child.zig").Child;
 
@@ -195,7 +195,7 @@ test "a Linux process with a child of its own is said to have one, and one witho
 
 test "a process's start time is its own: the same while it runs, gone once it is reaped" {
     const testing = std.testing;
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux, .macos => {},
         else => return error.SkipZigTest,
     }
@@ -220,7 +220,7 @@ test "a process's start time is its own: the same while it runs, gone once it is
 }
 
 test "a captured pid stays bound to the recorded process, and a start time that does not match refuses" {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux, .macos => {},
         else => return error.SkipZigTest,
     }
@@ -239,7 +239,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     defer captured.deinit();
     try testing.expectEqual(child.state.id, captured.processId());
     try testing.expect(captured.alive());
-    if (builtin.os.tag == .macos) {
+    if (builtin.target.os.tag == .macos) {
         try testing.expectError(error.Unsupported, captured.signalGroupSince(child.state.id, started, .CONT));
     }
     // A signal the shell's default action ignores, sent through the capture.
@@ -254,7 +254,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
 }
 
 test "a captured pid wait expires while it runs and wakes when it ends" {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux, .macos => {},
         else => return error.SkipZigTest,
     }
@@ -276,7 +276,7 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
 }
 
 test "killRecorded waits for a recorded root and a descendant it captured" {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux, .macos => {},
         else => return error.SkipZigTest,
     }
@@ -293,8 +293,8 @@ test "killRecorded waits for a recorded root and a descendant it captured" {
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(child.state.id)).?;
     var stage: []const u8 = "rejecting a mismatched start time";
-    errdefer |err| std.debug.print("recorded tree: {s} failed with {s}; root {d} start {?d}, descendant {d} start {?d}\n", .{
-        stage,      @errorName(err),                  child.state.id, startTime(child.state.id) catch null,
+    errdefer std.debug.print("recorded tree: {s} failed; root {d} start {?d}, descendant {d} start {?d}\n", .{
+        stage,      child.state.id,                   startTime(child.state.id) catch null,
         descendant, startTime(descendant) catch null,
     });
     var captured = (try captureStarted(descendant, (try startTime(descendant)).?)).?;
@@ -313,7 +313,7 @@ test "killRecorded waits for a recorded root and a descendant it captured" {
 }
 
 test "a failed tree fixture releases the descendant it still owns" {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux, .macos => {},
         else => return error.SkipZigTest,
     }
@@ -338,7 +338,7 @@ test "a failed tree fixture releases the descendant it still owns" {
 }
 
 test "a leaderless Linux group keeps the child its leader started" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
     const Child = @import("child.zig").Child;
     // The leader waits on its input, so it is still running when its start
@@ -373,7 +373,7 @@ test "a leaderless Linux group keeps the child its leader started" {
 }
 
 test "a captured process keeps its identity across exec" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
     const Child = @import("child.zig").Child;
@@ -402,7 +402,7 @@ test "a captured process keeps its identity across exec" {
 }
 
 test "Darwin token delivery refreshes after a concurrent exec and refuses a different unique id" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
     const Child = @import("child.zig").Child;
@@ -448,7 +448,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
 }
 
 test "Darwin lineage proves the captured birth parent rather than its pid" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos) return error.SkipZigTest;
     const Child = @import("child.zig").Child;
     var child = try Child.spawn(std.testing.allocator, std.testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
@@ -474,7 +474,7 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
 /// after it -- read back field by field.
 fn statReadsBack(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
-    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
     var record: std.ArrayList(u8) = .empty;
     defer record.deinit(std.testing.allocator);
     const gpa = std.testing.allocator;
@@ -523,7 +523,7 @@ fn direntsStayInside(_: void, smith: *std.testing.Smith) anyerror!void {
     @disableInstrumentation();
     const reclen_at = @offsetOf(std.os.linux.dirent64, "reclen");
     const name_at = @offsetOf(std.os.linux.dirent64, "name");
-    const endian = builtin.cpu.arch.endian();
+    const endian = builtin.target.cpu.arch.endian();
     var bytes: [256]u8 = @splat(0);
     var end: usize = 0;
     while (end + name_at < bytes.len and !smith.eosWeightedSimple(3, 1)) {

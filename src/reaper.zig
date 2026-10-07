@@ -55,7 +55,7 @@ const posix = std.posix;
 const c = std.c;
 const Child = @import("child.zig").Child;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
 const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
@@ -408,7 +408,7 @@ pub const Reaper = struct {
     /// Independent of root wait ownership: another task may hold that wait
     /// for the root's whole lifetime. This observer still reaps adopted exits.
     fn observeAdoption(reaper: *Reaper, io: std.Io) void {
-        if (builtin.os.tag != .linux) return;
+        if (builtin.target.os.tag != .linux) return;
         while (reaper.state.load(.acquire) == running) {
             reaper.lookOrphans() catch {
                 reaper.observation_failed.store(true, .release);
@@ -484,7 +484,7 @@ pub const Reaper = struct {
         // Ended, and not yet reaped: the group's id is still the child's, and
         // what is left in the group can be addressed by it. A child in a cgroup
         // of its own has what it left in there, wherever its group went.
-        const supervised = if (builtin.os.tag == .linux) reaper.child.state.supervisor != null else false;
+        const supervised = if (builtin.target.os.tag == .linux) reaper.child.state.supervisor != null else false;
         if (!supervised and (reaper.options.end_tree or reaper.killing.remaining(io) != null)) {
             if (reaper.child.state.cgroup.active()) {
                 if (!reaper.endContained(io, wake[0])) return error.Canceled;
@@ -602,8 +602,8 @@ pub const Reaper = struct {
     fn encode(term: Term) u64 {
         const tag: u64, const payload: u32 = switch (term) {
             .exited => |code| .{ 0, code },
-            .signal => |signal| .{ 1, @intCast(@intFromEnum(signal)) },
-            .stopped => |signal| .{ 2, @intCast(@intFromEnum(signal)) },
+            .signal => |signal| .{ 1, @intCast(@backingInt(signal)) },
+            .stopped => |signal| .{ 2, @intCast(@backingInt(signal)) },
             .unknown => |value| .{ 3, value },
         };
         return (tag << 32) | payload;
@@ -617,8 +617,8 @@ pub const Reaper = struct {
         const payload: u32 = @truncate(state);
         return switch (state >> 32) {
             0 => .{ .exited = @intCast(payload) },
-            1 => .{ .signal = @enumFromInt(payload) },
-            2 => .{ .stopped = @enumFromInt(payload) },
+            1 => .{ .signal = @fromBackingInt(@intCast(payload)) },
+            2 => .{ .stopped = @fromBackingInt(@intCast(payload)) },
             3 => .{ .unknown = payload },
             4 => @as(ExitError, @errorCast(@errorFromInt(@as(u16, @truncate(payload))))),
             else => unreachable,
@@ -629,7 +629,7 @@ pub const Reaper = struct {
 var pause_elapsed: if (builtin.is_test) ?*u32 else void = if (builtin.is_test) null else {};
 
 test "a Reaper tree grace counts elapsed time when polls are interrupted" {
-    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
     var child = try Child.spawn(testing.allocator, io, .{
@@ -803,10 +803,10 @@ test "a kill keeps its first deadline and a force expires the same grace" {
 }
 
 test "subreaping belongs to one Reaper and restores the process attribute" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const linux = std.os.linux;
     var before: c_int = 0;
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&before), 0, 0, 0)));
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&before), 0, 0, 0)));
     // The address a subreaper's child is spawned into, after init.
     var child: Child = undefined;
     var owner: Reaper = .init(&child, .{});
@@ -823,19 +823,19 @@ test "subreaping belongs to one Reaper and restores the process attribute" {
     }
     try std.testing.expectError(error.AlreadyStarted, other.enableSubreaper());
     var during: c_int = 0;
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
     try std.testing.expectEqual(@as(c_int, 1), during);
     try owner.stop(std.testing.io);
     try owner.stop(std.testing.io);
     try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
     var after: c_int = 0;
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&after), 0, 0, 0)));
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&after), 0, 0, 0)));
     try std.testing.expectEqual(before, after);
     try other.enableSubreaper();
 }
 
 test "Reaper subreaping is unsupported off Linux" {
-    if (builtin.os.tag == .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag == .linux) return error.SkipZigTest;
     // The address a subreaper's child is spawned into, after init.
     var child: Child = undefined;
     var reaper: Reaper = .init(&child, .{});
@@ -844,7 +844,7 @@ test "Reaper subreaping is unsupported off Linux" {
 }
 
 test "a subreaper teardown retains ownership until every direct child is reaped" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const io = std.testing.io;
     // The address a subreaper's child is spawned into, after init.
     var child: Child = undefined;
@@ -863,6 +863,6 @@ test "a subreaper teardown retains ownership until every direct child is reaped"
     try std.testing.expectError(error.DirectChildrenRemain, owner.stop(io));
     var during: c_int = 0;
     const linux = std.os.linux;
-    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
+    try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
     try std.testing.expectEqual(@as(c_int, 1), during);
 }

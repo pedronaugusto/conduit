@@ -5,7 +5,7 @@ const std = @import("std");
 const Child = @import("contract.zig");
 const posix = std.posix;
 const windows = std.os.windows;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const tree = @import("../tree.zig");
 const cgroups = @import("../cgroup.zig");
 const Id = std.process.Child.Id;
@@ -73,7 +73,7 @@ forks: if (is_windows) void else tree.Forks,
 /// none, and `kill` walks. `deinit` removes it.
 cgroup: if (is_windows) void else cgroups.Cgroup,
 /// Linux: private adoption owner, with its root status returned on the channel.
-supervisor: if (builtin.os.tag == .linux) ?Supervisor else void = if (builtin.os.tag == .linux) null else {},
+supervisor: if (builtin.target.os.tag == .linux) ?Supervisor else void = if (builtin.target.os.tag == .linux) null else {},
 /// Darwin: lineage observer, started before the root is released to exec.
 lineage: if (is_windows) void else ?*Tracker = if (is_windows) {} else null,
 /// How the child ended, once it has been reaped. While this is `null` the

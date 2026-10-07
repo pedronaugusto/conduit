@@ -65,10 +65,10 @@ const environ_impl = @import("environ.zig");
 const shell = @import("shell.zig");
 const tree = @import("tree.zig");
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 comptime {
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .windows,
         .linux,
         .driverkit,

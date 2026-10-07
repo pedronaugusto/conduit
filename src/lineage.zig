@@ -16,7 +16,7 @@ pub const testing_hook = struct {
     pub var delay_ms: std.atomic.Value(u32) = .init(0);
 };
 
-pub const supported = if (builtin.os.tag == .windows) false else tree.Forks.supported;
+pub const supported = if (builtin.target.os.tag == .windows) false else tree.Forks.supported;
 pub const Tracker = if (supported) Darwin else NoTracker;
 
 /// Where there is no fork note to observe: no tracker ever starts.

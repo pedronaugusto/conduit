@@ -135,8 +135,8 @@ test "InputWriter refuses a backlog without waiting for a child that stops readi
 
 test "InputWriter keeps a write failure for later writers and waiters" {
     var saved: std.posix.Sigaction = undefined;
-    if (builtin.os.tag != .windows) std.posix.sigaction(.PIPE, &.{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 }, &saved);
-    defer if (builtin.os.tag != .windows) std.posix.sigaction(.PIPE, &saved, null);
+    if (builtin.target.os.tag != .windows) std.posix.sigaction(.PIPE, &.{ .handler = .{ .handler = std.posix.SIG.IGN }, .mask = std.posix.sigemptyset(), .flags = 0 }, &saved);
+    defer if (builtin.target.os.tag != .windows) std.posix.sigaction(.PIPE, &saved, null);
     var child = try spawn("exit");
     defer reap(&child);
     var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 });

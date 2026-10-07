@@ -22,12 +22,12 @@ const Deadline = @import("conduit.tty").Deadline;
 /// The same lifetime rules as `Reaper`: it holds a pointer to itself, so it
 /// must not move once started, and `deinit` must run.
 pub const Watchdog = struct {
-    source: std.builtin.SourceLocation,
+    source: std.lang.SourceLocation,
     limit_ms: u32,
     group: std.Io.Group,
     finished: std.atomic.Value(bool),
 
-    pub fn init(source: std.builtin.SourceLocation, limit_ms: u32) Watchdog {
+    pub fn init(source: std.lang.SourceLocation, limit_ms: u32) Watchdog {
         return .{
             .source = source,
             .limit_ms = limit_ms,

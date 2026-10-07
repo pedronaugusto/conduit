@@ -35,7 +35,7 @@ const trace = @import("trace.zig");
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
 
 const Size = tty.Size;
@@ -519,7 +519,7 @@ pub const Pty = struct {
         // return the error number, and musl leaves `errno` as it was; Darwin
         // returns -1 and sets `errno`.
         const rc = ptsname_r(master_fd, buffer.ptr, buffer.len);
-        if (rc > 0) return .{ .failed = @enumFromInt(rc) };
+        if (rc > 0) return .{ .failed = @fromBackingInt(@intCast(rc)) };
         if (rc < 0) return .{ .failed = c.errno(rc) };
         const len = std.mem.findScalar(u8, buffer, 0) orelse return .{ .failed = .NAMETOOLONG };
         return .{ .name = buffer[0..len :0] };
@@ -864,7 +864,7 @@ pub const Pty = struct {
     }
 
     test "size borrows the pair instead of copying its mutable Windows geometry" {
-        const receiver = @typeInfo(@TypeOf(Pty.size)).@"fn".params[0].type.?;
+        const receiver = @typeInfo(@TypeOf(Pty.size)).@"fn".param_types[0].?;
         try testing.expect(receiver == *const Pty);
     }
 

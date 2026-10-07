@@ -59,7 +59,7 @@ const SpawnOptions = Child.SpawnOptions;
 
 /// Whether this system has the `posix_spawn` interface this file uses, with
 /// the attribute flags spelled the way it spells them.
-pub const available = !options_for_build.force_fork_spawn and switch (builtin.os.tag) {
+pub const available = !options_for_build.force_fork_spawn and switch (builtin.target.os.tag) {
     .linux,
     .driverkit,
     .ios,
@@ -79,7 +79,7 @@ pub const available = !options_for_build.force_fork_spawn and switch (builtin.os
 /// `spawn`, which has the plan.
 pub fn suits(options: SpawnOptions) bool {
     if (!available) return false;
-    if (builtin.os.tag == .linux and options.descendants == .contain) return false;
+    if (builtin.target.os.tag == .linux and options.descendants == .contain) return false;
     if (tree.Forks.supported and options.descendants == .contain) return false;
     // A terminal of the child's own session only where opening it makes it
     // the controlling one; an attached child is handed the terminal as it
@@ -98,7 +98,7 @@ pub fn suits(options: SpawnOptions) bool {
 /// of its own, and its terminal made the controlling one by opening it.
 /// Linux, where the libc has `POSIX_SPAWN_SETSID` and the kernel gives the
 /// first terminal a session leader opens to its session.
-pub const session_terminal = builtin.os.tag == .linux;
+pub const session_terminal = builtin.target.os.tag == .linux;
 
 /// A child `spawn` started, and the watch on its forks.
 pub const Started = struct {
@@ -136,7 +136,7 @@ pub fn spawn(
     // for it, so that the terminal is its controlling one; the other
     // standard streams that are the terminal are copies of that one.
     const session = options.stdio == .pty and options.detach;
-    var terminal_name: [std.fs.max_path_bytes:0]u8 = undefined;
+    var terminal_name: [std.Io.Dir.max_path_bytes:0]u8 = undefined;
     var terminal_slot: ?posix.fd_t = null;
     if (session) {
         const slave = options.stdio.pty.slaveHandle().?;
@@ -214,7 +214,7 @@ pub fn spawn(
             const spawned = try started(pid);
             return spawned;
         }
-        switch (@as(posix.E, @enumFromInt(rc))) {
+        switch (@as(posix.E, @fromBackingInt(@intCast(rc)))) {
             .NOENT, .NOTDIR => {},
             else => |err| best = err,
         }
@@ -284,8 +284,8 @@ const Flags = packed struct(c_short) {
 
     fn set(f: *Flags, comptime field: enum { start_suspended, setsid }, on: bool) void {
         const here = switch (field) {
-            .start_suspended => builtin.os.tag != .linux,
-            .setsid => builtin.os.tag == .linux,
+            .start_suspended => builtin.target.os.tag != .linux,
+            .setsid => builtin.target.os.tag == .linux,
         };
         if (on) std.debug.assert(here);
         if (here and on) f.bit7 = true;

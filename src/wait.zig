@@ -59,7 +59,7 @@ pub const Watch = struct {
     /// refuses `EVFILT_PROC` on a zombie with `ESRCH`. `endedUnreaped` is how
     /// a caller that holds the reap tells that case apart.
     pub fn open(pid: posix.pid_t) ?Watch {
-        return switch (builtin.os.tag) {
+        return switch (builtin.target.os.tag) {
             .linux => openPidfd(pid),
             .driverkit,
             .ios,
@@ -88,7 +88,7 @@ pub const Watch = struct {
     /// returns false, and the caller's deadline is what decides whether to ask
     /// again.
     pub fn ended(watch: Watch, milliseconds: u32) bool {
-        return switch (builtin.os.tag) {
+        return switch (builtin.target.os.tag) {
             .linux => endedPidfd(watch, milliseconds),
             else => endedKqueue(watch, milliseconds),
         };
@@ -102,7 +102,7 @@ pub const Watch = struct {
     /// other end of `wake` first. A wait that a signal interrupts says
     /// `timed_out`, and the caller asks again.
     pub fn endedOrWoken(watch: Watch, wake: posix.fd_t, milliseconds: ?u32) Outcome {
-        return switch (builtin.os.tag) {
+        return switch (builtin.target.os.tag) {
             .linux => endedOrWokenPidfd(watch, wake, milliseconds),
             else => endedOrWokenKqueue(watch, wake, milliseconds),
         };
@@ -159,12 +159,12 @@ pub fn endedUnreaped(pid: posix.pid_t) Ended {
 /// P_PID and id_t are ABI choices, independent of the wait option bits.
 /// FreeBSD and DragonFly use Solaris's selector and a 64-bit id_t; NetBSD
 /// keeps P_PID=1, and OpenBSD puts it after P_ALL and P_PGID.
-const p_pid: c_uint = switch (builtin.os.tag) {
+const p_pid: c_uint = switch (builtin.target.os.tag) {
     .freebsd, .dragonfly, .illumos => 0,
     .openbsd => 2,
     else => 1,
 };
-const WaitId = switch (builtin.os.tag) {
+const WaitId = switch (builtin.target.os.tag) {
     .freebsd, .dragonfly => i64,
     .illumos => i32,
     else => c_uint,
@@ -172,7 +172,7 @@ const WaitId = switch (builtin.os.tag) {
 
 /// `WEXITED | WNOHANG | WNOWAIT`, spelled per system, where it is known to
 /// be right; `null` elsewhere.
-const waitid_flags: ?c_int = switch (builtin.os.tag) {
+const waitid_flags: ?c_int = switch (builtin.target.os.tag) {
     .linux => 0x4 | 0x1 | 0x1000000,
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => 0x4 | 0x1 | 0x20,
     // sys/sys/wait.h in the BSD sources; sys/wait.h in illumos. The
@@ -185,7 +185,7 @@ const waitid_flags: ?c_int = switch (builtin.os.tag) {
 extern "c" fn waitid(idtype: c_uint, id: WaitId, info: *c.siginfo_t, options: c_int) c_int;
 
 fn infoPid(info: *const c.siginfo_t) posix.pid_t {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .linux => info.fields.common.first.piduid.pid,
         .netbsd => info.info.reason.child.pid,
         .illumos => info.reason.proc.pid,

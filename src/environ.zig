@@ -11,7 +11,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 /// One change to make to an inherited environment.
 pub const Override = struct {

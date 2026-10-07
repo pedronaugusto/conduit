@@ -19,7 +19,7 @@ pub const Supervisor = struct {
     /// Any signal Linux has fits the low seven bits: it numbers them below 65.
     pub fn request(self: Supervisor, sig: posix.SIG, cgroup_signalled: bool) Child.KillError!void {
         if (builtin.is_test and testing_hook.fail_request) return error.Unexpected;
-        const byte: u8 = @as(u8, @intCast(@intFromEnum(sig))) | (if (cgroup_signalled) @as(u8, 128) else 0);
+        const byte: u8 = @as(u8, @intCast(@backingInt(sig))) | (if (cgroup_signalled) @as(u8, 128) else 0);
         while (true) {
             const rc = linux.sendto(self.channel, std.mem.asBytes(&byte).ptr, 1, linux.MSG.NOSIGNAL | linux.MSG.DONTWAIT, null, 0);
             switch (linux.errno(rc)) {
@@ -84,12 +84,12 @@ pub fn prepare() Preparation {
     // A supervisor never execs: inherited handlers must be reset here too.
     var number: u32 = 1;
     while (number < linux.NSIG) : (number += 1) {
-        const sig: posix.SIG = @enumFromInt(number);
+        const sig: posix.SIG = @fromBackingInt(@intCast(number));
         if (sig == .KILL or sig == .STOP) continue;
         const action: posix.Sigaction = .{ .handler = .{ .handler = posix.SIG.DFL }, .mask = posix.sigemptyset(), .flags = 0 };
         _ = c.sigaction(sig, &action, null);
     }
-    const attribute_error = linux.errno(linux.prctl(@intFromEnum(linux.PR.SET_CHILD_SUBREAPER), 1, 0, 0, 0));
+    const attribute_error = linux.errno(linux.prctl(@backingInt(linux.PR.SET_CHILD_SUBREAPER), 1, 0, 0, 0));
     if (attribute_error != .SUCCESS) return .{ .failed = attribute_error };
     const signals = linux.signalfd(-1, &mask, linux.SFD.CLOEXEC | linux.SFD.NONBLOCK);
     if (linux.errno(signals) != .SUCCESS) return .{ .failed = linux.errno(signals) };
@@ -140,14 +140,14 @@ pub fn run(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Pr
             var notices: [8]linux.signalfd_siginfo = undefined;
             const n = c.read(prepared.signals, std.mem.asBytes(&notices).ptr, @sizeOf(@TypeOf(notices)));
             if (n > 0) for (notices[0 .. @as(usize, @intCast(n)) / @sizeOf(linux.signalfd_siginfo)]) |notice| {
-                if (notice.signo != @intFromEnum(posix.SIG.CHLD)) ending = true;
+                if (notice.signo != @backingInt(posix.SIG.CHLD)) ending = true;
             };
         }
         if (linux.errno(ready) == .SUCCESS and pollfds[0].revents & (linux.POLL.IN | linux.POLL.HUP) != 0) {
             var byte: u8 = 0;
             const n = c.read(commands, std.mem.asBytes(&byte).ptr, 1);
             if (n == 0) ending = true else if (n == 1) {
-                command = @enumFromInt(byte & 127);
+                command = @fromBackingInt(@intCast(byte & 127));
                 cgroup_signalled = byte & 128 != 0;
                 if (command.? == .KILL) ending = true;
             }

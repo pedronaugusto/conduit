@@ -5,12 +5,12 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-/// This file, so a signature can name its error sets as callers do.
+/// This file, so a signature can name its         const n = try f.writeStreaming(io, &.{}, &.{bytes[offset..]}, 1);or sets as callers do.
 const handles = @This();
 const posix = std.posix;
 const c = std.c;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 /// A raw handle as a `std.Io.File`.
 ///
@@ -120,7 +120,8 @@ fn posixReadable(fd: posix.fd_t) usize {
 /// are gone, which a read then reports as the end.
 fn windowsPipeAvailable(f: std.Io.File) usize {
     if (!is_windows) unreachable;
-    // As in `windowsPipeClosed`: only a synchronous handle is asked.
+    // A query on an asynchronous handle can pend and retain the stack's
+    // status block. Only the synchronous handles conduit creates are asked.
     if (f.flags.nonblocking) return 0;
     const windows = std.os.windows;
     var status: windows.IO_STATUS_BLOCK = undefined;
@@ -148,43 +149,12 @@ fn windowsPipeAvailable(f: std.Io.File) usize {
 /// zero without a cancellation point, so a task could otherwise spin past a
 /// request to stop. The same rule belongs to every writer in this package.
 pub fn writeStreamingAll(io: std.Io, f: std.Io.File, bytes: []const u8) std.Io.File.Writer.Error!void {
-    // Zig 0.16 maps STATUS_PIPE_CLOSING to Unexpected. Ask the pipe before
-    // writing so this ordinary peer closure does not emit an unexpected-error
-    // trace; check again on failure for a reader that closed during the write.
-    if (bytes.len != 0 and is_windows and windowsPipeClosed(f)) return error.BrokenPipe;
     var offset: usize = 0;
     while (offset < bytes.len) {
-        const n = f.writeStreaming(io, &.{}, &.{bytes[offset..]}, 1) catch |err| {
-            if (err == error.Unexpected and is_windows and windowsPipeClosed(f)) return error.BrokenPipe;
-            return err;
-        };
+        const n = try f.writeStreaming(io, &.{}, &.{bytes[offset..]}, 1);
         if (n == 0) try std.Io.checkCancel(io);
         offset += n;
     }
-}
-
-/// The peer has closed this Windows pipe. A file, console, or failed query
-/// proves nothing and leaves the Io backend's error unchanged. This is a
-/// metadata query on the handle the writer still owns, never another write.
-fn windowsPipeClosed(f: std.Io.File) bool {
-    if (!is_windows) unreachable;
-    // A query on an asynchronous handle can pend and retain the stack's
-    // status block. Only the synchronous handles conduit creates are probed.
-    if (f.flags.nonblocking) return false;
-    const windows = std.os.windows;
-    var status: windows.IO_STATUS_BLOCK = undefined;
-    var info: windows.FILE.PIPE.LOCAL_INFORMATION = undefined;
-    return switch (windows.ntdll.NtQueryInformationFile(
-        f.handle,
-        &status,
-        &info,
-        @sizeOf(@TypeOf(info)),
-        .PipeLocal,
-    )) {
-        .SUCCESS => info.NamedPipeState == .CLOSING or info.NamedPipeState == .DISCONNECTED,
-        .PIPE_CLOSING, .PIPE_BROKEN, .PIPE_DISCONNECTED => true,
-        else => false,
-    };
 }
 
 test "readStreaming retries a permitted zero-byte result" {

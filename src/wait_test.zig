@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const Deadline = @import("wait.zig").Deadline;
 const Watch = @import("wait.zig").Watch;
 const Outcome = @import("wait.zig").Outcome;
@@ -11,7 +11,7 @@ const endedUnreaped = @import("wait.zig").endedUnreaped;
 test "a watch on a child ends when the child does" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.allocator, testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "exit 0" },
@@ -33,7 +33,7 @@ test "a watch with a wake ends on the wake, then on the child" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
     const tty = @import("conduit.tty");
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.allocator, testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
@@ -64,7 +64,7 @@ test "a watch with a wake ends on the wake, then on the child" {
 test "a watch on a child that is still running says so" {
     const testing = std.testing;
     const Child = @import("child.zig").Child;
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    if (builtin.target.os.tag == .windows) return error.SkipZigTest;
 
     var child = try Child.spawn(testing.allocator, testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 30" },
@@ -102,6 +102,6 @@ test "exit observation keeps the child's identity until its owner reaps it" {
     try testing.expectEqual(Ended.ended, endedUnreaped(pid));
     // Observation left the wait identity unreaped and the root label intact.
     try testing.expectEqual(root, child.processId().?);
-    try testing.expectEqual(@as(c_int, 0), c.kill(pid, @enumFromInt(0)));
+    try testing.expectEqual(@as(c_int, 0), c.kill(pid, @fromBackingInt(@intCast(0))));
     try testing.expect(Child.succeeded((try child.waitTimeout(io, 5000)).?));
 }

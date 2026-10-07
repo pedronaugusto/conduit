@@ -54,7 +54,7 @@ pub fn candidates(arena: Allocator, places: Places, program: []const u8) Allocat
     if (places.executable_dir) |dir| try directories.append(arena, dir);
     if (places.current_dir) |dir| try directories.append(arena, dir);
     try directories.append(arena, places.system_dir);
-    if (std.fs.path.dirnameWindows(places.system_dir)) |windows_dir| {
+    if (std.Io.Dir.path.dirnameWindows(places.system_dir)) |windows_dir| {
         try directories.append(arena, try join(arena, windows_dir, "System"));
         try directories.append(arena, windows_dir);
     }
@@ -63,8 +63,8 @@ pub fn candidates(arena: Allocator, places: Places, program: []const u8) Allocat
         while (entries.next()) |entry| try directories.append(arena, std.mem.trim(u8, entry, "\""));
     }
 
-    const executable = if (std.fs.path.extension(program).len == 0)
-        try std.fmt.allocPrint(arena, "{s}.exe", .{program})
+    const executable = if (std.Io.Dir.path.extension(program).len == 0)
+        try arena.print("{s}.exe", .{program})
     else
         program;
     const list = try arena.alloc([]const u8, directories.items.len);
@@ -79,7 +79,7 @@ pub fn candidates(arena: Allocator, places: Places, program: []const u8) Allocat
 fn join(arena: Allocator, directory: []const u8, name: []const u8) Allocator.Error![]const u8 {
     const ends = directory[directory.len - 1];
     const separator = if (ends == '\\' or ends == '/') "" else "\\";
-    return std.fmt.allocPrint(arena, "{s}{s}{s}", .{ directory, separator, name });
+    return arena.print("{s}{s}{s}", .{ directory, separator, name });
 }
 
 const testing = std.testing;
@@ -177,8 +177,8 @@ fn pathEntriesKeepTheirShape(_: void, smith: *std.testing.Smith) !void {
         .path = path,
     }, program);
 
-    const executable = if (std.fs.path.extension(program).len == 0)
-        try std.fmt.allocPrint(arena, "{s}.exe", .{program})
+    const executable = if (std.Io.Dir.path.extension(program).len == 0)
+        try arena.print("{s}.exe", .{program})
     else
         program;
     const fixed = 3;

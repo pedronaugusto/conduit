@@ -15,15 +15,15 @@ const conduit = @import("conduit");
 /// On POSIX `stty size` prints what the terminal says its geometry is and
 /// `test -t 0` asks whether standard input is one, which together are the
 /// proof that the child really is running on a terminal.
-const shell_arguments: []const []const u8 = if (builtin.os.tag == .windows)
+const shell_arguments: []const []const u8 = if (builtin.target.os.tag == .windows)
     &.{ "/c", "echo running on a pseudoconsole" }
 else
     &.{ "-c", "stty size; echo \"is this a terminal? $(test -t 0 && echo yes || echo no)\"" };
 
 pub fn main() !void {
-    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = debug_allocator.deinit();
-    const gpa = debug_allocator.allocator();
+    var safe_allocator: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
+    defer _ = safe_allocator.deinit();
+    const gpa = safe_allocator.allocator();
 
     var io_threaded: std.Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();

@@ -55,7 +55,7 @@ const Pin = @import("pin.zig").Pin;
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 pub const Expect = struct {
     // Fields are private: read and change them only through the methods.

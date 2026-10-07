@@ -62,7 +62,7 @@ pub const Dirents = struct {
     pub fn next(names: *Dirents) ?[]const u8 {
         const rest = names.bytes[names.offset..];
         if (rest.len <= name_at) return null;
-        const reclen = std.mem.readInt(u16, rest[reclen_at..][0..2], builtin.cpu.arch.endian());
+        const reclen = std.mem.readInt(u16, rest[reclen_at..][0..2], builtin.target.cpu.arch.endian());
         if (reclen <= name_at or reclen > rest.len) return null;
         names.offset += reclen;
         return std.mem.sliceTo(rest[name_at..reclen], 0);
@@ -70,7 +70,7 @@ pub const Dirents = struct {
 };
 
 test "a getdents64 record that would run past what was read, or holds no name, ends the walk" {
-    const endian = builtin.cpu.arch.endian();
+    const endian = builtin.target.cpu.arch.endian();
     var bytes: [64]u8 = @splat(0);
     // One record of 24 bytes named "12", then one that claims 200.
     std.mem.writeInt(u16, bytes[Dirents.reclen_at..][0..2], 24, endian);
@@ -188,11 +188,11 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
 fn waitCaptured(io: std.Io, process: *const Process, timeout_ms: u32) std.Io.Cancelable!bool {
     if (!process.alive()) return true;
     const deadline: Deadline = .in(io, timeout_ms);
-    const watch: ?wait_for.Watch = if (builtin.os.tag == .linux)
+    const watch: ?wait_for.Watch = if (builtin.target.os.tag == .linux)
         .{ .handle = process.pidfd }
     else
         wait_for.Watch.open(process.pid);
-    defer if (builtin.os.tag != .linux) if (watch) |opened| opened.close();
+    defer if (builtin.target.os.tag != .linux) if (watch) |opened| opened.close();
     // Registration by number on Darwin is checked against the held unique
     // id immediately afterward; it cannot turn a reused pid into a wait
     // for the wrong process.
@@ -243,8 +243,8 @@ fn provenBelow(allocator: std.mem.Allocator, root: *const Process, candidate: *c
 }
 
 fn parentOf(pid: posix.pid_t) ?posix.pid_t {
-    if (comptime builtin.os.tag == .linux) return (processRelationLinux(pid) orelse return null).ppid;
-    if (comptime builtin.os.tag == .macos) {
+    if (comptime builtin.target.os.tag == .linux) return (processRelationLinux(pid) orelse return null).ppid;
+    if (comptime builtin.target.os.tag == .macos) {
         var info: ProcBsdInfo = undefined;
         if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) return null;
         return @intCast(info.ppid);
@@ -261,7 +261,7 @@ fn collect(
     in_group: ?posix.pid_t,
     into: *std.ArrayList(Process),
 ) std.mem.Allocator.Error!void {
-    if (comptime builtin.os.tag == .linux) {
+    if (comptime builtin.target.os.tag == .linux) {
         return collectLinux(allocator, root, in_group, into);
     }
 
@@ -433,7 +433,7 @@ const LinuxRelation = struct {
 
 fn processRelationLinux(pid: posix.pid_t) ?LinuxRelation {
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return null;
+    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/stat", .{pid}, 0) catch return null;
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return null;
     defer _ = c.close(fd);
@@ -488,8 +488,8 @@ pub const StartTimeError = error{
 };
 
 pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
-    if (builtin.os.tag == .windows) @compileError("startTime is POSIX-only");
-    switch (builtin.os.tag) {
+    if (builtin.target.os.tag == .windows) @compileError("startTime is POSIX-only");
+    switch (builtin.target.os.tag) {
         .linux => {
             const relation = processRelationLinux(pid) orelse return null;
             if (relation.state == 'Z' or relation.state == 'X') return null;
@@ -583,19 +583,19 @@ pub const CaptureError = error{
 };
 
 pub fn captureStarted(pid: posix.pid_t, since: u64) CaptureError!?CapturedPid {
-    if (builtin.os.tag == .windows) @compileError("captureStarted is POSIX-only");
+    if (builtin.target.os.tag == .windows) @compileError("captureStarted is POSIX-only");
     return CapturedPid.init((try captureStartedProcess(pid, since)) orelse return null);
 }
 
 fn captureStartedProcess(pid: posix.pid_t, since: u64) error{Unsupported}!?Process {
-    if (pid <= 1 or since == 0) return switch (builtin.os.tag) {
+    if (pid <= 1 or since == 0) return switch (builtin.target.os.tag) {
         .linux, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => null,
         else => error.Unsupported,
     };
-    switch (builtin.os.tag) {
+    switch (builtin.target.os.tag) {
         .linux => {
             var process = LinuxProcess.capture(pid) orelse return null;
-            if ((try startTime(pid)) != since or !process.signal(@enumFromInt(0))) {
+            if ((try startTime(pid)) != since or !process.signal(@fromBackingInt(@intCast(0)))) {
                 process.deinit();
                 return null;
             }
@@ -649,9 +649,9 @@ pub const KillRecordedError = error{
 /// was something to end. A held identity cannot survive a delivered SIGKILL,
 /// even when the kernel has not yet made its exit observable to a waiter.
 pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool {
-    if (builtin.os.tag == .windows) @compileError("killRecorded is POSIX-only");
+    if (builtin.target.os.tag == .windows) @compileError("killRecorded is POSIX-only");
     if (options.supervisor) |record| {
-        if (builtin.os.tag != .linux) return error.Unsupported;
+        if (builtin.target.os.tag != .linux) return error.Unsupported;
         const boot = cgroups.bootIdentity() orelse return error.Unproven;
         if (!std.mem.eql(u8, &boot, &record.boot)) return error.Unproven;
         var ended = false;
@@ -695,8 +695,8 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
     var root = (try captureStartedProcess(options.pid, options.start)) orelse {
         if (options.group) |group| {
             if (group != options.pid) return error.Unproven;
-            if (comptime builtin.os.tag == .linux) {
-                if ((try signalGroupSince(group, options.pid, options.start, @enumFromInt(0))) > 0) return error.Unproven;
+            if (comptime builtin.target.os.tag == .linux) {
+                if ((try signalGroupSince(group, options.pid, options.start, @fromBackingInt(@intCast(0)))) > 0) return error.Unproven;
             } else return error.Unsupported;
         }
         return false;
@@ -722,7 +722,7 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
         const holds = try provenBelow(allocator, &root, process);
         try verified.append(allocator, holds);
         if (!holds and process.alive()) unproven = true;
-        if (holds and builtin.os.tag == .linux and options.group != null) {
+        if (holds and builtin.target.os.tag == .linux and options.group != null) {
             if (try startTime(process.pid)) |since| try accounted.append(allocator, .{ .pid = process.pid, .start = since });
         }
     }
@@ -747,11 +747,11 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
 
     if (options.group) |group| {
         if (group != options.pid) return error.Unproven;
-        if (comptime builtin.os.tag == .linux) {
+        if (comptime builtin.target.os.tag == .linux) {
             // A held member may still appear in /proc immediately after a
             // delivered KILL. It is already accounted for by that signal;
             // only members outside the captured set are unproven.
-            if ((try signalGroupSinceImpl(group, options.pid, options.start, @enumFromInt(0), accounted.items)) > 0) return error.Unproven;
+            if ((try signalGroupSinceImpl(group, options.pid, options.start, @fromBackingInt(@intCast(0)), accounted.items)) > 0) return error.Unproven;
         } else return error.Unsupported;
     }
     if (unproven) return error.Unproven;
@@ -814,7 +814,7 @@ pub fn signalGroupSince(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
 const Started = struct { pid: posix.pid_t, start: u64 };
 
 fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig: posix.SIG, accounted: []const Started) error{Unsupported}!usize {
-    if (comptime builtin.os.tag != .linux) return error.Unsupported;
+    if (comptime builtin.target.os.tag != .linux) return error.Unsupported;
     if (group <= 1 or since == 0) return 0;
     const dir = c.open("/proc", .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
     if (dir < 0) return 0;
@@ -904,7 +904,7 @@ fn captureChildren(
     }
 }
 
-const Process = switch (builtin.os.tag) {
+const Process = switch (builtin.target.os.tag) {
     .linux => LinuxProcess,
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => DarwinProcess,
     else => NoProcess,
@@ -1000,7 +1000,7 @@ pub const DarwinProcess = struct {
             token.val[5] = @bitCast(process.pid);
             token.val[7] = @bitCast(info.unique.id_version);
             if (builtin.is_test) if (before_token_delivery) |exec| exec();
-            if (proc_signal_with_audittoken(&token, @intCast(@intFromEnum(sig))) == 0) return true;
+            if (proc_signal_with_audittoken(&token, @intCast(@backingInt(sig))) == 0) return true;
             previous = info.unique.id_version;
         }
         return false;
@@ -1159,7 +1159,7 @@ extern "c" fn proc_signal_with_audittoken(token: *AuditToken, sig: c_int) c_int;
 
 /// The immediate children of `pid`.
 fn childrenOf(allocator: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => childrenOfDarwin(allocator, pid, into),
         // No cheap way to ask, so the process group is the whole of the reach.
         else => childrenOfNobody(allocator, pid, into),
@@ -1245,7 +1245,7 @@ pub var walks: std.atomic.Value(usize) = .init(0);
 
 /// Whether this system can say that a child has nothing below it without a
 /// walk: Darwin by the watch on its forks (`Forks`), Linux by `hasChildren`.
-pub const knows_leaves = Forks.supported or builtin.os.tag == .linux;
+pub const knows_leaves = Forks.supported or builtin.target.os.tag == .linux;
 
 /// Whether `pid` has a child of its own now, or this cannot be said.
 ///
@@ -1262,11 +1262,11 @@ pub const knows_leaves = Forks.supported or builtin.os.tag == .linux;
 /// `CONFIG_PROC_CHILDREN`), a process that cannot be read. That is the walk,
 /// as it would have been.
 pub fn hasChildren(pid: posix.pid_t) bool {
-    if (comptime builtin.os.tag != .linux) return true;
+    if (comptime builtin.target.os.tag != .linux) return true;
     // The main thread first: a process that forks usually forks from it,
     // and then one read answers without listing the threads.
     var main_buffer: [64]u8 = undefined;
-    const main_path = std.fmt.bufPrintSentinel(&main_buffer, "/proc/{d}/task/{d}/children", .{ pid, pid }, 0) catch return true;
+    const main_path = std.mem.printSentinel(&main_buffer, "/proc/{d}/task/{d}/children", .{ pid, pid }, 0) catch return true;
     const main_fd = c.open(main_path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (main_fd < 0) return true;
     var first: [1]u8 = undefined;
@@ -1275,7 +1275,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
     if (main_n != 0) return true;
 
     var path_buffer: [64]u8 = undefined;
-    const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/{d}/task", .{pid}, 0) catch return true;
+    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/task", .{pid}, 0) catch return true;
     const dir = c.open(path, .{ .ACCMODE = .RDONLY, .DIRECTORY = true, .CLOEXEC = true });
     if (dir < 0) return true;
     defer _ = c.close(dir);
@@ -1293,7 +1293,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
             // Read above.
             if (tid == pid) continue;
             var file_buffer: [32]u8 = undefined;
-            const file = std.fmt.bufPrintSentinel(&file_buffer, "{s}/children", .{name}, 0) catch return true;
+            const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch return true;
             const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
             if (fd < 0) return true;
             var byte: [1]u8 = undefined;
@@ -1334,7 +1334,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
 ///
 /// **Everywhere else** there is no watch, and `any` answers `true`: the walk,
 /// as it always was.
-pub const Forks = switch (builtin.os.tag) {
+pub const Forks = switch (builtin.target.os.tag) {
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => DarwinForks,
     else => NoForks,
 };
@@ -1522,7 +1522,7 @@ pub const Members = enum {
 /// whose parent has not yet reaped it is counted until it is. The BSDs and
 /// illumos answer `unknown`.
 pub fn members(pgid: posix.pid_t, leader: posix.pid_t) Members {
-    return switch (builtin.os.tag) {
+    return switch (builtin.target.os.tag) {
         .linux => membersLinux(pgid, leader),
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => membersDarwin(pgid, leader),
         else => .unknown,
@@ -1641,7 +1641,7 @@ test "a descendant that escaped the process group is still killed" {
 
     const deadline: Deadline = .in(std.testing.io, 5000);
     while (deadline.remainingMs(std.testing.io) > 0) {
-        if (c.kill(escaped, @as(posix.SIG, @enumFromInt(0))) != 0 and
+        if (c.kill(escaped, @as(posix.SIG, @fromBackingInt(@intCast(0)))) != 0 and
             c.errno(@as(c_int, -1)) == .SRCH) return;
         try std.Io.sleep(std.testing.io, .fromMilliseconds(2), .awake);
     }
@@ -1649,7 +1649,7 @@ test "a descendant that escaped the process group is still killed" {
 }
 
 test "a Linux stat record yields its parent and process group" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const relation = parseLinuxStat("12 (a name) with ) punctuation) S 7 9 0 0 0").?;
     try std.testing.expectEqual(@as(u8, 'S'), relation.state);
     try std.testing.expectEqual(@as(posix.pid_t, 7), relation.ppid);
@@ -1658,7 +1658,7 @@ test "a Linux stat record yields its parent and process group" {
 }
 
 test "a Linux stat record yields its start time, field 22" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt
     // majflt cmajflt utime stime cutime cstime priority nice threads
     // itrealvalue starttime vsize
@@ -1667,7 +1667,7 @@ test "a Linux stat record yields its start time, field 22" {
 }
 
 test "a captured Darwin session leader proves its group's member" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos) return error.SkipZigTest;
     var report: [2]posix.fd_t = undefined;
     if (c.pipe(&report) != 0) return error.SkipZigTest;
     const leader = c.fork();

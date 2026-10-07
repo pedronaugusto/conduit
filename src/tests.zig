@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const tty = @import("conduit.tty");
 const environ_impl = @import("environ.zig");
 const shell = @import("shell.zig");
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const Pty = conduit.Pty;
 const Child = conduit.Child;
 const InputWriter = conduit.InputWriter;
@@ -76,7 +76,7 @@ test {
     _ = @import("child/spawn_test.zig");
     _ = @import("child/descendants_test.zig");
     _ = @import("child/windows/completion.zig");
-    if (builtin.os.tag == .linux) _ = @import("supervisor_test.zig");
+    if (builtin.target.os.tag == .linux) _ = @import("supervisor_test.zig");
     _ = @import("lineage.zig");
 }
 

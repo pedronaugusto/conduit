@@ -10,7 +10,7 @@ const std = @import("std");
 const posix = std.posix;
 const system = posix.system;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 /// Whether a descriptor on this system can be opened close-on-exec in one
 /// call, or needs a second one.

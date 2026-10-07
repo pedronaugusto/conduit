@@ -4,7 +4,7 @@ const tty = @import("conduit.tty");
 const posix = std.posix;
 const testing = std.testing;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 
 fn closeOnExec(fd: posix.fd_t) bool {
     const flags = posix.system.fcntl(fd, posix.F.GETFD, @as(usize, 0));

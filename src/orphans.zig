@@ -134,7 +134,7 @@ pub const Orphans = struct {
     /// Whether this system has what `start` needs. Linux: the subreaper attribute
     /// (3.4), `pidfd_open` (5.3), `waitid` on a pidfd (5.4), and the `children`
     /// files in `/proc`; `start` finds out whether the running kernel has them.
-    pub const supported = builtin.os.tag == .linux;
+    pub const supported = builtin.target.os.tag == .linux;
 
     /// An `Orphans` that is not running. `start` makes it run.
     pub fn init(allocator: Allocator) Orphans {
@@ -654,7 +654,7 @@ pub const Orphans = struct {
         /// a request already made is not made again, and `.kill` follows
         /// `.terminate`.
         fn ask(held: *Held, what: Asked) void {
-            if (@intFromEnum(held.asked) >= @intFromEnum(what)) return;
+            if (@backingInt(held.asked) >= @backingInt(what)) return;
             held.asked = what;
             const sig: posix.SIG = if (what == .kill) .KILL else .TERM;
             // Its pid is its own: it is this process's child, and nobody but this
@@ -754,7 +754,7 @@ pub const Orphans = struct {
         // says so, and one that cannot (before 5.4) calls the id type invalid.
         if (linux.errno(rc) != .CHILD) return error.Unsupported;
         var path_buffer: [64]u8 = undefined;
-        const path = std.fmt.bufPrintSentinel(&path_buffer, "/proc/self/task/{d}/children", .{linux.gettid()}, 0) catch return error.Unsupported;
+        const path = std.mem.printSentinel(&path_buffer, "/proc/self/task/{d}/children", .{linux.gettid()}, 0) catch return error.Unsupported;
         const children = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (children < 0) return error.Unsupported;
         _ = c.close(children);
@@ -762,12 +762,12 @@ pub const Orphans = struct {
 
     fn subreaper() bool {
         var flag: c_int = 0;
-        const rc = linux.prctl(@intFromEnum(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0); // safe: the address of a local the call writes one int to, alive across it
+        const rc = linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&flag), 0, 0, 0); // safe: the address of a local the call writes one int to, alive across it
         return linux.errno(rc) == .SUCCESS and flag != 0;
     }
 
     fn setSubreaper(on: bool) std.Io.UnexpectedError!void {
-        const rc = linux.prctl(@intFromEnum(linux.PR.SET_CHILD_SUBREAPER), @intFromBool(on), 0, 0, 0);
+        const rc = linux.prctl(@backingInt(linux.PR.SET_CHILD_SUBREAPER), @intFromBool(on), 0, 0, 0);
         switch (linux.errno(rc)) {
             .SUCCESS => {},
             else => |err| return posix.unexpectedErrno(err),
@@ -804,7 +804,7 @@ pub const Orphans = struct {
             while (names.next()) |name| {
                 _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
                 var file_buffer: [32]u8 = undefined;
-                const file = std.fmt.bufPrintSentinel(&file_buffer, "{s}/children", .{name}, 0) catch continue;
+                const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch continue;
                 const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
                 if (fd < 0) continue;
                 defer _ = c.close(fd);
@@ -857,7 +857,7 @@ test "an unknown pidfd wait does not prove reap ownership" {
             return .PERM;
         }
     };
-    const held: Orphans.Held = .{ .pid = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 1, .pidfd = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1 };
+    const held: Orphans.Held = .{ .pid = if (builtin.target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 1, .pidfd = if (builtin.target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1 };
     try std.testing.expectError(error.Unexpected, Orphans.Held.isChildWith(Refused, held));
 }
 
@@ -868,7 +868,7 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
         var checks: usize = 0;
 
         fn open(pid: posix.pid_t) Orphans.Held.OpenError!Orphans.Held {
-            return .{ .pid = pid, .pidfd = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 7 };
+            return .{ .pid = pid, .pidfd = if (builtin.target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 7 };
         }
 
         fn child(_: posix.fd_t, _: *linux.siginfo_t) linux.E {
@@ -892,7 +892,7 @@ test "orphan identity capture refuses a pid recycled during its start-time looku
     Reuse.retired = false;
     Reuse.closes = 0;
     Reuse.checks = 0;
-    try std.testing.expectError(error.Gone, Orphans.Held.openAdoptedWith(Reuse, if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 123));
+    try std.testing.expectError(error.Gone, Orphans.Held.openAdoptedWith(Reuse, if (builtin.target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else 123));
     try std.testing.expectEqual(@as(usize, 2), Reuse.checks);
     try std.testing.expectEqual(@as(usize, 1), Reuse.closes);
 }
@@ -905,5 +905,5 @@ test "orphan records copy group and session from the held adoption" {
 test "an adoption spawn refuses registration after releasing its gate" {
     var spawn = Orphans.Spawn.begin();
     spawn.finish();
-    try std.testing.expectError(error.Unexpected, spawn.started(if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else c.getpid()));
+    try std.testing.expectError(error.Unexpected, spawn.started(if (builtin.target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else c.getpid()));
 }

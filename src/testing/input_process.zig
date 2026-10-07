@@ -32,9 +32,9 @@ pub fn main(init: std.process.Init) !void {
 /// handles, none of it aligned.
 fn inherited(count: usize) !void {
     var line: [32]u8 = undefined;
-    if (builtin.os.tag != .windows) {
+    if (builtin.target.os.tag != .windows) {
         for (3..3 + count) |fd| {
-            const text = try std.fmt.bufPrint(&line, "fd {d}\n", .{fd});
+            const text = try std.mem.print(&line, "fd {d}\n", .{fd});
             if (std.c.write(@intCast(fd), text.ptr, text.len) != @as(isize, @intCast(text.len))) return error.FixtureWriteFailed;
         }
         return;
@@ -51,7 +51,7 @@ fn inherited(count: usize) !void {
         if (flags[fd] & 0x01 == 0) return error.FixtureNotOpen;
         const value = std.mem.readInt(usize, handles[fd * @sizeOf(usize) ..][0..@sizeOf(usize)], .little);
         const handle: windows.HANDLE = @ptrFromInt(value);
-        const text = try std.fmt.bufPrint(&line, "fd {d}\n", .{fd});
+        const text = try std.mem.print(&line, "fd {d}\n", .{fd});
         var written: windows.DWORD = 0;
         if (WriteFile(handle, text.ptr, @intCast(text.len), &written, null) == .FALSE or written != text.len)
             return error.FixtureWriteFailed;

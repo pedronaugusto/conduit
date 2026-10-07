@@ -2,7 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Child = @import("../child.zig").Child;
-const windows = builtin.os.tag == .windows;
+const windows = builtin.target.os.tag == .windows;
 const win32 = @import("../win32.zig");
 const tree = @import("../tree.zig");
 const cgroups = @import("../cgroup.zig");
@@ -55,7 +55,7 @@ const Fixture = struct {
     fn start(policy: Child.Descendants, argument: []const u8) !Fixture {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
-        var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        var cwd_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const cwd = cwd_buffer[0..try tmp.dir.realPath(io, &cwd_buffer)];
         const program = try std.Io.Dir.cwd().realPathFileAlloc(io, test_options.tree_fixture, gpa);
         defer gpa.free(program);
@@ -224,7 +224,7 @@ test "a walk too large to hold still kills and reaps the child itself" {
 }
 
 test "containment ends a double-forked session after normal exit" {
-    if (builtin.os.tag != .macos and builtin.os.tag != .linux and !windows) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos and builtin.target.os.tag != .linux and !windows) return error.SkipZigTest;
     inline for (.{ "wait", "tryWait", "output", "Reaper" }) |method| {
         var fixture = try Fixture.start(.contain, "--double-fork");
         defer fixture.deinit();
@@ -238,7 +238,7 @@ test "containment ends a double-forked session after normal exit" {
         // The intermediate remains alive until EOF. Wait for all three
         // registrations, so this tests retained lineage under any scheduler;
         // immediate parent exit is measured separately below.
-        if (builtin.os.tag == .macos) {
+        if (builtin.target.os.tag == .macos) {
             const tracker = fixture.child.state.lineage.?;
             const deadline: Deadline = .in(io, budget_ms);
             while (tracker.observed.load(.acquire) < 3 and deadline.remainingMs(io) > 0)
@@ -272,7 +272,7 @@ test "containment ends a double-forked session after normal exit" {
 // Darwin lineage observer, with and without a delay before it registers.
 // Run with `zig build unit -Dmeasure -Dtest-filter=measures`.
 test "Darwin measures the fork then exit registration race" {
-    if (builtin.os.tag != .macos or !test_options.measure) return error.SkipZigTest;
+    if (builtin.target.os.tag != .macos or !test_options.measure) return error.SkipZigTest;
     const attempts = 100;
     const hook = &lineage.testing_hook.delay_ms;
     defer hook.store(0, .release);
@@ -293,7 +293,7 @@ test "Darwin measures the fork then exit registration race" {
 }
 
 test "a Reaper subreaper ends and reaps a detached orphan without stealing another child" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var fixture: Fixture = undefined;
@@ -331,7 +331,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
 }
 
 test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const linux = std.os.linux;
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
@@ -380,7 +380,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
 }
 
 test "independent contained Linux children end only their own detached orphans" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var first = try Fixture.start(.contain, "--race");
@@ -398,7 +398,7 @@ test "independent contained Linux children end only their own detached orphans" 
 }
 
 test "a private supervisor preserves the root exit code and signal" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     inline for (.{ "exit 7", "kill -TERM $$" }, .{ Child.Term{ .exited = 7 }, Child.Term{ .signal = .TERM } }) |script, expected| {
         var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
         defer child.release(io) catch unreachable;
@@ -408,14 +408,14 @@ test "a private supervisor preserves the root exit code and signal" {
 }
 
 test "a saved private supervisor ends only its recorded scope" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     var first = try Fixture.start(.contain, "--race");
     defer first.deinit();
     var second = try Fixture.start(.contain, "--race");
     defer second.deinit();
-    var buffer: [std.fs.max_path_bytes + 64]u8 = undefined;
+    var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     const record = try first.child.containment(&buffer);
     try std.testing.expect(record.supervisor != null);
     try std.testing.expect(record.supervisor.?.pid != first.child.processId().?);
@@ -430,7 +430,7 @@ test "a saved private supervisor ends only its recorded scope" {
 }
 
 test "a failed contained exec leaves no private supervisor to wait for" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     try std.testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"/no-such-conduit-contained-executable"},
         .descendants = .contain,
@@ -443,7 +443,7 @@ test "a failed contained exec leaves no private supervisor to wait for" {
 }
 
 test "dropping a contained child ends and reaps its private supervisor" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .descendants = .contain,
@@ -460,7 +460,7 @@ test "dropping a contained child ends and reaps its private supervisor" {
 }
 
 test "a private supervisor has its own session and process group" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
     const scope = fixture.child.state.id;
@@ -471,7 +471,7 @@ test "a private supervisor has its own session and process group" {
 }
 
 test "every catchable supervisor stop ends and reaps its detached adoptee" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     cgroups.testing_hook.off = true;
     defer cgroups.testing_hook.off = false;
     inline for (.{ std.posix.SIG.HUP, std.posix.SIG.INT, std.posix.SIG.QUIT, std.posix.SIG.TERM, std.posix.SIG.TSTP }) |signal| {
@@ -485,7 +485,7 @@ test "every catchable supervisor stop ends and reaps its detached adoptee" {
 }
 
 test "a failed private scope release keeps ownership for retry" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const supervisor = @import("../supervisor.zig");
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();

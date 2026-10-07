@@ -5,7 +5,7 @@ const std = @import("std");
 const posix = std.posix;
 const Id = @import("child/contract.zig").Id;
 
-const is_windows = builtin.os.tag == .windows;
+const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
 
 /// Whether a process has the id `pid` now: `true`, `false`, or `null` where
@@ -26,7 +26,7 @@ const win32 = @import("win32.zig");
 pub fn processExists(pid: Id) ?bool {
     if (comptime is_windows) return existsWindows(pid);
     if (pid <= 0) return false;
-    return switch (posix.errno(std.c.kill(pid, @enumFromInt(0)))) {
+    return switch (posix.errno(std.c.kill(pid, @fromBackingInt(@intCast(0))))) {
         .SUCCESS => true,
         // There, and someone else's.
         .PERM => true,
