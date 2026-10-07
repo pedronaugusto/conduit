@@ -244,9 +244,9 @@ fn tryWait(x: Ctx) !void {
     var child = try conduit.Child.spawn(x.gpa(), io, .{ .argv = &.{ x.sleep, "30" }, .stdio = .ignore });
     defer child.deinit(io);
     defer _ = child.killWait(io, .zero) catch {};
-    for (0..warmups(x, 1000)) |_| if (try child.tryWait() != null) return error.ChildEnded;
+    for (0..warmups(x, 1000)) |_| if (try child.tryWait(x.io()) != null) return error.ChildEnded;
     const start = now(io);
-    for (0..x.n) |_| if (try child.tryWait() != null) return error.ChildEnded;
+    for (0..x.n) |_| if (try child.tryWait(x.io()) != null) return error.ChildEnded;
     try report(x, "TRY WAIT", "call", since(start, io) / @as(f64, @floatFromInt(x.n)), "ns");
 }
 

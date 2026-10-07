@@ -96,7 +96,7 @@ test "exchange refuses input for a child with no stdin pipe and leaves it runnin
     defer child.deinit(io);
     const stdin = child.takeStdin().?;
     try testing.expectError(error.NoStdinPipe, child.exchange(gpa, io, "input", .{ .timeout = within_budget }));
-    try testing.expectEqual(null, try child.tryWait());
+    try testing.expectEqual(null, try child.tryWait(io));
     // The refused call left the child alone: it still reads what it is given.
     try stdin.writeStreamingAll(io, "still here ");
     stdin.close(io);

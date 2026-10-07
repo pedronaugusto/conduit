@@ -27,6 +27,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Child.release(io)` is `Child.finish(io)`, and `Child.ReleaseError` is `Child.FinishError`. It ends an unfinished contained scope as before, but leaves the Child valid whatever it returns, so `deinit` is always owed after it. `Child.deinit` no longer asserts a confirmed scope: it kills and reaps one `finish` has not confirmed, reporting nothing, which makes `errdefer child.deinit(io)` safe.
 
+- `Orphans` keeps no `std.Io`. Every call whose look can adopt an orphan takes one, and the look that adopts sets the owner's event through it, so nothing is registered and no `std.Io` outlives the call that passed it.
+
+  | was | is |
+  |---|---|
+  | `child.tryWait()` | `child.tryWait(io)` |
+  | `orphans.count()`, `orphans.list(out)`, `orphans.stop()` | `orphans.count(io)`, `orphans.list(io, out)`, `orphans.stop(io)` |
+  | `orphans.adoptionEvent(io)`, `reaper.adoptionEvent(io)` | `orphans.adoptionEvent()`, `reaper.adoptionEvent()` |
+  | `reaper.adoptionRecords(out)` | `reaper.adoptionRecords(io, out)` |
+
 - `Child.Output` keeps the allocator that collected it: `Output.init(gpa, parts)`, and `output.deinit()` takes no allocator.
 
 - `Cgroup.release()` and `Cgroup.Recorded.release()` are `close()`: they close the handle and leave it empty, so they may be called again.

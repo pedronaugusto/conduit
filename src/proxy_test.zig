@@ -171,7 +171,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
 
     const deadline: Deadline = .in(io, .fromMilliseconds(5000));
     const term = while (deadline.remainingMs(io) > 0) {
-        if (try child.tryWait()) |term| break term;
+        if (try child.tryWait(io)) |term| break term;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     } else return error.TestChildWasNotInterrupted;
     try testing.expectEqual(Child.Term{ .signal = .INT }, term);

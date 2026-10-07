@@ -99,36 +99,38 @@ const Kill = struct {
 };
 
 pub const Reaper = struct {
-    // Fields are private: read and change them only through the methods.
-    /// The caller's handle, read by `start`: a subreaper's `Child` is
+    /// Private: the caller's handle, read by `start`: a subreaper's `Child` is
     /// spawned after `init`.
     source: *Child,
-    /// The child being waited for, copied from `source` again by `start`. The
+    /// Private: the child being waited for, copied from `source` again by `start`. The
     /// child must not be deinited while this runs; the caller's handle may
     /// move.
     child: Child,
+    /// Private: what `init` was given.
     options: Reaper.Options,
-    /// The task running the wait, and the one `kill` insists on.
+    /// Private: the task running the wait, and the one `kill` insists on.
     group: std.Io.Group,
-    /// `running`, a term encoded by `encode`, or an error encoded by
+    /// Private: `running`, a term encoded by `encode`, or an error encoded by
     /// `encodeError`. Written once by the task and read by anyone.
     state: std.atomic.Value(u64),
-    /// Set once `state` holds the answer, whatever it is.
+    /// Private: set once `state` holds the answer, whatever it is.
     answered: std.Io.Event,
-    /// The first kill deadline; force requests replace it with immediate expiry.
+    /// Private: the first kill deadline; force requests replace it with immediate expiry.
     killing: Kill,
-    /// POSIX: a pipe whose reading end the task waits on beside the child, and
+    /// Private: on POSIX, a pipe whose reading end the task waits on beside the child, and
     /// which `stop` and `deinit` write to. The wait on the child is not a cancelation point
     /// and has no deadline, so this is what ends it early. `null` until `start`,
     /// and where a pipe could not be had.
     wake: if (is_windows) void else ?[2]posix.fd_t,
 
-    /// The explicit process-wide adoption scope, owned until stop.
+    /// Private: the explicit process-wide adoption scope, owned until stop.
     orphans: ?*Orphans,
+    /// Private: a look at the adoption scope failed while the task waited.
     observation_failed: std.atomic.Value(bool),
 
+    /// Private: one claim for start and stop.
     lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
-    /// Safe builds: where this was when `start` began to hold a pointer to it.
+    /// Private: in safe builds, where this was when `start` began to hold a pointer to it.
     pin: Pin = .{},
 
     pub const Options = struct {
@@ -210,18 +212,18 @@ pub const Reaper = struct {
 
     /// Copy identities owned by this explicit adoption scope. No record borrows
     /// the scope or confers signal authority. Empty without enableSubreaper.
-    pub fn adoptionRecords(reaper: *Reaper, out: []Orphans.Record) Orphans.ListError![]Orphans.Record {
+    pub fn adoptionRecords(reaper: *Reaper, io: std.Io, out: []Orphans.Record) Orphans.ListError![]Orphans.Record {
         reaper.pin.check(reaper);
         const owner = reaper.orphans orelse return out[0..0];
-        return owner.list(out);
+        return owner.list(io, out);
     }
 
-    /// Notification of new scoped records, registered before start. Reset the
-    /// event, compare adoptionCount, and take another snapshot if it changed.
-    pub fn adoptionEvent(reaper: *Reaper, io: std.Io) ?*std.Io.Event {
+    /// Notification of new scoped records. Reset the event, compare
+    /// adoptionCount, and take another snapshot if it changed.
+    pub fn adoptionEvent(reaper: *Reaper) ?*std.Io.Event {
         reaper.pin.check(reaper);
         const owner = reaper.orphans orelse return null;
-        return owner.adoptionEvent(io);
+        return owner.adoptionEvent();
     }
 
     pub fn adoptionCount(reaper: *const Reaper) u64 {
@@ -374,7 +376,7 @@ pub const Reaper = struct {
             // A process-wide owner cannot leave an adoptee without a future
             // wait. End before restoring the attribute and releasing pidfds.
             try orphans.killAll(io, .zero);
-            try orphans.stop();
+            try orphans.stop(io);
             orphans.deinit();
             std.heap.page_allocator.destroy(orphans);
             reaper.orphans = null;
@@ -416,7 +418,7 @@ pub const Reaper = struct {
     fn observeAdoption(reaper: *Reaper, io: std.Io) void {
         if (builtin.target.os.tag != .linux) return;
         while (reaper.state.load(.acquire) == running) {
-            reaper.lookOrphans() catch {
+            reaper.lookOrphans(io) catch {
                 reaper.observation_failed.store(true, .release);
                 return;
             };
@@ -469,7 +471,7 @@ pub const Reaper = struct {
                 .ended => break,
                 .woken => return error.Canceled,
                 // a signal, not the end: ask again
-                .timed_out => try reaper.lookOrphans(),
+                .timed_out => try reaper.lookOrphans(io),
             };
         } else {
             // No watch. Darwin refuses one on a child that has already ended --
@@ -481,7 +483,7 @@ pub const Reaper = struct {
             while (true) switch (wait_for.endedUnreaped(reaper.child.state.id)) {
                 .ended => break,
                 .running => {
-                    try reaper.lookOrphans();
+                    try reaper.lookOrphans(io);
                     if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled;
                 },
                 .unknown => return held.wait(io),
@@ -504,8 +506,8 @@ pub const Reaper = struct {
     /// Only an explicitly enabled scope pays this look. Linux provides no
     /// adoption fd; bounded waits also collect and reap adoptees while the root
     /// keeps running, so an idle root does not leave an exited orphan a zombie.
-    fn lookOrphans(reaper: *Reaper) ExitError!void {
-        if (reaper.orphans) |orphans| _ = orphans.count() catch return error.Unexpected;
+    fn lookOrphans(reaper: *Reaper, io: std.Io) ExitError!void {
+        if (reaper.orphans) |orphans| _ = orphans.count(io) catch return error.Unexpected;
     }
 
     /// What the child left in its cgroup: asked, given the grace, then made.
@@ -776,7 +778,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     try testing.expectEqual(@as(usize, 3), clock.waits);
     try testing.expectEqual(@as(usize, 0), clock.sleeps);
     try testing.expectEqual(@as(u32, 30), clock.ms);
-    try testing.expectEqual(@as(?Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Term, null), try child.tryWait(io));
     clock = .{};
     reaper.insist(clock_io, .fromMilliseconds(40));
     try testing.expectEqual(@as(usize, 4), clock.waits);

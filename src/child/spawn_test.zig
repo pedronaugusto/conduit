@@ -273,7 +273,7 @@ test "a test wait uses an already elapsed clock deadline" {
 fn waitWithin(child: *Child) !Child.Term {
     const deadline: Deadline = .in(io, budget);
     while (true) {
-        if (try child.tryWait()) |term| return term;
+        if (try child.tryWait(io)) |term| return term;
         if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
@@ -399,7 +399,7 @@ test "output ends a silent child when its stream cannot be read" {
     child.state.stdout.?.handle = -1;
     defer _ = child.takeStdout();
     try testing.expectError(error.ReadFailed, child.output(gpa, io, .{}));
-    try testing.expect((try child.tryWait()) != null);
+    try testing.expect((try child.tryWait(io)) != null);
 }
 
 test "output gives up on a child that will not end, and ends it" {
@@ -414,7 +414,7 @@ test "output gives up on a child that will not end, and ends it" {
 
     try testing.expect(result.timedOut());
     // Reaped by `output`, so this cannot block.
-    try testing.expect((try child.tryWait()) != null);
+    try testing.expect((try child.tryWait(io)) != null);
 }
 
 test "tryWait is null while the child runs and a term once it has ended" {
@@ -425,13 +425,13 @@ test "tryWait is null while the child runs and a term once it has ended" {
     defer child.deinit(io);
     errdefer _ = child.killWait(io, .zero) catch {};
 
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 
     // Closing its standard input ends the read, and with it the shell.
     child.closeStdin(io);
 
     try testing.expectEqual(Child.Term{ .exited = 7 }, try waitWithin(&child));
-    try testing.expectEqual(Child.Term{ .exited = 7 }, (try child.tryWait()).?);
+    try testing.expectEqual(Child.Term{ .exited = 7 }, (try child.tryWait(io)).?);
 }
 
 test "Reaper.exit becomes non-null once the child has ended" {
@@ -490,7 +490,7 @@ test "a Reaper started after reaping never watches a reused identity" {
     try reaper.start(io);
     defer reaper.deinit(io);
     try testing.expectEqual(@as(?Child.Term, term), try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(20))));
-    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait(io));
 }
 
 test "killWait is legal while a Reaper is waiting, and the two share one reap" {
@@ -530,7 +530,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     } else return error.TestChildDidNotExit;
     try testing.expectEqual(term, reaped);
     try testing.expectEqual(term, try child.wait(io));
-    try testing.expectEqual(@as(?Child.Term, term), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, term), try child.tryWait(io));
 }
 
 test "a wait whose Reaper was cancelled is still a wait" {
@@ -919,7 +919,7 @@ test "output abandoned by a cancelation ends the child and reaps it" {
     group.cancel(io);
 
     // Reaped by the call that was abandoned, not by the `defer` above.
-    const term = (try child.tryWait()) orelse return error.TestChildOutlivedTheRun;
+    const term = (try child.tryWait(io)) orelse return error.TestChildOutlivedTheRun;
     try testing.expect(!conduit.succeeded(term));
 }
 
@@ -1005,7 +1005,7 @@ test "waitTimeout gives up without ending the child" {
     // The difference from `killWait`: the child is still there afterwards, and
     // deciding what to do about that is the caller's.
     try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, Deadline.within(.fromMilliseconds(50))));
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 
     _ = try child.killWait(io, .zero);
     // And once it has ended, the same call answers at once.
@@ -1391,7 +1391,7 @@ test "a signal other than the three reaches a detached child and what it started
         try sink.expect(try std.mem.print(&said, "parent-{s}", .{entry[1]}));
         try sink.expect(try std.mem.print(&said, "child-{s}", .{entry[1]}));
         // Caught, so delivered and not an end.
-        try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+        try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
     }
 }
 
@@ -1419,7 +1419,7 @@ test "stop suspends a child and what it started, and continue resumes them" {
     try expectStopped(child.processId().?, true);
     try expectStopped(grandchild, true);
     // A stopped child has not ended, and no wait here says it has.
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 
     try child.kill(.@"continue");
     try expectStopped(child.processId().?, false);
@@ -1491,7 +1491,7 @@ test "a signal with no meaning on this system is refused by name" {
         try testing.expectError(error.Unsupported, child.kill(.{ .posix = @fromBackingInt(@intCast(200)) }));
     }
     // Refused before anything was sent: the child is still running.
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 }
 
 /// Waits for `pid` to be stopped, or to be running again, by the state the
@@ -1844,7 +1844,7 @@ fn expectAdopted(pid: posix.pid_t) !void {
 /// Waits for `Orphans.count` to say `expected`.
 fn expectCount(orphans: *Orphans, expected: usize) !void {
     const deadline: Deadline = .in(io, budget);
-    while (try orphans.count() != expected) {
+    while (try orphans.count(io) != expected) {
         if (deadline.remainingMs(io) == 0) return error.TestWrongOrphanCount;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
@@ -1890,7 +1890,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     if (is_windows) return error.SkipZigTest;
     var orphans: Orphans = .init(gpa);
     defer {
-        orphans.stop() catch unreachable;
+        orphans.stop(io) catch unreachable;
         orphans.deinit();
     }
     if (!Orphans.supported) {
@@ -1919,11 +1919,11 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try expectCount(&orphans, 1);
     // named, so a program can write it down for a later one to end
     var names: [4]Orphans.Record = undefined;
-    const identities = try orphans.list(&names);
+    const identities = try orphans.list(io, &names);
     try testing.expectEqual(@as(usize, 1), identities.len);
     try testing.expectEqual(kept, identities[0].pid);
     try testing.expectEqual((try conduit.startTime(kept)).?, identities[0].start);
-    try testing.expectEqual(0, (try orphans.list(names[0..0])).len);
+    try testing.expectEqual(0, (try orphans.list(io, names[0..0])).len);
 
     // One that has ended by the time the child that left it is reaped: the
     // reap is the event, and takes it with it.
@@ -1983,9 +1983,9 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try testing.expect(alive(kept));
     try orphans.killAll(io, .fromMilliseconds(2000));
     try expectGone(kept);
-    try testing.expectEqual(@as(usize, 0), try orphans.count());
+    try testing.expectEqual(@as(usize, 0), try orphans.count(io));
 
-    try orphans.stop();
+    try orphans.stop(io);
     try testing.expect(!subreaperNow());
 }
 
@@ -1994,7 +1994,7 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
     if (setsidProgram() == null) return error.SkipZigTest;
     var orphans: Orphans = .init(gpa);
     defer {
-        orphans.stop() catch unreachable;
+        orphans.stop(io) catch unreachable;
         orphans.deinit();
     }
     orphans.start() catch |err| switch (err) {
@@ -2024,6 +2024,63 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
     try expectGone(orphan);
 }
 
+test "an adoption sets the owner's event through the Io of the call whose look found it, with nothing registered" {
+    if (is_windows or !Orphans.supported) return error.SkipZigTest;
+    if (setsidProgram() == null) return error.SkipZigTest;
+    var orphans: Orphans = .init(gpa);
+    defer {
+        orphans.stop(io) catch unreachable;
+        orphans.deinit();
+    }
+    orphans.start() catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+        else => return err,
+    };
+    const adopted = orphans.adoptionEvent();
+
+    // The reap of the child that left it is the look that finds it.
+    adopted.reset();
+    var seen = orphans.adoptionCount();
+    var leaver = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer leaver.deinit(io);
+    defer _ = leaver.killWait(io, .zero) catch {};
+    const first = try orphanOf(&leaver);
+    defer if (alive(first)) {
+        _ = c.kill(first, .KILL);
+    };
+    try expectAdopted(first);
+    _ = (try leaver.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
+    try testing.expect(adopted.isSet());
+    try testing.expect(orphans.adoptionCount() > seen);
+
+    // With nothing of conduit's happening, `count` is the look.
+    adopted.reset();
+    seen = orphans.adoptionCount();
+    var keeper = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer keeper.deinit(io);
+    defer _ = keeper.killWait(io, .zero) catch {};
+    const second = try orphanOf(&keeper);
+    defer if (alive(second)) {
+        _ = c.kill(second, .KILL);
+    };
+    try expectAdopted(second);
+    try testing.expect(!adopted.isSet());
+    try testing.expectEqual(@as(usize, 2), try orphans.count(io));
+    try testing.expect(adopted.isSet());
+    try testing.expect(orphans.adoptionCount() > seen);
+
+    try orphans.killAll(io, .zero);
+    try expectGone(first);
+    try expectGone(second);
+    _ = try keeper.killWait(io, .zero);
+}
+
 test "a Child's status is never taken by the reaping of orphans, however the two race" {
     if (is_windows or !Orphans.supported) return error.SkipZigTest;
 
@@ -2037,7 +2094,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
 
     var orphans: Orphans = .init(gpa);
     defer {
-        orphans.stop() catch unreachable;
+        orphans.stop(io) catch unreachable;
         orphans.deinit();
     }
     orphans.start() catch |err| switch (err) {
@@ -2048,7 +2105,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
     // Ended, and looked at, before it is waited for.
     before.closeStdin(io);
     try expectZombie(before.state.id);
-    _ = try orphans.count();
+    _ = try orphans.count(io);
     try testing.expectEqual(Child.Term{ .exited = 4 }, (try before.waitTimeout(io, within_budget)) orelse
         return error.TestChildDidNotExit);
 
@@ -2062,7 +2119,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
     try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
 
     try orphans.killAll(io, .zero);
-    try testing.expectEqual(@as(usize, 0), try orphans.count());
+    try testing.expectEqual(@as(usize, 0), try orphans.count(io));
 }
 
 const race_tasks = 4;
@@ -2650,7 +2707,7 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     // There is no foreground process group on this terminal, so the byte is
     // just a byte. The child is still there; `killWait` is what ends it.
     try std.Io.sleep(io, .fromMilliseconds(50), .awake);
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
     try testing.expectEqual(Child.Term{ .signal = .TERM }, try child.killWait(io, .fromMilliseconds(500)));
 }
 
@@ -3642,7 +3699,7 @@ test "a Windows child with every stream closed inherits no unrelated handle" {
     defer _ = child.killWait(io, .zero) catch {};
     const found = probe(child.state.id, secret);
     // A child that had already gone would hold nothing and prove nothing.
-    if (try child.tryWait()) |term| {
+    if (try child.tryWait(io)) |term| {
         std.debug.print("the child ended before it was asked: {any}\n", .{term});
         return error.TestChildDidNotWait;
     }
@@ -4385,7 +4442,7 @@ test "a Reaper started after status loss never watches a reused identity" {
     while (c.waitpid(child.state.id, &status, 0) < 0) {
         if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
     }
-    try testing.expectError(error.ReapedElsewhere, child.tryWait());
+    try testing.expectError(error.ReapedElsewhere, child.tryWait(io));
     var witness = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "read x" }, .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } }, .detach = true });
     defer witness.deinit(io);
     defer _ = witness.killWait(io, .zero) catch {};
@@ -4396,7 +4453,7 @@ test "a Reaper started after status loss never watches a reused identity" {
     try reaper.start(io);
     defer reaper.deinit(io);
     try testing.expectError(error.ReapedElsewhere, reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(100))));
-    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait(io));
 }
 
 test "the Windows PID fixture keeps reading after a successful empty read" {
@@ -4529,7 +4586,7 @@ test "output reads a published result before watching a retired process number" 
     try testing.expectEqual(false, output.timedOut());
     try testing.expectEqualStrings("retained", output.stdout());
     try testing.expectEqual(Child.Term{ .exited = 7 }, output.term());
-    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try witness.tryWait(io));
 }
 
 test "Orphans list copies the held identity for a record kept after reaping" {
@@ -4537,7 +4594,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     var orphans: Orphans = .init(gpa);
     try orphans.start();
     defer {
-        orphans.stop() catch unreachable;
+        orphans.stop(io) catch unreachable;
         orphans.deinit();
     }
     defer orphans.killAll(io, .zero) catch {};
@@ -4551,7 +4608,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     try expectAdopted(kept);
     try expectCount(&orphans, 1);
     var records: [4]Orphans.Record = undefined;
-    const listed = try orphans.list(&records);
+    const listed = try orphans.list(io, &records);
     try testing.expectEqual(@as(usize, 1), listed.len);
     const saved = listed[0];
     try testing.expectEqual(kept, saved.pid);
@@ -4559,7 +4616,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     try testing.expectEqual(getpgid(kept), saved.group);
     try testing.expectEqual(getsid(kept), saved.session);
     try orphans.killAll(io, .zero);
-    try testing.expectEqual(@as(usize, 0), (try orphans.list(&records)).len);
+    try testing.expectEqual(@as(usize, 0), (try orphans.list(io, &records)).len);
     try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);
 }
 

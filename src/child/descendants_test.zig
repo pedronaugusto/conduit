@@ -119,7 +119,7 @@ test "normal reap and deinit leave a detached daemon alive by default" {
         const term = if (comptime std.mem.eql(u8, method, "tryWait")) term: {
             const deadline: Deadline = .in(io, budget);
             while (deadline.remainingMs(io) > 0) {
-                if (try fixture.child.tryWait()) |term| break :term term;
+                if (try fixture.child.tryWait(io)) |term| break :term term;
                 try io.sleep(.fromMilliseconds(2), .awake);
             }
             return error.TestChildDidNotExit;
@@ -159,7 +159,7 @@ test "containment ends a daemon after normal completion through every reap" {
         } else if (comptime std.mem.eql(u8, method, "tryWait")) {
             const deadline: Deadline = .in(io, budget);
             const term = while (deadline.remainingMs(io) > 0) {
-                if (try fixture.child.tryWait()) |term| break term;
+                if (try fixture.child.tryWait(io)) |term| break term;
                 try io.sleep(.fromMilliseconds(2), .awake);
             } else return error.TestChildDidNotExit;
             try std.testing.expect(Child.succeeded(term));
@@ -222,7 +222,7 @@ test "a walk too large to hold still kills and reaps the child itself" {
         var fixture = try Fixture.start(.survive, "--escape");
         defer fixture.deinit();
         try std.testing.expectError(error.OutOfMemory, fixture.child.killWait(io, .zero));
-        try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try fixture.child.tryWait()).?);
+        try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try fixture.child.tryWait(io)).?);
     }
 }
 
@@ -252,7 +252,7 @@ test "containment ends a double-forked session after normal exit" {
         if (comptime std.mem.eql(u8, method, "tryWait")) {
             const deadline: Deadline = .in(io, budget);
             const term = while (deadline.remainingMs(io) > 0) {
-                if (try fixture.child.tryWait()) |term| break term;
+                if (try fixture.child.tryWait(io)) |term| break term;
                 try io.sleep(.fromMilliseconds(2), .awake);
             } else return error.TestChildDidNotExit;
             try std.testing.expect(Child.succeeded(term));
@@ -328,7 +328,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     var status: c_int = 0;
     try std.testing.expectEqual(@as(c_int, -1), std.c.waitpid(daemon_id, &status, std.posix.W.NOHANG));
     try std.testing.expectEqual(std.posix.E.CHILD, std.posix.errno(-1));
-    try std.testing.expectEqual(@as(?Child.Term, null), try unrelated.tryWait());
+    try std.testing.expectEqual(@as(?Child.Term, null), try unrelated.tryWait(io));
     unrelated.closeStdin(io);
     try std.testing.expectEqual(Child.Term{ .exited = 7 }, (try unrelated.waitTimeout(io, within_budget)).?);
 }
@@ -394,7 +394,7 @@ test "independent contained Linux children end only their own detached orphans" 
     try std.testing.expect(Child.succeeded((try first.child.waitTimeout(io, within_budget)).?));
     try first.expectEnded();
     try std.testing.expect(second.daemon.alive());
-    try std.testing.expectEqual(@as(?Child.Term, null), try second.child.tryWait());
+    try std.testing.expectEqual(@as(?Child.Term, null), try second.child.tryWait(io));
     second.child.closeStdin(io);
     try std.testing.expect(Child.succeeded((try second.child.waitTimeout(io, within_budget)).?));
     try second.expectEnded();
@@ -406,7 +406,7 @@ test "a private supervisor preserves the root exit code and signal" {
         var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", script }, .descendants = .contain, .stdio = .ignore });
         defer child.deinit(io);
         try std.testing.expectEqual(expected, (try child.waitTimeout(io, within_budget)).?);
-        try std.testing.expectEqual(expected, (try child.tryWait()).?);
+        try std.testing.expectEqual(expected, (try child.tryWait(io)).?);
     }
 }
 
@@ -513,7 +513,7 @@ test "a contained Windows wait confirms every Job member ended before returning"
         const term = if (comptime std.mem.eql(u8, method, "tryWait")) term: {
             const deadline: Deadline = .in(io, budget);
             while (deadline.remainingMs(io) > 0) {
-                if (try fixture.child.tryWait()) |ended| break :term ended;
+                if (try fixture.child.tryWait(io)) |ended| break :term ended;
                 try io.sleep(.fromMilliseconds(2), .awake);
             }
             return error.TestChildDidNotExit;

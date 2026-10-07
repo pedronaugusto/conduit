@@ -29,8 +29,9 @@ const win32 = @import("win32.zig");
 const max_program_units = 1024;
 
 pub const Shell = struct {
-    // Fields are private: read and change them only through the methods.
+    /// Private: the pseudo-terminal the shell runs on.
     pair: Pty,
+    /// Private: the shell process.
     process: Child,
 
     /// What `spawnShell` fails with: the pair, the spawn, or the environment.

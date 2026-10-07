@@ -104,31 +104,37 @@ const linux = std.os.linux;
 const adoption_record = @import("orphans/adoption_record.zig");
 
 pub const Orphans = struct {
-    // Fields are private: read and change them only through the methods.
-    /// Every list here. Must be safe to use from more than one thread: spawns and
-    /// reaps on any thread add to and look at them.
+    /// Private: the allocator of every list here. Must be safe to use from
+    /// more than one thread: spawns and reaps on any thread add to and look
+    /// at them.
     gpa: Allocator,
-    /// The children conduit started while this runs, and the ones this process
+    /// Private: the children conduit started while this runs, and the ones this process
     /// had when `start` was called: not this one's to reap. Added to by spawns,
     /// which hold `gate` shared and `own_lock`; pruned by `look`, which holds
     /// `gate` alone.
     own: std.ArrayList(Orphans.Held),
+    /// Private: guards `own`.
     own_lock: Orphans.SpinLock,
-    /// The children this process adopted, until each is reaped. Held under
+    /// Private: the children this process adopted, until each is reaped. Held under
     /// `lock`.
     adopted: std.ArrayList(Orphans.Held),
+    /// Private: guards `adopted` and the looks.
     lock: Orphans.SpinLock,
-    /// Whether this process was a subreaper before `start`, so that `stop`
+    /// Private: whether this process was a subreaper before `start`, so that `stop`
     /// puts back what it found.
     was_subreaper: bool,
+    /// Private: between a successful `start` and `stop`.
     running: bool,
-    /// Adoption is announced without calling an owner's code while `lock` is
-    /// held. A watcher compares `adoptions` after resetting this event so a
-    /// concurrent adoption cannot be lost.
+    /// Private: how many processes this has adopted. Adoption is announced
+    /// without calling an owner's code while `lock` is held; an owner compares
+    /// this after resetting `adoption_event`, so a concurrent adoption is not
+    /// lost.
     adoptions: std.atomic.Value(u64),
+    /// Private: set through the `std.Io` of whichever call's look adopted
+    /// something; this keeps no `std.Io` of its own.
     adoption_event: std.Io.Event,
-    adoption_io: ?std.Io,
-    /// Safe builds: where this was when `start` made it the process's scope.
+    /// Private: in safe builds, where this was when `start` made it the
+    /// process's scope.
     pin: Pin = .{},
 
     /// Whether this system has what `start` needs. Linux: the subreaper attribute
@@ -148,18 +154,18 @@ pub const Orphans = struct {
             .running = false,
             .adoptions = .init(0),
             .adoption_event = .unset,
-            .adoption_io = null,
         };
     }
 
-    /// Register one owner to be woken when a new orphan is held. The event is
-    /// only a notification; call `list` to take the actual snapshot. Register
-    /// before starting the owner's wait task.
-    pub fn adoptionEvent(orphans: *Orphans, io: std.Io) *std.Io.Event {
+    /// The event one owner waits on to learn that a new orphan is held. It is
+    /// only a notification; call `list` to take the actual snapshot. The look
+    /// that adopts sets it through the `std.Io` its own call was given (a
+    /// spawn, a reap, `count`, `list`, `killAll` or `stop`), so the owner
+    /// waits with whichever `std.Io` it likes and nothing is registered. Reset
+    /// it, compare `adoptionCount`, and list again if the count moved, so an
+    /// adoption between the list and the reset is not lost.
+    pub fn adoptionEvent(orphans: *Orphans) *std.Io.Event {
         orphans.pin.check(orphans);
-        orphans.lock.lock();
-        defer orphans.lock.unlock();
-        orphans.adoption_io = io;
         return &orphans.adoption_event;
     }
 
@@ -248,7 +254,7 @@ pub const Orphans = struct {
                 defer orphans.lock.unlock();
                 {
                     defer gate.unlock();
-                    try orphans.look();
+                    try orphans.look(io);
                 }
                 orphans.reapEnded();
                 const insisting = grace.nanoseconds <= 0 or deadline.remainingMs(io) == 0;
@@ -273,7 +279,7 @@ pub const Orphans = struct {
     /// left: still running, or ended in the moment since. Zero when this is not
     /// running. The call for a program that wants the zombies gone now rather
     /// than at conduit's next event.
-    pub fn count(orphans: *Orphans) LookError!usize {
+    pub fn count(orphans: *Orphans, io: std.Io) LookError!usize {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return 0;
         gate.lock();
@@ -281,7 +287,7 @@ pub const Orphans = struct {
         defer orphans.lock.unlock();
         {
             defer gate.unlock();
-            try orphans.look();
+            try orphans.look(io);
         }
         orphans.reapEnded();
         return orphans.adopted.items.len;
@@ -301,7 +307,7 @@ pub const Orphans = struct {
     /// IdentityUnavailable; its numeric pid is never returned alone.
     /// Empty when this is not running. Records own no handle and remain valid
     /// as saved facts after killAll or stop; they do not promise liveness.
-    pub fn list(orphans: *Orphans, out: []Record) ListError![]Record {
+    pub fn list(orphans: *Orphans, io: std.Io, out: []Record) ListError![]Record {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return out[0..0];
         gate.lock();
@@ -309,7 +315,7 @@ pub const Orphans = struct {
         defer orphans.lock.unlock();
         {
             defer gate.unlock();
-            try orphans.look();
+            try orphans.look(io);
         }
         orphans.reapEnded();
         const n = @min(out.len, orphans.adopted.items.len);
@@ -326,14 +332,14 @@ pub const Orphans = struct {
     /// may be spawned during it.
     pub const StopError = LookError || error{ DirectChildrenRemain, OrphansRemain };
 
-    pub fn stop(orphans: *Orphans) StopError!void {
+    pub fn stop(orphans: *Orphans, io: std.Io) StopError!void {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return;
         gate.lock();
         defer gate.unlock();
         orphans.lock.lock();
         defer orphans.lock.unlock();
-        try orphans.look();
+        try orphans.look(io);
         orphans.reapEnded();
         if (orphans.own.items.len != 0) return error.DirectChildrenRemain;
         if (orphans.adopted.items.len != 0) return error.OrphansRemain;
@@ -380,7 +386,7 @@ pub const Orphans = struct {
     /// or a spawn has returned one — and, if an `Orphans` runs, a look goes with
     /// it: the processes that child left are this one's by now, and what has
     /// ended among the adopted is reaped. One atomic load when none runs.
-    pub fn event() void {
+    pub fn event(io: std.Io) void {
         if (!supported or !active.load(.acquire)) return;
         gate.lock();
         defer gate.unlock();
@@ -388,7 +394,7 @@ pub const Orphans = struct {
         orphans.lock.lock();
         defer orphans.lock.unlock();
         // ziglint-ignore: Z026 an event has no caller to tell; what this look missed the next one, or `count` or `killAll`, finds
-        orphans.look() catch {};
+        orphans.look(io) catch {};
         orphans.reapEnded();
     }
 
@@ -400,10 +406,13 @@ pub const Orphans = struct {
     } || std.Io.UnexpectedError;
 
     pub const Spawn = struct {
-        // Fields are private: read and change them only through the methods.
+        /// Private: the running `Orphans` the spawn registers with, if any.
         orphans: ?*Orphans,
+        /// Private: whether this spawn holds the gate shared.
         holding: bool,
+        /// Private: a child was registered, so `finish` looks.
         look_after: bool = false,
+        /// Private: ready, registered, or closed by `finish`.
         lifetime: enum { ready, registered, closed } = .ready,
 
         fn init(orphans: ?*Orphans, holding: bool) Spawn {
@@ -446,7 +455,8 @@ pub const Orphans = struct {
         /// Lets a look happen again, and — after a spawn that started a child —
         /// has one: the spawn is an event of conduit's, and a moment to take in
         /// what is waiting. Idempotent.
-        pub fn finish(spawn: *Spawn) void {
+        // ziglint-ignore: Z023 `spawn` is the receiver; ziglint resolves none on a type nested in another
+        pub fn finish(spawn: *Spawn, io: std.Io) void {
             const state = spawn;
             if (state.lifetime == .closed) return;
             state.lifetime = .closed;
@@ -457,7 +467,7 @@ pub const Orphans = struct {
             }
             if (spawn.look_after) {
                 spawn.look_after = false;
-                event();
+                event(io);
             }
         }
     };
@@ -675,7 +685,8 @@ pub const Orphans = struct {
 
     /// Finds every child of this process that is neither conduit's own nor
     /// adopted already, and adopts it. The caller holds `gate` alone and `lock`.
-    fn look(orphans: *Orphans) LookError!void {
+    /// An adoption sets the owner's event through `io`, the caller's own.
+    fn look(orphans: *Orphans, io: std.Io) LookError!void {
         if (builtin.is_test) _ = looks.fetchAdd(1, .monotonic);
         // A child of conduit's own that its owner has reaped is no longer a child
         // at all, and its pid may be given to a process this one should adopt.
@@ -692,6 +703,9 @@ pub const Orphans = struct {
             held.close();
             _ = orphans.own.swapRemove(i);
         }
+        const before = orphans.adoptions.load(.monotonic);
+        // An adoption made before an error is announced all the same.
+        defer if (orphans.adoptions.load(.monotonic) != before) orphans.adoption_event.set(io);
         try forEachChild(orphans, consider);
     }
 
@@ -707,7 +721,6 @@ pub const Orphans = struct {
             return error.OutOfMemory;
         };
         _ = orphans.adoptions.fetchAdd(1, .release);
-        if (orphans.adoption_io) |io| orphans.adoption_event.set(io);
     }
 
     /// `start`'s look: every child there is is somebody's.
@@ -848,7 +861,7 @@ test "orphan records retain a pid and its captured start time" {
     var storage: [1]Orphans.Record = undefined;
     var orphans: Orphans = .init(std.testing.allocator);
     defer orphans.deinit();
-    try std.testing.expectEqual(@as(usize, 0), (try orphans.list(&storage)).len);
+    try std.testing.expectEqual(@as(usize, 0), (try orphans.list(std.testing.io, &storage)).len);
 }
 
 test "an unknown pidfd wait does not prove reap ownership" {
@@ -904,6 +917,6 @@ test "orphan records copy group and session from the held adoption" {
 
 test "an adoption spawn refuses registration after releasing its gate" {
     var spawn = Orphans.Spawn.begin();
-    spawn.finish();
+    spawn.finish(std.testing.io);
     try std.testing.expectError(error.Unexpected, spawn.started(if (builtin.target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else c.getpid()));
 }

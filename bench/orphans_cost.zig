@@ -36,7 +36,7 @@ pub fn main(init: std.process.Init) !void {
         var orphans: conduit.Orphans = .init(gpa);
         try orphans.start();
         best_on = @min(best_on, try spawnWait(io, gpa, n));
-        try orphans.stop();
+        try orphans.stop(io);
         orphans.deinit();
     }
     try say(io, "spawn+wait off {d:.1} us, on {d:.1} us\n", .{ best_off, best_on });
@@ -51,7 +51,7 @@ pub fn main(init: std.process.Init) !void {
         var best: f64 = 1e9;
         for (0..(if (smoke) @as(usize, 1) else 7)) |_| {
             const start = benchmarkNow(io);
-            for (0..(if (smoke) @as(usize, 1) else 200)) |_| _ = try orphans.count();
+            for (0..(if (smoke) @as(usize, 1) else 200)) |_| _ = try orphans.count(io);
             const ns = start.durationTo(benchmarkNow(io)).nanoseconds;
             best = @min(best, @as(f64, @floatFromInt(ns)) / (if (smoke) @as(f64, 1) else 200) / 1000.0);
         }
@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
             _ = ch.killWait(io, .zero) catch {};
             ch.deinit(io);
         }
-        try orphans.stop();
+        try orphans.stop(io);
         orphans.deinit();
         try say(io, "look with {d} own children: {d:.1} us\n", .{ live, best });
     }

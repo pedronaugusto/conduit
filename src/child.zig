@@ -568,7 +568,7 @@ pub const Child = struct {
     /// the caller's timeout, and `killWait`'s grace is it with the grace. The two
     /// used to be the same loop copied out twice.
     fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
-        if (try child.tryWaitClaimed()) |term| return term;
+        if (try child.tryWaitClaimed(io)) |term| return term;
 
         if (is_windows) {
             // The child's own process handle is signalled the moment it ends, and
@@ -590,7 +590,7 @@ pub const Child = struct {
                 }
                 try std.Io.checkCancel(io);
             }
-            return child.tryWaitClaimed();
+            return child.tryWaitClaimed(io);
         }
 
         if (!is_windows) {
@@ -598,7 +598,7 @@ pub const Child = struct {
             if (comptime tree.Forks.supported) {
                 while (true) {
                     const left = deadline.remainingMs(io);
-                    if (left == 0) return child.tryWaitClaimed();
+                    if (left == 0) return child.tryWaitClaimed(io);
                     const ended = child.state.forks.ended(@min(left, wait_for.slice_ms)) orelse break;
                     if (ended) return child.reapEnded(io, deadline);
                     try std.Io.checkCancel(io);
@@ -615,14 +615,14 @@ pub const Child = struct {
                     if (watch.ended(@min(left, wait_for.slice_ms))) return child.reapEnded(io, deadline);
                     try std.Io.checkCancel(io);
                 }
-                return child.tryWaitClaimed();
+                return child.tryWaitClaimed(io);
             }
         }
 
         // Darwin refuses a watch once exit has begun. The child may have
         // ended between the first reap attempt and registration; ask again
         // before treating a missing watch as a reason to sleep.
-        if (try child.tryWaitClaimed()) |term| return term;
+        if (try child.tryWaitClaimed(io)) |term| return term;
 
         // Nothing to wait on: ask again, on an interval that grows to a few
         // milliseconds so a child that ends promptly is noticed promptly and one
@@ -630,9 +630,9 @@ pub const Child = struct {
         var interval_ms: u32 = 1;
         while (true) {
             const left = deadline.remainingMs(io);
-            if (left == 0) return child.tryWaitClaimed();
+            if (left == 0) return child.tryWaitClaimed(io);
             try std.Io.sleep(io, .fromMilliseconds(@min(interval_ms, left)), .awake);
-            if (try child.tryWaitClaimed()) |term| return term;
+            if (try child.tryWaitClaimed(io)) |term| return term;
             interval_ms = @min(interval_ms * 2, 4);
         }
     }
@@ -727,7 +727,10 @@ pub const Child = struct {
     /// wait is the one that reaps, and this answers from the term it publishes as
     /// soon as there is one. A `null` was always a snapshot; that is the one case
     /// where it can be a moment out of date.
-    pub fn tryWait(child: *Child) TryWaitError!?Term {
+    ///
+    /// A reap is one of the moments a running `Orphans` looks for what the child
+    /// left; an orphan it adopts then is announced through `io`.
+    pub fn tryWait(child: *Child, io: std.Io) TryWaitError!?Term {
         if (child.settled()) |term| return term;
         // Another task is inside the wait. The child is still running as far as
         // anything that has not been told otherwise is concerned, and taking the
@@ -735,11 +738,11 @@ pub const Child = struct {
         // happen here.
         if (!child.claimReap()) return null;
         defer child.releaseReap();
-        return child.tryWaitClaimed();
+        return child.tryWaitClaimed(io);
     }
 
     /// `tryWait` for a caller that already holds the reap.
-    fn tryWaitClaimed(child: *Child) TryWaitError!?Term {
+    fn tryWaitClaimed(child: *Child, io: std.Io) TryWaitError!?Term {
         // tryWait must stay nonblocking even while a signaller walks a tree.
         if (!child.state.identity.tryLock()) return null;
         var published = false;
@@ -747,7 +750,7 @@ pub const Child = struct {
             child.state.identity.unlock();
             // Adoption belongs to Orphans, after retirement has let go of the
             // identity. Its process-table look must not hold off signalling.
-            if (builtin.target.os.tag == .linux and published) orphans.event();
+            if (builtin.target.os.tag == .linux and published) orphans.event(io);
         }
         if (child.settled()) |term| return term;
         if (child.state.identity_retired) return error.ReapedElsewhere;
@@ -820,7 +823,7 @@ pub const Child = struct {
     fn reapEnded(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         var tries: u32 = 0;
         while (true) {
-            if (try child.tryWaitClaimed()) |term| return term;
+            if (try child.tryWaitClaimed(io)) |term| return term;
             const left = deadline.remainingMs(io);
             if (left == 0) return null;
             // The first few asks give the kernel the scheduler tick it needs
@@ -1121,7 +1124,7 @@ pub const Child = struct {
     /// tree. The child itself was killed and has been reaped when it returns.
     pub fn killWait(child: *Child, io: std.Io, grace: std.Io.Duration) KillWaitError!Term {
         // A child that has already ended is reaped rather than signalled.
-        if (try child.tryWait()) |term| return term;
+        if (try child.tryWait(io)) |term| return term;
 
         if (grace.nanoseconds > 0) {
             // ziglint-ignore: Z026 a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
@@ -1806,7 +1809,7 @@ pub const Child = struct {
                 } else if (ended) {
                     // Through the reap claim: a task holding it (a `Reaper`,
                     // or a `HeldReap`) reaps, and this reads what it publishes.
-                    term = try child.tryWait();
+                    term = try child.tryWait(io);
                 }
                 if (term != null) drain = drainDeadline(io, options, until);
             }
@@ -2165,7 +2168,7 @@ pub const Child = struct {
         while (c.waitpid(child.state.id, &status, 0) < 0) {
             if (c.errno(@as(c_int, -1)) != .INTR) return error.TestWaitFailed;
         }
-        try testing.expectError(error.ReapedElsewhere, child.tryWait());
+        try testing.expectError(error.ReapedElsewhere, child.tryWait(io));
         try testing.expectError(error.ReapedElsewhere, child.result());
         try testing.expectEqual(@as(?Id, null), child.processId());
 

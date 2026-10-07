@@ -198,7 +198,7 @@ test "deinit stops the reader while the terminal is still open" {
     }
     // Still running: the read ended because it was asked to, not because the
     // stream did.
-    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait());
+    try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 }
 
 test "untilAny says which of several answers came, and leaves the rest" {
@@ -399,7 +399,7 @@ test "a buffer that fills says so, and discard makes room" {
 fn waitWithin(io: std.Io, child: *Child) !Child.Term {
     const deadline: Deadline = .in(io, budget);
     while (true) {
-        if (try child.tryWait()) |term| return term;
+        if (try child.tryWait(io)) |term| return term;
         if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }

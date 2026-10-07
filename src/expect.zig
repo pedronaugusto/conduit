@@ -59,47 +59,46 @@ const handles = @import("handles.zig");
 const is_windows = builtin.target.os.tag == .windows;
 
 pub const Expect = struct {
-    // Fields are private: read and change them only through the methods.
-    /// What the child says, and where a reply goes.
+    /// Private: what the child says, and where a reply goes.
     ///
     /// `Child.pty` is already this shape, and `Child.expect` builds one for a
     /// child on pipes out of its standard output and standard input. Borrowed:
     /// `deinit` closes neither file.
     master: Pty.Master,
-    /// Where what the child says is kept. The caller's, and borrowed: nothing
+    /// Private: where what the child says is kept. The caller's, and borrowed: nothing
     /// here frees it, and it must outlive the `Expect`.
     buffer: []u8,
-    /// How much of `buffer` has arrived.
+    /// Private: how much of `buffer` has arrived.
     filled: usize,
-    /// How much of `buffer[0..filled]` a match has already accounted for.
+    /// Private: how much of `buffer[0..filled]` a match has already accounted for.
     ///
     /// Those bytes are not dropped when the match is returned but at the start of
     /// the next call, which is what keeps the slices in a `Match` readable after
     /// the call that produced them.
     consumed: usize,
-    /// The reading task reached the end of the stream.
+    /// Private: the reading task reached the end of the stream.
     ended: bool,
-    /// The reading task could not read, for a reason other than the end.
+    /// Private: the reading task could not read, for a reason other than the end.
     failed: bool,
-    /// The reading task has stopped, for any reason, cancellation included.
+    /// Private: the reading task has stopped, for any reason, cancellation included.
     /// Atomic and not under `mutex`, so it can be read without taking anything
     /// the task holds.
     finished: std.atomic.Value(bool),
-    /// Guards the four fields above: the reading task appends to them, and the
+    /// Private: guards the four fields above: the reading task appends to them, and the
     /// caller's task consumes from them.
     mutex: std.Io.Mutex,
-    /// Set by the reading task whenever one of those fields changes, so a wait
+    /// Private: set by the reading task whenever one of those fields changes, so a wait
     /// ends the moment the child speaks rather than at the end of a poll
     /// interval.
     arrived: std.Io.Event,
-    /// Set when consuming or discarding bytes makes buffer space available.
+    /// Private: set when consuming or discarding bytes makes buffer space available.
     space: std.Io.Event,
-    /// The task doing the reading.
+    /// Private: the task doing the reading.
     group: std.Io.Group,
-    /// One claim for initialization, task ownership and stopping. Stop ends
+    /// Private: one claim for initialization, task ownership and stopping. Stop ends
     /// even a lifetime whose task has never been started.
     lifetime: std.atomic.Value(enum(u8) { ready, started, stopped }),
-    /// Safe builds: where this was when `start` began to hold a pointer to it.
+    /// Private: in safe builds, where this was when `start` began to hold a pointer to it.
     pin: Pin = .{},
 
     /// Where a pattern was found, in the bytes that had arrived when it was.

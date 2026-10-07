@@ -42,11 +42,15 @@ const Size = tty.Size;
 const file = handles.file;
 
 pub const Pty = struct {
-    // Fields are private: read and change them only through the methods.
+    /// Private: the master's reading handle, or null once closed.
     read: ?std.Io.File.Handle,
+    /// Private: the master's writing handle, or null once closed.
     write: ?std.Io.File.Handle,
+    /// Private: the terminal end, or null once closed.
     slave: ?Pty.Slave,
+    /// Private: on Windows, the console's size, shared with its resize.
     geometry: if (is_windows) ?*Pty.Geometry else void,
+    /// Private: on Windows, how the pseudo console was made.
     console: if (is_windows) Pty.ConsoleOptions else void,
 
     /// Borrows the reading handle, or null after the master closes.

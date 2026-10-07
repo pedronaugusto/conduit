@@ -335,7 +335,7 @@ to read while a wait or Reaper runs.
 | `child.exchange(gpa, io, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
-| `child.tryWait()` | Never blocks. `null` while the child runs. |
+| `child.tryWait(io)` | Never blocks. `null` while the child runs. |
 | `child.finish(io)` | Ends an unfinished contained scope and confirms it ended, reporting what the cleanup met. The child stays valid either way, so a failed call can be made again, and `deinit` is still owed. |
 | `child.containment(buffer)` | Copies the detached group, private Linux supervisor identity and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
@@ -485,11 +485,11 @@ attribute while another direct child still owns a wait. Handle these failures
 before `deinit`, which cannot fail and leaves the owner undefined. This explicit process-wide scope is
 separate from each contained child's private supervisor.
 
-`reaper.adoptionRecords(out)` copies the explicit scope's `Orphans.Record`
-values without lending its owner. `reaper.adoptionEvent(io)` and
+`reaper.adoptionRecords(io, out)` copies the explicit scope's `Orphans.Record`
+values without lending its owner. `reaper.adoptionEvent()` and
 `reaper.adoptionCount()` provide the same notification and reset handshake as
-Orphans. Register before start, snapshot, reset and compare the count to avoid
-losing a concurrent adoption. These records belong to the scope as a whole;
+Orphans: snapshot, reset and compare the count to avoid losing a concurrent
+adoption. These records belong to the scope as a whole;
 they never claim a former child as their parent.
 
 Timeouts in `output`, output errors, `kill` and `killWait` still end the tree
@@ -728,15 +728,15 @@ started, which safe builds assert on each call.
 parent of every orphan below it (`PR_SET_CHILD_SUBREAPER`): a daemon a
 child left, a grandchild that forked twice and called `setsid`. Nothing
 runs for it — no task, no timer: whenever conduit reaps a child or spawns
-one, it also takes in the new orphans and reaps the ended ones. `count()`
-does the same on demand and says how many are left. `list(out)` copies
+one, it also takes in the new orphans and reaps the ended ones. `count(io)`
+does the same on demand and says how many are left. `list(io, out)` copies
 `Orphans.Record` values with `pid`, `start`, `group` and `session`, copied from
 one process snapshot under pidfd and reap ownership during adoption. It
 reports `IdentityUnavailable` if that snapshot could not be read. Retain
 these facts and the boot identity for a later `captureStarted` or
 `killRecorded`; records own no handles. `killAll(io, grace)` ends them all through a pidfd
 each — `SIGTERM`, the grace, then
-`SIGKILL` — for the end of a program. `try stop()` restores the attribute
+`SIGKILL` — for the end of a program. `try stop(io)` restores the attribute
 after every direct child and adoptee has been reaped; failure retains ownership for another call, and `deinit()` follows success.
 Opt-in, and only for a program that starts every child through conduit
 (below). `error.Unsupported` elsewhere.

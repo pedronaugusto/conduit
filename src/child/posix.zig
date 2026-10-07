@@ -75,7 +75,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     // takes a child started here for one it adopted; and a look after, since
     // a spawn is one of the moments it has. Nothing where it does not run.
     var adoption: Orphans.Spawn = .begin();
-    defer adoption.finish();
+    defer adoption.finish(io);
 
     // Nothing has to happen between a fork and an exec for this one, so it
     // need not be a fork at all. `posix_spawn` describes the child with file
@@ -121,7 +121,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
         closePipes(io, &report, go);
         return err;
     };
-    adoption.finish();
+    adoption.finish(io);
     if (channel_ends) |*ends| {
         _ = c.close(ends[1]);
         ends[1] = -1;
@@ -315,7 +315,7 @@ fn spawnWithoutFork(
         discard(child.pid);
         return err;
     };
-    adoption.finish();
+    adoption.finish(io);
     plan.closeChildSide(io);
     return started(state, child.pid, child.forks, .none, plan, options);
 }

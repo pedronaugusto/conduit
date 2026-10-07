@@ -609,9 +609,9 @@ const Leftovers = struct {
 var sequence: std.atomic.Value(u32) = .init(0);
 
 const LinuxCgroup = struct {
-    // Fields are private: read and change them only through the methods.
-    /// The child's cgroup directory, opened `O_PATH`, or -1 for none.
+    /// Private: the child's cgroup directory, opened `O_PATH`, or -1 for none.
     dir: posix.fd_t,
+    /// Private: the directory's name, and the process that owns it.
     name: Name,
 
     fn init(dir: posix.fd_t, name: Name) LinuxCgroup {
@@ -771,11 +771,15 @@ const LinuxCgroup = struct {
 };
 
 const LinuxRecorded = struct {
-    // Fields are private: read and change them only through the methods.
+    /// Private: the parent cgroup directory, opened `O_PATH`.
     parent: posix.fd_t,
+    /// Private: the recorded cgroup directory, opened `O_PATH`.
     dir: posix.fd_t,
+    /// Private: the cgroup's own name under `parent`, NUL-terminated.
     name: [std.Io.Dir.max_name_bytes + 1]u8,
+    /// Private: how much of `name` is used.
     name_len: usize,
+    /// Private: the directory inode recorded with the path, checked on open.
     recorded_id: u64,
 
     fn open(path_name: []const u8, recorded_id: u64) ?LinuxRecorded {
@@ -1059,8 +1063,9 @@ fn parsePopulated(text: []const u8) Populated {
 }
 
 pub const Pending = struct {
-    // Fields are private: read and change them only through the methods.
+    /// Private: the cgroup the child joins.
     cgroup: Cgroup,
+    /// Private: its `cgroup.procs`, open for the join; -1 once started or abandoned.
     procs: posix.fd_t,
 
     fn init(cgroup: Cgroup, procs: posix.fd_t) Pending {
