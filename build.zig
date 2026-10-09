@@ -11,6 +11,10 @@ pub fn build(b: *std.Build) void {
     // only be a dependency to explain.
     const link_libc = target.result.os.tag != .windows;
 
+    // The one runtime dependency: aegis, a leaf that needs only std.
+    const aegis_package = b.dependency("aegis", .{ .target = target, .optimize = optimize });
+    const aegis = aegis_package.module("aegis");
+
     //=====================================================================
     // The module.
     //=====================================================================
@@ -41,6 +45,7 @@ pub fn build(b: *std.Build) void {
             .linux, .windows => null,
             else => true,
         },
+        .imports = &.{.{ .name = "aegis", .module = aegis }},
     });
 
     const module = b.addModule("conduit", .{
@@ -48,7 +53,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
-        .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
+        .imports = &.{
+            .{ .name = "aegis", .module = aegis },
+            .{ .name = "conduit.tty", .module = tty_module },
+        },
     });
     module.addOptions("conduit_options", conduit_options);
 
@@ -87,7 +95,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = link_libc,
         .sanitize_thread = if (thread_sanitizer) true else null,
-        .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
+        .imports = &.{
+            .{ .name = "aegis", .module = aegis },
+            .{ .name = "conduit.tty", .module = tty_module },
+        },
     });
     test_module.addOptions("conduit_options", conduit_options);
     // The tests' clocks, fault plans and counts. A lazy, test-only
@@ -260,13 +271,6 @@ pub fn build(b: *std.Build) void {
             // What `CONDUIT_TRACE` prints is at the info level.
             .test_log_level = .info,
         });
-        if (b.dependencyLazy("preflight", .{ .@"repo-root" = "." })) |dependency| {
-            const plan = b.addRunArtifact(dependency.artifact("preflight"));
-            plan.addArg("plan");
-            plan.addPassthruArgs();
-            plan.setCwd(b.path("."));
-            b.step("plan", "Generate CI matrices from ci/workflow.json").dependOn(&plan.step);
-        } else |_| {}
         const containment = preflight.addCheck(b, "check-containment", "ci/containment.zig");
         const probe = b.addRunArtifact(containment);
         probe.addArg("runner");
@@ -276,6 +280,7 @@ pub fn build(b: *std.Build) void {
             .package = "conduit",
             .program = b.path("ci/consumer.zig"),
             .modules = &.{ "conduit", "conduit.tty" },
+            .packages = &.{aegis_package},
         });
     }
 }
@@ -288,18 +293,23 @@ const example_sources = [_][]const u8{
 
 /// Build each benchmark's imports in its own optimization mode.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, options: *std.Build.Step.Options) []const std.Build.Module.Import {
+    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
     const tty = b.createModule(.{
         .root_source_file = b.path("src/tty.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .imports = &.{.{ .name = "aegis", .module = aegis }},
     });
     const module = b.createModule(.{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "conduit.tty", .module = tty }},
+        .imports = &.{
+            .{ .name = "aegis", .module = aegis },
+            .{ .name = "conduit.tty", .module = tty },
+        },
     });
     module.addOptions("conduit_options", options);
     const imports = b.allocator.alloc(std.Build.Module.Import, 1) catch @panic("OOM");

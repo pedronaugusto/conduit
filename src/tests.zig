@@ -110,5 +110,5 @@ test {
     _ = @import("input_writer.zig");
     _ = @import("orphans.zig");
     _ = @import("proxy.zig");
-    _ = tty.console;
+    _ = @import("console_test.zig");
 }

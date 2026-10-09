@@ -189,20 +189,3 @@ pub fn readInput(handle: windows.HANDLE, buffer: []InputRecord) std.Io.Unexpecte
         return unexpected(windows.GetLastError());
     return count;
 }
-
-test "a key-down input record has the Windows layout" {
-    try std.testing.expectEqual(@as(usize, 20), @sizeOf(InputRecord));
-    try std.testing.expectEqual(@as(usize, 4), @offsetOf(InputRecord, "event"));
-    const key: InputRecord = .{ .event_type = key_event, .event = .{ .key = .{
-        .down = 1,
-        .repeat_count = 1,
-        .virtual_key = 0,
-        .scan_code = 0,
-        .character = 'a',
-        .control_keys = 0,
-    } } };
-    try std.testing.expect(key.keyDown());
-    var up = key;
-    up.event.key.down = 0;
-    try std.testing.expect(!up.keyDown());
-}

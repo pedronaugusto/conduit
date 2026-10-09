@@ -2,10 +2,6 @@
   "sources": [
     "src"
   ],
-  "test_roots": [
-    "src/tests.zig",
-    "src/console.zig"
-  ],
   "function_exceptions": {},
   "layout_exceptions": {},
   "docs": {
