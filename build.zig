@@ -153,6 +153,18 @@ pub fn build(b: *std.Build) void {
     // two it was.
     const unit_step = b.step("unit", "Run the conduit tests, without the examples");
     unit_step.dependOn(&b.addRunArtifact(tests).step);
+    // console is exported through the separate tty module. Give its tests a
+    // configured root, so preflight need not infer reachability from aliases.
+    const console_tests = b.addTest(.{
+        .name = "conduit-console-tests",
+        .filters = test_filters,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/console.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    unit_step.dependOn(&b.addRunArtifact(console_tests).step);
     b.step("check-unit", "Compile the conduit tests without running them").dependOn(&tests.step);
     // The suite as a program of its own, for a run as another user: only root
     // may make a cgroup on CI's Linux runner, so its cgroup leg runs
@@ -171,6 +183,7 @@ pub fn build(b: *std.Build) void {
     // `zig build -Dtarget=...` is the same check under another name.
     const check_step = b.step("check", "Compile the tests and the examples without running them");
     check_step.dependOn(&tests.step);
+    check_step.dependOn(&console_tests.step);
     b.getInstallStep().dependOn(check_step);
 
     //=====================================================================
@@ -231,19 +244,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "orphans-cost", .source = "bench/orphans_cost.zig" },
             .{ .name = "conduit-bench", .source = "bench/conduit_bench.zig" },
         };
-        for (programs) |program| {
-            const executable = b.addExecutable(.{
-                .name = program.name,
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path(program.source),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = link_libc,
-                    .imports = BenchModules.imports(b, target, optimize),
-                }),
-            });
-            check_step.dependOn(&executable.step);
-        }
         preflight.addCi(b, .{
             .tests = test_step,
             .bench = .{
@@ -260,13 +260,6 @@ pub fn build(b: *std.Build) void {
             // What `CONDUIT_TRACE` prints is at the info level.
             .test_log_level = .info,
         });
-        if (b.dependencyLazy("preflight", .{ .@"repo-root" = "." })) |dependency| {
-            const plan = b.addRunArtifact(dependency.artifact("preflight"));
-            plan.addArg("plan");
-            plan.addPassthruArgs();
-            plan.setCwd(b.path("."));
-            b.step("plan", "Generate CI matrices from ci/workflow.json").dependOn(&plan.step);
-        } else |_| {}
         const containment = preflight.addCheck(b, "check-containment", "ci/containment.zig");
         const probe = b.addRunArtifact(containment);
         probe.addArg("runner");

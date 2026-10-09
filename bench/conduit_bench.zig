@@ -1,6 +1,9 @@
 const std = @import("std");
 const conduit = @import("conduit");
 const coverage = @import("coverage.zig");
+const bench = @import("shakedown").bench;
+const metadata: bench.Metadata = .{ .commit = @import("preflight_bench_options").commit };
+var writer: *std.Io.Writer = undefined;
 var smoke = false;
 const c = std.c;
 
@@ -20,9 +23,14 @@ pub fn main(init: std.process.Init) !void {
     if (args.len == 2 and std.mem.eql(u8, args[1], "signal_child")) signalChild();
     smoke = args.len == 2 and std.mem.eql(u8, args[1], "--smoke");
     coverage.smoke = smoke;
+    var output_buffer: [4096]u8 = undefined;
+    var output = std.Io.File.stdout().writerStreaming(init.io, &output_buffer);
+    writer = &output.interface;
     // With no arguments (or --smoke), make the default 1 KiB line in the
     // fresh working directory preflight gives this run.
-    const defaults = args.len == 1 or smoke;
+    const filtered = args.len == 3 and std.mem.eql(u8, args[1], "--row");
+    const prefix = if (filtered) args[2] else "";
+    const defaults = args.len == 1 or smoke or filtered;
     if (!defaults and (args.len < 2 or args.len > 4)) return error.Usage;
     if (defaults) {
         const line: [1023]u8 = @splat('x');
@@ -32,14 +40,24 @@ pub fn main(init: std.process.Init) !void {
     defer init.gpa.free(path);
     const workload = if (!defaults and args.len > 2) args[2] else "all";
     const n = if (smoke) 1 else if (args.len > 3) try std.fmt.parseInt(usize, args[3], 10) else default_count;
+    if (n == 0 or n > 1_000_000) return error.BadCount;
     const input = try std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .unlimited);
     defer init.gpa.free(input);
 
     if (std.mem.eql(u8, workload, "all")) {
-        for (own_workloads ++ coverage.names) |each| try runOne(init, each, n, input, path);
+        var selected = false;
+        for (own_workloads ++ coverage.names) |each| {
+            if (std.mem.startsWith(u8, each, prefix)) {
+                selected = true;
+                try runOne(init, each, n, input, path);
+            }
+        }
+        if (!selected) return error.UnknownWorkload;
+        try output.interface.flush();
         return;
     }
-    return runOne(init, workload, n, input, path);
+    try runOne(init, workload, n, input, path);
+    try output.interface.flush();
 }
 
 /// How many times a workload runs when the command line does not say.
@@ -102,11 +120,16 @@ fn reportAs(init: std.process.Init, side: []const u8, workload: []const u8, metr
     try out.interface.flush();
 }
 
+const Context = struct { init: std.process.Init, input: []const u8 = "", end: PtyEnd = .tree };
+
 fn spawnWait(init: std.process.Init, n: usize) !void {
-    for (0..if (smoke) @as(usize, 0) else @min(n, 10)) |_| try oneSpawnWait(init);
-    const start = now(init.io);
-    for (0..n) |_| try oneSpawnWait(init);
-    try report(init, "SPAWN+WAIT", "latency", elapsedNs(start, init.io) / @as(f64, @floatFromInt(n)) / 1000.0, "us");
+    var context: Context = .{ .init = init };
+    const Callback = struct {
+        fn run(x: *Context, units: u64) !void {
+            for (0..units) |_| try oneSpawnWait(x.init);
+        }
+    };
+    try bench.run(init.gpa, init.io, writer, &context, &.{.{ .name = "spawn_wait", .unit = "spawn", .initial = n, .run = Callback.run }}, metadata, .{ .smoke = smoke });
 }
 
 fn oneSpawnWait(init: std.process.Init) !void {
@@ -117,10 +140,13 @@ fn oneSpawnWait(init: std.process.Init) !void {
 
 fn spawnCollect(init: std.process.Init, n: usize, arg: []const u8) !void {
     if (arg.len != 1024 or std.mem.findScalar(u8, arg, 0) != null) return error.BadInput;
-    for (0..if (smoke) @as(usize, 0) else @min(n, 5)) |_| try oneCollect(init, arg);
-    const start = now(init.io);
-    for (0..n) |_| try oneCollect(init, arg);
-    try report(init, "SPAWN+COLLECT", "latency", elapsedNs(start, init.io) / @as(f64, @floatFromInt(n)) / 1000.0, "us");
+    var context: Context = .{ .init = init, .input = arg };
+    const Callback = struct {
+        fn run(x: *Context, units: u64) !void {
+            for (0..units) |_| try oneCollect(x.init, x.input);
+        }
+    };
+    try bench.run(init.gpa, init.io, writer, &context, &.{.{ .name = "spawn_collect", .unit = "spawn", .initial = n, .run = Callback.run }}, metadata, .{ .smoke = smoke });
 }
 
 fn oneCollect(init: std.process.Init, arg: []const u8) !void {
@@ -143,14 +169,13 @@ const PtyEnd = enum { tree, child };
 
 fn ptySpawn(init: std.process.Init, n: usize, input: []const u8, end: PtyEnd) !void {
     if (input.len != 1024 or input[input.len - 1] != '\n') return error.BadInput;
-    for (0..if (smoke) @as(usize, 0) else @min(n, 3)) |_| _ = try onePtyRoundTrip(init, input, end);
-    const start = now(init.io);
-    for (0..n) |_| _ = try onePtyRoundTrip(init, input, end);
-    const side = switch (end) {
-        .tree => "conduit",
-        .child => "conduit-childkill",
+    var context: Context = .{ .init = init, .input = input, .end = end };
+    const Callback = struct {
+        fn run(x: *Context, units: u64) !void {
+            for (0..units) |_| _ = try onePtyRoundTrip(x.init, x.input, x.end);
+        }
     };
-    try reportAs(init, side, "PTY SPAWN", "latency", elapsedNs(start, init.io) / @as(f64, @floatFromInt(n)) / 1000.0, "us");
+    try bench.run(init.gpa, init.io, writer, &context, &.{.{ .name = if (end == .tree) "pty_spawn" else "pty_spawn_child_kill", .unit = "round_trip", .initial = n, .run = Callback.run }}, metadata, .{ .smoke = smoke });
 }
 
 fn onePtyRoundTrip(init: std.process.Init, input: []const u8, end: PtyEnd) !u64 {

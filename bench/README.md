@@ -1,7 +1,7 @@
 # conduit's benchmarks
 
 conduit's own measurements of its own calls. They run on POSIX, on a quiet
-machine, and are never timed in CI: `zig build check` compiles them, and
+machine, and are never timed in CI: `zig build bench-build` compiles them, and
 `zig build test` runs each once with `--smoke`, every point once and no clock
 read, so they keep working with the API.
 
@@ -10,7 +10,13 @@ zig build bench                        # all of them
 zig-out/bench/conduit-bench input.txt spawn_wait 1000 # one workload, a thousand times
 ```
 
-builds three programs in ReleaseFast into `zig-out/bench` and runs them, one
+The migration is unfinished on `measuring`: `spawn_wait`, `spawn_collect`,
+`pty_spawn` and `pty_spawn_child_kill` use shared shakedown JSONL output, with
+samples in ns/spawn or ns/round-trip. The remaining rows retain their older
+formats and timing loops until shared per-sample setup/teardown hooks exist.
+`conduit-bench --row <prefix>` selects existing workload names.
+
+`zig build bench` builds three programs in ReleaseFast into `zig-out/bench` and runs them, one
 after another:
 
 - `lifecycle-claims --quiet-machine` measures the ratios and bounds the

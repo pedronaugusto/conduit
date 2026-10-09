@@ -846,7 +846,20 @@ before `CreateProcessW`; otherwise Windows resolves it.
   nothing is linked.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
   the tests and CI.
+- [shakedown](https://github.com/pedronaugusto/shakedown) supplies test clocks,
+  fault injection and benchmark measurement. It is a test-only dependency.
 - **tycho**, every coding agent in one folder (in development).
+
+## Measurement migration (work in progress)
+
+The `measuring` branch pins the published shakedown measurement module and
+preflight integration. `spawn_wait`, `spawn_collect`, `pty_spawn` and
+`pty_spawn_child_kill` use `shakedown.bench` JSONL rows; `--row <prefix>` selects
+workloads for preflight. Samples are nanoseconds per spawn or round trip.
+The other drivers still use the previous measurement code. Migrating one-shot
+wait, kill and join measurements while keeping their setup outside timing needs
+a shared setup/teardown contract that the pinned module does not expose. This
+branch is unfinished; its full output still mixes JSONL and the older formats.
 
 ## Testing
 
