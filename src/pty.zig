@@ -422,6 +422,12 @@ pub const Pty = struct {
     }
 
     /// One owner for the Windows resize operation and the size it accepted.
+    ///
+    /// Not an `aegis.Guarded`: the lock is held across `ResizePseudoConsole`, an
+    /// operating-system call that can block while the output pipe is undrained,
+    /// and a guard's sections are bounded. `resize` and `size` take no `std.Io`
+    /// to wait with, so a blocking guard would be a public change of its own
+    /// (an OS boundary).
     const Geometry = struct {
         mutex: std.atomic.Mutex = .unlocked,
         size: Size,

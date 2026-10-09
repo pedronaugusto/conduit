@@ -108,6 +108,11 @@ pub const Orphans = struct {
     /// more than one thread: spawns and reaps on any thread add to and look
     /// at them.
     gpa: Allocator,
+    // The locks below are raw, not `aegis.Guarded`: `own` is reached under `gate`
+    // alone by a look (pruning) and under `gate` shared with `own_lock` by spawns,
+    // a protocol of two locks no single guard states, and `lock` is held across a
+    // whole look that reads procfs, past a spin guard's bounded sections. Both
+    // order the use of operating-system names (an OS boundary).
     /// Private: the children conduit started while this runs, and the ones this process
     /// had when `start` was called: not this one's to reap. Added to by spawns,
     /// which hold `gate` shared and `own_lock`; pruned by `look`, which holds

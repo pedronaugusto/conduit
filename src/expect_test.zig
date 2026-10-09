@@ -483,6 +483,14 @@ test "a stopped Expect refuses a start, and stopping again does nothing" {
     try std.testing.expectError(error.AlreadyStarted, expect.start(std.testing.io));
 }
 
+/// Marks `count` bytes of `expect`'s buffer as arrived, as a reader that was
+/// never started would have: the setup of a test that runs alone.
+fn fill(expect: *Expect, count: usize) void {
+    var held = expect.intake.acquireUncancelable(testing.io);
+    defer held.deinit(testing.io);
+    held.value().filled = count;
+}
+
 test "a full Expect buffer waits for its consumer without interval sleeps" {
     // Any interval sleep, and the wait for the consumer, are canceled.
     const observed = try FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{
@@ -492,7 +500,7 @@ test "a full Expect buffer waits for its consumer without interval sleeps" {
     defer observed.deinit();
     var buffer: [1]u8 = .{'x'};
     var expect = Expect.init(undefined, &buffer);
-    expect.filled = buffer.len;
+    fill(&expect, buffer.len);
     try testing.expectError(error.Canceled, access.read(&expect, observed.io()));
     try testing.expectEqual(@as(u64, 0), observed.count(.sleep));
     try testing.expectEqual(@as(u64, 1), observed.count(.futexWait));
@@ -511,7 +519,9 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         fn make(base: std.Io, context: *anyopaque) void {
             const room: *Self = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Room as the context
             if (room.consume) {
-                room.expect.consumed = 1;
+                var held = room.expect.intake.acquireUncancelable(base);
+                held.value().consumed = 1;
+                held.deinit(base);
                 access.compact(base, room.expect);
             } else room.expect.discard(base);
         }
@@ -525,7 +535,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         defer f.close(io);
         var buffer: [1]u8 = .{'a'};
         var expect = Expect.init(.{ .read = f, .write = f }, &buffer);
-        expect.filled = buffer.len;
+        fill(&expect, buffer.len);
         var room: Room = .{ .expect = &expect, .consume = consume };
         const observed = try FaultIo.init(testing.allocator, io, .{ .plan = &.{
             .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .{ .call = .{ .ctx = &room, .f = Room.make } } },

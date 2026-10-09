@@ -77,7 +77,7 @@ test "InputWriter delivers copied bytes in queue order" {
     try gate.init();
     defer gate.deinit();
     const gated_io = gate.gated();
-    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 1024 });
+    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(1024) });
     defer writer.deinit(gated_io);
     try testing.expect(child.stdinFile() == null);
     var bytes = "first".*;
@@ -99,7 +99,7 @@ test "InputWriter bounds queued bytes together with bytes being written" {
     try gate.init();
     defer gate.deinit();
     const gated_io = gate.gated();
-    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
+    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(10) });
     defer writer.deinit(gated_io);
     try writer.queue(gated_io, "123456");
     try gate.entered();
@@ -119,7 +119,7 @@ test "InputWriter closes input after every byte queued before its close" {
     try gate.init();
     defer gate.deinit();
     const gated_io = gate.gated();
-    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
+    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(10) });
     defer writer.deinit(gated_io);
     try writer.queue(gated_io, "before");
     try gate.entered();
@@ -152,7 +152,7 @@ test "InputWriter refuses a backlog without waiting for a child that stops readi
     const bytes = try gpa.alloc(u8, 2 * 1024 * 1024);
     defer gpa.free(bytes);
     @memset(bytes, 'x');
-    var writer = try child.inputWriter(gpa, observed_io, .{ .max_backlog = bytes.len });
+    var writer = try child.inputWriter(gpa, observed_io, .{ .max_backlog = .fromRaw(bytes.len) });
     defer writer.deinit(observed_io);
     try writer.queue(observed_io, bytes);
     try started.waitTimeout(io, within_budget);
@@ -168,7 +168,7 @@ test "InputWriter keeps a write failure for later writers and waiters" {
     defer if (builtin.target.os.tag != .windows) std.posix.sigaction(.PIPE, &saved, null);
     var child = try spawn("exit");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 });
+    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(1024) });
     defer writer.deinit(io);
     try testing.expect((try child.waitTimeout(io, within_budget)) != null);
     try writer.queue(io, "gone");
@@ -183,7 +183,7 @@ test "InputWriter keeps a write failure for later writers and waiters" {
 test "InputWriter cancellation closes an idle pipe and deinit joins an active write" {
     var child = try spawn("end");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 10 });
+    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(10) });
     defer writer.deinit(io);
     writer.cancel(io);
     writer.cancel(io);
@@ -197,7 +197,7 @@ test "InputWriter cancellation closes an idle pipe and deinit joins an active wr
     try gate.init();
     defer gate.deinit();
     const gated_io = gate.gated();
-    var active = try blocked.inputWriter(gpa, gated_io, .{ .max_backlog = 10 });
+    var active = try blocked.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(10) });
     active.queue(gated_io, "held") catch |err| {
         active.deinit(gated_io);
         return err;
@@ -213,7 +213,7 @@ test "InputWriter cancellation closes an idle pipe and deinit joins an active wr
 test "InputWriter cancellation of a waiter leaves delivery running" {
     var child = try spawn("echo");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 10 });
+    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(10) });
     defer writer.deinit(io);
     const Waiter = struct {
         fn wait(w: *InputWriter, entered: *std.Io.Event) InputWriter.WriteError!void {
@@ -235,7 +235,7 @@ test "InputWriter cancellation of a waiter leaves delivery running" {
 test "InputWriter serializes concurrent producers without splitting their bytes" {
     var child = try spawn("echo");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 });
+    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(1024) });
     defer writer.deinit(io);
     const Producer = struct {
         fn queue(w: *InputWriter, id: u8) void {
@@ -268,7 +268,7 @@ test "InputWriter allocation refusal leaves the queue and the bound intact" {
     defer reap(&child);
     // State, node, then payload: fail the payload, after a node was allocated.
     var failing = testing.FailingAllocator.init(gpa, .{ .fail_index = 2 });
-    var writer = try child.inputWriter(failing.allocator(), io, .{ .max_backlog = 4 });
+    var writer = try child.inputWriter(failing.allocator(), io, .{ .max_backlog = .fromRaw(4) });
     defer writer.deinit(io);
     try testing.expectError(error.OutOfMemory, writer.queue(io, "lost"));
     failing.fail_index = std.math.maxInt(usize);
@@ -283,25 +283,25 @@ test "InputWriter failed startup leaves the pipe with the child" {
     defer reap(&child);
     const file = child.stdinFile().?;
     var failing = testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
-    try testing.expectError(error.OutOfMemory, child.inputWriter(failing.allocator(), io, .{ .max_backlog = 10 }));
+    try testing.expectError(error.OutOfMemory, child.inputWriter(failing.allocator(), io, .{ .max_backlog = .fromRaw(10) }));
     try testing.expectEqual(file.handle, child.stdinFile().?.handle);
     const refused = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
         .fault = .{ .fail = error.ConcurrencyUnavailable },
     }} });
     defer refused.deinit();
-    try testing.expectError(error.ConcurrencyUnavailable, child.inputWriter(gpa, refused.io(), .{ .max_backlog = 10 }));
+    try testing.expectError(error.ConcurrencyUnavailable, child.inputWriter(gpa, refused.io(), .{ .max_backlog = .fromRaw(10) }));
     try testing.expectEqual(file.handle, child.stdinFile().?.handle);
     try file.writeStreamingAll(io, "still open");
     child.closeStdin(io);
     try output(&child, "still open");
-    try testing.expectError(error.NoStdinPipe, child.inputWriter(gpa, io, .{ .max_backlog = 10 }));
+    try testing.expectError(error.NoStdinPipe, child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(10) }));
 }
 
 test "InputWriter a zero bound accepts only empty input" {
     var child = try spawn("end");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 0 });
+    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(0) });
     defer writer.deinit(io);
     try writer.queue(io, "");
     try testing.expectError(error.BacklogFull, writer.queue(io, "x"));
@@ -324,7 +324,7 @@ test "InputWriter checks cancellation when a write makes no progress" {
     const stalled_io = stalled.io();
     var child = try spawn("echo");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, stalled_io, .{ .max_backlog = 10 });
+    var writer = try child.inputWriter(gpa, stalled_io, .{ .max_backlog = .fromRaw(10) });
     defer writer.deinit(stalled_io);
     try writer.queue(stalled_io, "held");
     try testing.expectError(error.Canceled, writer.wait(io));
@@ -345,7 +345,7 @@ test "InputWriter isOpen observes acceptance even with a full backlog" {
     try gate.init();
     defer gate.deinit();
     const gated_io = gate.gated();
-    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = 4 });
+    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(4) });
     defer writer.deinit(gated_io);
     try testing.expect(writer.isOpen(gated_io));
     try writer.queue(gated_io, "held");
@@ -363,10 +363,58 @@ test "InputWriter isOpen observes acceptance even with a full backlog" {
 test "InputWriter isOpen observes cancellation and retained failures" {
     var child = try spawn("end");
     defer reap(&child);
-    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = 0 });
+    var writer = try child.inputWriter(gpa, io, .{ .max_backlog = .fromRaw(0) });
     defer writer.deinit(io);
     try testing.expect(writer.isOpen(io));
     writer.cancel(io);
     try testing.expect(!writer.isOpen(io));
     try testing.expectError(error.Canceled, writer.queue(io, ""));
+}
+
+/// What the writer's backlog still has room for, read as the callers read it.
+fn room(on: std.Io, writer: *InputWriter) usize {
+    var held = writer.state.queue.acquireUncancelable(on);
+    defer held.deinit(on);
+    return held.value().backlog.remaining();
+}
+
+test "InputWriter gives each batch's charge back when its write completes" {
+    var child = try spawn("echo");
+    defer reap(&child);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
+    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(10) });
+    defer writer.deinit(gated_io);
+    try writer.queue(gated_io, "123456");
+    try gate.entered();
+    try writer.queue(gated_io, "7890");
+    try testing.expectEqual(@as(usize, 0), room(gated_io, &writer));
+    try writer.close(gated_io);
+    gate.release();
+    try output(&child, "1234567890");
+    try writer.wait(gated_io);
+    try testing.expectEqual(@as(usize, 10), room(gated_io, &writer));
+}
+
+test "InputWriter gives every charge back when it ends with batches unwritten" {
+    var child = try spawn("echo");
+    defer reap(&child);
+    var gate: WriteGate = undefined;
+    try gate.init();
+    defer gate.deinit();
+    const gated_io = gate.gated();
+    var writer = try child.inputWriter(gpa, gated_io, .{ .max_backlog = .fromRaw(10) });
+    defer writer.deinit(gated_io);
+    try writer.queue(gated_io, "12345");
+    try gate.entered();
+    try writer.queue(gated_io, "67");
+    try writer.queue(gated_io, "890");
+    try testing.expectEqual(@as(usize, 0), room(gated_io, &writer));
+    // The held write is interrupted and the two queued batches are dropped:
+    // none of them leaves bytes or a charge behind.
+    writer.cancel(gated_io);
+    try testing.expectEqual(@as(usize, 10), room(gated_io, &writer));
+    try testing.expectError(error.Canceled, writer.queue(gated_io, "x"));
 }

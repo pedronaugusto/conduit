@@ -59,7 +59,7 @@ test "exchange keeps no more than max_bytes and says the rest was dropped" {
     defer gpa.free(input);
     var child = try spawn("echo");
     defer child.deinit(io);
-    var result = try child.exchange(gpa, io, input, .{ .timeout = within_budget, .max_bytes = 100 });
+    var result = try child.exchange(gpa, io, input, .{ .timeout = within_budget, .max_bytes = .fromRaw(100) });
     defer result.deinit();
     try testing.expect(Child.succeeded(result.term()));
     try testing.expect(result.stdoutTruncated());

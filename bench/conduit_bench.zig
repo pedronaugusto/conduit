@@ -130,7 +130,7 @@ fn oneCollect(init: std.process.Init, arg: []const u8) !void {
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(init.io);
-    var result = try child.output(init.gpa, init.io, .{ .max_bytes = 2048 });
+    var result = try child.output(init.gpa, init.io, .{ .max_bytes = .fromRaw(2048) });
     defer result.deinit();
     if (!conduit.succeeded(result.term()) or result.stdout().len != 1025 or result.stdout()[1024] != '\n') return error.BadOutput;
 }

@@ -1,6 +1,7 @@
 //! One clock-based deadline for every bounded wait in conduit, and for a
 //! caller whose wait ends in a system call that counts whole milliseconds.
 const std = @import("std");
+const aegis = @import("aegis");
 
 pub const Deadline = struct {
     /// The moment the wait ends, on the awake clock.
@@ -49,8 +50,10 @@ pub const Deadline = struct {
         if (left <= 0) return 0;
         // Kernel waits take whole milliseconds. A positive fraction still
         // belongs to the budget; rounding it down would declare expiry early.
-        const milliseconds = @divTrunc(left - 1, std.time.ns_per_ms) + 1;
-        return std.math.lossyCast(u32, milliseconds);
+        const span = aegis.units.Duration(.nanosecond, i128).fromRaw(left);
+        // A wait too long for a count of u32 milliseconds is the longest one.
+        const milliseconds = span.convert(.millisecond, u32, .up) catch return std.math.maxInt(u32);
+        return milliseconds.raw();
     }
 
     /// `remainingMs` for a Windows wait, where the largest count is

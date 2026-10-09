@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const posix = std.posix;
 const windows = std.os.windows;
 const c = std.c;
@@ -696,7 +697,7 @@ pub const OutputOptions = struct {
     /// The most that will be kept from each stream. Bytes past it are read and
     /// dropped — the child is never blocked by a full pipe — and the matching
     /// `_truncated` flag is set.
-    max_bytes: usize = 10 * 1024 * 1024,
+    max_bytes: aegis.units.Bytes(usize) = .fromRaw(10 * 1024 * 1024),
     /// How long the child gets before `killWait` ends it. `.none` waits as long
     /// as it takes.
     timeout: std.Io.Timeout = .none,
@@ -728,7 +729,7 @@ pub const OutputError = error{
 pub const ExchangeOptions = struct {
     /// The most kept from each stream, as `OutputOptions.max_bytes`: bytes
     /// past it are read and dropped, and the stream is reported truncated.
-    max_bytes: usize = 10 * 1024 * 1024,
+    max_bytes: aegis.units.Bytes(usize) = .fromRaw(10 * 1024 * 1024),
     /// One budget for the whole exchange: writing the input, the child's run,
     /// its end and the reading after it. When it runs out the child is killed
     /// at once, with no grace, and `Output.timedOut` says so. `.none` waits as

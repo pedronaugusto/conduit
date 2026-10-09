@@ -8,10 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Adopt aegis (a5d17d0). The Reaper's kill deadline is an `aegis.Guarded`; the `InputWriter` queue is an `aegis.BlockingGuarded` with an `aegis.Condition`, its backlog an `aegis.bounded.Budget` whose reservation travels with the batch it admitted and is released with the batch's bytes through an `aegis.own.Owned`, so the backlog comes back by the batch's release and not by a reset; `Expect` keeps what has arrived behind an `aegis.BlockingGuarded`; the serialized allocator keeps its parent behind one; `Deadline.remainingMs` converts nanoseconds to whole milliseconds with `aegis.units`.
+- Pin the newest green preflight and shakedown. The console layout test now runs with the root module's tests, where before it was never reached.
 - Pin shakedown's fault callbacks, spurious wakes and automatic late timers; replace the Reaper fault layer, stacked refusal wrappers and late-resume tasks while retaining their assertions.
 - Pin preflight's package, test dependency and benchmark contracts. Benchmarks accept `--smoke`; `zig build bench` builds ReleaseFast programs under `zig-out/bench` and runs them with default fixtures.
 
 ### Breaking
+
+- Byte counts take `aegis.units.Bytes(usize)`: `InputWriter.Options.max_backlog`, `OutputOptions.max_bytes` and `ExchangeOptions.max_bytes` (was `usize`). Build them with `.fromRaw(n)`. conduit now depends on aegis, a leaf that needs only the standard library, and a build that sets these options imports it.
 
 - Every wait with a bound takes a `std.Io.Timeout` instead of milliseconds, and every span (a grace, a drain, an interval) is a `std.Io.Duration`. `.none` waits as long as it takes; `Deadline.within(span)` is a timeout on the awake clock.
 

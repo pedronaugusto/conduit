@@ -50,6 +50,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const Pin = @import("pin.zig").Pin;
 const Deadline = @import("conduit.tty").Deadline;
 
@@ -68,25 +69,14 @@ pub const Expect = struct {
     /// Private: where what the child says is kept. The caller's, and borrowed: nothing
     /// here frees it, and it must outlive the `Expect`.
     buffer: []u8,
-    /// Private: how much of `buffer` has arrived.
-    filled: usize,
-    /// Private: how much of `buffer[0..filled]` a match has already accounted for.
-    ///
-    /// Those bytes are not dropped when the match is returned but at the start of
-    /// the next call, which is what keeps the slices in a `Match` readable after
-    /// the call that produced them.
-    consumed: usize,
-    /// Private: the reading task reached the end of the stream.
-    ended: bool,
-    /// Private: the reading task could not read, for a reason other than the end.
-    failed: bool,
+    /// Private: how much of `buffer` has arrived, and how the stream stands. The
+    /// reading task appends to it, and the caller's task consumes from it, so it
+    /// is reachable only through its guard.
+    intake: aegis.BlockingGuarded(Intake),
     /// Private: the reading task has stopped, for any reason, cancellation included.
-    /// Atomic and not under `mutex`, so it can be read without taking anything
+    /// Atomic and not behind the guard, so it can be read without taking anything
     /// the task holds.
     finished: std.atomic.Value(bool),
-    /// Private: guards the four fields above: the reading task appends to them, and the
-    /// caller's task consumes from them.
-    mutex: std.Io.Mutex,
     /// Private: set by the reading task whenever one of those fields changes, so a wait
     /// ends the moment the child speaks rather than at the end of a poll
     /// interval.
@@ -100,6 +90,22 @@ pub const Expect = struct {
     lifetime: std.atomic.Value(enum(u8) { ready, started, stopped }),
     /// Private: in safe builds, where this was when `start` began to hold a pointer to it.
     pin: Pin = .{},
+
+    /// What the reading task and the caller share, behind `intake`.
+    const Intake = struct {
+        /// How much of `buffer` has arrived.
+        filled: usize,
+        /// How much of `buffer[0..filled]` a match has already accounted for.
+        ///
+        /// Those bytes are not dropped when the match is returned but at the start of
+        /// the next call, which is what keeps the slices in a `Match` readable after
+        /// the call that produced them.
+        consumed: usize,
+        /// The reading task reached the end of the stream.
+        ended: bool,
+        /// The reading task could not read, for a reason other than the end.
+        failed: bool,
+    };
 
     /// Where a pattern was found, in the bytes that had arrived when it was.
     ///
@@ -128,11 +134,7 @@ pub const Expect = struct {
         return .{
             .master = master,
             .buffer = buffer,
-            .filled = 0,
-            .consumed = 0,
-            .ended = false,
-            .failed = false,
-            .mutex = .init,
+            .intake = .init(.{ .filled = 0, .consumed = 0, .ended = false, .failed = false }),
             .arrived = .unset,
             .space = .unset,
             .group = .init,
@@ -283,21 +285,22 @@ pub const Expect = struct {
             var ended = false;
             var failed = false;
             {
-                expect.mutex.lockUncancelable(io);
-                defer expect.mutex.unlock(io);
+                var held = expect.intake.acquireUncancelable(io);
+                defer held.deinit(io);
+                const intake = held.value();
 
-                if (search.find(expect.buffer[0..expect.filled], patterns)) |found| {
+                if (search.find(expect.buffer[0..intake.filled], patterns)) |found| {
                     const pattern = patterns[found.index];
                     winner = .{
                         .index = found.index,
                         .before = expect.buffer[0..found.at],
                         .found = expect.buffer[found.at..][0..pattern.len],
                     };
-                    expect.consumed = found.at + pattern.len;
+                    intake.consumed = found.at + pattern.len;
                 } else {
-                    full = expect.filled == expect.buffer.len;
-                    ended = expect.ended;
-                    failed = expect.failed;
+                    full = intake.filled == expect.buffer.len;
+                    ended = intake.ended;
+                    failed = intake.failed;
                 }
             }
 
@@ -380,14 +383,15 @@ pub const Expect = struct {
             var ended = false;
             var failed = false;
             {
-                expect.mutex.lockUncancelable(io);
-                defer expect.mutex.unlock(io);
-                enough = expect.filled >= count;
+                var held = expect.intake.acquireUncancelable(io);
+                defer held.deinit(io);
+                const intake = held.value();
+                enough = intake.filled >= count;
                 if (enough) {
-                    expect.consumed = count;
+                    intake.consumed = count;
                 } else {
-                    ended = expect.ended;
-                    failed = expect.failed;
+                    ended = intake.ended;
+                    failed = intake.failed;
                 }
             }
 
@@ -429,9 +433,10 @@ pub const Expect = struct {
     /// worth a great deal more than one that does not.
     pub fn pending(expect: *Expect, io: std.Io) []const u8 {
         expect.pin.check(expect);
-        expect.mutex.lockUncancelable(io);
-        defer expect.mutex.unlock(io);
-        return expect.buffer[expect.consumed..expect.filled];
+        var held = expect.intake.acquireUncancelable(io);
+        defer held.deinit(io);
+        const intake = held.value();
+        return expect.buffer[intake.consumed..intake.filled];
     }
 
     /// Forgets everything pending, and starts the buffer again from empty.
@@ -441,10 +446,11 @@ pub const Expect = struct {
     /// Reading resumes at once.
     pub fn discard(expect: *Expect, io: std.Io) void {
         expect.pin.check(expect);
-        expect.mutex.lockUncancelable(io);
-        defer expect.mutex.unlock(io);
-        expect.filled = 0;
-        expect.consumed = 0;
+        var held = expect.intake.acquireUncancelable(io);
+        defer held.deinit(io);
+        const intake = held.value();
+        intake.filled = 0;
+        intake.consumed = 0;
         expect.space.set(io);
     }
 
@@ -463,9 +469,9 @@ pub const Expect = struct {
             // consumer before this check leaves room; one after it sets space.
             expect.space.reset();
             const room = room: {
-                expect.mutex.lockUncancelable(io);
-                defer expect.mutex.unlock(io);
-                break :room expect.buffer.len - expect.filled;
+                var held = expect.intake.acquireUncancelable(io);
+                defer held.deinit(io);
+                break :room expect.buffer.len - held.value().filled;
             };
             if (room == 0) {
                 // Full means backpressure until the consumer makes room.
@@ -478,13 +484,14 @@ pub const Expect = struct {
                 else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
             };
             {
-                expect.mutex.lockUncancelable(io);
-                defer expect.mutex.unlock(io);
+                var held = expect.intake.acquireUncancelable(io);
+                defer held.deinit(io);
+                const intake = held.value();
                 // Only this reader grows `filled`, and the room it saw can
                 // only have grown since: a consumer frees space, never takes it.
-                std.debug.assert(n <= expect.buffer.len - expect.filled);
-                @memcpy(expect.buffer[expect.filled..][0..n], chunk[0..n]);
-                expect.filled += n;
+                std.debug.assert(n <= expect.buffer.len - intake.filled);
+                @memcpy(expect.buffer[intake.filled..][0..n], chunk[0..n]);
+                intake.filled += n;
             }
             expect.arrived.set(io);
         }
@@ -494,11 +501,11 @@ pub const Expect = struct {
     /// has finished, including when cancellation bypasses this function.
     fn finish(expect: *Expect, io: std.Io, why: enum { ended, failed }) void {
         {
-            expect.mutex.lockUncancelable(io);
-            defer expect.mutex.unlock(io);
+            var held = expect.intake.acquireUncancelable(io);
+            defer held.deinit(io);
             switch (why) {
-                .ended => expect.ended = true,
-                .failed => expect.failed = true,
+                .ended => held.value().ended = true,
+                .failed => held.value().failed = true,
             }
         }
         expect.arrived.set(io);
@@ -536,15 +543,16 @@ pub const Expect = struct {
     /// which is what keeps a `Match`'s slices readable until the caller asks for
     /// something else.
     fn compact(expect: *Expect, io: std.Io) void {
-        expect.mutex.lockUncancelable(io);
-        defer expect.mutex.unlock(io);
-        if (expect.consumed == 0) return;
-        std.debug.assert(expect.consumed <= expect.filled);
-        std.debug.assert(expect.filled <= expect.buffer.len);
-        const rest = expect.filled - expect.consumed;
-        @memmove(expect.buffer[0..rest], expect.buffer[expect.consumed..expect.filled]);
-        expect.filled = rest;
-        expect.consumed = 0;
+        var held = expect.intake.acquireUncancelable(io);
+        defer held.deinit(io);
+        const intake = held.value();
+        if (intake.consumed == 0) return;
+        std.debug.assert(intake.consumed <= intake.filled);
+        std.debug.assert(intake.filled <= expect.buffer.len);
+        const rest = intake.filled - intake.consumed;
+        @memmove(expect.buffer[0..rest], expect.buffer[intake.consumed..intake.filled]);
+        intake.filled = rest;
+        intake.consumed = 0;
         expect.space.set(io);
     }
 

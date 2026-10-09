@@ -32,6 +32,7 @@ const State = @import("child/State.zig");
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
@@ -1527,7 +1528,7 @@ pub const Child = struct {
         // The readers grow the collected streams on tasks of their own; their
         // allocations are made one at a time, so the caller's allocator need
         // not be safe to share.
-        var serial: SerialAllocator = .{ .parent = gpa, .io = io };
+        var serial: SerialAllocator = .init(gpa, io);
         var out: Collector = .init;
         var err: Collector = .init;
         errdefer out.list.deinit(gpa);
@@ -1646,7 +1647,7 @@ pub const Child = struct {
             io: std.Io,
             streams: [2]?std.Io.File,
             collectors: [2]*Collector,
-            max_bytes: usize,
+            max_bytes: aegis.units.Bytes(usize),
             exit: ?posix.fd_t,
         ) OutputError!PollSet {
             var set: PollSet = .{ .fds = undefined, .which = undefined, .count = 0 };
@@ -1696,7 +1697,7 @@ pub const Child = struct {
         gpa: Allocator,
         io: std.Io,
         f: std.Io.File,
-        max_bytes: usize,
+        max_bytes: aegis.units.Bytes(usize),
         into: *Collector,
     ) std.Io.Cancelable!void {
         while (!try collectOnce(gpa, io, f, max_bytes, into)) {}
@@ -1708,12 +1709,12 @@ pub const Child = struct {
         gpa: Allocator,
         io: std.Io,
         f: std.Io.File,
-        max_bytes: usize,
+        max_bytes: aegis.units.Bytes(usize),
         into: *Collector,
     ) std.Io.Cancelable!bool {
         var discard: [64 * 1024]u8 = undefined;
         {
-            const room = max_bytes -| into.list.items.len;
+            const room = max_bytes.raw() -| into.list.items.len;
             var keeping = into.failure.load(.acquire) != .out_of_memory and room != 0;
             const buffer = if (keeping) buffer: {
                 if (into.list.capacity == into.list.items.len) {

@@ -358,7 +358,7 @@ test "output stops at max_bytes and says it did" {
     defer child.deinit(io);
     errdefer _ = child.killWait(io, .zero) catch {};
 
-    var result = try child.output(gpa, io, .{ .max_bytes = 5, .timeout = within_budget });
+    var result = try child.output(gpa, io, .{ .max_bytes = .fromRaw(5), .timeout = within_budget });
     defer result.deinit();
 
     try testing.expectEqualStrings("hello", result.stdout());

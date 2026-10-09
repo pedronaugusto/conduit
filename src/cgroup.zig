@@ -561,6 +561,10 @@ const Name = struct {
 const Leftovers = struct {
     /// Sixteen at a time. Past that, one is left for whatever removes this
     /// process's own cgroup: systemd a unit's, a container runtime its own.
+    // Raw lock beside its data, not an `aegis.Guarded`: `sweep` passes over a
+    // held lock instead of waiting for it, and the waiters yield. Guarded has
+    // neither, so this stays until it has a try-acquire (an OS boundary:
+    // the owners are directory handles).
     var owners: [16]?LinuxCgroup = @splat(null);
     var held: std.atomic.Value(bool) = .init(false);
 

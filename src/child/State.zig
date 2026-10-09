@@ -102,6 +102,12 @@ reaping: std.atomic.Value(bool) = .init(false),
 /// whole tree walk and delivery; reaping holds it only for the final,
 /// nonblocking wait, handle closure and publication. Waiting for an exit
 /// never holds it, so a child being waited for can still be killed.
+///
+/// Not an `aegis.Guarded`, and deliberately a raw lock (an OS boundary: it
+/// guards the use of an operating-system name, not one value). It is held
+/// across a descendant walk and signal delivery, which a spin guard's bounded
+/// sections do not allow; `tryWaitClaimed` must take it without waiting, which
+/// `Guarded` cannot; and its waiters yield rather than burn the walk's time.
 identity: std.atomic.Mutex = .unlocked,
 /// A force request still owns group cleanup at the final, nonblocking reap.
 /// Protected by identity, so fork completion cannot be followed by retirement

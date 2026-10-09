@@ -49,8 +49,8 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const Pin = @import("pin.zig").Pin;
-const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 const Child = @import("child.zig").Child;
@@ -67,29 +67,25 @@ const Deadline = tty.Deadline;
 const Cgroup = @import("cgroup.zig").Cgroup;
 
 // Published before signalling, and retained until the held reap ends the tree.
-// Only the small deadline snapshot is under this lock; no I/O is done in it.
+// Only the small deadline snapshot is behind the guard; no I/O is done under it.
 const Kill = struct {
-    mutex: std.atomic.Mutex = .unlocked,
-    deadline: ?Deadline = null,
-
-    fn lock(kill: *Kill) void {
-        spin.lock(&kill.mutex);
-    }
+    deadline: aegis.Guarded(?Deadline) = .init(null),
 
     fn request(kill: *Kill, io: std.Io, grace: std.Io.Duration) bool {
         const deadline: Deadline = .in(io, grace);
-        kill.lock();
-        defer kill.mutex.unlock();
-        if (grace.nanoseconds > 0 and kill.deadline != null) return false;
-        kill.deadline = deadline;
+        var held = kill.deadline.acquire();
+        defer held.deinit();
+        const slot = held.value();
+        if (grace.nanoseconds > 0 and slot.* != null) return false;
+        slot.* = deadline;
         return true;
     }
 
     /// The deadline of the kill requested, if one was.
     fn current(kill: *Kill) ?Deadline {
-        kill.lock();
-        defer kill.mutex.unlock();
-        return kill.deadline;
+        var held = kill.deadline.acquire();
+        defer held.deinit();
+        return held.value().*;
     }
 
     /// What is left of the kill's grace, if one was requested.

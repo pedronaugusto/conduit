@@ -132,7 +132,7 @@ fn oneExchange(x: Ctx) !f64 {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    var out = try child.exchange(x.gpa(), io, x.input, .{ .max_bytes = x.input.len + 1 });
+    var out = try child.exchange(x.gpa(), io, x.input, .{ .max_bytes = .fromRaw(x.input.len + 1) });
     const ns = since(start, io);
     defer out.deinit();
     if (!conduit.succeeded(out.term()) or out.stdoutTruncated() or !std.mem.eql(u8, out.stdout(), x.input)) return error.BadOutput;
@@ -157,7 +157,7 @@ fn oneCollect(x: Ctx) !f64 {
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    var out = try child.output(x.gpa(), io, .{ .max_bytes = x.input.len + 1 });
+    var out = try child.output(x.gpa(), io, .{ .max_bytes = .fromRaw(x.input.len + 1) });
     const ns = since(start, io);
     defer out.deinit();
     if (!conduit.succeeded(out.term()) or !std.mem.eql(u8, out.stdout(), x.input)) return error.BadOutput;
@@ -190,7 +190,7 @@ fn oneInputWriter(x: Ctx) !f64 {
     });
     defer child.deinit(io);
     errdefer _ = child.killWait(io, .zero) catch {};
-    var writer = try child.inputWriter(x.gpa(), io, .{ .max_backlog = x.input.len });
+    var writer = try child.inputWriter(x.gpa(), io, .{ .max_backlog = .fromRaw(x.input.len) });
     defer writer.deinit(io);
     var at: usize = 0;
     while (at < x.input.len) {
@@ -199,7 +199,7 @@ fn oneInputWriter(x: Ctx) !f64 {
         at = end;
     }
     try writer.close(io);
-    var out = try child.output(x.gpa(), io, .{ .max_bytes = x.input.len + 1 });
+    var out = try child.output(x.gpa(), io, .{ .max_bytes = .fromRaw(x.input.len + 1) });
     defer out.deinit();
     try writer.wait(io);
     const ns = since(start, io);

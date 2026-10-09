@@ -13,6 +13,7 @@
 //! calls are serialized; a shared allocator must support its other users.
 
 const std = @import("std");
+const aegis = @import("aegis");
 const handles = @import("handles.zig");
 
 pub fn Writer(comptime Child: type) type {
@@ -26,7 +27,7 @@ pub fn Writer(comptime Child: type) type {
                 /// Bytes accepted but not yet written, queued and in flight together.
                 /// A batch stays charged until its whole write completes. Zero accepts
                 /// only empty writes. The queue's allocation metadata is additional.
-                max_backlog: usize,
+                max_backlog: aegis.units.Bytes(usize),
             };
 
             pub const StartError = std.mem.Allocator.Error || std.Io.ConcurrentError || error{NoStdinPipe};
@@ -42,7 +43,7 @@ pub fn Writer(comptime Child: type) type {
                 const file = child_state.stdin orelse return error.NoStdinPipe;
                 const state = try gpa.create(State);
                 errdefer gpa.destroy(state);
-                state.* = .{ .gpa = gpa, .file = file, .max_backlog = options.max_backlog };
+                state.* = .init(gpa, file, options.max_backlog);
                 try state.group.concurrent(io, State.run, .{ state, io });
                 child.state.stdin = null;
                 return .{ .state = state };
@@ -53,9 +54,10 @@ pub fn Writer(comptime Child: type) type {
             /// A later queue call still checks its own acceptance and may fail.
             pub fn isOpen(writer: *const InputWriter, io: std.Io) bool {
                 const state = writer.state;
-                state.mutex.lockUncancelable(io);
-                defer state.mutex.unlock(io);
-                return !state.ending and state.failed == null;
+                var held = state.queue.acquireUncancelable(io);
+                defer held.deinit(io);
+                const inbox = held.value();
+                return !inbox.ending and inbox.failed == null;
             }
 
             /// Copies all of `bytes` into the queue, or accepts none of it. Concurrent
@@ -65,19 +67,24 @@ pub fn Writer(comptime Child: type) type {
             /// After a write failure, every call returns that same error.
             pub fn queue(writer: *InputWriter, io: std.Io, bytes: []const u8) QueueError!void {
                 const state = writer.state;
-                try state.mutex.lock(io);
-                defer state.mutex.unlock(io);
-                if (state.failed) |err| return err;
-                if (state.ending) return error.InputClosed;
-                if (bytes.len > state.max_backlog - state.backlog) return error.BacklogFull;
+                var held = try state.queue.acquire(io);
+                defer held.deinit(io);
+                const inbox = held.value();
+                if (inbox.failed) |err| return err;
+                if (inbox.ending) return error.InputClosed;
                 if (bytes.len == 0) return;
+                // Charged before anything is allocated, and released with the
+                // batch it admitted: by the write that completes it, or by the
+                // end of the writer, never by the caller giving up.
+                var charge = inbox.backlog.reserve(bytes.len) catch return error.BacklogFull;
+                errdefer charge.release();
                 const node = try state.gpa.create(Node);
                 errdefer state.gpa.destroy(node);
-                node.* = .{ .bytes = try state.gpa.dupe(u8, bytes) };
-                if (state.tail) |tail| tail.next = node else state.head = node;
-                state.tail = node;
-                state.backlog += bytes.len;
-                std.debug.assert(state.backlog <= state.max_backlog);
+                const copy = try state.gpa.dupe(u8, bytes);
+                node.* = .{ .batch = .init(.{ .gpa = state.gpa, .bytes = copy, .charge = undefined }) };
+                charge.moveInto(&node.batch.borrowMut().charge);
+                if (inbox.tail) |tail| tail.next = node else inbox.head = node;
+                inbox.tail = node;
                 state.more.signal(io);
             }
 
@@ -86,10 +93,11 @@ pub fn Writer(comptime Child: type) type {
             /// returned instead. `wait` observes the eventual closure or failure.
             pub fn close(writer: *InputWriter, io: std.Io) WriteError!void {
                 const state = writer.state;
-                state.mutex.lockUncancelable(io);
-                defer state.mutex.unlock(io);
-                if (state.failed) |err| return err;
-                state.ending = true;
+                var held = state.queue.acquireUncancelable(io);
+                defer held.deinit(io);
+                const inbox = held.value();
+                if (inbox.failed) |err| return err;
+                inbox.ending = true;
                 state.more.signal(io);
             }
 
@@ -99,9 +107,9 @@ pub fn Writer(comptime Child: type) type {
             pub fn wait(writer: *InputWriter, io: std.Io) WriteError!void {
                 const state = writer.state;
                 try state.closed.wait(io);
-                state.mutex.lockUncancelable(io);
-                defer state.mutex.unlock(io);
-                if (state.failed) |err| return err;
+                var held = state.queue.acquireUncancelable(io);
+                defer held.deinit(io);
+                if (held.value().failed) |err| return err;
             }
 
             /// Abandons pending input, interrupts a blocked write and joins the task.
@@ -110,9 +118,12 @@ pub fn Writer(comptime Child: type) type {
             /// Only one caller may cancel at a time; queue, close and wait may run alongside.
             pub fn cancel(writer: *InputWriter, io: std.Io) void {
                 const state = writer.state;
-                state.mutex.lockUncancelable(io);
-                if (!state.finished and state.failed == null) state.failed = error.Canceled;
-                state.mutex.unlock(io);
+                {
+                    var held = state.queue.acquireUncancelable(io);
+                    defer held.deinit(io);
+                    const inbox = held.value();
+                    if (!inbox.finished and inbox.failed == null) inbox.failed = error.Canceled;
+                }
                 state.group.cancel(io);
             }
 
@@ -129,47 +140,79 @@ pub fn Writer(comptime Child: type) type {
     };
 }
 
-/// One batch of queued bytes.
-const Node = struct {
-    next: ?*Node = null,
+/// One batch of queued bytes, and what it is charged against the backlog.
+const Batch = struct {
+    gpa: std.mem.Allocator,
     bytes: []u8,
+    charge: aegis.bounded.Budget(usize).Reservation,
+
+    /// Gives back the bytes and the charge, together: the one place either is
+    /// released.
+    fn release(batch: *Batch) void {
+        batch.charge.release();
+        batch.gpa.free(batch.bytes);
+    }
 };
 
-/// What an `InputWriter` and its writing task share. `mutex` guards every
-/// field but the file, which only the task uses once it has started.
-const State = struct {
-    gpa: std.mem.Allocator,
-    file: std.Io.File,
-    max_backlog: usize,
-    mutex: std.Io.Mutex = .init,
-    more: std.Io.Condition = .init,
+/// A queued batch, in the order it was accepted.
+const Node = struct {
+    next: ?*Node = null,
+    batch: aegis.own.Owned(Batch, Batch.release),
+};
+
+/// What the queue's callers and the writing task share, behind `State.queue`.
+const Queue = struct {
+    /// Bytes accepted and not yet written. Its ceiling is `max_backlog`.
+    backlog: aegis.bounded.Budget(usize),
     head: ?*Node = null,
     tail: ?*Node = null,
-    backlog: usize = 0,
     ending: bool = false,
     failed: ?std.Io.File.Writer.Error = null,
     finished: bool = false,
+};
+
+/// What an `InputWriter` and its writing task share. `queue` guards every
+/// field a caller and the task both touch; the file only the task uses once it
+/// has started.
+const State = struct {
+    gpa: std.mem.Allocator,
+    file: std.Io.File,
+    queue: aegis.BlockingGuarded(Queue),
+    /// The one waiter is the writing task, waiting for a batch or an end.
+    more: aegis.Condition = .initLimit(1),
     closed: std.Io.Event = .unset,
     group: std.Io.Group = .init,
 
+    fn init(gpa: std.mem.Allocator, file: std.Io.File, max_backlog: aegis.units.Bytes(usize)) State {
+        return .{ .gpa = gpa, .file = file, .queue = .init(.{ .backlog = .init(max_backlog.raw()) }) };
+    }
+
+    /// Releases a batch and frees its node. Under the guard, like every use of
+    /// the backlog it was charged to.
     fn free(state: *State, node: *Node) void {
-        state.gpa.free(node.bytes);
+        node.batch.deinit();
         state.gpa.destroy(node);
     }
 
     fn next(state: *State, io: std.Io) std.Io.Cancelable!?*Node {
-        try state.mutex.lock(io);
-        defer state.mutex.unlock(io);
-        while (state.head == null and !state.ending and state.failed == null)
-            try state.more.wait(io, &state.mutex);
-        if (state.failed != null) return null;
-        const node = state.head orelse {
-            std.debug.assert(state.tail == null);
+        var held = try state.queue.acquire(io);
+        defer held.deinit(io);
+        while (held.value().head == null and !held.value().ending and held.value().failed == null) {
+            state.more.wait(io, &held, .none) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                // unreachable: the wait has no timeout, and the writing task is the one waiter.
+                error.Timeout, error.WaiterLimit => unreachable,
+            };
+        }
+        const queue = held.value();
+        if (queue.failed != null) return null;
+        const node = queue.head orelse {
+            std.debug.assert(queue.tail == null);
             return null;
         };
-        state.head = node.next;
-        if (state.head == null) state.tail = null;
-        std.debug.assert(node.bytes.len > 0);
+        queue.head = node.next;
+        if (queue.head == null) queue.tail = null;
+        std.debug.assert(node.batch.borrow().bytes.len > 0);
         return node;
     }
 
@@ -179,17 +222,18 @@ const State = struct {
         defer {
             // Only this task ever uses or closes the transferred pipe.
             state.file.close(io);
-            state.mutex.lockUncancelable(io);
-            defer state.mutex.unlock(io);
-            if (state.failed == null) state.failed = failure;
-            while (state.head) |node| {
-                state.head = node.next;
+            var held = state.queue.acquireUncancelable(io);
+            defer held.deinit(io);
+            const queue = held.value();
+            if (queue.failed == null) queue.failed = failure;
+            // Every batch still queued gives its charge back with its bytes.
+            while (queue.head) |node| {
+                queue.head = node.next;
                 state.free(node);
             }
-            state.tail = null;
-            state.backlog = 0;
-            state.ending = true;
-            state.finished = true;
+            queue.tail = null;
+            queue.ending = true;
+            queue.finished = true;
             state.closed.set(io);
         }
         while (true) {
@@ -197,20 +241,18 @@ const State = struct {
                 failure = err;
                 return;
             } orelse return;
-            handles.writeStreamingAll(io, state.file, node.bytes) catch |err| {
-                state.mutex.lockUncancelable(io);
-                defer state.mutex.unlock(io);
+            handles.writeStreamingAll(io, state.file, node.batch.borrow().bytes) catch |err| {
+                var held = state.queue.acquireUncancelable(io);
+                defer held.deinit(io);
                 // Publish the failure before releasing the batch's backlog.
-                if (state.failed == null) state.failed = err;
+                if (held.value().failed == null) held.value().failed = err;
                 state.free(node);
                 return;
             };
-            state.mutex.lockUncancelable(io);
-            // Charged by `queue` when the batch was taken in.
-            std.debug.assert(state.backlog >= node.bytes.len);
-            state.backlog -= node.bytes.len;
+            var held = state.queue.acquireUncancelable(io);
+            defer held.deinit(io);
+            // Written: the batch's bytes and the charge `queue` made for it go back together.
             state.free(node);
-            state.mutex.unlock(io);
         }
     }
 };
@@ -231,15 +273,15 @@ test "InputWriter isOpen takes a contended mutex without cancellation" {
             mutex.state.store(.unlocked, .release);
         }
     };
-    var state: State = .{ .gpa = std.testing.allocator, .file = undefined, .max_backlog = 0 };
+    var state: State = .init(std.testing.allocator, undefined, .fromRaw(0));
     var writer: TestWriter = .{ .state = &state };
     // A cancelable wait would fail the test, through any cancel.
     const observed = try shakedown.FaultIo.init(std.testing.allocator, std.testing.io, .{ .plan = &.{
-        .{ .at = .{ .nth = .{ .call = .futexWaitUncancelable, .n = 1 } }, .fault = .{ .call = .{ .ctx = &state.mutex, .f = Release.unlock } } },
+        .{ .at = .{ .nth = .{ .call = .futexWaitUncancelable, .n = 1 } }, .fault = .{ .call = .{ .ctx = &state.queue.mutex, .f = Release.unlock } } },
         .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .cancel, .times = 0 },
     } });
     defer observed.deinit();
-    state.mutex.state.store(.locked_once, .release);
+    state.queue.mutex.state.store(.locked_once, .release);
     try std.testing.expect(writer.isOpen(observed.io()));
     try std.testing.expectEqual(@as(u64, 1), observed.count(.futexWaitUncancelable));
     try std.testing.expectEqual(@as(u64, 0), observed.count(.futexWait));

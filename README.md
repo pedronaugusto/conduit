@@ -19,7 +19,10 @@ const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimiz
 exe.root_module.addImport("conduit", conduit.module("conduit"));
 ```
 
-One import, and no dependencies beyond the standard library. The module links
+One import. The one package conduit builds with is
+[aegis](https://github.com/pedronaugusto/aegis), a leaf that needs only the
+standard library. The options that count bytes take its `units.Bytes(usize)`, so
+a build that sets them imports aegis too. The module links
 libc on POSIX and not on Windows, and decides that from the target: the POSIX
 pseudo-terminal interface is a libc interface everywhere, and Darwin has no
 stable ABI to reach past it. Every Windows call is a `kernel32` import.
@@ -328,11 +331,11 @@ to read while a wait or Reaper runs.
 | `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller, who closes it. A pair has no pipe to transfer. |
 | `conduit.readAvailable(io, file, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
-| `child.inputWriter(gpa, io, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog` bounds queued and in-flight bytes together. |
+| `child.inputWriter(gpa, io, options)` | Transfer stdin to an `InputWriter` on its own task. `options.max_backlog`, an `aegis.units.Bytes(usize)`, bounds queued and in-flight bytes together. |
 | `child.terminalMaster()` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
-| `child.output(gpa, io, options)` | Run to the end and collect it: a cap, a timeout, a bounded drain, both streams read on their own tasks. |
+| `child.output(gpa, io, options)` | Run to the end and collect it: a cap (`max_bytes`, an `aegis.units.Bytes(usize)`), a timeout, a bounded drain, both streams read on their own tasks. |
 | `child.exchange(gpa, io, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
@@ -557,7 +560,7 @@ machine's processor time, from 1 through 10,000; an out-of-range value is
 accepted, even when the backlog is full. A later `queue` checks again.
 
 ```zig
-var input = try child.inputWriter(gpa, io, .{ .max_backlog = 1024 * 1024 });
+var input = try child.inputWriter(gpa, io, .{ .max_backlog = aegis.units.Bytes(usize).fromRaw(1024 * 1024) });
 defer input.deinit(io);
 try input.queue(io, "first\n");
 try input.queue(io, "second\n");
@@ -844,6 +847,7 @@ before `CreateProcessW`; otherwise Windows resolves it.
   interface; `conduit.tty` links it only where the C library is the system
   interface, not on Linux. On Windows every call is a kernel32 import and
   nothing is linked.
+- [aegis](https://github.com/pedronaugusto/aegis) holds the data beside its lock (`Guarded`, `BlockingGuarded`), the bounded backlog and its owners, and the byte count and duration conversions.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
   the tests and CI.
 - **tycho**, every coding agent in one folder (in development).
