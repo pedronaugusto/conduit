@@ -242,19 +242,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "orphans-cost", .source = "bench/orphans_cost.zig" },
             .{ .name = "conduit-bench", .source = "bench/conduit_bench.zig" },
         };
-        for (programs) |program| {
-            const executable = b.addExecutable(.{
-                .name = program.name,
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path(program.source),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = link_libc,
-                    .imports = BenchModules.imports(b, target, optimize),
-                }),
-            });
-            check_step.dependOn(&executable.step);
-        }
         preflight.addCi(b, .{
             .tests = test_step,
             .bench = .{

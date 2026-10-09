@@ -1,138 +1,156 @@
+//! conduit's own measurements of its own calls, as shakedown rows: one JSON
+//! line per row on standard output, every sample in nanoseconds per unit.
+//!
+//!     conduit-bench [--smoke] [--row <name prefix>] [--samples <n>] [--input <file>]
+//!
+//! `--input` is a file of whole lines for the size rows; with none, a 1 KiB
+//! line is made in the working directory. The other rows are in `coverage.zig`
+//! and the shared fixture in `fixture.zig`.
 const std = @import("std");
 const conduit = @import("conduit");
+const bench = @import("shakedown").bench;
 const coverage = @import("coverage.zig");
-var smoke = false;
+const fixture = @import("fixture.zig");
+const rowset = @import("rows.zig");
+const Context = fixture.Context;
+const single = rowset.single;
 const c = std.c;
 
-var true_program: []const u8 = "true";
-var echo_program: []const u8 = "echo";
-var cat_program: []const u8 = "cat";
-var sleep_program: []const u8 = "sleep";
-var shell_program: []const u8 = "sh";
+/// A row that does `units` whole operations, spawn to reap.
+const batched = .{
+    .{ .name = "spawn_wait", .unit = "spawn", .run = spawnWait },
+    .{ .name = "spawn_collect", .unit = "spawn", .setup = requireKiB, .run = spawnCollect },
+    .{ .name = "pty_spawn", .unit = "round_trip", .setup = requireLine, .run = ptySpawnTree },
+    .{ .name = "pty_spawn_child_kill", .unit = "round_trip", .setup = requireLine, .run = ptySpawnChild },
+};
+
+/// A row whose sample is one operation, the child it needs started before the
+/// clock and ended after it.
+const sampled = .{
+    .{ .name = "pty_throughput", .unit = "transfer", .setup = throughputSetup, .run = throughput, .teardown = throughputTeardown },
+    .{ .name = "wait_timeout", .unit = "wait", .setup = waitTimeoutSetup, .run = waitTimeout, .teardown = release },
+    .{ .name = "tree_kill", .unit = "kill", .setup = treeSetup, .run = treeKill, .teardown = treeTeardown },
+    .{ .name = "end_recorded", .unit = "kill", .setup = recordedSetup, .run = endRecorded, .teardown = treeTeardown },
+    .{ .name = "leaf_kill/kill", .unit = "kill", .setup = leafSetup, .run = leafKill, .teardown = leafTeardown },
+    .{ .name = "leaf_kill/latency", .unit = "kill", .setup = leafSetup, .run = leafKillWait, .teardown = release },
+};
+
+const all_rows = batched ++ coverage.batched ++ sampled ++ coverage.sampled;
+const WorkloadError = rowset.ErrorOf(all_rows);
+comptime {
+    std.debug.assert(WorkloadError != anyerror);
+}
+const batched_rows = rowset.of(Context, WorkloadError, batched ++ coverage.batched);
+const sampled_rows = rowset.of(Context, WorkloadError, sampled ++ coverage.sampled);
+
+const usage = "usage: conduit-bench [--smoke] [--row <name prefix>] [--samples <n>] [--input <file>]\n";
 
 pub fn main(init: std.process.Init) !void {
-    true_program = init.environ_map.get("BENCH_TRUE") orelse "true";
-    echo_program = init.environ_map.get("BENCH_ECHO") orelse "echo";
-    cat_program = init.environ_map.get("BENCH_CAT") orelse "cat";
-    sleep_program = init.environ_map.get("BENCH_SLEEP") orelse "sleep";
-    shell_program = init.environ_map.get("BENCH_SH") orelse "sh";
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len == 2 and std.mem.eql(u8, args[1], "signal_child")) signalChild();
-    smoke = args.len == 2 and std.mem.eql(u8, args[1], "--smoke");
-    coverage.smoke = smoke;
-    // With no arguments (or --smoke), make the default 1 KiB line in the
-    // fresh working directory preflight gives this run.
-    const defaults = args.len == 1 or smoke;
-    if (!defaults and (args.len < 2 or args.len > 4)) return error.Usage;
-    if (defaults) {
+    var smoke = false;
+    var prefix: []const u8 = "";
+    var samples: usize = 31;
+    var input_path: ?[]const u8 = null;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const flag = args[i];
+        if (std.mem.eql(u8, flag, "--smoke")) {
+            smoke = true;
+        } else if (i + 1 < args.len and std.mem.eql(u8, flag, "--row")) {
+            i += 1;
+            prefix = args[i];
+        } else if (i + 1 < args.len and std.mem.eql(u8, flag, "--samples")) {
+            i += 1;
+            samples = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (i + 1 < args.len and std.mem.eql(u8, flag, "--input")) {
+            i += 1;
+            input_path = args[i];
+        } else {
+            try std.Io.File.stderr().writeStreamingAll(init.io, usage);
+            return error.Usage;
+        }
+    }
+    if (input_path == null) {
         const line: [1023]u8 = @splat('x');
         try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = "line.txt", .data = &line ++ "\n" });
     }
-    const path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, if (defaults) "line.txt" else args[1], init.gpa);
+    const path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, input_path orelse "line.txt", init.gpa);
     defer init.gpa.free(path);
-    const workload = if (!defaults and args.len > 2) args[2] else "all";
-    const n = if (smoke) 1 else if (args.len > 3) try std.fmt.parseInt(usize, args[3], 10) else default_count;
     const input = try std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .unlimited);
     defer init.gpa.free(input);
 
-    if (std.mem.eql(u8, workload, "all")) {
-        for (own_workloads ++ coverage.names) |each| try runOne(init, each, n, input, path);
-        return;
-    }
-    return runOne(init, workload, n, input, path);
-}
-
-/// How many times a workload runs when the command line does not say.
-const default_count = 100;
-
-/// The workloads this file runs itself; `coverage.names` are the rest. `all`
-/// runs both lists, in order.
-const own_workloads = [_][]const u8{
-    "spawn_wait",
-    "spawn_collect",
-    "pty_spawn",
-    "pty_spawn_child_kill",
-    "pty_throughput",
-    "wait_timeout",
-    "tree_kill",
-    "leaf_kill",
-    "end_recorded",
-};
-
-fn runOne(init: std.process.Init, workload: []const u8, n: usize, input: []const u8, path: []const u8) !void {
-    if (std.mem.eql(u8, workload, "spawn_wait")) return spawnWait(init, n);
-    if (std.mem.eql(u8, workload, "spawn_collect")) return spawnCollect(init, n, input);
-    if (std.mem.eql(u8, workload, "pty_spawn")) return ptySpawn(init, n, input, .tree);
-    if (std.mem.eql(u8, workload, "pty_spawn_child_kill")) return ptySpawn(init, n, input, .child);
-    if (std.mem.eql(u8, workload, "pty_throughput")) return ptyThroughput(init, input);
-    if (std.mem.eql(u8, workload, "wait_timeout")) return waitTimeout(init, n);
-    if (std.mem.eql(u8, workload, "tree_kill")) return treeKill(init, n);
-    if (std.mem.eql(u8, workload, "leaf_kill")) return leafKill(init, n);
-    if (std.mem.eql(u8, workload, "end_recorded")) return endRecorded(init, n);
-    if (try coverage.run(.{
+    var context: Context = .{
         .init = init,
-        .n = n,
         .input = input,
         .path = path,
-        .cat = cat_program,
-        .echo = echo_program,
-        .sleep = sleep_program,
-        .sh = shell_program,
-        .true_ = true_program,
-    }, workload)) return;
-    return error.UnknownWorkload;
+        .cat = init.environ_map.get("BENCH_CAT") orelse "cat",
+        .echo = init.environ_map.get("BENCH_ECHO") orelse "echo",
+        .sleep = init.environ_map.get("BENCH_SLEEP") orelse "sleep",
+        .sh = init.environ_map.get("BENCH_SH") orelse "sh",
+        .true_ = init.environ_map.get("BENCH_TRUE") orelse "true",
+    };
+
+    // `wait_tree` is a row only where a cgroup can be made.
+    var available: [sampled_rows.len]bench.Row(Context, WorkloadError) = undefined;
+    var count: usize = 0;
+    const waits = try coverage.waitTreeAvailable(&context);
+    for (sampled_rows) |row| {
+        if (!waits and std.mem.eql(u8, row.name, "wait_tree")) continue;
+        available[count] = row;
+        count += 1;
+    }
+    var selected = false;
+    for (batched_rows) |row| selected = selected or std.mem.startsWith(u8, row.name, prefix);
+    for (available[0..count]) |row| selected = selected or std.mem.startsWith(u8, row.name, prefix);
+    if (!selected) return error.UnknownRow;
+
+    const metadata: bench.Metadata = .{ .commit = @import("preflight_bench_options").commit };
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
+    try bench.run(WorkloadError, init.gpa, init.io, &stdout.interface, &context, &batched_rows, metadata, .{ .smoke = smoke, .prefix = prefix, .samples = samples });
+    // A sample here is one operation, so a batch must never grow: a sample
+    // shorter than ten clock ticks is an error, not a longer batch. The
+    // shortest, one kill signal or one read, are a few microseconds against
+    // a tick of tens of nanoseconds.
+    try bench.run(WorkloadError, init.gpa, init.io, &stdout.interface, &context, available[0..count], metadata, .{ .smoke = smoke, .prefix = prefix, .samples = samples, .minimum = .zero, .resolution_multiple = 10 });
+    try stdout.interface.flush();
 }
 
-fn now(io: std.Io) std.Io.Timestamp {
-    return benchmarkNow(io);
+// --------------------------------------------------------------- spawn wait
+
+fn spawnWait(x: *Context, units: u64) !void {
+    for (0..units) |_| {
+        var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{x.true_}, .stdio = .ignore });
+        defer child.deinit(x.io());
+        if (!conduit.succeeded(try child.wait(x.io()))) return error.ChildFailed;
+    }
 }
 
-fn elapsedNs(start: std.Io.Timestamp, io: std.Io) f64 {
-    return @floatFromInt(start.durationTo(now(io)).toNanoseconds());
+// ------------------------------------------------------------ spawn collect
+
+fn requireKiB(x: *Context) !void {
+    if (x.input.len != 1024 or std.mem.findScalar(u8, x.input, 0) != null) return error.BadInput;
 }
 
-fn report(init: std.process.Init, workload: []const u8, metric: []const u8, value: f64, unit: []const u8) !void {
-    return reportAs(init, "conduit", workload, metric, value, unit);
+fn spawnCollect(x: *Context, units: u64) !void {
+    for (0..units) |_| {
+        const argv = &.{ x.echo, x.input };
+        var child = try conduit.Child.spawn(x.gpa(), x.io(), .{
+            .argv = argv,
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        });
+        defer child.deinit(x.io());
+        var result = try child.output(x.gpa(), x.io(), .{ .max_bytes = .fromRaw(2048) });
+        defer result.deinit();
+        if (!conduit.succeeded(result.term()) or result.stdout().len != 1025 or result.stdout()[1024] != '\n') return error.BadOutput;
+    }
 }
 
-fn reportAs(init: std.process.Init, side: []const u8, workload: []const u8, metric: []const u8, value: f64, unit: []const u8) !void {
-    var buf: [512]u8 = undefined;
-    var out = std.Io.File.stdout().writerStreaming(init.io, &buf);
-    try out.interface.print("{s}\t{s}\t{s}\t{d:.6}\t{s}\n", .{ side, workload, metric, value, unit });
-    try out.interface.flush();
-}
+// ---------------------------------------------------------------- pty spawn
 
-fn spawnWait(init: std.process.Init, n: usize) !void {
-    for (0..if (smoke) @as(usize, 0) else @min(n, 10)) |_| try oneSpawnWait(init);
-    const start = now(init.io);
-    for (0..n) |_| try oneSpawnWait(init);
-    try report(init, "SPAWN+WAIT", "latency", elapsedNs(start, init.io) / @as(f64, @floatFromInt(n)) / 1000.0, "us");
-}
-
-fn oneSpawnWait(init: std.process.Init) !void {
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{ .argv = &.{true_program}, .stdio = .ignore });
-    defer child.deinit(init.io);
-    if (!conduit.succeeded(try child.wait(init.io))) return error.ChildFailed;
-}
-
-fn spawnCollect(init: std.process.Init, n: usize, arg: []const u8) !void {
-    if (arg.len != 1024 or std.mem.findScalar(u8, arg, 0) != null) return error.BadInput;
-    for (0..if (smoke) @as(usize, 0) else @min(n, 5)) |_| try oneCollect(init, arg);
-    const start = now(init.io);
-    for (0..n) |_| try oneCollect(init, arg);
-    try report(init, "SPAWN+COLLECT", "latency", elapsedNs(start, init.io) / @as(f64, @floatFromInt(n)) / 1000.0, "us");
-}
-
-fn oneCollect(init: std.process.Init, arg: []const u8) !void {
-    const argv = &.{ echo_program, arg };
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{
-        .argv = argv,
-        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
-    });
-    defer child.deinit(init.io);
-    var result = try child.output(init.gpa, init.io, .{ .max_bytes = .fromRaw(2048) });
-    defer result.deinit();
-    if (!conduit.succeeded(result.term()) or result.stdout().len != 1025 or result.stdout()[1024] != '\n') return error.BadOutput;
+fn requireLine(x: *Context) !void {
+    if (x.input.len != 1024 or x.input[x.input.len - 1] != '\n') return error.BadInput;
 }
 
 /// How the round trip ends the child. `.tree` is `killWait`, the call a
@@ -141,47 +159,40 @@ fn oneCollect(init: std.process.Init, arg: []const u8) !void {
 /// cost of the descendant walk `killWait` pays can be read off beside it.
 const PtyEnd = enum { tree, child };
 
-fn ptySpawn(init: std.process.Init, n: usize, input: []const u8, end: PtyEnd) !void {
-    if (input.len != 1024 or input[input.len - 1] != '\n') return error.BadInput;
-    for (0..if (smoke) @as(usize, 0) else @min(n, 3)) |_| _ = try onePtyRoundTrip(init, input, end);
-    const start = now(init.io);
-    for (0..n) |_| _ = try onePtyRoundTrip(init, input, end);
-    const side = switch (end) {
-        .tree => "conduit",
-        .child => "conduit-childkill",
-    };
-    try reportAs(init, side, "PTY SPAWN", "latency", elapsedNs(start, init.io) / @as(f64, @floatFromInt(n)) / 1000.0, "us");
+fn ptySpawnTree(x: *Context, units: u64) !void {
+    for (0..units) |_| _ = try ptyRoundTrip(x, .tree);
 }
 
-fn onePtyRoundTrip(init: std.process.Init, input: []const u8, end: PtyEnd) !u64 {
-    var pty = try conduit.Pty.open(init.gpa, .{ .rows = 24, .cols = 80 });
-    defer pty.close(init.io);
+fn ptySpawnChild(x: *Context, units: u64) !void {
+    for (0..units) |_| _ = try ptyRoundTrip(x, .child);
+}
+
+fn ptyRoundTrip(x: *Context, end: PtyEnd) !u64 {
+    const io = x.io();
+    var pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
     _ = try conduit.rawMode(pty.readHandle().?);
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{
-        .argv = &.{cat_program},
+    var child = try conduit.Child.spawn(x.gpa(), io, .{
+        .argv = &.{x.cat},
         .stdio = .{ .pty = &pty },
         .detach = true,
     });
-    defer child.deinit(init.io);
-    errdefer _ = child.killWait(init.io, .zero) catch {};
-    pty.closeSlave(init.io);
-    try pty.writeFile().writeStreamingAll(init.io, input);
-    const checksum = try drainExact(init.io, pty.readFile(), expectedPtyBytes(input));
+    defer child.deinit(io);
+    errdefer _ = child.killWait(io, .zero) catch {};
+    pty.closeSlave(io);
+    try pty.writeFile().writeStreamingAll(io, x.input);
+    const checksum = try drainExact(io, pty.readFile(), x.input.len);
     switch (end) {
-        .tree => _ = try child.killWait(init.io, .zero),
+        .tree => _ = try child.killWait(io, .zero),
         .child => {
             if (c.kill(child.processId().?, .KILL) != 0) return error.KillFailed;
-            _ = try child.wait(init.io);
+            _ = try child.wait(io);
         },
     }
     return checksum;
 }
 
-fn expectedPtyBytes(input: []const u8) usize {
-    return input.len;
-}
-
-fn drainExact(io: std.Io, file: std.Io.File, wanted: usize) !u64 {
+pub fn drainExact(io: std.Io, file: std.Io.File, wanted: usize) !u64 {
     var buf: [64 * 1024]u8 = undefined;
     var total: usize = 0;
     var checksum: u64 = 0;
@@ -194,6 +205,8 @@ fn drainExact(io: std.Io, file: std.Io.File, wanted: usize) !u64 {
     return checksum;
 }
 
+// ----------------------------------------------------------- pty throughput
+
 const WriteCtx = struct {
     io: std.Io,
     file: std.Io.File,
@@ -205,49 +218,57 @@ fn writeAll(ctx: *WriteCtx) void {
     ctx.file.writeStreamingAll(ctx.io, ctx.bytes) catch ctx.failed.store(true, .release);
 }
 
-fn ptyThroughput(init: std.process.Init, input: []const u8) !void {
-    if (input.len == 0 or input[input.len - 1] != '\n') return error.BadInput;
-    var pty = try conduit.Pty.open(init.gpa, .{ .rows = 24, .cols = 80 });
-    defer pty.close(init.io);
-    _ = try conduit.rawMode(pty.readHandle().?);
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{
-        .argv = &.{cat_program},
-        .stdio = .{ .pty = &pty },
-        .detach = true,
-    });
-    defer child.deinit(init.io);
-    errdefer _ = child.killWait(init.io, .zero) catch {};
-    pty.closeSlave(init.io);
+/// The terminal and the `cat` on it, made before the clock and ended after.
+fn throughputSetup(x: *Context) !void {
+    if (x.input.len == 0 or x.input[x.input.len - 1] != '\n') return error.BadInput;
+    const io = x.io();
+    x.pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    errdefer x.pty.close(io);
+    _ = try conduit.rawMode(x.pty.readHandle().?);
+    try x.spawn(.{ .argv = &.{x.cat}, .stdio = .{ .pty = &x.pty }, .detach = true });
+    errdefer x.release();
+    x.pty.closeSlave(io);
+}
 
-    var ctx: WriteCtx = .{ .io = init.io, .file = pty.writeFile(), .bytes = input };
+/// The whole input written to `cat` on its terminal and every byte read back,
+/// from the writer's start to its end. The child is a fresh one, as it is for
+/// a program that uses it once: its start is in the first bytes' wait. The row
+/// is the transfer; its throughput is the input's size over the sample.
+fn throughput(x: *Context, units: u64) !void {
+    try single(units);
+    const io = x.io();
+    var ctx: WriteCtx = .{ .io = io, .file = x.pty.writeFile(), .bytes = x.input };
     var group: std.Io.Group = .init;
-    defer group.cancel(init.io);
-    const start = now(init.io);
-    try group.concurrent(init.io, writeAll, .{&ctx});
-    const checksum = try drainExact(init.io, pty.readFile(), expectedPtyBytes(input));
-    group.cancel(init.io);
-    const ns = elapsedNs(start, init.io);
+    defer group.cancel(io);
+    try group.concurrent(io, writeAll, .{&ctx});
+    const checksum = try drainExact(io, x.pty.readFile(), x.input.len);
+    group.cancel(io);
     if (ctx.failed.load(.acquire) or checksum == 0) return error.TransferFailed;
-    _ = try child.killWait(init.io, .zero);
-    try report(init, "PTY THROUGHPUT", "throughput", @as(f64, @floatFromInt(input.len)) / ns * 1000.0, "MB/s");
 }
 
-fn waitTimeout(init: std.process.Init, n: usize) !void {
-    for (0..if (smoke) @as(usize, 0) else @min(n, 3)) |_| _ = try oneWaitTimeout(init);
-    var total_ns: f64 = 0;
-    for (0..n) |_| total_ns += try oneWaitTimeout(init);
-    const overshoot_us = @max(0.0, total_ns / @as(f64, @floatFromInt(n)) / 1000.0 - 10_000.0);
-    try report(init, "WAIT-TIMEOUT", "overshoot", overshoot_us, "us");
+fn throughputTeardown(x: *Context) !void {
+    x.release();
+    x.pty.close(x.io());
 }
 
-fn oneWaitTimeout(init: std.process.Init) !f64 {
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{ .argv = &.{ sleep_program, "0.01" }, .stdio = .ignore });
-    defer child.deinit(init.io);
-    errdefer _ = child.killWait(init.io, .zero) catch {};
-    const start = now(init.io);
-    const term = (try child.waitTimeout(init.io, conduit.Deadline.within(.fromSeconds(1)))) orelse return error.UnexpectedTimeout;
+// ------------------------------------------------------------- wait timeout
+
+fn waitTimeoutSetup(x: *Context) !void {
+    try x.spawn(.{ .argv = &.{ x.sleep, "0.01" }, .stdio = .ignore });
+}
+
+/// `waitTimeout` on a child that ends in ten milliseconds. The sample is the
+/// call, which returns at the child's end: the row's overshoot is the median
+/// less those ten milliseconds.
+fn waitTimeout(x: *Context, units: u64) !void {
+    try single(units);
+    const term = (try x.child.waitTimeout(x.io(), conduit.Deadline.within(.fromSeconds(1)))) orelse return error.UnexpectedTimeout;
+    x.reaped = true;
     if (!conduit.succeeded(term)) return error.ChildFailed;
-    return elapsedNs(start, init.io);
+}
+
+fn release(x: *Context) !void {
+    x.release();
 }
 
 extern "c" fn proc_listchildpids(ppid: std.posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
@@ -300,88 +321,72 @@ fn confirmGone(io: std.Io, pids: []const std.posix.pid_t) !void {
     return error.DescendantSurvived;
 }
 
-fn treeKill(init: std.process.Init, n: usize) !void {
-    for (0..if (smoke) @as(usize, 0) else @min(n, 2)) |_| _ = try oneTreeKill(init);
-    var total_ns: f64 = 0;
-    for (0..n) |_| total_ns += try oneTreeKill(init);
-    try report(init, "TREE KILL", "latency", total_ns / @as(f64, @floatFromInt(n)) / 1_000_000.0, "ms");
+// ----------------------------------------------------------------- tree kill
+
+/// A shell with two children of its own, started and found before the clock.
+fn treeSetup(x: *Context) !void {
+    try x.spawn(.{ .argv = &.{ x.sh, "-c", "sleep 30 & sleep 30 & wait" }, .stdio = .ignore, .detach = true });
+    errdefer x.release();
+    const found = try waitForTwoChildren(x.io(), x.child.processId().?, &x.descendants);
+    x.descendant_count = found.len;
 }
 
-fn oneTreeKill(init: std.process.Init) !f64 {
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{ .argv = &.{ shell_program, "-c", "sleep 30 & sleep 30 & wait" }, .stdio = .ignore, .detach = true });
-    defer child.deinit(init.io);
-    errdefer _ = child.killWait(init.io, .zero) catch {};
-    var storage: [8]std.posix.pid_t = undefined;
-    const descendants = try waitForTwoChildren(init.io, child.processId().?, &storage);
-    const start = now(init.io);
-    try child.kill(.kill);
-    _ = try child.wait(init.io);
-    const ns = elapsedNs(start, init.io);
-    try confirmGone(init.io, descendants);
-    return ns;
+/// The kill and the reap of the root.
+fn treeKill(x: *Context, units: u64) !void {
+    try single(units);
+    try x.child.kill(.kill);
+    _ = try x.wait();
+}
+
+/// Every descendant is then confirmed gone.
+fn treeTeardown(x: *Context) !void {
+    x.release();
+    try confirmGone(x.io(), x.descendants[0..x.descendant_count]);
 }
 
 /// `endRecorded` on the same fixed tree, as a later run of a program ends
 /// what an earlier one recorded: the pid and its start time, no group, no
-/// grace. The call and the reap of the root are timed; every descendant is
-/// then confirmed gone.
-fn endRecorded(init: std.process.Init, n: usize) !void {
-    for (0..if (smoke) @as(usize, 0) else @min(n, 2)) |_| _ = try oneEndRecorded(init);
-    var total_ns: f64 = 0;
-    for (0..n) |_| total_ns += try oneEndRecorded(init);
-    try report(init, "END RECORDED", "latency", total_ns / @as(f64, @floatFromInt(n)) / 1_000_000.0, "ms");
+/// grace. The call and the reap of the root are timed.
+fn recordedSetup(x: *Context) !void {
+    try treeSetup(x);
+    errdefer x.release();
+    x.pid = x.child.processId().?;
+    x.started = (try conduit.startTime(x.pid)) orelse return error.NoStartTime;
 }
 
-fn oneEndRecorded(init: std.process.Init) !f64 {
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{ .argv = &.{ shell_program, "-c", "sleep 30 & sleep 30 & wait" }, .stdio = .ignore, .detach = true });
-    defer child.deinit(init.io);
-    errdefer _ = child.killWait(init.io, .zero) catch {};
-    var storage: [8]std.posix.pid_t = undefined;
-    const descendants = try waitForTwoChildren(init.io, child.processId().?, &storage);
-    const root = child.processId().?;
-    const started = (try conduit.startTime(root)) orelse return error.NoStartTime;
-    const start = now(init.io);
-    if (!try conduit.killRecorded(init.io, .{ .pid = root, .start = started, .grace = .zero })) return error.NothingEnded;
-    _ = try child.wait(init.io);
-    const ns = elapsedNs(start, init.io);
-    try confirmGone(init.io, descendants);
-    return ns;
+fn endRecorded(x: *Context, units: u64) !void {
+    try single(units);
+    if (!try conduit.killRecorded(x.io(), .{ .pid = x.pid, .start = x.started, .grace = .zero })) return error.NothingEnded;
+    _ = try x.wait();
 }
 
-/// Diagnostic: `Child.kill(.kill)` of a detached child that never forks
-/// (`sleep`), started and given a millisecond to run before the timed
-/// region. Two lines: the call alone (`kill`) and the call and the reap
-/// (`latency`), the second being mostly the kernel tearing the process down.
-fn leafKill(init: std.process.Init, n: usize) !void {
-    var sums: [2]f64 = .{ 0, 0 };
-    for (0..if (smoke) @as(usize, 0) else @min(n, 2)) |_| _ = try oneLeafKill(init);
-    for (0..n) |_| {
-        const got = try oneLeafKill(init);
-        sums[0] += got[0];
-        sums[1] += got[1];
-    }
-    const count: f64 = @floatFromInt(n);
-    try report(init, "LEAF KILL", "kill", sums[0] / count / 1000.0, "us");
-    try report(init, "LEAF KILL", "latency", sums[1] / count / 1000.0, "us");
+// ----------------------------------------------------------------- leaf kill
+
+/// `Child.kill(.kill)` of a detached child that never forks (`sleep`),
+/// started and given a millisecond to run before the clock. Two rows: the call
+/// alone (`kill`) and the call and the reap (`latency`), the second being
+/// mostly the kernel tearing the process down.
+fn leafSetup(x: *Context) !void {
+    try x.spawn(.{ .argv = &.{ x.sleep, "30" }, .stdio = .ignore, .detach = true });
+    errdefer x.release();
+    try x.io().sleep(.fromMilliseconds(1), .awake);
 }
 
-fn oneLeafKill(init: std.process.Init) ![2]f64 {
-    var child = try conduit.Child.spawn(init.gpa, init.io, .{ .argv = &.{ sleep_program, "30" }, .stdio = .ignore, .detach = true });
-    defer child.deinit(init.io);
-    errdefer _ = child.killWait(init.io, .zero) catch {};
-    try std.Io.sleep(init.io, .fromMilliseconds(1), .awake);
-    const start = now(init.io);
-    try child.kill(.kill);
-    const signalled = elapsedNs(start, init.io);
-    _ = try child.wait(init.io);
-    return .{ signalled, elapsedNs(start, init.io) };
+fn leafKill(x: *Context, units: u64) !void {
+    try single(units);
+    try x.child.kill(.kill);
 }
 
-// Smoke exercises correctness without sampling a benchmark clock.
-var smoke_ticks = std.atomic.Value(i64).init(0);
-fn benchmarkNow(io: std.Io) std.Io.Timestamp {
-    if (smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
-    return std.Io.Clock.awake.now(io);
+fn leafKillWait(x: *Context, units: u64) !void {
+    try single(units);
+    try x.child.kill(.kill);
+    _ = try x.wait();
+}
+
+/// The reap the `kill` row leaves out.
+fn leafTeardown(x: *Context) !void {
+    defer x.release();
+    _ = try x.wait();
 }
 
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;

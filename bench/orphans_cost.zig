@@ -1,84 +1,130 @@
-//! Spawn+wait of /usr/bin/true with Orphans off and on, interleaved; and the
-//! cost of one look (Orphans.count) with N live children. Linux only:
-//! elsewhere it says so and ends.
+//! What `Orphans` costs, as shakedown rows: spawn and wait of `true` with
+//! `Orphans` off and on, and one look (`Orphans.count`) with 0, 10 and 100 live
+//! children of conduit's own. Linux only: elsewhere it says so and ends.
+//!
+//!     orphans-cost [--smoke] [--row <name prefix>] [--samples <n>]
 const std = @import("std");
 const conduit = @import("conduit");
-var smoke = false;
-var true_program: []const u8 = "true";
-var sleep_program: []const u8 = "sleep";
+const rowset = @import("rows.zig");
+const bench = @import("shakedown").bench;
 
-fn spawnWait(io: std.Io, gpa: std.mem.Allocator, n: usize) !f64 {
-    const start = benchmarkNow(io);
-    for (0..n) |_| {
-        var child = try conduit.Child.spawn(gpa, io, .{ .argv = &.{true_program}, .stdio = .ignore });
-        defer child.deinit(io);
-        _ = try child.wait(io);
+const Context = struct {
+    init: std.process.Init,
+    true_: []const u8,
+    sleep: []const u8,
+    orphans: conduit.Orphans = undefined,
+    children: [100]conduit.Child = undefined,
+    live: usize = 0,
+
+    fn io(x: *const Context) std.Io {
+        return x.init.io;
     }
-    const ns = start.durationTo(benchmarkNow(io)).nanoseconds;
-    return @as(f64, @floatFromInt(ns)) / @as(f64, @floatFromInt(n)) / 1000.0;
+
+    fn gpa(x: *const Context) std.mem.Allocator {
+        return x.init.gpa;
+    }
+};
+
+const table = .{
+    .{ .name = "spawn_wait/off", .unit = "spawn", .run = spawnWait },
+    .{ .name = "spawn_wait/on", .unit = "spawn", .setup = tracking, .run = spawnWait, .teardown = untracking },
+    .{ .name = "look/0", .unit = "look", .setup = tracking, .run = look, .teardown = untracking },
+    .{ .name = "look/10", .unit = "look", .setup = look10, .run = look, .teardown = untracking },
+    .{ .name = "look/100", .unit = "look", .setup = look100, .run = look, .teardown = untracking },
+};
+const WorkloadError = rowset.ErrorOf(table);
+comptime {
+    std.debug.assert(WorkloadError != anyerror);
 }
+const rows = rowset.of(Context, WorkloadError, table);
 
 pub fn main(init: std.process.Init) !void {
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    var smoke = false;
+    var prefix: []const u8 = "";
+    var samples: usize = 31;
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--smoke")) {
+            smoke = true;
+        } else if (i + 1 < args.len and std.mem.eql(u8, args[i], "--row")) {
+            i += 1;
+            prefix = args[i];
+        } else if (i + 1 < args.len and std.mem.eql(u8, args[i], "--samples")) {
+            i += 1;
+            samples = try std.fmt.parseInt(usize, args[i], 10);
+        } else {
+            try std.Io.File.stderr().writeStreamingAll(init.io, "usage: orphans-cost [--smoke] [--row <name prefix>] [--samples <n>]\n");
+            return error.Usage;
+        }
+    }
     if (!conduit.Orphans.supported) {
-        try say(init.io, "Orphans tracking unavailable: requires Linux\n", .{});
+        try std.Io.File.stderr().writeStreamingAll(init.io, "Orphans tracking unavailable: requires Linux\n");
         return;
     }
-    true_program = init.environ_map.get("BENCH_TRUE") orelse "true";
-    sleep_program = init.environ_map.get("BENCH_SLEEP") orelse "sleep";
-    const io = init.io;
-    const gpa = std.heap.c_allocator;
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
-    smoke = args.len == 2 and std.mem.eql(u8, args[1], "--smoke");
-    if (args.len != 1 and !smoke) return error.Usage;
-    const n: usize = if (smoke) 1 else 2000;
-    if (!smoke) _ = try spawnWait(io, gpa, 200);
-    var best_off: f64 = 1e9;
-    var best_on: f64 = 1e9;
-    for (0..(if (smoke) @as(usize, 1) else 7)) |_| {
-        best_off = @min(best_off, try spawnWait(io, gpa, n));
-        var orphans: conduit.Orphans = .init(gpa);
-        try orphans.start();
-        best_on = @min(best_on, try spawnWait(io, gpa, n));
-        try orphans.stop(io);
-        orphans.deinit();
-    }
-    try say(io, "spawn+wait off {d:.1} us, on {d:.1} us\n", .{ best_off, best_on });
+    var selected = false;
+    for (rows) |row| selected = selected or std.mem.startsWith(u8, row.name, prefix);
+    if (!selected) return error.UnknownRow;
+    var context: Context = .{
+        .init = init,
+        .true_ = init.environ_map.get("BENCH_TRUE") orelse "true",
+        .sleep = init.environ_map.get("BENCH_SLEEP") orelse "sleep",
+    };
+    var buffer: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
+    try bench.run(WorkloadError, init.gpa, init.io, &stdout.interface, &context, &rows, .{ .commit = @import("preflight_bench_options").commit }, .{ .smoke = smoke, .prefix = prefix, .samples = samples });
+    try stdout.interface.flush();
+}
 
-    // One look with 0, 10, 100 live children of conduit's own.
-    const live_counts: []const usize = if (smoke) &.{ 0, 1 } else &.{ 0, 10, 100 };
-    for (live_counts) |live| {
-        var children: [100]conduit.Child = undefined;
-        var orphans: conduit.Orphans = .init(gpa);
-        try orphans.start();
-        for (children[0..live]) |*ch| ch.* = try conduit.Child.spawn(gpa, io, .{ .argv = &.{ sleep_program, "100" }, .stdio = .ignore });
-        var best: f64 = 1e9;
-        for (0..(if (smoke) @as(usize, 1) else 7)) |_| {
-            const start = benchmarkNow(io);
-            for (0..(if (smoke) @as(usize, 1) else 200)) |_| _ = try orphans.count(io);
-            const ns = start.durationTo(benchmarkNow(io)).nanoseconds;
-            best = @min(best, @as(f64, @floatFromInt(ns)) / (if (smoke) @as(f64, 1) else 200) / 1000.0);
-        }
-        for (children[0..live]) |*ch| {
-            _ = ch.killWait(io, .zero) catch {};
-            ch.deinit(io);
-        }
-        try orphans.stop(io);
-        orphans.deinit();
-        try say(io, "look with {d} own children: {d:.1} us\n", .{ live, best });
+fn spawnWait(x: *Context, units: u64) !void {
+    for (0..units) |_| {
+        var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{x.true_}, .stdio = .ignore });
+        defer child.deinit(x.io());
+        _ = try child.wait(x.io());
     }
 }
 
-// Smoke exercises correctness without sampling a benchmark clock.
-var smoke_ticks = std.atomic.Value(i64).init(0);
-fn benchmarkNow(io: std.Io) std.Io.Timestamp {
-    if (smoke) return .{ .nanoseconds = smoke_ticks.fetchAdd(1, .monotonic) };
-    return std.Io.Clock.awake.now(io);
+/// `Orphans` started, and with `children` live children of conduit's own.
+fn start(x: *Context, children: usize) !void {
+    x.orphans = .init(x.gpa());
+    errdefer x.orphans.deinit();
+    try x.orphans.start();
+    errdefer x.orphans.stop(x.io()) catch {};
+    x.live = 0;
+    errdefer end(x);
+    for (x.children[0..children]) |*child| {
+        child.* = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{ x.sleep, "100" }, .stdio = .ignore });
+        x.live += 1;
+    }
 }
 
-/// One line of the report, on standard output.
-fn say(io: std.Io, comptime format: []const u8, args: anytype) !void {
-    var buffer: [256]u8 = undefined;
-    var out = std.Io.File.stdout().writerStreaming(io, &buffer);
-    try out.interface.print(format, args);
-    try out.interface.flush();
+/// Every child ended, then `Orphans` stopped.
+fn end(x: *Context) void {
+    for (x.children[0..x.live]) |*child| {
+        _ = child.killWait(x.io(), .zero) catch {};
+        child.deinit(x.io());
+    }
+    x.live = 0;
+}
+
+fn tracking(x: *Context) !void {
+    try start(x, 0);
+}
+
+fn look10(x: *Context) !void {
+    try start(x, 10);
+}
+
+fn look100(x: *Context) !void {
+    try start(x, 100);
+}
+
+fn untracking(x: *Context) !void {
+    end(x);
+    defer x.orphans.deinit();
+    try x.orphans.stop(x.io());
+}
+
+fn look(x: *Context, units: u64) !void {
+    for (0..units) |_| _ = try x.orphans.count(x.io());
 }
