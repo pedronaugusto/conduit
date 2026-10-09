@@ -1714,6 +1714,8 @@ pub const Child = struct {
     ) std.Io.Cancelable!bool {
         var discard: [64 * 1024]u8 = undefined;
         {
+            // Both counts are bytes, so this arithmetic cannot mix kinds of value;
+            // the cap is a `Bytes` at the public boundary and raw only here.
             const room = max_bytes.raw() -| into.list.items.len;
             var keeping = into.failure.load(.acquire) != .out_of_memory and room != 0;
             const buffer = if (keeping) buffer: {
