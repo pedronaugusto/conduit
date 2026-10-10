@@ -2,6 +2,10 @@
   "sources": [
     "src"
   ],
+  "test_support": [
+    "src/testing.zig",
+    "src/testing/**"
+  ],
   "function_exceptions": {},
   "layout_exceptions": {},
   "docs": {
@@ -26,7 +30,8 @@
     ]
   ],
   "test_dependencies": [
-    "shakedown"
+    "shakedown",
+    "conduit.testing"
   ],
   "glint_paths": [
     "src",

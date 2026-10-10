@@ -188,7 +188,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
                 defer output.deinit();
                 try std.testing.expect(output.timedOut());
             } else if (comptime std.mem.eql(u8, operation, "kill")) {
-                try fixture.child.kill(.kill);
+                try fixture.child.kill(io, .kill);
                 _ = (try fixture.child.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
             } else if (comptime std.mem.eql(u8, operation, "killWait")) {
                 _ = try fixture.child.killWait(io, .fromMilliseconds(50));
@@ -214,7 +214,7 @@ test "a walk too large to hold still kills and reaps the child itself" {
     {
         var fixture = try Fixture.start(.survive, "--escape");
         defer fixture.deinit();
-        try std.testing.expectError(error.OutOfMemory, fixture.child.kill(.kill));
+        try std.testing.expectError(error.OutOfMemory, fixture.child.kill(io, .kill));
         const term = (try fixture.child.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
         try std.testing.expectEqual(Child.Term{ .signal = .KILL }, term);
     }

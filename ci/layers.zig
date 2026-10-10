@@ -3,6 +3,9 @@
 const gantry = @import("gantry");
 
 pub const layers: []const gantry.rules.Layer = &.{
+    .{ .name = "seam", .patterns = &.{
+        "src/seam.zig",
+    } },
     .{ .name = "primitives", .patterns = &.{
         "src/orphans/**",
         "src/child/command_line.zig",
@@ -54,6 +57,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "spawn and input policy", .patterns = &.{
         "src/child/posix.zig",
         "src/child/windows.zig",
+        "src/child/simulated.zig",
         "src/input_writer.zig",
     } },
     .{ .name = "child owner", .patterns = &.{
@@ -71,7 +75,13 @@ pub const layers: []const gantry.rules.Layer = &.{
 
 pub const entries: []const []const u8 = &.{};
 
-pub const modules: []const gantry.NamedModule = &.{.{ .name = "conduit.tty", .path = "src/tty.zig" }};
+/// The seam is a module of its own, so conduit and `conduit.testing` share it
+/// without either exporting it.
+pub const modules: []const gantry.NamedModule = &.{
+    .{ .name = "conduit.tty", .path = "src/tty.zig" },
+    .{ .name = "seam", .path = "src/seam.zig" },
+    .{ .name = "conduit.testing", .path = "src/testing.zig" },
+};
 pub const references: []const gantry.rules.ReferenceRule = &.{
     .{ .name = "named dependencies", .unresolved_only = true, .except_targets = &.{
         "aegis",
@@ -86,6 +96,8 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
 };
 
 pub const required = [_][]const u8{
+    "src/seam.zig",
+    "src/child/simulated.zig",
     "src/orphans/adoption_record.zig",
     "src/child/command_line.zig",
     "src/console.zig",
@@ -139,6 +151,7 @@ pub const owned: []const gantry.rules.TokenRule = &.{
     .{ .name = "cgroup owner", .kind = .string, .tokens = &.{"/sys/fs/cgroup*"}, .owners = &.{"src/cgroup.zig"} },
     // A test double is a shakedown `Clock`, `FaultIo` or `Layer`, never a
     // copied `Io` vtable with a slot replaced: such a copy keeps its state in
-    // globals and cannot be stacked. The one vtable here is an allocator's.
-    .{ .name = "test doubles on shakedown", .tokens = &.{ "vtable", "VTable" }, .owners = &.{"src/serial_allocator.zig"} },
+    // globals and cannot be stacked. The one vtable here is an allocator's,
+    // and the seam reads the slot its layer replaces, as airlock's does.
+    .{ .name = "test doubles on shakedown", .tokens = &.{ "vtable", "VTable" }, .owners = &.{ "src/serial_allocator.zig", "src/seam.zig" } },
 };

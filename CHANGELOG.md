@@ -26,6 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `ForkGap` and the leftover-cgroup list are `aegis.Guarded`, taken with `acquireScheduling` (and `tryAcquire` for the sweep that passes over a held lock), where each was a lock of its own over an atomic. Needs the aegis revision that has `acquireScheduling`.
 - `Proxy`'s `Resize.ticket` and `Resize.tick` are `Resize.wake`, a reactor `Wake` the program signals when it learns of a resize: the forwarder waits on it for the interval instead of looking at a counter every five milliseconds. Waiting for a cgroup to empty is a reactor priority-event wait on `cgroup.events`, and `console.waitInput` is a reactor wait on the console's input handle, where both sliced their waits in five milliseconds.
 - `Reaper.enableSubreaper` takes the allocator the adoption scope lives in (it used the page allocator), and the Darwin lineage tracker takes the spawning allocator. `Reaper.deinit` and `Orphans.deinit` end a scope whose `stop` failed or was skipped as far as they can, where they asserted and leaked.
+- conduit runs inside a shakedown simulation, and the calls that reach past
+  `std.Io` take one: `Child.kill(io, signal)`, `Pty.open(gpa, io, options)`,
+  `Pty.resize(io, size)` and `Pty.size(io)`. Where the `Io` is conduit's
+  simulated route the call goes to the simulation; elsewhere it is the
+  system's, as before.
 - Byte counts take `aegis.units.Bytes(usize)`: `InputWriter.Options.max_backlog`, `OutputOptions.max_bytes` and `ExchangeOptions.max_bytes` (was `usize`). Build them with `.fromRaw(n)`. conduit now depends on aegis, a leaf that needs only the standard library, and a build that sets these options imports it.
 
 - Every wait with a bound takes a `std.Io.Timeout` instead of milliseconds, and every span (a grace, a drain, an interval) is a `std.Io.Duration`. `.none` waits as long as it takes; `Deadline.within(span)` is a timeout on the awake clock.
@@ -143,6 +148,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behaviour it had.
 
 ### Added
+
+- `conduit.testing`, from `@import("conduit").testing(dependency)`: a `Seam`
+  over a shakedown `Sim`'s `Io` that starts children as programs registered on
+  the simulation, on pipes, files, the null device or a simulated pair from
+  `Pty.open`, ends them as a signal would, and waits for them on the
+  simulation's clock (`wait`, `waitTimeout`, `tryWait`, `killWait`, `Reaper`).
+  What a simulation cannot be is `error.Unsupported`.
 
 - `Deadline.within(span)`, `Deadline.of(io, timeout)`, `Deadline.never`, `deadline.min(other)`, `deadline.remaining(io)` and `deadline.toTimeout()`, for a caller that holds its own deadline across several waits.
 

@@ -61,7 +61,7 @@ test "a child killed a moment before it is waited for is noticed without asking 
         });
         defer child.deinit(io);
         defer reap(&child, io);
-        try child.kill(.kill);
+        try child.kill(io, .kill);
         try testing.expectEqual(exit.Wait.ended, try exit.wait(counted.io(), child.state.id, watchOf(&child), null, Deadline.within(.fromMilliseconds(5000))));
     }
     try testing.expectEqual(@as(u64, 0), counted.count(.sleep));

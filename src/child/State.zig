@@ -114,6 +114,9 @@ reaping: std.atomic.Value(bool) = .init(false),
 /// sections do not allow; `tryWaitClaimed` must take it without waiting, which
 /// `Guarded` cannot; and its waiters yield rather than burn the walk's time.
 identity: std.atomic.Mutex = .unlocked,
+/// A child the simulated route started: `std.process`'s, on the route's
+/// `Io`, whose signals and waits go to the route. Null for the system's.
+simulated: ?std.process.Child = null,
 /// A force request still owns group cleanup at the final, nonblocking reap.
 /// Protected by identity, so fork completion cannot be followed by retirement
 /// before the group is addressed again.

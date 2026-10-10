@@ -246,7 +246,7 @@ pub const Reaper = struct {
         reaper.observation_failed.store(false, .release);
         // Without a wake the wait ends at the cancel, which is only later: it
         // is how a wait is ended early, not a condition of waiting at all.
-        if (!is_windows) reaper.wake = reactor.Wake.init(io) catch null;
+        if (!is_windows and reaper.child.state.simulated == null) reaper.wake = reactor.Wake.init(io) catch null;
         errdefer reaper.closeWake(io);
         if (reaper.orphans != null) {
             try reaper.group.concurrent(io, observeAdoption, .{ reaper, io });
@@ -321,11 +321,11 @@ pub const Reaper = struct {
         if (!reaper.killing.request(io, grace)) return;
         if (grace.nanoseconds <= 0) {
             // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
-            reaper.target().kill(.kill) catch {};
+            reaper.target().kill(io, .kill) catch {};
             return;
         }
         // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
-        reaper.target().kill(.terminate) catch {};
+        reaper.target().kill(io, .terminate) catch {};
         reaper.group.concurrent(io, insist, .{ reaper, io, grace }) catch {
             // No task to wait out the grace on: insisting now is the one answer
             // that still ends the child.
@@ -449,6 +449,9 @@ pub const Reaper = struct {
     }
 
     fn reap(reaper: *Reaper, io: std.Io) ExitError!Term {
+        // A simulated child's end is the simulation's wait, which a cancel
+        // ends as `stop` asks.
+        if (reaper.child.state.simulated != null) return reaper.child.wait(io);
         if (is_windows) {
             const term = try reaper.child.wait(io);
             if (reaper.options.end_tree or reaper.killing.remaining(io) != null) if (reaper.child.state.job) |job| {

@@ -190,7 +190,7 @@ const expect_message = "expect round trip 0123456789\n";
 /// `cat` on a terminal, and a conversation with it.
 fn expectSetup(x: *Context) !void {
     const io = x.io();
-    x.pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    x.pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
     errdefer x.pty.close(io);
     _ = try conduit.rawMode(x.pty.readHandle().?);
     try x.spawn(.{ .argv = &.{x.cat}, .stdio = .{ .pty = &x.pty }, .detach = true });
@@ -253,7 +253,7 @@ fn proxySetup(x: *Context) !void {
     };
     p.output_open = true;
     p.drain = .{ .fd = p.output[0] };
-    p.pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    p.pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
 }
 
 /// `cat FILE` on a terminal in its default mode, the pair's bytes moved by
@@ -335,7 +335,7 @@ fn shellSpawn(x: *Context, units: u64) !void {
 
 fn ptyOpen(x: *Context, units: u64) !void {
     for (0..units) |_| {
-        var pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+        var pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
         pty.close(x.io());
     }
 }
@@ -347,7 +347,7 @@ const size: conduit.Size = .{ .rows = 24, .cols = 80 };
 /// A terminal with `sleep` in its foreground, found there before the clock.
 fn ttySetup(x: *Context) !void {
     const io = x.io();
-    x.pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    x.pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
     errdefer x.pty.close(io);
     try x.spawn(.{ .argv = &.{ x.sleep, "30" }, .stdio = .{ .pty = &x.pty }, .detach = true });
     errdefer x.release();
@@ -378,11 +378,11 @@ fn setWinSize(x: *Context, units: u64) !void {
 }
 
 fn ptySize(x: *Context, units: u64) !void {
-    for (0..units) |_| if ((try x.pty.size()).cols != 80) return error.BadSize;
+    for (0..units) |_| if ((try x.pty.size(x.io())).cols != 80) return error.BadSize;
 }
 
 fn ptyResize(x: *Context, units: u64) !void {
-    for (0..units) |_| try x.pty.resize(size);
+    for (0..units) |_| try x.pty.resize(x.io(), size);
 }
 
 fn isTty(x: *Context, units: u64) !void {
@@ -511,7 +511,7 @@ fn signalSetup(x: *Context) !void {
 
 fn signal(x: *Context, units: u64) !void {
     for (0..units) |_| {
-        try x.child.kill(.user1);
+        try x.child.kill(x.io(), .user1);
         try readExact(x.signal_out, "x\n");
     }
 }

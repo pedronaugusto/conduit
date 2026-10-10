@@ -411,7 +411,7 @@ fn joinTeardown(x: *Context) !void {
 /// reading it.
 fn readerSetup(x: *Context) !void {
     const io = x.io();
-    x.pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    x.pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
     errdefer x.pty.close(io);
     try x.spawn(.{
         .argv = &.{ "/bin/sh", "-c", "echo ready; read x" },

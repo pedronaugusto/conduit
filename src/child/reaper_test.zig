@@ -54,7 +54,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         access.probe(&hook);
         defer access.probe(null);
         stage = "delivering the signal";
-        try child.kill(if (iteration % 3 == 0) .kill else .terminate);
+        try child.kill(io, if (iteration % 3 == 0) .kill else .terminate);
         access.probe(null);
         stage = "checking retirement during delivery";
         try testing.expect(!probe.retired);
@@ -63,7 +63,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
         stage = "comparing the published answer";
         try testing.expectEqual(term, try child.wait(io));
         stage = "ignoring a retired kill";
-        try child.kill(.kill);
+        try child.kill(io, .kill);
     }
 }
 

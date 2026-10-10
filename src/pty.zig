@@ -20,6 +20,10 @@
 //! Linux, the BSDs and Darwin. On Windows it is `CreatePseudoConsole`, which
 //! needs Windows 10 version 1809 or newer.
 //!
+//! Over an `Io` that carries conduit's simulated route (`conduit.testing`),
+//! `open` makes the pair in the simulation instead: a master and a terminal
+//! end, one handle each, which a child spawned on it gets as its streams.
+//!
 //! Every end is owned by the `Pty` until `close`, `closeSlave` or
 //! `closeMaster` is called; see the ownership note on `Child.spawn` for which
 //! end a parent should keep, and `closeSlave` for the one place the two
@@ -37,6 +41,7 @@ const tty = @import("conduit.tty");
 
 const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
+const seam = @import("seam");
 
 const Size = tty.Size;
 const file = handles.file;
@@ -52,6 +57,11 @@ pub const Pty = struct {
     geometry: if (is_windows) ?*Pty.Geometry else void,
     /// Private: on Windows, how the pseudo console was made.
     console: if (is_windows) Pty.ConsoleOptions else void,
+    /// Private: a simulated pair's terminal end, a stream on every system,
+    /// where `slave` is null; null once closed.
+    simulated_slave: ?Handle = null,
+    /// Private: whether the pair is a simulation's.
+    simulated: bool = false,
 
     /// Borrows the reading handle, or null after the master closes.
     pub fn readHandle(pty: Pty) ?Handle {
@@ -175,9 +185,33 @@ pub const Pty = struct {
     /// unrelated child is spawned is not handed to it. `Child.spawn` puts the
     /// slave on the child's standard streams with `dup2`, which clears the flag on
     /// the copies, so the child it *is* for still gets its terminal.
-    pub fn open(gpa: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
+    pub fn open(gpa: std.mem.Allocator, io: std.Io, options: OpenOptions) OpenError!Pty {
+        if (seam.routeOf(io)) |route| return openSimulated(route, options);
         if (is_windows) return openWindows(gpa, options);
         return openPosix(options);
+    }
+
+    /// A pair the route makes: the master one handle, read and written, and
+    /// the terminal end one stream.
+    fn openSimulated(route: *const seam.Route, options: OpenOptions) OpenError!Pty {
+        const t = route.terminal(.{ .rows = options.rows, .cols = options.cols }) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.SystemResources => error.SystemResources,
+        };
+        return .{
+            .read = t.master.handle,
+            .write = t.master.handle,
+            .slave = null,
+            .geometry = if (is_windows) null else {},
+            .console = if (is_windows) options.console else {},
+            .simulated_slave = t.slave.handle,
+            .simulated = true,
+        };
+    }
+
+    /// The terminal end a child spawned on a simulated pair is given.
+    pub fn simulatedSlave(pty: Pty) ?std.Io.File {
+        return if (pty.simulated_slave) |h| file(h) else null;
     }
 
     pub const ResizeError = error{
@@ -201,7 +235,15 @@ pub const Pty = struct {
     ///
     /// Safe to call from another task while the master is being read or written.
     /// That is what makes window-size forwarding possible at all — see `Proxy`.
-    pub fn resize(pty: *Pty, new_size: tty.Size) ResizeError!void {
+    pub fn resize(pty: *Pty, io: std.Io, new_size: tty.Size) ResizeError!void {
+        if (pty.simulated) {
+            const route = seam.routeOf(io) orelse return error.Unexpected;
+            const read = pty.read orelse return error.Unexpected;
+            return route.setWindowSize(file(read), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
+                error.NotTerminalDevice => error.NotATerminal,
+                error.BadHandle => error.Unexpected,
+            };
+        }
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
             geometry.lock();
@@ -225,7 +267,16 @@ pub const Pty = struct {
     /// Windows a pseudoconsole cannot be asked, so this answers with what `open`
     /// or `resize` last set. Safe to read while resize is in flight; the OS
     /// change and cached geometry are serialized together on Windows.
-    pub fn size(pty: *const Pty) SizeError!tty.Size {
+    pub fn size(pty: *const Pty, io: std.Io) SizeError!tty.Size {
+        if (pty.simulated) {
+            const route = seam.routeOf(io) orelse return error.Unexpected;
+            const read = pty.read orelse return error.Unexpected;
+            const got = route.windowSize(file(read)) catch |err| return switch (err) {
+                error.NotTerminalDevice => error.NotATerminal,
+                error.BadHandle => error.Unexpected,
+            };
+            return .{ .rows = got.rows, .cols = got.cols };
+        }
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
             geometry.lock();
@@ -267,6 +318,7 @@ pub const Pty = struct {
     /// reads or writes.
     pub fn slaveFile(pty: Pty) std.Io.File {
         if (is_windows) @compileError("Pty.slaveFile is POSIX-only: a pseudoconsole is not a stream");
+        if (pty.simulated) return file(pty.simulated_slave.?);
         return slaveFilePosix(pty);
     }
 
@@ -299,7 +351,7 @@ pub const Pty = struct {
     /// output reads until it has it — on POSIX, `closeSlave` first and read to the
     /// end — and then stops its reader and calls this.
     pub fn close(pty: *Pty, io: std.Io) void {
-        if (is_windows) return pty.closeWindows(io);
+        if (is_windows and !pty.simulated) return pty.closeWindows(io);
         pty.closeSlave(io);
         pty.closeMaster(io);
     }
@@ -368,6 +420,10 @@ pub const Pty = struct {
     /// is how it is done.
     pub fn closeSlave(pty: *Pty, io: std.Io) void {
         defer if (is_windows) pty.releaseGeometry();
+        if (pty.simulated_slave) |handle| {
+            file(handle).close(io);
+            pty.simulated_slave = null;
+        }
         const slave = pty.slave orelse return;
         pty.slave = null;
         if (is_windows) {
@@ -697,7 +753,7 @@ pub const Pty = struct {
     test "open gives a pair at the requested size, and resize changes it" {
         const io = testing.io;
 
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 30, .cols = 100 });
         defer pty.close(io);
         // Registered after the close, so it runs before it: the reader is stopped
         // before the file it reads is closed (see `closeMaster`), and `close`
@@ -706,12 +762,12 @@ pub const Pty = struct {
         defer drain.deinit(io);
         try drain.start(io, pty.readFile());
 
-        const opened = try pty.size();
+        const opened = try pty.size(std.testing.io);
         try testing.expectEqual(@as(u16, 30), opened.rows);
         try testing.expectEqual(@as(u16, 100), opened.cols);
 
-        try pty.resize(.{ .rows = 41, .cols = 121 });
-        const resized = try pty.size();
+        try pty.resize(std.testing.io, .{ .rows = 41, .cols = 121 });
+        const resized = try pty.size(std.testing.io);
         try testing.expectEqual(@as(u16, 41), resized.rows);
         try testing.expectEqual(@as(u16, 121), resized.cols);
     }
@@ -719,7 +775,7 @@ pub const Pty = struct {
     test "close is idempotent and correct after closing one end" {
         const io = testing.io;
 
-        var pty = try Pty.open(std.testing.allocator, .{});
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{});
         // The master ends go first here, which is what makes the terminal end safe
         // to close on Windows with nothing reading: see `close`.
         pty.closeMaster(io);
@@ -734,15 +790,15 @@ pub const Pty = struct {
     test "both ends of a POSIX pair are the same terminal" {
         if (is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 30, .cols = 100 });
         defer pty.close(io);
 
         try testing.expect(tty.isTty(pty.read.?));
         try testing.expect(tty.isTty(pty.slave.?));
         // The size belongs to the terminal, so the slave reports the same one.
-        try testing.expectEqual(try pty.size(), try tty.winSize(pty.slave.?));
+        try testing.expectEqual(try pty.size(std.testing.io), try tty.winSize(pty.slave.?));
 
-        try pty.resize(.{ .rows = 40, .cols = 132, .x_pixel = 1320, .y_pixel = 800 });
+        try pty.resize(std.testing.io, .{ .rows = 40, .cols = 132, .x_pixel = 1320, .y_pixel = 800 });
         try testing.expectEqual(Size{
             .rows = 40,
             .cols = 132,
@@ -757,17 +813,17 @@ pub const Pty = struct {
         // What a terminal embedding a program passes through: the cells it gave
         // the program, and those cells in pixels, so a program that sizes
         // pictures by the cell does not have to guess.
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 });
         defer pty.close(io);
         const want: Size = .{ .rows = 38, .cols = 118, .x_pixel = 1062, .y_pixel = 760 };
-        try testing.expectEqual(want, try pty.size());
+        try testing.expectEqual(want, try pty.size(std.testing.io));
         try testing.expectEqual(want, try tty.winSize(pty.slave.?));
     }
 
     test "the terminal end of a POSIX pair has a name under /dev" {
         if (is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var pty = try Pty.open(std.testing.allocator, .{});
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{});
         defer pty.close(io);
 
         var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -778,7 +834,7 @@ pub const Pty = struct {
     test "raw mode round-trips on the terminal end of a POSIX pair" {
         if (is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var pty = try Pty.open(std.testing.allocator, .{});
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{});
         defer pty.close(io);
 
         // `rawMode` answers what the attributes were when it was called, so
@@ -815,7 +871,7 @@ pub const Pty = struct {
         // gone.
         if (is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var pty = try Pty.open(std.testing.allocator, .{});
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{});
         defer pty.close(io);
 
         const cloexec: c_int = c.FD_CLOEXEC;
@@ -832,7 +888,7 @@ pub const Pty = struct {
         // All three asked for. `passthrough` needs Windows 11 22H2 and the others
         // are older, so what comes back depends on the machine — but it is always
         // a subset of the ask, and the open never fails for want of a flag.
-        var pty = try Pty.open(std.testing.allocator, .{
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{
             .rows = 24,
             .cols = 80,
             .console = .{ .win32_input = true, .passthrough = true, .resize_quirk = true },
@@ -842,13 +898,13 @@ pub const Pty = struct {
         try testing.expect(pty.slave != null);
 
         // And a pair that still works: the size it was given is the size it says.
-        try testing.expectEqual(@as(u16, 24), (try pty.size()).rows);
+        try testing.expectEqual(@as(u16, 24), (try pty.size(std.testing.io)).rows);
     }
 
     test "a pair asked for no console options gets none" {
         if (!is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         try testing.expectEqual(ConsoleOptions{}, pty.console);
     }
@@ -859,7 +915,7 @@ pub const Pty = struct {
         // TCSAFLUSH does, would never return.
         if (is_windows) return error.SkipZigTest;
         const io = testing.io;
-        var pty = try Pty.open(std.testing.allocator, .{});
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{});
         defer pty.close(io);
         const saved = try tty.rawMode(pty.slave.?);
         // Not blocking, so filling the pair cannot hang the test either.
@@ -888,7 +944,7 @@ pub const Pty = struct {
         const io = testing.io;
         const a: Size = .{ .rows = 24, .cols = 80, .x_pixel = 640, .y_pixel = 480 };
         const b: Size = .{ .rows = 30, .cols = 100, .x_pixel = 1000, .y_pixel = 600 };
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
         defer pty.close(io);
         var drain: Drain = .{};
         try drain.start(io, pty.readFile());
@@ -896,8 +952,8 @@ pub const Pty = struct {
         const Resize = struct {
             fn run(pair: *Pty, first: Size, second: Size) !void {
                 for (0..64) |_| {
-                    try pair.resize(second);
-                    try pair.resize(first);
+                    try pair.resize(std.testing.io, second);
+                    try pair.resize(std.testing.io, first);
                 }
             }
         };
@@ -907,17 +963,17 @@ pub const Pty = struct {
         for (0..1024) |_| {
             const borrowed = pty.master();
             try testing.expectEqual(pty.read.?, borrowed.read.handle);
-            const got = try pty.size();
+            const got = try pty.size(std.testing.io);
             try testing.expect(std.meta.eql(got, a) or std.meta.eql(got, b));
             try std.Io.sleep(io, .fromNanoseconds(1), .awake);
         }
         try resizing.await(io);
-        try testing.expectEqual(a, try pty.size());
+        try testing.expectEqual(a, try pty.size(std.testing.io));
     }
 
     test "open uses the caller allocator until every end closes" {
         var failing: testing.FailingAllocator = .init(testing.allocator, .{});
-        var pty = try Pty.open(failing.allocator(), .{});
+        var pty = try Pty.open(failing.allocator(), std.testing.io, .{});
         defer pty.close(testing.io);
         try testing.expectEqual(@as(usize, if (is_windows) 1 else 0), failing.allocations);
         pty.closeSlave(testing.io);
@@ -931,7 +987,7 @@ pub const Pty = struct {
     test "open reports caller allocation refusal before opening a Windows pair" {
         if (!is_windows) return error.SkipZigTest;
         var failing: testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
-        try testing.expectError(error.OutOfMemory, Pty.open(failing.allocator(), .{}));
+        try testing.expectError(error.OutOfMemory, Pty.open(failing.allocator(), std.testing.io, .{}));
     }
 };
 
