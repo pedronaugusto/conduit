@@ -59,6 +59,8 @@ const contract = @import("child/contract.zig");
 const child_output = @import("child/output.zig");
 const child_posix = @import("child/posix.zig");
 const child_windows = @import("child/windows.zig");
+const child_simulated = @import("child/simulated.zig");
+const seam = @import("seam");
 /// Tests only: the clocks and fault plans of the tests below.
 const shakedown = @import("shakedown");
 
@@ -293,6 +295,7 @@ pub const Child = struct {
         const state = try gpa.create(State);
         errdefer gpa.destroy(state);
         state.gpa = gpa;
+        if (seam.routeOf(io) != null) return .{ .state = try child_simulated.spawn(io, configured, state) };
         if (is_windows) return .{ .state = try child_windows.spawn(gpa, io, configured, state) };
         // A job object is what these bound, and POSIX has no such container.
         // `resource_limits` is the option that exists here.
@@ -329,7 +332,9 @@ pub const Child = struct {
         if (state.stdin) |f| f.close(io);
         if (state.stdout) |f| f.close(io);
         if (state.stderr) |f| f.close(io);
-        if (is_windows) {
+        if (state.simulated != null) {
+            // The simulation holds nothing of this process's for it.
+        } else if (is_windows) {
             if (state.handles_open) child.closeHandles();
             child.closeJob(io);
         } else {
@@ -570,6 +575,7 @@ pub const Child = struct {
     /// the caller's timeout, and `killWait`'s grace is it with the grace. The two
     /// used to be the same loop copied out twice.
     fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
+        if (child.state.simulated != null) return child.reapSimulated(io, deadline.toTimeout());
         if (try child.tryWaitClaimed(io)) |term| return term;
         if (builtin.is_test and !is_windows) if (before_exit_watch) |hook| hook(child);
 
@@ -648,7 +654,7 @@ pub const Child = struct {
         defer child.deinit(io);
         defer @import("testing/support.zig").reap(&child, io);
         const before = tree.testing_hook.group_forces.load(.acquire);
-        try child.kill(.kill);
+        try child.kill(io, .kill);
         _ = try child.wait(io);
         try std.testing.expectEqual(before, tree.testing_hook.group_forces.load(.acquire));
         try std.testing.expect(child.state.scope_complete);
@@ -702,6 +708,7 @@ pub const Child = struct {
 
     /// `tryWait` for a caller that already holds the reap.
     fn tryWaitClaimed(child: *Child, io: std.Io) TryWaitError!?Term {
+        if (child.state.simulated != null) return child.pollSimulated(io);
         // tryWait must stay nonblocking even while a signaller walks a tree.
         if (!child.state.identity.tryLock()) return null;
         var published = false;
@@ -769,6 +776,35 @@ pub const Child = struct {
                 else => |err| return posix.unexpectedErrno(err),
             }
         }
+    }
+
+    /// The simulated route's wait, until `timeout`, for a caller that holds
+    /// the reap. No identity lock is held across it: a route's call is a
+    /// step of the simulation, where another task may run, and a simulated
+    /// process has no number another one could be given.
+    fn reapSimulated(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTimeoutError!?Term {
+        if (child.settled()) |term| return term;
+        const route = seam.routeOf(io) orelse return error.Unexpected;
+        const ended = route.waitFor(&child.state.simulated.?, timeout) catch |err| return switch (err) {
+            error.Canceled => error.Canceled,
+            else => error.Unexpected,
+        };
+        return child.publishSimulated(ended);
+    }
+
+    /// The simulated route's wait that does not wait.
+    fn pollSimulated(child: *Child, io: std.Io) TryWaitError!?Term {
+        if (child.settled()) |term| return term;
+        const route = seam.routeOf(io) orelse return error.Unexpected;
+        const ended = route.poll(&child.state.simulated.?) catch return error.Unexpected;
+        return child.publishSimulated(ended);
+    }
+
+    fn publishSimulated(child: *Child, ended: ?seam.Term) ?Term {
+        const term = child_simulated.termFrom(ended orelse return null);
+        child.state.scope_complete = true;
+        child.publish(term);
+        return term;
     }
 
     /// Reap a child the watch has said is ending.
@@ -874,7 +910,19 @@ pub const Child = struct {
     /// final reaping: no wait can release the pid or close the Windows handles
     /// during the descendant walk or signal delivery. The child still needs
     /// reaping when this returns, unless another task has already done it.
-    pub fn kill(child: *Child, signal: Signal) KillError!void {
+    ///
+    /// A child started through conduit's simulated route (`conduit.testing`)
+    /// is ended as a signal it does not catch ends a program, through `io`;
+    /// a signal whose default is to be ignored or to stop does nothing there,
+    /// and what the child started is not reached.
+    pub fn kill(child: *Child, io: std.Io, signal: Signal) KillError!void {
+        if (child.state.simulated) |*simulated| {
+            if (child.settled() != null) return;
+            if (!signal.valid()) return error.Unsupported;
+            const route = seam.routeOf(io) orelse return error.Unexpected;
+            if (child_simulated.termOf(signal)) |term| route.end(simulated, term);
+            return;
+        }
         // Never wait for an exit here. Whoever holds identity is only delivering
         // a signal or doing the final nonblocking reap, not waiting on the child.
         spin.lock(&child.state.identity);
@@ -1087,13 +1135,13 @@ pub const Child = struct {
 
         if (grace.nanoseconds > 0) {
             // glint-ignore: Z026 -- a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
-            child.kill(.terminate) catch {};
+            child.kill(io, .terminate) catch {};
             if (try child.waitWithin(io, .in(io, grace))) |term| return term;
         }
 
         // A walk too large to hold still killed the child itself, so it is
         // reaped before the incomplete walk is reported.
-        child.kill(.kill) catch |err| switch (err) {
+        child.kill(io, .kill) catch |err| switch (err) {
             error.OutOfMemory => {
                 _ = try child.wait(io);
                 return err;
@@ -2123,7 +2171,7 @@ pub const Child = struct {
         // Substitute an unrelated live process's number for the retired label:
         // exercise PID reuse without relying on the kernel to recycle a pid.
         child.state.id = witness.state.id;
-        try child.kill(.kill);
+        try child.kill(io, .kill);
         try testing.expectEqual(@as(?Term, null), try witness.waitTimeout(io, Deadline.within(.fromMilliseconds(20))));
     }
 

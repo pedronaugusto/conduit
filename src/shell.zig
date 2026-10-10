@@ -129,7 +129,7 @@ pub fn spawnShell(gpa: Allocator, io: std.Io, options: Options) SpawnShellError!
         break :map &inherited.?;
     };
 
-    var pty: Pty = try .open(gpa, .{
+    var pty: Pty = try .open(gpa, io, .{
         .rows = options.size.rows,
         .cols = options.size.cols,
         .x_pixel = options.size.x_pixel,

@@ -23,6 +23,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- conduit runs inside a shakedown simulation, and the calls that reach past
+  `std.Io` take one: `Child.kill(io, signal)`, `Pty.open(gpa, io, options)`,
+  `Pty.resize(io, size)` and `Pty.size(io)`. Where the `Io` is conduit's
+  simulated route the call goes to the simulation; elsewhere it is the
+  system's, as before.
 - Byte counts take `aegis.units.Bytes(usize)`: `InputWriter.Options.max_backlog`, `OutputOptions.max_bytes` and `ExchangeOptions.max_bytes` (was `usize`). Build them with `.fromRaw(n)`. conduit now depends on aegis, a leaf that needs only the standard library, and a build that sets these options imports it.
 
 - Every wait with a bound takes a `std.Io.Timeout` instead of milliseconds, and every span (a grace, a drain, an interval) is a `std.Io.Duration`. `.none` waits as long as it takes; `Deadline.within(span)` is a timeout on the awake clock.
@@ -140,6 +145,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behaviour it had.
 
 ### Added
+
+- `conduit.testing`, from `@import("conduit").testing(dependency)`: a `Seam`
+  over a shakedown `Sim`'s `Io` that starts children as programs registered on
+  the simulation, on pipes, files, the null device or a simulated pair from
+  `Pty.open`, ends them as a signal would, and waits for them on the
+  simulation's clock (`wait`, `waitTimeout`, `tryWait`, `killWait`, `Reaper`).
+  What a simulation cannot be is `error.Unsupported`.
 
 - `Deadline.within(span)`, `Deadline.of(io, timeout)`, `Deadline.never`, `deadline.min(other)`, `deadline.remaining(io)` and `deadline.toTimeout()`, for a caller that holds its own deadline across several waits.
 

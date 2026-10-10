@@ -92,6 +92,7 @@ test {
     _ = @import("handles_test.zig");
     _ = @import("lineage_test.zig");
     _ = @import("expect_test.zig");
+    _ = @import("simulated_test.zig");
 }
 
 test "the process's own terminal opens as a terminal, or says there is none" {

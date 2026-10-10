@@ -1165,7 +1165,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     //
     // On a pair rather than on pipes, because a shell with no controlling
     // terminal declines to turn job control on at all.
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -1209,7 +1209,7 @@ test "a child that has never forked is stopped by its signal alone, without the 
     // it goes through `posix_spawn` (unless the build says always fork), on
     // a pair through the fork, and both ways with and without a group.
     for ([_]bool{ false, true }) |on_pty| for ([_]bool{ false, true }) |detach| {
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sleep", "100" },
@@ -1220,7 +1220,7 @@ test "a child that has never forked is stopped by its signal alone, without the 
         defer reap(&child, io);
 
         const before = tree.walks.load(.monotonic);
-        try child.kill(.kill);
+        try child.kill(io, .kill);
         try testing.expectEqual(before, tree.walks.load(.monotonic));
         try expectKilled(try child.wait(io), .KILL);
     };
@@ -1228,7 +1228,7 @@ test "a child that has never forked is stopped by its signal alone, without the 
 
 test "a child on a terminal opens it as one poll can wait on" {
     if (is_windows) return error.SkipZigTest;
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{test_options.tty_fixture},
@@ -1283,7 +1283,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
     for ([_]bool{ false, true }) |on_pty| {
-        var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+        var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
         if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
         defer tree.testing_hook.hold_ms = 0;
@@ -1376,7 +1376,7 @@ test "a signal other than the three reaches a detached child and what it started
         .{ .{ .posix = .ALRM }, "ALRM" },
     };
     for (sent) |entry| {
-        try child.kill(entry[0]);
+        try child.kill(io, entry[0]);
         var said: [32]u8 = undefined;
         try sink.expect(try std.mem.print(&said, "parent-{s}", .{entry[1]}));
         try sink.expect(try std.mem.print(&said, "child-{s}", .{entry[1]}));
@@ -1405,13 +1405,13 @@ test "stop suspends a child and what it started, and continue resumes them" {
     try sink.expect("parent-ready");
     try sink.expect("child-ready");
 
-    try child.kill(.stop);
+    try child.kill(io, .stop);
     try expectStopped(child.processId().?, true);
     try expectStopped(grandchild, true);
     // A stopped child has not ended, and no wait here says it has.
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 
-    try child.kill(.@"continue");
+    try child.kill(io, .@"continue");
     try expectStopped(child.processId().?, false);
     try expectStopped(grandchild, false);
     try sink.expect("parent-CONT");
@@ -1453,7 +1453,7 @@ test "a signal that is not a request to end leaves what the child started to its
         };
         try sink.expect("child-ready");
 
-        try child.kill(entry[0]);
+        try child.kill(io, entry[0]);
         try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
         if (entry[2]) {
             try testing.expect(alive(grandchild));
@@ -1473,12 +1473,12 @@ test "a signal with no meaning on this system is refused by name" {
 
     if (is_windows) {
         inline for (.{ .hangup, .quit, .user1, .user2, .stop, .@"continue", .window_change }) |signal| {
-            try testing.expectError(error.Unsupported, child.kill(signal));
+            try testing.expectError(error.Unsupported, child.kill(io, signal));
         }
-        try testing.expectError(error.Unsupported, child.kill(.{ .posix = .TERM }));
+        try testing.expectError(error.Unsupported, child.kill(io, .{ .posix = .TERM }));
     } else {
-        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @fromBackingInt(@intCast(0)) }));
-        try testing.expectError(error.Unsupported, child.kill(.{ .posix = @fromBackingInt(@intCast(200)) }));
+        try testing.expectError(error.Unsupported, child.kill(io, .{ .posix = @fromBackingInt(@intCast(0)) }));
+        try testing.expectError(error.Unsupported, child.kill(io, .{ .posix = @fromBackingInt(@intCast(200)) }));
     }
     // Refused before anything was sent: the child is still running.
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
@@ -2353,7 +2353,7 @@ test "waitTree says the tree has ended, and does not say it early" {
     // the port is what says so. `deinit` is the one this cannot use, because
     // it closes the port the answer would arrive on. Contained waits consume
     // that completion before releasing the lifecycle.
-    try child.kill(.kill);
+    try child.kill(io, .kill);
     try testing.expect(try child.waitTree(io, within_budget));
     try testing.expect(endedWithin(grandchild));
 
@@ -2545,7 +2545,7 @@ test "what a child writes to its terminal reaches the master" {
     // the master itself while it does.
 
     trace.print("master: opening a pair", .{});
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2578,7 +2578,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // anything in the first place.
     if (!is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{
         .rows = 24,
         .cols = 80,
         .console = .{ .passthrough = true },
@@ -2623,7 +2623,7 @@ test "a child on a pty sees a terminal" {
     // construction.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2644,7 +2644,7 @@ test "a child on a pty reports the window size it was given, and the one it is r
     // print; that a pseudoconsole takes the new size is `Pty`'s own test.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 30, .cols = 100 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 30, .cols = 100 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2664,7 +2664,7 @@ test "a child on a pty reports the window size it was given, and the one it is r
 
     try sink.expect("30 100");
 
-    try pty.resize(.{ .rows = 41, .cols = 121 });
+    try pty.resize(std.testing.io, .{ .rows = 41, .cols = 121 });
     try pty.writeFile().writeStreamingAll(io, "\n");
 
     try sink.expect("41 121");
@@ -2677,7 +2677,7 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
     // has a Windows counterpart.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     // `exec` so the shell is replaced and the signal has one process to reach.
@@ -2702,7 +2702,7 @@ test "Ctrl-C written to the master reaches a detached pty child as SIGINT" {
 test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2727,7 +2727,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     // generated signals to, which is not a thing a console has.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2747,7 +2747,7 @@ test "a detached pty child is the terminal's foreground process group, and an at
     // a child on a pair without `detach` sees a terminal that has no
     // foreground group, so nothing typed at the master will ever become a
     // signal for it.
-    var quiet = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var quiet = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer quiet.close(io);
 
     var attached = try Child.spawn(gpa, io, .{
@@ -2771,7 +2771,7 @@ test "closing the master hangs the terminal up, and a detached child gets SIGHUP
     // signalling it, and that is `Pty.closeSlave`, not this.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2799,7 +2799,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     // a pseudoconsole is not a file.
     if (is_windows) return error.SkipZigTest;
 
-    var sink_pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var sink_pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer sink_pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -2861,7 +2861,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
     // `Pty.slaveFile` is a compile error there and says so.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     // Standard output is the terminal; standard error is a pipe. The child
@@ -3379,7 +3379,7 @@ test "spawnShell starts the user's shell on a pair" {
     defer reap(shell.child(), io);
     if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child().*)});
 
-    try testing.expectEqual(@as(u16, 40), (try shell.pty().size()).rows);
+    try testing.expectEqual(@as(u16, 40), (try shell.pty().size(std.testing.io)).rows);
 
     var sink: Sink = .{};
     defer sink.deinit();
@@ -4145,7 +4145,7 @@ test "a program that cannot run is still reported when extra files cover the rep
 }
 
 test "a child on a terminal gets its extra files above the terminal's three" {
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -4332,7 +4332,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     cgroup.testing_hook.off = true;
     defer cgroup.testing_hook.off = false;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 20, .cols = 70 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 20, .cols = 70 });
     defer pty.close(io);
     const options: Child.SpawnOptions = .{
         // A terminal that is its controlling one (only such a process opens
@@ -4612,7 +4612,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
 
 test "a pty master in a standard slot cannot close the child's replacement stream" {
     if (is_windows) return error.SkipZigTest;
-    var pair = try Pty.open(gpa, .{});
+    var pair = try Pty.open(gpa, std.testing.io, .{});
     defer pair.close(io);
     var stdin: BorrowedDescriptor = try .take(0, pair.readFile());
     defer stdin.restore();

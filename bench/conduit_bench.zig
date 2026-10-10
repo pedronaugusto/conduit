@@ -169,7 +169,7 @@ fn ptySpawnChild(x: *Context, units: u64) !void {
 
 fn ptyRoundTrip(x: *Context, end: PtyEnd) !u64 {
     const io = x.io();
-    var pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    var pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
     _ = try conduit.rawMode(pty.readHandle().?);
     var child = try conduit.Child.spawn(x.gpa(), io, .{
@@ -223,7 +223,7 @@ fn writeAll(ctx: *WriteCtx) void {
 fn throughputSetup(x: *Context) !void {
     if (x.input.len == 0 or x.input[x.input.len - 1] != '\n') return error.BadInput;
     const io = x.io();
-    x.pty = try conduit.Pty.open(x.gpa(), .{ .rows = 24, .cols = 80 });
+    x.pty = try conduit.Pty.open(x.gpa(), x.io(), .{ .rows = 24, .cols = 80 });
     errdefer x.pty.close(io);
     _ = try conduit.rawMode(x.pty.readHandle().?);
     try x.spawn(.{ .argv = &.{x.cat}, .stdio = .{ .pty = &x.pty }, .detach = true });
@@ -335,7 +335,7 @@ fn treeSetup(x: *Context) !void {
 /// The kill and the reap of the root.
 fn treeKill(x: *Context, units: u64) !void {
     try single(units);
-    try x.child.kill(.kill);
+    try x.child.kill(x.io(), .kill);
     _ = try x.wait();
 }
 
@@ -375,12 +375,12 @@ fn leafSetup(x: *Context) !void {
 
 fn leafKill(x: *Context, units: u64) !void {
     try single(units);
-    try x.child.kill(.kill);
+    try x.child.kill(x.io(), .kill);
 }
 
 fn leafKillWait(x: *Context, units: u64) !void {
     try single(units);
-    try x.child.kill(.kill);
+    try x.child.kill(x.io(), .kill);
     _ = try x.wait();
 }
 

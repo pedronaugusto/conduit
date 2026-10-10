@@ -106,7 +106,7 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
     // words of `cmd.exe`.
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -153,7 +153,7 @@ test "deinit stops the reader while the terminal is still open" {
     else
         &.{ "/bin/sh", "-c", "printf 'ready\\n'; read ignored" };
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -291,7 +291,7 @@ test "bytes waits for a count, and what follows stays pending" {
     const gpa = testing.allocator;
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -323,7 +323,7 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
     const gpa = testing.allocator;
     if (is_windows) return error.SkipZigTest;
 
-    var pty = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
     var child = try Child.spawn(gpa, io, .{

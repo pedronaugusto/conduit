@@ -20,7 +20,7 @@ test "input at end of file leaves the child's output flowing" {
     const io = testing.io;
     const gpa = testing.allocator;
 
-    var terminal = try Pty.open(std.testing.allocator, .{});
+    var terminal = try Pty.open(std.testing.allocator, std.testing.io, .{});
     defer terminal.close(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "sleep 0.3; echo hello-from-child" },
@@ -90,13 +90,13 @@ test "bytes written to one terminal reach the program on the other, and back" {
 
     // The terminal the "user" is at. Raw, so nothing it is sent is echoed
     // back and confused with the child's output.
-    var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var user = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
     _ = try tty.rawMode(user.slaveHandle().?);
 
     // The terminal the child runs on, also raw: `cat` is doing the echoing
     // here, and the terminal doing it too would double every line.
-    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
     _ = try tty.rawMode(terminal.slaveHandle().?);
 
@@ -138,11 +138,11 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
 
     // The user's terminal, raw: that is what turns Ctrl-C into a byte instead
     // of a signal for this process, which is the whole claim being tested.
-    var user = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var user = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer user.close(io);
     _ = try tty.rawMode(user.slaveHandle().?);
 
-    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
     var child = try Child.spawn(gpa, io, .{
@@ -185,10 +185,10 @@ test "the window size is forwarded onto the pair" {
 
     // Two pairs again: one stands in for the program's own terminal, whose
     // size the forwarder reads, and one is the child's.
-    var user = try Pty.open(std.testing.allocator, .{ .rows = 11, .cols = 37 });
+    var user = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 11, .cols = 37 });
     defer user.close(io);
 
-    var terminal = try Pty.open(std.testing.allocator, .{ .rows = 24, .cols = 80 });
+    var terminal = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer terminal.close(io);
 
     var input_buffer: [64]u8 = undefined;
@@ -216,7 +216,7 @@ test "the window size is forwarded onto the pair" {
 
     // And a change is picked up on the ticket rather than at the end of the
     // one-second interval, which is what the ticket is for.
-    try user.resize(.{ .rows = 50, .cols = 160 });
+    try user.resize(std.testing.io, .{ .rows = 50, .cols = 160 });
     _ = ticket.fetchAdd(1, .release);
     try expectSizeWithin(io, &terminal, .{ .rows = 50, .cols = 160 });
 }
@@ -224,7 +224,7 @@ test "the window size is forwarded onto the pair" {
 fn expectSizeWithin(io: std.Io, pty: *Pty, want: tty.Size) !void {
     const deadline: Deadline = .in(io, .fromMilliseconds(5000));
     while (deadline.remainingMs(io) > 0) {
-        const now = try pty.size();
+        const now = try pty.size(std.testing.io);
         if (now.rows == want.rows and now.cols == want.cols) return;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
@@ -239,7 +239,7 @@ test "an input error interrupts a silent output pump" {
     try watchdog.start(io);
     defer watchdog.deinit(io);
 
-    var terminal = try Pty.open(std.testing.allocator, .{});
+    var terminal = try Pty.open(std.testing.allocator, std.testing.io, .{});
     defer terminal.close(io);
     var input_buffer: [32]u8 = undefined;
     var output_buffer: [32]u8 = undefined;

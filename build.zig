@@ -52,6 +52,15 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "aegis", .module = aegis }},
     });
 
+    // The seam in front of the process calls conduit makes past `std.Io`: a
+    // module of its own that only conduit and `conduit.testing` import, so
+    // neither exports it.
+    const seam = b.createModule(.{
+        .root_source_file = b.path("src/seam.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const module = b.addModule("conduit", .{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
@@ -61,6 +70,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "aegis", .module = aegis },
             .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty_module },
+            .{ .name = "seam", .module = seam },
         },
     });
     module.addOptions("conduit_options", conduit_options);
@@ -104,15 +114,18 @@ pub fn build(b: *std.Build) void {
             .{ .name = "aegis", .module = aegis },
             .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty_module },
+            .{ .name = "seam", .module = seam },
         },
     });
     test_module.addOptions("conduit_options", conduit_options);
-    // The tests' clocks, fault plans and counts. A lazy, test-only
-    // dependency, asked for only in conduit's own tree: a project that
-    // depends on conduit neither builds these tests nor fetches it.
+    // The tests' clocks, fault plans and counts, and the simulated route. A
+    // lazy, test-only dependency, asked for only in conduit's own tree: a
+    // project that depends on conduit neither builds these tests nor fetches
+    // it.
     if (b.pkg_hash.len == 0) {
-        if (b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize })) |shakedown| {
-            test_module.addImport("shakedown", shakedown.module("shakedown"));
+        if (testingModule(b, module)) |testing_module| {
+            test_module.addImport("conduit.testing", testing_module);
+            test_module.addImport("shakedown", testing_module.import_table.get("shakedown").?);
         } else |_| {}
     }
 
@@ -301,6 +314,7 @@ fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
         .link_libc = true,
         .imports = &.{.{ .name = "aegis", .module = aegis }},
     });
+    const seam = b.createModule(.{ .root_source_file = b.path("src/seam.zig"), .target = target, .optimize = optimize });
     const module = b.createModule(.{
         .root_source_file = b.path("src/conduit.zig"),
         .target = target,
@@ -310,10 +324,48 @@ fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
             .{ .name = "aegis", .module = aegis },
             .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty },
+            .{ .name = "seam", .module = seam },
         },
     });
     module.addOptions("conduit_options", options);
     const imports = b.allocator.alloc(std.Build.Module.Import, 1) catch @panic("OOM");
     imports[0] = .{ .name = "conduit", .module = module };
     return imports;
+}
+
+/// The simulated route for a project's tests: the module `conduit.testing`,
+/// on shakedown, for `conduit`'s dependency in that project's build.
+///
+///     const conduit_build = @import("conduit"); // at the top of the build.zig
+///
+///     const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimize });
+///     tests.root_module.addImport("conduit.testing", try conduit_build.testing(conduit));
+///
+/// Only a build that calls this fetches shakedown: while it is being
+/// fetched this returns `error.LazyDependencyNeeded`, as
+/// `std.Build.dependencyLazy` does, for the build function to return.
+pub fn testing(conduit: *std.Build.Dependency) error{LazyDependencyNeeded}!*std.Build.Module {
+    return testingModule(conduit.builder, conduit.module("conduit"));
+}
+
+/// The published `conduit.testing`, made once per build of the package, on
+/// shakedown bound to conduit's own aegis.
+fn testingModule(b: *std.Build, conduit: *std.Build.Module) error{LazyDependencyNeeded}!*std.Build.Module {
+    if (b.modules.get("conduit.testing")) |made| return made;
+    const target = conduit.resolved_target.?;
+    const optimize = conduit.optimize.?;
+    const shakedown = try b.dependencyLazy("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
+    const shakedown_build = b.lazyImport(@This(), "shakedown") orelse return error.LazyDependencyNeeded;
+    shakedown_build.useAegis(shakedown, conduit.import_table.get("aegis").?);
+    const module = b.createModule(.{
+        .root_source_file = b.path("src/testing.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "seam", .module = conduit.import_table.get("seam").? },
+            .{ .name = "shakedown", .module = shakedown.module("shakedown") },
+        },
+    });
+    b.modules.put(b.graph.arena, "conduit.testing", module) catch @panic("OOM");
+    return module;
 }

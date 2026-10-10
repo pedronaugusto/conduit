@@ -323,11 +323,11 @@ is a `std.Io.Duration`. Each function that allocates takes the allocator as
 
 | | |
 |---|---|
-| `Pty.open(gpa, options)` | A new pair. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
+| `Pty.open(gpa, io, options)` | A new pair; a simulated one over `conduit.testing`'s `Io`. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
 | `pty.readHandle()`, `pty.writeHandle()` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
 | `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, as `std.Io.File`s sharing the handle rather than duplicating it. |
 | `pty.slaveHandle()` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
-| `pty.resize(size)`, `pty.size()` | The window size. `size` borrows the pair; it and `resize` share the Windows geometry owner and are safe while another task reads or writes. |
+| `pty.resize(io, size)`, `pty.size(io)` | The window size. `size` borrows the pair; it and `resize` share the Windows geometry owner and are safe while another task reads or writes. |
 | `pty.consoleOptions()` | Windows only: which of `OpenOptions.console` the system granted. `win32_input` for keys a terminal encoding cannot spell, `passthrough` for the child's own bytes rather than the console host's redraw of them, `resize_quirk` for a resize that does not reflow. A Windows too old for one of them refuses the whole call, so `open` asks again without it. |
 | `pty.close(io)` | Everything. Idempotent, and correct after either of the next two. |
 | `pty.closeSlave(io)`, `pty.closeMaster(io)` | One end. The two systems want `closeSlave` at different moments — see Design. |
@@ -360,7 +360,7 @@ to read while a wait or Reaper runs.
 | `child.containment(buffer)` | Copies the detached group, private Linux supervisor identity and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
-| `child.kill(signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. On POSIX any other signal goes the same way: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"`, `.window_change`, or `.{ .posix = .ALRM }` for one by number. Only the first three end the tree with the child; the rest leave it to `descendants`. Windows refuses each of the others with `error.Unsupported`, as POSIX does a number it does not define. |
+| `child.kill(io, signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. On POSIX any other signal goes the same way: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"`, `.window_change`, or `.{ .posix = .ALRM }` for one by number. Only the first three end the tree with the child; the rest leave it to `descendants`. Windows refuses each of the others with `error.Unsupported`, as POSIX does a number it does not define. |
 | `child.killWait(io, grace)` | `.terminate`, the grace, `.kill`, a reap. |
 | `child.waitTree(io, ms)` | Waits for the container the child was put in to hold no process at all, which is the question `wait` does not answer — a child that exits having started something is a tree that is still running. Windows: the job object. Linux: the child's own cgroup, woken by `cgroup.events` rather than asking again; a child given none is `error.Unsupported`. A compile error on the other POSIX systems, which have nothing to ask. |
 | `child.deinit(io)` | Closes owned resources and leaves the child undefined. A contained scope `finish` has not confirmed is killed and reaped first, with nothing reported. Supplied streams stay open. |
@@ -907,6 +907,34 @@ The package's own benchmarks are in `bench/`: `zig build bench` builds them in
 ReleaseFast and runs them, and [bench/README.md](bench/README.md) says what
 each measures. CI never times them; `zig build test` runs each once in smoke
 mode, so they keep working.
+
+### Testing code that starts children
+
+conduit's children, terminals, signals and waits are the system's, past the
+`Io` they are given. Over a [shakedown](https://github.com/pedronaugusto/shakedown)
+`Sim`, `conduit.testing` is the `Io` that sends them to the simulation:
+`Child.spawn` starts a program registered on `sim.programs()` as a simulated
+process, on pipes, on a simulated pair from `Pty.open`, on the null device or
+on files; `kill` ends it as a signal it does not catch would, `wait`,
+`waitTimeout`, `tryWait` and a `Reaper` wait for it on the simulation's clock,
+and the run repeats from its seed. What a simulation cannot be (credentials,
+resource and job limits, a parent-death signal) is `error.Unsupported`, and a
+simulated child's own children are not ended with it.
+
+```zig
+const conduit_build = @import("conduit"); // conduit's build.zig, at the top of yours
+tests.root_module.addImport("conduit.testing", try conduit_build.testing(conduit));
+```
+
+```zig
+try sim.programs().register("fake-git", fakeGit, .{});
+const routed = try @import("conduit.testing").Seam.create(gpa, sim.io());
+defer routed.destroy();
+// Inside sim.run: code under test spawns "git" through conduit on routed.io().
+```
+
+The suite runs conduit's own children, terminals, signals, timed waits and
+`Reaper` this way too, and checks that one seed makes one run.
 
 `zig build unit` is the suite without the examples, `-Dtest-filter` runs part
 of it, and `CONDUIT_TRACE` in the environment logs what this package asked
