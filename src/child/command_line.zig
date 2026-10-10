@@ -129,87 +129,94 @@ test "a first argument containing a quote is refused" {
 //======================================================================
 
 test "an argument list survives the command line it is written into" {
-    try testing.fuzz({}, argvSurvivesTheRoundTrip, .{});
-}
+    const shakedown = @import("shakedown");
+    const gen = shakedown.gen;
+    const draw = @import("../testing/draw.zig");
+    const Property = struct {
+        /// The property: `CommandLineToArgvW`'s rules, applied to what `serialise`
+        /// wrote, give back the argument list it was given.
+        ///
+        /// This is the only claim that matters about this file, and the only one a
+        /// reader cannot check: a quote or a backslash in the wrong place does not
+        /// mangle an argument, it moves the boundary between two of them, and a child
+        /// then receives an argument the caller never wrote. The rules are quoted in
+        /// `parse` below, written from the other direction, and every argument here is
+        /// built out of the three bytes that decide where a boundary falls.
+        fn argvSurvivesTheRoundTrip(_: void, c: *shakedown.Case) !void {
+            const s = c.source;
 
-/// The property: `CommandLineToArgvW`'s rules, applied to what `serialise`
-/// wrote, give back the argument list it was given.
-///
-/// This is the only claim that matters about this file, and the only one a
-/// reader cannot check: a quote or a backslash in the wrong place does not
-/// mangle an argument, it moves the boundary between two of them, and a child
-/// then receives an argument the caller never wrote. The rules are quoted in
-/// `parse` below, written from the other direction, and every argument here is
-/// built out of the three bytes that decide where a boundary falls.
-fn argvSurvivesTheRoundTrip(_: void, smith: *std.testing.Smith) !void {
-    @disableInstrumentation();
+            // Printable ASCII only: `serialise` ends in a WTF-8 to WTF-16 conversion,
+            // and what that does to bytes that spell nothing is a question about the
+            // standard library rather than about quoting. The three bytes the rules
+            // turn on carry most of the weight.
+            const alphabet: []const draw.Pick = &.{
+                .{ .lo = 0x21, .hi = 0x7e, .weight = 1 },
+                .{ .lo = '"', .hi = '"', .weight = 8 },
+                .{ .lo = '\\', .hi = '\\', .weight = 8 },
+                .{ .lo = ' ', .hi = ' ', .weight = 8 },
+                .{ .lo = '\t', .hi = '\t', .weight = 2 },
+            };
 
-    // Printable ASCII only: `serialise` ends in a WTF-8 to WTF-16 conversion,
-    // and what that does to bytes that spell nothing is a question about the
-    // standard library rather than about quoting. The three bytes the rules
-    // turn on carry most of the weight.
-    const alphabet: []const std.testing.Smith.Weight = &.{
-        .rangeAtMost(u8, 0x21, 0x7e, 1),
-        .value(u8, '"', 8),
-        .value(u8, '\\', 8),
-        .value(u8, ' ', 8),
-        .value(u8, '\t', 2),
+            var storage: [6][12]u8 = undefined;
+            var argv: [6][]const u8 = undefined;
+            const count = gen.intRange(s, u8, 1, argv.len);
+            for (argv[0..count], storage[0..count]) |*argument, *bytes| {
+                argument.* = draw.weightedBytes(s, bytes, alphabet);
+            }
+            const wanted = argv[0..count];
+
+            var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+
+            const line = serialise(arena, wanted) catch |err| switch (err) {
+                // The one argument list with no command line: a first argument
+                // holding a quote, which is refused rather than mangled.
+                error.InvalidArgv => {
+                    try testing.expect(std.mem.findScalar(u8, wanted[0], '"') != null);
+                    return;
+                },
+                else => |e| return e,
+            };
+
+            const utf8 = try std.unicode.wtf16LeToWtf8Alloc(arena, line);
+            const parsed = try parse(arena, utf8);
+
+            try testing.expectEqual(wanted.len, parsed.len);
+            for (wanted, parsed) |expected, actual| try testing.expectEqualStrings(expected, actual);
+        }
     };
-
-    var storage: [6][12]u8 = undefined;
-    var argv: [6][]const u8 = undefined;
-    const count = smith.valueRangeAtMost(u8, 1, argv.len);
-    for (argv[0..count], storage[0..count]) |*argument, *bytes| {
-        argument.* = bytes[0..smith.sliceWeightedBytes(bytes, alphabet)];
-    }
-    const wanted = argv[0..count];
-
-    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const line = serialise(arena, wanted) catch |err| switch (err) {
-        // The one argument list with no command line: a first argument
-        // holding a quote, which is refused rather than mangled.
-        error.InvalidArgv => {
-            try testing.expect(std.mem.findScalar(u8, wanted[0], '"') != null);
-            return;
-        },
-        else => |e| return e,
-    };
-
-    const utf8 = try std.unicode.wtf16LeToWtf8Alloc(arena, line);
-    const parsed = try parse(arena, utf8);
-
-    try testing.expectEqual(wanted.len, parsed.len);
-    for (wanted, parsed) |expected, actual| try testing.expectEqualStrings(expected, actual);
+    try shakedown.check(testing.allocator, {}, Property.argvSurvivesTheRoundTrip, .{});
 }
 
 test "an argument list of any text survives the command line it is written into" {
-    try testing.fuzz({}, anyTextSurvivesTheRoundTrip, .{});
-}
-
-/// The same property over arguments of any text: characters of every UTF-8
-/// length, a surrogate half spelled in WTF-8, a NUL, and the bytes the
-/// quoting rules turn on. What `serialise` writes is the arguments it was
-/// given, or a refusal -- never fewer or other arguments.
-fn anyTextSurvivesTheRoundTrip(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
-    const pieces = [_][]const u8{ "a", "\"", "\\", " ", "\t", "\x00", "\u{e9}", "\u{20ac}", "\u{1f600}", "\xed\xa0\x80", "\n", "^", "%" };
-    var storage: [5][32]u8 = undefined;
-    var argv: [5][]const u8 = undefined;
-    const count = smith.valueRangeAtMost(u8, 1, argv.len);
-    for (argv[0..count], storage[0..count]) |*argument, *bytes| {
-        var len: usize = 0;
-        while (!smith.eosWeightedSimple(2, 1)) {
-            const piece = pieces[smith.index(pieces.len)];
-            if (len + piece.len > bytes.len) break;
-            @memcpy(bytes[len..][0..piece.len], piece);
-            len += piece.len;
+    const shakedown = @import("shakedown");
+    const gen = shakedown.gen;
+    const Property = struct {
+        /// The same property over arguments of any text: characters of every UTF-8
+        /// length, a surrogate half spelled in WTF-8, a NUL, and the bytes the
+        /// quoting rules turn on. What `serialise` writes is the arguments it was
+        /// given, or a refusal -- never fewer or other arguments.
+        fn anyTextSurvivesTheRoundTrip(_: void, c: *shakedown.Case) anyerror!void {
+            const s = c.source;
+            const pieces = [_][]const u8{ "a", "\"", "\\", " ", "\t", "\x00", "\u{e9}", "\u{20ac}", "\u{1f600}", "\xed\xa0\x80", "\n", "^", "%" };
+            var storage: [5][32]u8 = undefined;
+            var argv: [5][]const u8 = undefined;
+            const count = gen.intRange(s, u8, 1, argv.len);
+            for (argv[0..count], storage[0..count]) |*argument, *bytes| {
+                var len: usize = 0;
+                while (s.more(2)) {
+                    const piece = gen.oneOf(s, []const u8, &pieces);
+                    if (len + piece.len > bytes.len) break;
+                    @memcpy(bytes[len..][0..piece.len], piece);
+                    len += piece.len;
+                }
+                argument.* = bytes[0..len];
+            }
+            try checkRoundTrip(argv[0..count]);
         }
-        argument.* = bytes[0..len];
-    }
-    try checkRoundTrip(argv[0..count]);
+    };
+    try shakedown.check(testing.allocator, {}, Property.anyTextSurvivesTheRoundTrip, .{});
 }
 
 fn checkRoundTrip(wanted: []const []const u8) !void {

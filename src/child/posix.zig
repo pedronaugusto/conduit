@@ -1089,68 +1089,72 @@ test "searchPath joins a bare name onto every entry, and an empty entry is the c
 //======================================================================
 
 test "every candidate is an entry of PATH with the program on the end of it" {
-    try std.testing.fuzz({}, candidatesKeepTheirShape, .{});
-}
+    const shakedown = @import("shakedown");
+    const gen = shakedown.gen;
+    const draw = @import("../testing/draw.zig");
+    const Property = struct {
+        /// The property: a bare program name produces one candidate per entry of
+        /// `PATH`, in the order the entries are written, each of them that entry and
+        /// the program with a single separator between them; a program that is
+        /// already a path produces itself and nothing else.
+        ///
+        /// What a fuzzer is for here is the punctuation. A candidate is built out of
+        /// the two bytes that mean something in a path — the one entries are split on
+        /// and the one they are joined with — and a program name is a caller's bytes,
+        /// which may hold either. An entry lost, an entry run together with the next,
+        /// or a separator that doubles would each send the child looking somewhere the
+        /// caller did not name.
+        fn candidatesKeepTheirShape(_: void, case: *shakedown.Case) !void {
+            const s = case.source;
 
-/// The property: a bare program name produces one candidate per entry of
-/// `PATH`, in the order the entries are written, each of them that entry and
-/// the program with a single separator between them; a program that is
-/// already a path produces itself and nothing else.
-///
-/// What a fuzzer is for here is the punctuation. A candidate is built out of
-/// the two bytes that mean something in a path — the one entries are split on
-/// and the one they are joined with — and a program name is a caller's bytes,
-/// which may hold either. An entry lost, an entry run together with the next,
-/// or a separator that doubles would each send the child looking somewhere the
-/// caller did not name.
-fn candidatesKeepTheirShape(_: void, smith: *std.testing.Smith) !void {
-    @disableInstrumentation();
+            // A NUL is left out: a name holding one is not a name a path can spell,
+            // and what `execve` would make of it is not this function's question.
+            const alphabet: []const draw.Pick = &.{
+                .{ .lo = 'a', .hi = 'c', .weight = 2 },
+                .{ .lo = '/', .hi = '/', .weight = 4 },
+                .{ .lo = ':', .hi = ':', .weight = 4 },
+                .{ .lo = '.', .hi = '.', .weight = 1 },
+            };
 
-    // A NUL is left out: a name holding one is not a name a path can spell,
-    // and what `execve` would make of it is not this function's question.
-    const alphabet: []const std.testing.Smith.Weight = &.{
-        .rangeAtMost(u8, 'a', 'c', 2),
-        .value(u8, '/', 4),
-        .value(u8, ':', 4),
-        .value(u8, '.', 1),
+            var program_bytes: [16]u8 = undefined;
+            const program = draw.weightedBytes(s, &program_bytes, alphabet);
+
+            var path_bytes: [48]u8 = undefined;
+            const path: ?[]const u8 = if (gen.boolean(s))
+                draw.weightedBytes(s, &path_bytes, alphabet)
+            else
+                null;
+            const search = gen.boolean(s);
+
+            var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+            defer arena_state.deinit();
+            const arena = arena_state.allocator();
+
+            const candidates = try searchPath(arena, program, path, search);
+
+            if (!search or std.mem.findScalar(u8, program, '/') != null) {
+                try std.testing.expectEqual(@as(usize, 1), candidates.len);
+                try std.testing.expectEqualStrings(program, std.mem.span(candidates[0]));
+                return;
+            }
+
+            var joined: std.ArrayList(u8) = .empty;
+            var entries = std.mem.splitScalar(u8, path orelse "/usr/local/bin:/usr/bin:/bin", ':');
+            var index: usize = 0;
+            while (entries.next()) |entry| {
+                // An empty entry is the current directory, which is what a shell makes
+                // of it and the one entry that is not written down.
+                const prefix = if (entry.len == 0) "." else entry;
+                joined.clearRetainingCapacity();
+                try joined.print(arena, "{s}/{s}", .{ prefix, program });
+                if (joined.items.len >= std.Io.Dir.max_path_bytes) continue;
+
+                try std.testing.expect(index < candidates.len);
+                try std.testing.expectEqualStrings(joined.items, std.mem.span(candidates[index]));
+                index += 1;
+            }
+            try std.testing.expectEqual(index, candidates.len);
+        }
     };
-
-    var program_bytes: [16]u8 = undefined;
-    const program = program_bytes[0..smith.sliceWeightedBytes(&program_bytes, alphabet)];
-
-    var path_bytes: [48]u8 = undefined;
-    const path: ?[]const u8 = if (smith.value(bool))
-        path_bytes[0..smith.sliceWeightedBytes(&path_bytes, alphabet)]
-    else
-        null;
-    const search = smith.value(bool);
-
-    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    const candidates = try searchPath(arena, program, path, search);
-
-    if (!search or std.mem.findScalar(u8, program, '/') != null) {
-        try std.testing.expectEqual(@as(usize, 1), candidates.len);
-        try std.testing.expectEqualStrings(program, std.mem.span(candidates[0]));
-        return;
-    }
-
-    var joined: std.ArrayList(u8) = .empty;
-    var entries = std.mem.splitScalar(u8, path orelse "/usr/local/bin:/usr/bin:/bin", ':');
-    var index: usize = 0;
-    while (entries.next()) |entry| {
-        // An empty entry is the current directory, which is what a shell makes
-        // of it and the one entry that is not written down.
-        const prefix = if (entry.len == 0) "." else entry;
-        joined.clearRetainingCapacity();
-        try joined.print(arena, "{s}/{s}", .{ prefix, program });
-        if (joined.items.len >= std.Io.Dir.max_path_bytes) continue;
-
-        try std.testing.expect(index < candidates.len);
-        try std.testing.expectEqualStrings(joined.items, std.mem.span(candidates[index]));
-        index += 1;
-    }
-    try std.testing.expectEqual(index, candidates.len);
+    try shakedown.check(std.testing.allocator, {}, Property.candidatesKeepTheirShape, .{});
 }

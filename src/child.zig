@@ -2031,23 +2031,18 @@ pub const Child = struct {
     /// Any status word decodes to a `Term`, and the `$?` a shell would give it
     /// is the one its bits say: the exit status in the second byte, or 128 and
     /// a signal's number -- whatever the bits above them hold.
-    fn statusDecodes(_: void, smith: *std.testing.Smith) anyerror!void {
-        @disableInstrumentation();
-        if (is_windows) return error.SkipZigTest;
-        try checkStatus(smith.value(u32));
-    }
-
     fn checkStatus(status: u32) !void {
         const term = statusToTerm(status);
         // The two shapes every system's kernel writes, in the low sixteen
         // bits: an exit with its status in the second byte, and a signal's
-        // number alone in the low seven. Any other word decodes to whatever
+        // number alone in the low seven (a core flag with no signal under it
+        // is an exit, as `WIFEXITED` has it). Any other word decodes to whatever
         // that system's macros make of it, and never to a panic.
         const word = status & 0xffff;
         if (word & 0xff == 0) {
             try std.testing.expectEqual(word >> 8, term.exited);
             try std.testing.expectEqual(@as(u8, @intCast(word >> 8)), shellStatus(term));
-        } else if (word >> 8 == 0 and word & 0x7f != 0x7f) {
+        } else if (word >> 8 == 0 and word & 0x7f != 0x7f and word & 0x7f != 0) {
             try std.testing.expectEqual(word & 0x7f, @backingInt(term.signal));
             try std.testing.expectEqual(@as(u8, @intCast(128 + (word & 0x7f))), shellStatus(term));
         }
@@ -2057,12 +2052,18 @@ pub const Child = struct {
     }
 
     test "a wait status word decodes to the end a shell reports" {
-        try std.testing.fuzz({}, statusDecodes, .{});
+        if (is_windows) return error.SkipZigTest;
+        const Property = struct {
+            fn statusDecodes(_: void, case: *shakedown.Case) anyerror!void {
+                try checkStatus(shakedown.gen.int(case.source, u32));
+            }
+        };
+        try shakedown.check(std.testing.allocator, {}, Property.statusDecodes, .{});
     }
 
     test "a wait status word decodes whatever its upper bits hold" {
         if (is_windows) return error.SkipZigTest;
-        for ([_]u32{ 0, 0x0100, 0xff00, 0x10000, 0x1ff00, 0xffff_0000, 0xffff_ffff, 0x0109, 0x1_0009, 0x137f, 0x1_137f }) |status| {
+        for ([_]u32{ 0, 0x0100, 0xff00, 0x10000, 0x1ff00, 0xffff_0000, 0xffff_ffff, 0x0109, 0x1_0009, 0x137f, 0x1_137f, 0x0080 }) |status| {
             try checkStatus(status);
         }
     }
