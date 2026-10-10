@@ -23,6 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `ForkGap` and the leftover-cgroup list are `aegis.Guarded`, taken with `acquireScheduling` (and `tryAcquire` for the sweep that passes over a held lock), where each was a lock of its own over an atomic. Needs the aegis revision that has `acquireScheduling`.
 - `Proxy`'s `Resize.ticket` and `Resize.tick` are `Resize.wake`, a reactor `Wake` the program signals when it learns of a resize: the forwarder waits on it for the interval instead of looking at a counter every five milliseconds. Waiting for a cgroup to empty is a reactor priority-event wait on `cgroup.events`, and `console.waitInput` is a reactor wait on the console's input handle, where both sliced their waits in five milliseconds.
 - `Reaper.enableSubreaper` takes the allocator the adoption scope lives in (it used the page allocator), and the Darwin lineage tracker takes the spawning allocator. `Reaper.deinit` and `Orphans.deinit` end a scope whose `stop` failed or was skipped as far as they can, where they asserted and leaked.
 - Byte counts take `aegis.units.Bytes(usize)`: `InputWriter.Options.max_backlog`, `OutputOptions.max_bytes` and `ExchangeOptions.max_bytes` (was `usize`). Build them with `.fromRaw(n)`. conduit now depends on aegis, a leaf that needs only the standard library, and a build that sets these options imports it.

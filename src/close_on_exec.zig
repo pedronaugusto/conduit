@@ -7,6 +7,7 @@
 //! that pipe and conduit's spawns take the same one.
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const posix = std.posix;
 const system = posix.system;
 
@@ -42,30 +43,19 @@ pub const opening_is_two_calls = !is_windows and @TypeOf(system.pipe2) == void;
 ///
 /// Where an open carries its own flag, `hold` only calls the function.
 pub const ForkGap = struct {
-    var held: std.atomic.Value(bool) = .init(false);
+    var gap: aegis.Guarded(void) = .init({});
 
     /// Calls `function` with `args` inside the lock, and leaves it however
     /// the call returns. The section is a few system calls long: the wait for
-    /// it is a spin. It is not reentrant, so `function` makes no `pipe` and
-    /// starts no child through conduit.
+    /// it hands the processor back between tries. It is not reentrant, so
+    /// `function` makes no `pipe` and starts no child through conduit.
     pub fn hold(function: anytype, args: anytype) @typeInfo(@TypeOf(function)).@"fn".return_type.? {
         if (!opening_is_two_calls) return @call(.auto, function, args);
-        take();
         // A fork child inherits the lock as held and never returns here: it
         // runs a handful of system calls and execs.
-        defer held.store(false, .release);
+        var guard = gap.acquireScheduling();
+        defer guard.deinit();
         return @call(.auto, function, args);
-    }
-
-    fn take() void {
-        while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
-            // Both sections are a few system calls long, so the wait is short
-            // and the scheduler is the right place to spend it. A system that
-            // cannot yield only brings the next try sooner.
-            std.Thread.yield() catch |err| switch (err) {
-                error.SystemCannotYield => {},
-            };
-        }
     }
 };
 

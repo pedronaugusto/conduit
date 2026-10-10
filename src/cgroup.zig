@@ -50,6 +50,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const reactor = @import("reactor");
 const spin = @import("spin.zig");
 const posix = std.posix;
@@ -562,26 +563,12 @@ const Name = struct {
 const Leftovers = struct {
     /// Sixteen at a time. Past that, one is left for whatever removes this
     /// process's own cgroup: systemd a unit's, a container runtime its own.
-    // Raw lock beside its data, not an `aegis.Guarded`: `sweep` passes over a
-    // held lock instead of waiting for it, and the waiters yield. Guarded has
-    // neither, so this stays until it has a try-acquire (an OS boundary:
-    // the owners are directory handles).
-    var owners: [16]?LinuxCgroup = @splat(null);
-    var held: std.atomic.Value(bool) = .init(false);
-
-    fn lock() void {
-        while (held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) spin.yield();
-    }
-
-    fn unlock() void {
-        std.debug.assert(held.load(.monotonic));
-        held.store(false, .release);
-    }
+    var owners: aegis.Guarded([16]?LinuxCgroup) = .init(@splat(null));
 
     fn add(cgroup: LinuxCgroup) void {
-        lock();
-        defer unlock();
-        for (&owners) |*slot| if (slot.* == null) {
+        var guard = owners.acquireScheduling();
+        defer guard.deinit();
+        for (guard.value()) |*slot| if (slot.* == null) {
             slot.* = cgroup;
             return;
         };
@@ -591,10 +578,10 @@ const Leftovers = struct {
     }
 
     fn sweep() void {
-        if (held.load(.monotonic)) return;
-        lock();
-        defer unlock();
-        for (&owners) |*slot| if (slot.*) |*cgroup| {
+        // Passes over a held lock instead of waiting for it.
+        var guard = owners.tryAcquire() orelse return;
+        defer guard.deinit();
+        for (guard.value()) |*slot| if (slot.*) |*cgroup| {
             if (cgroup.remove()) {
                 slot.* = null;
             } else if (cgroup.namedIdentity() == .gone) {
