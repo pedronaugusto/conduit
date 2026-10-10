@@ -39,7 +39,7 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 const Deadline = @import("conduit.tty").Deadline;
-const wait_for = @import("wait.zig");
+const reactor = @import("reactor");
 const adoption_record = @import("orphans/adoption_record.zig");
 const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
 const cgroups = @import("cgroup.zig");
@@ -181,17 +181,21 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     return reached;
 }
 
-/// Wait for a held process to end without reaping it. Linux polls the held
-/// pidfd; Darwin registers NOTE_EXIT with kqueue while the unique process id still
-/// matches. If registration is unavailable, a bounded 1–4 ms clock-based
-/// check is used. True means gone; false means the deadline passed.
+/// Wait for a held process to end without reaping it. Linux waits on the held
+/// pidfd; Darwin has reactor watch NOTE_EXIT while the unique process id still
+/// matches. If no watch can be had, a bounded 1–4 ms clock-based check is
+/// used. True means gone; false means the deadline passed.
 fn waitCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.Cancelable!bool {
     if (!process.alive()) return true;
-    const watch: ?wait_for.Watch = if (builtin.target.os.tag == .linux)
-        .{ .handle = process.pidfd }
-    else
-        wait_for.Watch.open(process.pid);
-    defer if (builtin.target.os.tag != .linux) if (watch) |opened| opened.close();
+    var opened: ?reactor.Process = null;
+    defer if (opened) |*held| held.close(io);
+    var target: ?reactor.Waitable = null;
+    if (builtin.target.os.tag == .linux) {
+        target = .{ .readable = process.pidfd };
+    } else if (reactor.Process.open(io, process.pid)) |watch| {
+        opened = watch;
+        target = .{ .process = &opened.? };
+    } else |_| {}
     // Registration by number on Darwin is checked against the held unique
     // id immediately afterward; it cannot turn a reused pid into a wait
     // for the wrong process.
@@ -200,14 +204,22 @@ fn waitCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.
     while (true) {
         const left = deadline.remainingMs(io);
         if (left == 0) return !process.alive();
-        if (watch) |opened| {
-            _ = opened.ended(@min(left, wait_for.slice_ms));
-            try std.Io.checkCancel(io);
-        } else {
+        const watching = target orelse {
             try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
             interval_ms = @min(interval_ms * 2, 4);
-        }
+            if (!process.alive()) return true;
+            continue;
+        };
+        reactor.wait(io, watching, deadline.toTimeout()) catch |err| switch (err) {
+            error.Timeout => return !process.alive(),
+            error.Canceled => return error.Canceled,
+            // A watch that cannot wait: ask again, as with none.
+            error.Unsupported, error.Unexpected => target = null,
+        };
         if (!process.alive()) return true;
+        // Ready and still alive: the process is ending, or ended and is not yet
+        // gone to `alive`. Give it a moment rather than ask in a tight loop.
+        if (target != null) try std.Io.sleep(io, .fromMilliseconds(1), .awake);
     }
 }
 
@@ -1347,7 +1359,6 @@ pub const DarwinForks = struct {
     /// (the kernel makes every `EVFILT_PROC` one `EV_CLEAR`), so what one
     /// question learned is kept here for the next.
     seen: std.atomic.Value(bool) = .init(false),
-    exited: std.atomic.Value(bool) = .init(false),
     /// Held by the task reading the queue. A second task that asks meanwhile
     /// could otherwise find the queue emptied by the first and the note not
     /// yet kept, so it answers `true` instead, which is the walk.
@@ -1368,7 +1379,7 @@ pub const DarwinForks = struct {
             .ident = @intCast(pid),
             .filter = c.EVFILT.PROC,
             .flags = c.EV.ADD | c.EV.ENABLE,
-            .fflags = c.NOTE.FORK | c.NOTE.EXIT,
+            .fflags = c.NOTE.FORK,
             .data = 0,
             .udata = 0,
             .ext = .{ 0, 0 },
@@ -1400,32 +1411,8 @@ pub const DarwinForks = struct {
         if (ready < 0) return true;
         for (events[0..@intCast(ready)]) |event| {
             if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
-            if (event.fflags & c.NOTE.EXIT != 0) forks.exited.store(true, .release);
         }
         return forks.seen.load(.acquire);
-    }
-
-    /// The exit registered before the child ran, including a note consumed
-    /// by a concurrent fork check. Null means no queue could be registered.
-    pub fn ended(forks: *DarwinForks, milliseconds: u32) ?bool {
-        if (forks.exited.load(.acquire)) return true;
-        const queue = forks.queue orelse return null;
-        if (forks.reading.swap(true, .acquire)) return false;
-        defer forks.reading.store(false, .release);
-        if (forks.exited.load(.acquire)) return true;
-        var events: [2]c.kevent64_s = undefined;
-        var nothing: [0]c.kevent64_s = undefined;
-        const timeout: c.timespec = .{
-            .sec = @intCast(milliseconds / 1000),
-            .nsec = @intCast((milliseconds % 1000) * std.time.ns_per_ms),
-        };
-        const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{}, &timeout);
-        if (ready < 0) return null;
-        for (events[0..@intCast(ready)]) |event| {
-            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
-            if (event.fflags & c.NOTE.EXIT != 0) forks.exited.store(true, .release);
-        }
-        return forks.exited.load(.acquire);
     }
 
     pub fn close(forks: *DarwinForks) void {
@@ -1710,7 +1697,6 @@ pub const test_access = if (builtin.is_test) struct {
     pub const current = DarwinProcess.current;
     pub const capture = FixtureProcess.capture;
     pub const Deadline = FixtureDeadline;
-    pub const wait_for = fixture_wait_for;
     pub const signalDescendantsGuarded = fixtureSignalDescendantsGuarded;
     pub const waitCaptured = fixtureWaitCaptured;
     pub const provenBelow = fixtureProvenBelow;
@@ -1752,7 +1738,6 @@ pub const test_access = if (builtin.is_test) struct {
     }
 } else struct {};
 const FixtureDeadline = Deadline;
-const fixture_wait_for = wait_for;
 const fixtureSignalDescendantsGuarded = signalDescendantsGuarded;
 const fixtureWaitCaptured = waitCaptured;
 const fixtureProvenBelow = provenBelow;

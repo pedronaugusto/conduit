@@ -48,7 +48,8 @@ const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32.zig");
 const tree = @import("tree.zig");
 const cgroups = @import("cgroup.zig");
-const wait_for = @import("wait.zig");
+const child_exit = @import("exit.zig");
+const reactor = @import("reactor");
 const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
 const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
@@ -254,7 +255,10 @@ pub const Child = struct {
     ///
     /// `gpa` builds the arguments and environment and owns the lifecycle
     /// state until `deinit`. It must outlive the Child. `io` closes every handle
-    /// the parent opened here and does not keep.
+    /// the parent opened here and does not keep. On Windows, on a reactor
+    /// runtime, it also attaches the job's reports to the runtime for as long as
+    /// the child lives: each live child holds one of the runtime's `max_jobs`,
+    /// and a spawn past them is `error.SystemResources`.
     ///
     /// This is not a cancelation point. On POSIX, between the `fork` and the
     /// return there is a child process that only this function knows about, so
@@ -327,11 +331,12 @@ pub const Child = struct {
         if (state.stderr) |f| f.close(io);
         if (is_windows) {
             if (state.handles_open) child.closeHandles();
-            child.closeJob();
+            child.closeJob(io);
         } else {
             if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| owner.close();
             if (state.lineage) |tracker| tracker.destroy();
             state.forks.close();
+            if (state.exit_watch) |*watch| watch.close(io);
             state.cgroup.close();
         }
         state.gpa.destroy(state);
@@ -537,12 +542,11 @@ pub const Child = struct {
     /// own deadlock.
     ///
     /// **How it waits.** On a handle the operating system makes ready the moment
-    /// the child ends: a `pidfd` on Linux, a kqueue registration on Darwin and
-    /// the BSDs, and the process handle itself on Windows. So a child that ends
-    /// is noticed then and not at the end of an interval — which used to cost a
-    /// millisecond and a half on every wait. Where there is no such handle, the
-    /// wait asks again on a growing interval as it always did. Either way it is
-    /// a cancelation point.
+    /// the child ends, which reactor waits on: a `pidfd` on Linux, a kqueue
+    /// registration on Darwin and the BSDs, and the process handle itself on
+    /// Windows. So a child that ends is noticed then and not at the end of an
+    /// interval. Where no such handle can be had, the wait asks again on a
+    /// growing interval. Either way it is a cancelation point.
     ///
     /// `null` while another task holds the wait for this child -- a `Reaper` --
     /// and it has not published a term by the deadline: the child is not this
@@ -560,11 +564,6 @@ pub const Child = struct {
         return child.reapWithin(io, deadline);
     }
 
-    /// How long one wait on the child's process handle lasts before the caller is
-    /// given a chance to notice it has been cancelled. `wait.zig` keeps the same
-    /// number for the handles it opens, and is POSIX-only.
-    const windows_slice_ms: u32 = 5;
-
     /// Reaps the child if it ends before `deadline`. The caller holds the reap.
     ///
     /// This is the one place a bounded wait is written: `waitTimeout` is it with
@@ -572,60 +571,14 @@ pub const Child = struct {
     /// used to be the same loop copied out twice.
     fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         if (try child.tryWaitClaimed(io)) |term| return term;
+        if (builtin.is_test and !is_windows) if (before_exit_watch) |hook| hook(child);
 
-        if (is_windows) {
-            // The child's own process handle is signalled the moment it ends, and
-            // `WaitForSingleObject` takes the deadline directly. Asking again on a
-            // sleeping interval instead cost a whole scheduler tick: the shortest
-            // sleep Windows grants is about fifteen milliseconds, so a child that
-            // ended in nine was not noticed until sixteen.
-            while (true) {
-                const left = deadline.remainingMs(io);
-                if (left == 0) break;
-                // A blocking wait on a handle is not a cancelation point, so it is
-                // spent in slices and cancelation is asked about between them.
-                switch (win32.WaitForSingleObject(child.state.id, @min(left, windows_slice_ms))) {
-                    win32.wait_timeout => {},
-                    win32.wait_object_0 => return child.reapEnded(io, deadline),
-                    // Ended, or a handle that cannot be waited on: either way the
-                    // reap below is what says so.
-                    else => break,
-                }
-                try std.Io.checkCancel(io);
-            }
-            return child.tryWaitClaimed(io);
+        switch (try child_exit.wait(io, child.state.id, child.exitWatch(), null, deadline.toTimeout())) {
+            .ended => return child.reapEnded(io, deadline),
+            .woken => unreachable, // unreachable: no wake was given
+            .timeout => return child.tryWaitClaimed(io),
+            .unavailable => {},
         }
-
-        if (!is_windows) {
-            if (builtin.is_test) if (before_exit_watch) |hook| hook(child);
-            if (comptime tree.Forks.supported) {
-                while (true) {
-                    const left = deadline.remainingMs(io);
-                    if (left == 0) return child.tryWaitClaimed(io);
-                    const ended = child.state.forks.ended(@min(left, wait_for.slice_ms)) orelse break;
-                    if (ended) return child.reapEnded(io, deadline);
-                    try std.Io.checkCancel(io);
-                }
-            }
-            if (wait_for.Watch.open(child.state.id)) |watch| {
-                defer watch.close();
-                while (true) {
-                    const left = deadline.remainingMs(io);
-                    if (left == 0) break;
-                    // A blocking wait on a handle is not a cancelation point, so
-                    // it is spent in slices and cancelation is asked about
-                    // between them.
-                    if (watch.ended(@min(left, wait_for.slice_ms))) return child.reapEnded(io, deadline);
-                    try std.Io.checkCancel(io);
-                }
-                return child.tryWaitClaimed(io);
-            }
-        }
-
-        // Darwin refuses a watch once exit has begun. The child may have
-        // ended between the first reap attempt and registration; ask again
-        // before treating a missing watch as a reason to sleep.
-        if (try child.tryWaitClaimed(io)) |term| return term;
 
         // Nothing to wait on: ask again, on an interval that grows to a few
         // milliseconds so a child that ends promptly is noticed promptly and one
@@ -640,11 +593,16 @@ pub const Child = struct {
         }
     }
 
+    /// The watch on the child's end that `spawn` opened, if it could.
+    fn exitWatch(child: *const Child) ?*const reactor.Process {
+        if (is_windows) return null;
+        return if (child.state.exit_watch) |*watch| watch else null;
+    }
+
     var before_exit_watch: if (builtin.is_test) ?*const fn (*Child) void else void = if (builtin.is_test) null else {};
 
-    test "an exit before watch registration is reaped without a fallback sleep" {
+    test "an exit before the wait begins is reaped without a fallback sleep" {
         if (is_windows) return error.SkipZigTest;
-        if (!tree.Forks.supported) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
         var child = try Child.spawn(testing.allocator, io, .{
@@ -658,11 +616,12 @@ pub const Child = struct {
             fn beforeWatch(owner: *Child) void {
                 owner.closeStdin(testing.io);
                 const until: Deadline = .in(testing.io, .fromMilliseconds(5000));
-                while (wait_for.endedUnreaped(owner.state.id) == .running) {
+                while (child_exit.ask(owner.state.id) == .running) {
                     if (until.remainingMs(testing.io) == 0) @panic("fixture did not exit");
                     spin.yield();
                 }
-                // A fork check may consume NOTE_EXIT before the waiter runs.
+                // The watch `spawn` opened was told of the end, which the
+                // system will not tell one opened now.
                 _ = owner.state.forks.any();
             }
         };
@@ -755,7 +714,7 @@ pub const Child = struct {
         if (child.settled()) |term| return term;
         if (child.state.identity_retired) return error.ReapedElsewhere;
         if (is_windows) {
-            const term = try child.tryWaitWindows();
+            const term = try child.tryWaitWindows(io);
             published = term != null;
             return term;
         }
@@ -765,7 +724,7 @@ pub const Child = struct {
             // Normal containment and every termination request share this
             // final force. Once waitid observes the root ended, its last fork
             // has finished and its group id is still ours until waitpid.
-            switch (wait_for.endedUnreaped(child.state.id)) {
+            switch (child_exit.ask(child.state.id)) {
                 .running => return null,
                 .ended => {
                     if (child.state.lineage) |tracker| if (!tracker.finish()) return null;
@@ -1028,8 +987,8 @@ pub const Child = struct {
             return c.errno(@as(c_int, -1));
         }
 
-        fn ended(pid: posix.pid_t) wait_for.Ended {
-            return wait_for.endedUnreaped(pid);
+        fn ended(pid: posix.pid_t) child_exit.Ended {
+            return child_exit.ask(pid);
         }
     };
 
@@ -1068,7 +1027,7 @@ pub const Child = struct {
                 return null;
             }
 
-            fn ended(_: posix.pid_t) wait_for.Ended {
+            fn ended(_: posix.pid_t) child_exit.Ended {
                 return .running;
             }
         };
@@ -1084,7 +1043,7 @@ pub const Child = struct {
                 return .PERM;
             }
 
-            fn ended(_: posix.pid_t) wait_for.Ended {
+            fn ended(_: posix.pid_t) child_exit.Ended {
                 return .running;
             }
         };
@@ -1158,21 +1117,24 @@ pub const Child = struct {
     /// is still running. `false` means the time ran out with something still in
     /// it.
     ///
-    /// On Windows the container is the job object, which reports to a
-    /// completion port; on Linux it is the child's cgroup, whose `cgroup.events`
-    /// wakes a `poll` when its `populated` line changes, so the wait is woken by
-    /// the change rather than by asking again. A process that has ended and not
-    /// been reaped is not in it. Either way the deadline is spent in five
-    /// millisecond slices, between which cancelation is asked about, as every
-    /// wait here is.
+    /// On Windows the container is the job object, which reports through
+    /// reactor to the task that waits, with no thread of its own on a reactor
+    /// runtime; on Linux it is the child's cgroup, whose `cgroup.events` wakes a
+    /// `poll` when its `populated` line changes, so the wait is woken by the
+    /// change rather than by asking again. A process that has ended and not been
+    /// reaped is not in it. Either way the wait is a cancelation point.
     ///
-    /// Ask it before `deinit`, which releases the job and its port, or the
-    /// cgroup, under the chosen descendant policy.
+    /// Ask it before `deinit`, which releases the job and what it reports
+    /// through, or the cgroup, under the chosen descendant policy.
     ///
     /// A zero timeout asks and does not wait, which is how to poll. On
-    /// Windows the job's message is posted once and taking it off the port
-    /// consumes it, so this remembers: once it has answered `true` it answers
-    /// `true` thereafter. A Linux cgroup is asked again each time.
+    /// Windows the job's message is posted once and taking it consumes it, so
+    /// this remembers: once it has answered `true` it answers `true`
+    /// thereafter. A Linux cgroup is asked again each time.
+    ///
+    /// **On a reactor runtime, Windows**: a job's reports are kept 32 at a
+    /// time; when a tree outruns them the job's own count of its processes says
+    /// what the lost ones would have.
     ///
     /// A Linux child that was given no cgroup — this process may not make one
     /// below its own, which `kill` describes — is `error.Unsupported`: what
@@ -1206,49 +1168,30 @@ pub const Child = struct {
         return contained.waitEmpty(io, timeout);
     }
 
-    /// How long one wait on the completion port lasts before the caller is given a
-    /// chance to notice it has been cancelled.
-    ///
-    /// `GetQueuedCompletionStatus` is not a cancelation point, so the deadline is
-    /// spent in slices of this and cancelation is asked about between them. The
-    /// same five milliseconds `wait.slice_ms` spends on POSIX, for the same
-    /// reason.
-    const tree_slice_ms: u32 = 5;
-
     fn waitTreeWindows(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTreeError!bool {
         if (child.state.tree_ended) return true;
-        const port = child.state.job_port orelse return false;
-        const job = child.state.job orelse return false;
-        const deadline: Deadline = .of(io, timeout);
-
+        const events = &(child.state.job_events orelse return false);
+        // A job reports more than the one thing, and each message that is not
+        // the answer starts nothing over: the timeout is one deadline.
+        const until = Deadline.of(io, timeout).toTimeout();
         while (true) {
-            const left = deadline.remainingMs(io);
-            var message: windows.DWORD = undefined;
-            var key: windows.ULONG_PTR = undefined;
-            var overlapped: ?*anyopaque = undefined;
-            if (win32.GetQueuedCompletionStatus(
-                port,
-                &message,
-                &key,
-                &overlapped,
-                @min(left, tree_slice_ms),
-            ) != .FALSE) {
-                // A job reports more than the one thing: a process started, a
-                // process exited, a limit was reached. Only one of them is the
-                // answer, and the rest are taken off the port and dropped.
-                if (key == @intFromPtr(job) and message == win32.job_object_msg_active_process_zero) { // safe: the completion key against the job handle's value, nothing dereferenced
+            const message = events.next(io, until) catch |err| switch (err) {
+                error.Timeout => return false,
+                error.Canceled => return error.Canceled,
+                // The reports overflowed and some were dropped, the last one
+                // perhaps: what the job holds says whether it was.
+                error.SystemResources => if (try child.jobEmpty()) {
                     child.state.tree_ended = true;
                     return true;
-                }
-                continue;
+                } else continue,
+                error.Unexpected => return error.Unexpected,
+            };
+            // A process started, a process exited, a limit was reached: only one
+            // of them is the answer, and the rest are taken and dropped.
+            if (message == .active_process_zero) {
+                child.state.tree_ended = true;
+                return true;
             }
-            switch (windows.GetLastError()) {
-                // Nothing on the port within the slice, which is all this says.
-                .WAIT_TIMEOUT => {},
-                else => |err| return win32.unexpected(err),
-            }
-            if (left == 0) return false;
-            try std.Io.checkCancel(io);
         }
     }
 
@@ -1411,12 +1354,8 @@ pub const Child = struct {
         if (!is_windows) {
             // A published term needs only stream draining. Never register an OS
             // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(gpa, io, options, until, null, published, false);
-            if (comptime tree.Forks.supported) {
-                if (child.state.forks.queue) |queue|
-                    return child.outputPolled(gpa, io, options, until, .{ .handle = queue }, null, true);
-            }
-            if (wait_for.Watch.open(child.state.id)) |watch| return child.outputPolled(gpa, io, options, until, watch, null, false);
+            if (published != null) return child.outputPolled(gpa, io, options, until, null, published);
+            if (child.exitWatch()) |watch| return child.outputPolled(gpa, io, options, until, watch, null);
         }
         return child.outputOnTasks(gpa, io, options, until);
     }
@@ -1633,39 +1572,45 @@ pub const Child = struct {
 
     /// What one round of `outputPolled` waits on: each stream still open, and
     /// the child's exit while it is still to come. `which` says what each
-    /// descriptor is, 0 and 1 for the streams and 2 for the exit.
+    /// member is, 0 and 1 for the streams and `exit` for the exit.
     const PollSet = struct {
-        fds: [3]posix.pollfd,
+        members: [3]reactor.Waitable,
         which: [3]u8,
         count: usize,
 
-        /// A stream whose descriptor is not one is not something `poll`
-        /// reports on: it is read here, directly, so that the read says what
-        /// is wrong.
+        const exit = 2;
+
+        /// A stream whose descriptor is not one is not something that is
+        /// waited on: it is read here, directly, so that the read says what
+        /// is wrong. The stream `first` names leads the set, which is how a
+        /// wait that reports the lowest ready member still serves both
+        /// streams in turn.
         fn init(
             gpa: Allocator,
             io: std.Io,
             streams: [2]?std.Io.File,
             collectors: [2]*Collector,
             max_bytes: aegis.units.Bytes(usize),
-            exit: ?posix.fd_t,
+            first: u1,
+            ending: ?*const reactor.Process,
         ) OutputError!PollSet {
-            var set: PollSet = .{ .fds = undefined, .which = undefined, .count = 0 };
-            for (streams, collectors, 0..) |stream, collector, i| {
-                if (collector.done.load(.acquire)) continue;
-                if (stream.?.handle < 0) {
-                    _ = try collectOnce(gpa, io, stream.?, max_bytes, collector);
+            var set: PollSet = .{ .members = undefined, .which = undefined, .count = 0 };
+            for (0..2) |turn| {
+                const i = turn ^ first;
+                if (collectors[i].done.load(.acquire)) continue;
+                if (streams[i].?.handle < 0) {
+                    _ = try collectOnce(gpa, io, streams[i].?, max_bytes, collectors[i]);
                     continue;
                 }
-                set.add(stream.?.handle, @intCast(i));
+                set.add(.{ .readable = streams[i].?.handle }, @intCast(i));
             }
-            if (exit) |fd| set.add(fd, 2);
+            if (ending) |process| set.add(.{ .process = process }, exit);
             return set;
         }
 
-        fn add(set: *PollSet, fd: posix.fd_t, what: u8) void {
-            std.debug.assert(set.count < set.fds.len);
-            set.fds[set.count] = .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 };
+        fn add(set: *PollSet, member: reactor.Waitable, what: u8) void {
+            std.debug.assert(set.count < set.members.len);
+            set.members[set.count] = member;
             set.which[set.count] = what;
             set.count += 1;
         }
@@ -1688,9 +1633,11 @@ pub const Child = struct {
         return first.min(b orelse return first);
     }
 
-    /// How often an unbounded `output` wait gives its readers a chance to report
-    /// that one of them cannot keep draining. Each bounded wait still uses the
-    /// operating system's process handle rather than sleeping this interval.
+    /// How often a run reading its streams on tasks gives them a chance to report
+    /// that one of them cannot keep draining, and the longest a run reading its
+    /// streams itself leaves a child that has ended and cannot yet be reaped
+    /// before it asks again. The wait for the child is on its process handle,
+    /// not on this interval.
     const output_wait_slice_ms: u32 = 10;
 
     fn collect(
@@ -1755,25 +1702,25 @@ pub const Child = struct {
         }
     }
 
-    /// `output` on one task: the pipes and the child's end are polled together.
+    /// `output` on one task: the pipes and the child's end are waited on together.
     ///
     /// The promises are the same as the task-based path's. Two streams are read
     /// as either has bytes, so a child that fills one while the other is being
-    /// read is never blocked; a timeout is a bound on the poll and not on a read
+    /// read is never blocked; a timeout is a bound on the wait and not on a read
     /// that may never return; after the child ends the streams are drained for
     /// `drain` and no longer, because whatever still holds them open is not
     /// the child.
+    ///
+    /// `process` is the watch on the child, null once its term is `published`.
     fn outputPolled(
         child: *Child,
         gpa: Allocator,
         io: std.Io,
         options: OutputOptions,
         until: ?Deadline,
-        watch: ?wait_for.Watch,
+        process: ?*const reactor.Process,
         published: ?Term,
-        borrowed_exit: bool,
     ) OutputError!Output {
-        defer if (!borrowed_exit) if (watch) |opened| opened.close();
         var out: Collector = .init;
         var err: Collector = .init;
         errdefer out.list.deinit(gpa);
@@ -1791,12 +1738,10 @@ pub const Child = struct {
         var term = published;
         var drain: ?Deadline = if (published != null) drainDeadline(io, options, until) else null;
         var ended = false;
+        var first: u1 = 0;
+        var lag_ms: u32 = 1;
         while (true) {
             try std.Io.checkCancel(io);
-            // A fork check or waiter may have consumed the shared exit note.
-            if (comptime tree.Forks.supported) if (borrowed_exit and child.state.forks.exited.load(.acquire)) {
-                ended = true;
-            };
             const out_done = out.done.load(.acquire);
             const err_done = err.done.load(.acquire);
             if (term == null) {
@@ -1817,43 +1762,42 @@ pub const Child = struct {
             }
             if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
 
-            var set = try PollSet.init(gpa, io, streams, collectors, options.max_bytes, if (term == null and !ended) watch.?.handle else null);
-            const fds = set.fds[0..set.count];
-            const which = set.which[0..set.count];
-            const count = set.count;
-            var slice: u32 = output_wait_slice_ms;
-            if (term == null) {
-                if (deadline) |run_end| slice = @min(slice, run_end.remainingMs(io));
-            } else slice = @min(slice, drain.?.remainingMs(io));
-            if (count == 0) {
+            var set = try PollSet.init(gpa, io, streams, collectors, options.max_bytes, first, if (term == null and !ended) process.? else null);
+            const members = set.members[0..set.count];
+            // A stream read directly, above, may be the one that failed.
+            if (out.readFailed() or err.readFailed()) continue;
+            // The wait ends with the run, or with the drain once the child has.
+            var limit = if (term == null) deadline else drain;
+            if (members.len == 0) {
                 // The streams are finished and the child has been told to end;
                 // it is only its own exit that is waited for now.
-                if (try child.waitWithin(io, .in(io, .fromMilliseconds(slice)))) |finished| {
+                if (try child.waitWithin(io, limit orelse .never)) |finished| {
                     term = finished;
                     drain = drainDeadline(io, options, until);
                 }
                 continue;
             }
-            // A poll that cannot be made is a stream that cannot be read.
-            const ready = posix.poll(fds, @intCast(slice)) catch return error.ReadFailed;
-            if (ready == 0) continue;
-            for (fds, which) |fd, i| {
-                if (fd.revents == 0) continue;
-                if (i == 2) {
-                    // The child has ended, or is a moment from being waitable:
-                    // the reap is asked for on the next round, and again until
-                    // it answers.
-                    if (comptime tree.Forks.supported) {
-                        if (borrowed_exit) {
-                            ended = child.state.forks.ended(0) orelse false;
-                            continue;
-                        }
-                    }
-                    ended = true;
-                    continue;
-                }
-                _ = try collectOnce(gpa, io, streams[i].?, options.max_bytes, collectors[i]);
+            // The child has ended and is a moment from being waitable, or
+            // another task holds its reap: the reap is asked for again soon,
+            // while the streams go on being read.
+            if (ended and term == null) {
+                limit = earlier(limit, Deadline.in(io, .fromMilliseconds(lag_ms)));
+                lag_ms = @min(lag_ms * 2, output_wait_slice_ms);
             }
+            const ready = reactor.waitAny(io, members, if (limit) |at| at.toTimeout() else .none) catch |failure| switch (failure) {
+                error.Timeout => continue,
+                error.Canceled => return error.Canceled,
+                // A wait that cannot be made is a stream that cannot be read.
+                error.Unsupported, error.Unexpected => return error.ReadFailed,
+            };
+            const which = set.which[ready];
+            if (which == PollSet.exit) {
+                ended = true;
+                continue;
+            }
+            _ = try collectOnce(gpa, io, streams[which].?, options.max_bytes, collectors[which]);
+            first = @intCast(which ^ 1); // safe: `which` is a stream here, 0 or 1
+            lag_ms = 1;
         }
 
         return Collector.output(gpa, &out, &err, term.?, timed_out);
@@ -1870,14 +1814,14 @@ pub const Child = struct {
     }
 
     /// Closes the job under the selected lifecycle policy. Idempotent.
-    fn closeJob(child: *Child) void {
-        // The port goes after the job. A contained job ends its members here
-        // and posts that to the port; the job must not report to a handle that
-        // has gone, even though nothing reads the final message.
-        defer if (child.state.job_port) |port| {
-            child.state.job_port = null;
-            windows.CloseHandle(port);
-        };
+    fn closeJob(child: *Child, io: std.Io) void {
+        // What the job reports stops before the job is closed. A contained job
+        // ends its members here and posts that; nothing reads the final message,
+        // and the job must not report to what has gone.
+        if (child.state.job_events) |*events| {
+            events.detach(io);
+            child.state.job_events = null;
+        }
         const job = child.state.job orelse return;
         child.state.job = null;
         trace.print("child: closing the job", .{});
@@ -1885,7 +1829,7 @@ pub const Child = struct {
         trace.print("child: job closed", .{});
     }
 
-    fn tryWaitWindows(child: *Child) TryWaitError!?Term {
+    fn tryWaitWindows(child: *Child, io: std.Io) TryWaitError!?Term {
         switch (win32.WaitForSingleObject(child.state.id, 0)) {
             win32.wait_object_0 => {},
             win32.wait_timeout => return null,
@@ -1896,13 +1840,22 @@ pub const Child = struct {
             .{ .exited = code }
         else
             .{ .unknown = 0 };
-        const completed = try completion.poll(WindowsCompletion, child, term, child.state.descendants, child.state.end_descendants);
+        const completed = try completion.poll(WindowsCompletion, io, child, term, child.state.descendants, child.state.end_descendants);
         if (completed == null) return null;
         if (child.state.descendants == .contain or child.state.end_descendants)
             child.state.scope_complete = true;
         child.closeHandles();
         child.publish(term);
         return term;
+    }
+
+    /// Whether the job holds no process now, by its own accounting.
+    fn jobEmpty(child: *Child) std.Io.UnexpectedError!bool {
+        const job = child.state.job orelse return error.Unexpected;
+        var counts: win32.JobObjectBasicAccountingInformation = undefined;
+        if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
+            return win32.unexpected(windows.GetLastError());
+        return counts.ActiveProcesses == 0;
     }
 
     const WindowsCompletion = struct {
@@ -1915,27 +1868,30 @@ pub const Child = struct {
                 return win32.unexpected(windows.GetLastError());
         }
         pub fn empty(child: *Child) Child.TryWaitError!bool {
-            const job = child.state.job orelse return error.Unexpected;
-            var counts: win32.JobObjectBasicAccountingInformation = undefined;
-            if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
-                return win32.unexpected(windows.GetLastError());
-            return counts.ActiveProcesses == 0;
+            return child.jobEmpty();
         }
-        pub fn ended(child: *Child) Child.TryWaitError!bool {
-            if (child.state.tree_ended) return true;
-            const job = child.state.job orelse return error.Unexpected;
-            const port = child.state.job_port orelse return error.Unexpected;
+        /// Whether the job has reported that it holds nothing. Never blocks, and
+        /// is not a cancelation point: a cancel stays pending for the next one.
+        pub fn ended(child: *Child, io: std.Io) Child.TryWaitError!bool {
+            const state = child.state;
+            if (state.tree_ended) return true;
+            const events = &(state.job_events orelse return error.Unexpected);
+            const protection = io.swapCancelProtection(.blocked);
+            defer _ = io.swapCancelProtection(protection);
             while (true) {
-                var message: windows.DWORD = undefined;
-                var key: windows.ULONG_PTR = undefined;
-                var overlapped: ?*anyopaque = undefined;
-                if (win32.GetQueuedCompletionStatus(port, &message, &key, &overlapped, 0) == .FALSE)
-                    return switch (windows.GetLastError()) {
-                        .WAIT_TIMEOUT => false,
-                        else => |err| win32.unexpected(err),
-                    };
-                if (key == @intFromPtr(job) and message == win32.job_object_msg_active_process_zero) { // safe: the completion key is compared with the job handle, never dereferenced.
-                    child.state.tree_ended = true;
+                const message = events.next(io, Deadline.within(.zero)) catch |err| switch (err) {
+                    error.Timeout => return false,
+                    error.Canceled => unreachable, // unreachable: cancelation is blocked above
+                    // The reports overflowed and some were dropped, the last one
+                    // perhaps: what the job holds says whether it was.
+                    error.SystemResources => if (try child.jobEmpty()) {
+                        state.tree_ended = true;
+                        return true;
+                    } else continue,
+                    error.Unexpected => return error.Unexpected,
+                };
+                if (message == .active_process_zero) {
+                    state.tree_ended = true;
                     return true;
                 }
             }
@@ -2087,7 +2043,7 @@ pub const Child = struct {
         defer child.deinit(io);
         defer _ = child.killWait(io, .zero) catch {};
         const until: Deadline = .in(io, .fromSeconds(5));
-        while (wait_for.endedUnreaped(child.state.id) == .running) {
+        while (child_exit.ask(child.state.id) == .running) {
             if (until.remainingMs(io) == 0) return error.TestChildDidNotExit;
             try std.Io.sleep(io, .fromMilliseconds(1), .awake);
         }
@@ -2179,7 +2135,7 @@ pub const Child = struct {
             _ = @import("child/posix.zig");
             _ = @import("cgroup.zig");
             _ = @import("tree.zig");
-            _ = @import("wait.zig");
+            _ = @import("exit.zig");
         }
     }
 
@@ -2189,7 +2145,7 @@ pub const Child = struct {
     }
 
     test "Child lifecycle cannot be read or rewritten through public fields" {
-        inline for (.{ "id", "thread", "handles_open", "job", "job_port", "tree_ended", "pgid", "forks", "cgroup", "term", "reaped", "reaping", "identity", "identity_retired" }) |name| {
+        inline for (.{ "id", "thread", "handles_open", "job", "job_events", "tree_ended", "pgid", "forks", "cgroup", "term", "reaped", "reaping", "identity", "identity_retired" }) |name| {
             try std.testing.expect(!@hasField(Child, name));
         }
     }

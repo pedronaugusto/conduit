@@ -29,7 +29,8 @@ const Child = conduit.Child;
 const Deadline = @import("conduit.tty").Deadline;
 const Pty = conduit.Pty;
 const handles = @import("../handles.zig");
-const wait_for = @import("../wait.zig");
+const child_exit = @import("../exit.zig");
+const reactor = @import("reactor");
 const tree = @import("../tree.zig");
 const cgroup = @import("../cgroup.zig");
 const trace = @import("../trace.zig");
@@ -787,7 +788,7 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     defer _ = c.kill(left, .KILL);
 
     var deadline: Deadline = .in(io, budget);
-    while (wait_for.endedUnreaped(child.state.id) != .ended) {
+    while (child_exit.ask(child.state.id) != .ended) {
         if (deadline.remainingMs(io) == 0) return error.TestChildDidNotExit;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
@@ -967,8 +968,8 @@ test "waitTimeout uses the native exit wait without interval sleeps" {
     defer child.deinit(io);
     defer _ = child.killWait(io, .zero) catch {};
     if (!is_windows) {
-        const watch = wait_for.Watch.open(child.processId().?) orelse return error.SkipZigTest;
-        watch.close();
+        var process = reactor.Process.open(io, child.processId().?) catch return error.SkipZigTest;
+        process.close(io);
     }
     // Any interval sleep is canceled, and fails the wait.
     const counted = try FaultIo.init(gpa, io, .{ .plan = &.{.{

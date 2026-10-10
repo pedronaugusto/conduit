@@ -18,6 +18,8 @@ const posix_spawn = @import("posix/spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
 const tree = @import("../tree.zig");
+const exit = @import("../exit.zig");
+const reactor = @import("reactor");
 const cgroup = @import("../cgroup.zig");
 const Orphans = @import("../orphans.zig").Orphans;
 const supervisor = @import("../supervisor.zig");
@@ -151,12 +153,13 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
         var status: c_int = undefined;
         while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
         watched.forks.close();
+        if (watched.exit_watch) |*watch| watch.close(io);
         return record.toError();
     }
 
     const kept: cgroup.Cgroup = if (contained) |*pending| pending.started(outcome.joined) else .none;
     contained = null;
-    const child = started(state, pid, watched.forks, kept, &plan, options);
+    const child = started(state, pid, watched.forks, watched.exit_watch, kept, &plan, options);
     state.lineage = watched.tracker;
     if (comptime builtin.target.os.tag == .linux) if (channel_ends) |ends| {
         state.supervisor = .{ .channel = ends[0], .record = watched.record.? };
@@ -228,6 +231,7 @@ const Watched = struct {
     tracker: ?*lineage.Tracker,
     record: ?Child.SupervisorRecord,
     forks: tree.Forks,
+    exit_watch: ?reactor.Process,
 };
 
 /// The watch, then the word to go on. The reading end of the go pipe is
@@ -248,6 +252,8 @@ fn watchStarted(
     };
     errdefer if (tracker) |owned| owned.destroy();
     const record: ?Child.SupervisorRecord = if (supervised) supervisorRecord(pid) orelse return error.Unexpected else null;
+    var exit_watch = exit.open(io, pid);
+    errdefer if (exit_watch) |*watch| watch.close(io);
     var forks: tree.Forks = .none;
     if (go) |ends| {
         forks = .watch(pid);
@@ -255,7 +261,7 @@ fn watchStarted(
         file(ends[1]).close(io);
         file(ends[0]).close(io);
     }
-    return .{ .tracker = tracker, .record = record, .forks = forks };
+    return .{ .tracker = tracker, .record = record, .forks = forks, .exit_watch = exit_watch };
 }
 
 /// What the fork child execs, built in the parent: between `fork` and
@@ -318,10 +324,12 @@ fn spawnWithoutFork(
     contained: ?*cgroup.Pending,
 ) SpawnError!?*State {
     const into: ?posix.fd_t = if (!posix_spawn.into_cgroup) null else if (contained) |pending| pending.intoDescriptor() else null;
-    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options, into }) orelse return null;
+    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ io, plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options, into }) orelse return null;
     adoption.started(child.pid) catch |err| {
         var forks = child.forks;
         forks.close();
+        var exit_watch = child.exit_watch;
+        if (exit_watch) |*watch| watch.close(io);
         discard(child.pid);
         return err;
     };
@@ -329,7 +337,7 @@ fn spawnWithoutFork(
     plan.closeChildSide(io);
     // Born in its cgroup, which is the child's to keep from here.
     const kept: cgroup.Cgroup = if (contained) |pending| pending.started(true) else .none;
-    return started(state, child.pid, child.forks, kept, plan, options);
+    return started(state, child.pid, child.forks, child.exit_watch, kept, plan, options);
 }
 
 /// In the fork child of a contained spawn on Linux: becomes the supervisor
@@ -443,6 +451,7 @@ fn started(
     state: *State,
     pid: posix.pid_t,
     forks: tree.Forks,
+    exit_watch: ?reactor.Process,
     contained: cgroup.Cgroup,
     plan: *const Plan,
     options: SpawnOptions,
@@ -455,10 +464,11 @@ fn started(
         .thread = {},
         .handles_open = {},
         .job = {},
-        .job_port = {},
+        .job_events = {},
         .tree_ended = {},
         .pgid = if (options.detach) pid else null,
         .forks = forks,
+        .exit_watch = exit_watch,
         .cgroup = contained,
         .term = null,
         .stdin = plan.parent[0],

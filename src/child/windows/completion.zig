@@ -2,12 +2,14 @@
 const std = @import("std");
 const Child = @import("../contract.zig");
 
-pub fn poll(comptime System: type, context: anytype, term: Child.Term, policy: Child.Descendants, ending: bool) Child.TryWaitError!?Child.Term {
+/// `System.ended` reads what the job has reported, which takes the `io` the
+/// reports come through.
+pub fn poll(comptime System: type, io: std.Io, context: anytype, term: Child.Term, policy: Child.Descendants, ending: bool) Child.TryWaitError!?Child.Term {
     if (policy == .survive and !ending and term == .exited) {
         try System.releaseSurvivors(context);
     } else {
         try System.end(context);
-        if (!try System.empty(context) or !try System.ended(context)) return null;
+        if (!try System.empty(context) or !try System.ended(context, io)) return null;
     }
     return term;
 }
@@ -21,7 +23,7 @@ test "Windows completion keeps the root status unpublished while Job members rem
         fn end(self: *Self) !void {
             self.stops += 1;
         }
-        fn ended(_: *Self) !bool {
+        fn ended(_: *Self, _: std.Io) !bool {
             return true;
         }
         fn empty(self: *Self) !bool {
@@ -30,10 +32,10 @@ test "Windows completion keeps the root status unpublished while Job members rem
     };
     var backend: Backend = .{};
     const term: Child.Term = .{ .exited = 7 };
-    try std.testing.expectEqual(@as(?Child.Term, null), try poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectEqual(@as(?Child.Term, null), try poll(Backend, std.testing.io, &backend, term, .contain, false));
     try std.testing.expectEqual(@as(usize, 1), backend.stops);
     backend.members = 0;
-    try std.testing.expectEqual(@as(?Child.Term, term), try poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectEqual(@as(?Child.Term, term), try poll(Backend, std.testing.io, &backend, term, .contain, false));
 }
 
 test "Windows completion reports a failed Job stop or accounting query" {
@@ -45,7 +47,7 @@ test "Windows completion reports a failed Job stop or accounting query" {
         fn end(self: *Self) !void {
             if (self.fail_stop) return error.Unexpected;
         }
-        fn ended(_: *Self) !bool {
+        fn ended(_: *Self, _: std.Io) !bool {
             return true;
         }
         fn empty(self: *Self) !bool {
@@ -55,12 +57,12 @@ test "Windows completion reports a failed Job stop or accounting query" {
     };
     var backend: Backend = .{};
     const term: Child.Term = .{ .exited = 7 };
-    try std.testing.expectError(error.Unexpected, poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectError(error.Unexpected, poll(Backend, std.testing.io, &backend, term, .contain, false));
     backend.fail_stop = false;
     backend.fail_query = true;
-    try std.testing.expectError(error.Unexpected, poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectError(error.Unexpected, poll(Backend, std.testing.io, &backend, term, .contain, false));
     backend.fail_query = false;
-    try std.testing.expectEqual(@as(?Child.Term, term), try poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectEqual(@as(?Child.Term, term), try poll(Backend, std.testing.io, &backend, term, .contain, false));
 }
 
 test "Windows completion waits for the Job termination notification after accounting reaches zero" {
@@ -72,13 +74,13 @@ test "Windows completion waits for the Job termination notification after accoun
         fn empty(_: *Self) !bool {
             return true;
         }
-        fn ended(self: *Self) !bool {
+        fn ended(self: *Self, _: std.Io) !bool {
             return self.notified;
         }
     };
     var backend: Backend = .{};
     const term: Child.Term = .{ .exited = 7 };
-    try std.testing.expectEqual(@as(?Child.Term, null), try poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectEqual(@as(?Child.Term, null), try poll(Backend, std.testing.io, &backend, term, .contain, false));
     backend.notified = true;
-    try std.testing.expectEqual(@as(?Child.Term, term), try poll(Backend, &backend, term, .contain, false));
+    try std.testing.expectEqual(@as(?Child.Term, term), try poll(Backend, std.testing.io, &backend, term, .contain, false));
 }

@@ -60,7 +60,8 @@ const win32 = @import("win32.zig");
 const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
 const Orphans = @import("orphans.zig").Orphans;
-const wait_for = @import("wait.zig");
+const child_exit = @import("exit.zig");
+const reactor = @import("reactor");
 
 const Term = Child.Term;
 const Deadline = tty.Deadline;
@@ -113,11 +114,11 @@ pub const Reaper = struct {
     answered: std.Io.Event,
     /// Private: the first kill deadline; force requests replace it with immediate expiry.
     killing: Kill,
-    /// Private: on POSIX, a pipe whose reading end the task waits on beside the child, and
-    /// which `stop` and `deinit` write to. The wait on the child is not a cancelation point
-    /// and has no deadline, so this is what ends it early. `null` until `start`,
-    /// and where a pipe could not be had.
-    wake: if (is_windows) void else ?[2]posix.fd_t,
+    /// Private: on POSIX, what `stop` and `deinit` signal to end the wait on the child at
+    /// once. Cancelling the task ends it too, but a wait on a thread that is
+    /// not a reactor runtime's looks for a cancel only between short waits.
+    /// `null` until `start`, and where none could be had.
+    wake: if (is_windows) void else ?reactor.Wake,
 
     /// Private: the explicit process-wide adoption scope, owned until stop.
     orphans: ?*Orphans,
@@ -244,11 +245,10 @@ pub const Reaper = struct {
         reaper.child = reaper.source.*;
         reaper.pin.set(reaper);
         reaper.observation_failed.store(false, .release);
-        // Without a pipe the wait falls back to Child.wait, which is
-        // a cancelation point of its own: the wake is how a better wait is ended,
-        // not a condition of waiting at all.
-        if (!is_windows) reaper.wake = tty.pipe(.{}) catch null;
-        errdefer reaper.closeWake();
+        // Without a wake the wait ends at the cancel, which is only later: it
+        // is how a wait is ended early, not a condition of waiting at all.
+        if (!is_windows) reaper.wake = reactor.Wake.init(io) catch null;
+        errdefer reaper.closeWake(io);
         if (reaper.orphans != null) {
             try reaper.group.concurrent(io, observeAdoption, .{ reaper, io });
         }
@@ -393,19 +393,16 @@ pub const Reaper = struct {
     /// Closes the lifetime and joins the task. Calling it again joins nothing.
     fn joinTask(reaper: *Reaper, io: std.Io) void {
         reaper.lifetime.store(.closed, .release);
-        if (!is_windows) if (reaper.wake) |ends| {
-            _ = c.write(ends[1], "x", 1);
-        };
+        if (!is_windows) if (reaper.wake) |*wake| wake.signal();
         reaper.group.cancel(io);
-        reaper.closeWake();
+        reaper.closeWake(io);
     }
 
-    /// A rejected start and a joined task release the same owned wake handles.
-    fn closeWake(reaper: *Reaper) void {
-        if (!is_windows) if (reaper.wake) |ends| {
+    /// A rejected start and a joined task release the same wake.
+    fn closeWake(reaper: *Reaper, io: std.Io) void {
+        if (!is_windows) if (reaper.wake) |*wake| {
+            wake.deinit(io);
             reaper.wake = null;
-            _ = c.close(ends[0]);
-            _ = c.close(ends[1]);
         };
     }
 
@@ -418,7 +415,7 @@ pub const Reaper = struct {
                 reaper.observation_failed.store(true, .release);
                 return;
             };
-            io.sleep(.fromMilliseconds(wait_for.slice_ms), .awake) catch return;
+            io.sleep(adoption_interval, .awake) catch return;
         }
     }
 
@@ -452,7 +449,6 @@ pub const Reaper = struct {
             };
             return term;
         }
-        const wake = reaper.wake orelse return reaper.child.wait(io);
         // Held from here to the reap, as any wait in flight holds it: so the child
         // ended is still the child's, unreaped, while its group is ended below.
         const held = reaper.child.holdReap() orelse return reaper.child.wait(io);
@@ -461,43 +457,37 @@ pub const Reaper = struct {
         // identity that has been retired. Holding the reap does not conceal the
         // result: result reads it without asking the operating system to reap.
         if (try reaper.child.result()) |term| return term;
-        if (wait_for.Watch.open(reaper.child.state.id)) |watch| {
-            defer watch.close();
-            while (true) switch (watch.endedOrWoken(wake[0], if (reaper.orphans != null) wait_for.slice_ms else null)) {
-                .ended => break,
-                .woken => return error.Canceled,
-                // a signal, not the end: ask again
-                .timed_out => try reaper.lookOrphans(io),
-            };
-        } else {
-            // No watch. Darwin refuses one on a child that has already ended --
-            // one that ended before this task first ran -- and some systems have
-            // none at all. Either way the end is asked for without reaping, so
-            // that what the child left in its group can still be ended by the id
-            // the child holds. Where even that cannot be asked, the wait is the
-            // Child.wait, and the group is left as it is.
-            while (true) switch (wait_for.endedUnreaped(reaper.child.state.id)) {
-                .ended => break,
-                .running => {
-                    try reaper.lookOrphans(io);
-                    if (!pause(wake[0], wait_for.slice_ms)) return error.Canceled;
-                },
-                .unknown => return held.wait(io),
-            };
-        }
+        // With an adoption scope to look at, the wait is cut into the intervals
+        // the looks are made at; without one it lasts as long as the child does.
+        const interval: std.Io.Timeout = if (reaper.orphans != null) .{ .duration = .{ .raw = adoption_interval, .clock = .awake } } else .none;
+        const watch: ?*const reactor.Process = if (reaper.child.state.exit_watch) |*existing| existing else null;
+        const wake: ?*reactor.Wake = if (reaper.wake) |*existing| existing else null;
+        while (true) switch (try child_exit.wait(io, reaper.child.state.id, watch, wake, interval)) {
+            .ended => break,
+            // `stop` or `deinit`: the owner is done with this child.
+            .woken => return error.Canceled,
+            .timeout => try reaper.lookOrphans(io),
+            // Where even the end cannot be asked, the wait is the Child.wait, and
+            // the group is left as it is.
+            .unavailable => return held.wait(io),
+        };
         // Ended, and not yet reaped: the group's id is still the child's, and
         // what is left in the group can be addressed by it. A child in a cgroup
         // of its own has what it left in there, wherever its group went.
         const supervised = if (builtin.target.os.tag == .linux) reaper.child.state.supervisor != null else false;
         if (!supervised and (reaper.options.end_tree or reaper.killing.remaining(io) != null)) {
             if (reaper.child.state.cgroup.active()) {
-                if (!reaper.endContained(io, wake[0])) return error.Canceled;
+                try reaper.endContained(io);
             } else if (reaper.child.state.pgid) |pgid| {
-                if (!reaper.endGroup(io, pgid, wake[0])) return error.Canceled;
+                try reaper.endGroup(io, pgid);
             }
         }
         return held.wait(io);
     }
+
+    /// How often the adoption scope is looked at while the root runs, on
+    /// Linux, which provides no descriptor that says an orphan was adopted.
+    const adoption_interval: std.Io.Duration = .fromMilliseconds(5);
 
     /// Only an explicitly enabled scope pays this look. Linux provides no
     /// adoption fd; bounded waits also collect and reap adoptees while the root
@@ -508,17 +498,16 @@ pub const Reaper = struct {
 
     /// What the child left in its cgroup: asked, given the grace, then made.
     /// The child itself, ended and unreaped, is not counted as running there.
-    /// False when the wake came first.
-    fn endContained(reaper: *Reaper, io: std.Io, wake: posix.fd_t) bool {
+    /// A cancel ends the grace and is returned.
+    fn endContained(reaper: *Reaper, io: std.Io) std.Io.Cancelable!void {
         const contained = &reaper.child.state.cgroup;
         switch (contained.populated()) {
-            .none => return true,
+            .none => return,
             .others => {
                 // ziglint-ignore: Z026 a member the request misses is still ended by the kill once the grace has passed
                 _ = contained.signalMembers(.TERM, reaper.child.state.id, null) catch {};
-                switch (reaper.treeGrace(io, wake, .{ .contained = contained })) {
-                    .empty => return true,
-                    .woken => return false,
+                switch (try reaper.treeGrace(io, .{ .contained = contained })) {
+                    .empty => return,
                     .elapsed => {},
                 }
             },
@@ -526,24 +515,22 @@ pub const Reaper = struct {
         }
         // One write, and safe against a fork while it is delivered. A cgroup the
         // kernel will not end leaves the group to be ended as before.
-        if (contained.kill()) return true;
-        if (reaper.child.state.pgid) |pgid| return reaper.endGroup(io, pgid, wake);
-        return true;
+        if (contained.kill()) return;
+        if (reaper.child.state.pgid) |pgid| return reaper.endGroup(io, pgid);
     }
 
     /// What the child left in its group: asked, given the grace, then made.
-    /// False when the wake came first.
-    fn endGroup(reaper: *Reaper, io: std.Io, pgid: posix.pid_t, wake: posix.fd_t) bool {
+    /// A cancel ends the grace and is returned.
+    fn endGroup(reaper: *Reaper, io: std.Io, pgid: posix.pid_t) std.Io.Cancelable!void {
         const leader = reaper.child.state.id;
         // A group holding nothing but the child is the usual case, and is the
         // one that sends nothing.
         switch (tree.members(pgid, leader)) {
-            .none => return true,
+            .none => return,
             .others => {
                 _ = c.kill(-pgid, .TERM);
-                switch (reaper.treeGrace(io, wake, .{ .group = pgid })) {
-                    .empty => return true,
-                    .woken => return false,
+                switch (try reaper.treeGrace(io, .{ .group = pgid })) {
+                    .empty => return,
                     .elapsed => {},
                 }
             },
@@ -552,7 +539,6 @@ pub const Reaper = struct {
         // `kill(-pgid)` is not atomic against a `fork` inside the group, so it is
         // sent again while the group still answers, as `Child.kill` does.
         tree.forceHeldGroup(pgid, leader);
-        return true;
     }
 
     const TreeReach = union(enum) {
@@ -567,10 +553,11 @@ pub const Reaper = struct {
         }
     };
 
-    /// One grace for either tree reach, measured by the caller's clock. An
-    /// interrupted poll spends only the time it actually took, and a delayed
-    /// wake spends all of it. Neither changes the deadline.
-    fn treeGrace(reaper: *Reaper, io: std.Io, wake: posix.fd_t, reach: TreeReach) enum { empty, elapsed, woken } {
+    /// One grace for either tree reach, measured by the caller's clock: a sleep
+    /// that resumes late spends the time it took, and neither changes the
+    /// deadline. Nothing announces that a group or a cgroup is empty, so it is
+    /// looked at between sleeps.
+    fn treeGrace(reaper: *Reaper, io: std.Io, reach: TreeReach) std.Io.Cancelable!enum { empty, elapsed } {
         const deadline: Deadline = .in(io, reaper.options.tree_grace);
         var slice_ms: u32 = 1;
         while (true) {
@@ -578,7 +565,7 @@ pub const Reaper = struct {
             // Re-read it each pass so a force request supersedes that grace.
             const left = (reaper.killing.current() orelse deadline).remainingMs(io);
             if (left == 0) return .elapsed;
-            if (!pause(wake, @min(left, slice_ms))) return .woken;
+            try io.sleep(.fromMilliseconds(@min(left, slice_ms)), .awake);
             if (reach.empty(reaper.child.state.id)) return .empty;
             slice_ms = @min(slice_ms * 2, tree_slice_ms);
         }
@@ -587,18 +574,6 @@ pub const Reaper = struct {
     /// The longest the group is left between two looks while its grace runs.
     /// Only a group with something left in it is looked at at all.
     const tree_slice_ms: u32 = 20;
-
-    /// Sleeps `ms` unless the wake comes first. False when it did.
-    fn pause(wake: posix.fd_t, ms: u32) bool {
-        if (builtin.is_test) if (interrupted_pause) |interrupted| {
-            // A poll interrupted before its requested slice elapsed: the
-            // test moves its clock by the time actually spent.
-            interrupted.spend(interrupted.context);
-            return true;
-        };
-        var fds = [_]c.pollfd{.{ .fd = wake, .events = c.POLL.IN, .revents = 0 }};
-        return c.poll(&fds, 1, @intCast(ms)) <= 0 or fds[0].revents == 0;
-    }
 
     /// No term can encode to this: the tag byte is out of range.
     const running: u64 = std.math.maxInt(u64);
@@ -633,11 +608,7 @@ pub const Reaper = struct {
 /// Tests only: the clocks and fault plans of the tests below.
 const shakedown = @import("shakedown");
 
-/// In a test, what a `pause` does instead of polling: an interrupted poll
-/// that spends what `spend` says on the test's clock.
-var interrupted_pause: if (builtin.is_test) ?struct { context: *anyopaque, spend: *const fn (*anyopaque) void } else void = if (builtin.is_test) null else {};
-
-test "a Reaper tree grace counts elapsed time when polls are interrupted" {
+test "a Reaper tree grace counts elapsed time when its sleeps resume late" {
     if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
@@ -652,20 +623,11 @@ test "a Reaper tree grace counts elapsed time when polls are interrupted" {
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
 
-    const Clock = shakedown.Clock;
-    const Interrupted = struct {
-        /// Each poll is interrupted after two milliseconds.
-        fn spend(context: *anyopaque) void {
-            const clock: *Clock = @ptrCast(@alignCast(context)); // safe: the test hands its Clock as the context
-            clock.advance(.fromMilliseconds(2));
-        }
-    };
-    var clock: Clock = .init(io, .{});
+    // Each sleep resumes two milliseconds late, on the test's clock.
+    var clock: shakedown.Clock = .init(io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(2) } } });
     const start = clock.read(.awake);
     var reaper: Reaper = .init(&child, .{ .tree_grace = .fromMilliseconds(100) });
-    interrupted_pause = .{ .context = &clock, .spend = Interrupted.spend };
-    defer interrupted_pause = null;
-    try testing.expect(reaper.endGroup(clock.io(), child.state.pgid.?, -1));
+    try reaper.endGroup(clock.io(), child.state.pgid.?);
     try testing.expect(start.durationTo(clock.read(.awake)).nanoseconds >= 100 * std.time.ns_per_ms);
 }
 
@@ -698,7 +660,7 @@ test "every wait error survives the round trip through the atomic" {
     }
 }
 
-test "a rejected Reaper start releases its wake pipe before returning" {
+test "a rejected Reaper start may be retried" {
     if (is_windows) return error.SkipZigTest;
     const io = std.testing.io;
     var child = try Child.spawn(std.testing.allocator, io, .{
@@ -709,30 +671,12 @@ test "a rejected Reaper start releases its wake pipe before returning" {
     defer _ = child.killWait(io, .zero) catch {};
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
-    const FaultIo = shakedown.FaultIo;
-    // Record the wake pipe before refusing the task.
-    const Seen = struct {
-        const Self = @This();
-        reaper: *Reaper,
-        ends: ?[2]posix.fd_t = null,
-
-        fn record(_: std.Io, context: *anyopaque) void {
-            const seen: *Self = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Seen as the context
-            seen.ends = seen.reaper.wake;
-        }
-    };
-    var seen: Seen = .{ .reaper = &reaper };
-    const refused = try FaultIo.init(std.testing.allocator, io, .{ .plan = &.{.{
+    const refused = try shakedown.FaultIo.init(std.testing.allocator, io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
-        .fault = .{ .call = .{ .ctx = &seen, .f = Seen.record, .then = &.{ .fail = error.ConcurrencyUnavailable } } },
+        .fault = .{ .fail = error.ConcurrencyUnavailable },
     }} });
     defer refused.deinit();
     try std.testing.expectError(error.ConcurrencyUnavailable, reaper.start(refused.io()));
-    for (seen.ends.?) |fd| {
-        try std.testing.expectEqual(@as(c_int, -1), c.fcntl(fd, c.F.GETFD));
-        try std.testing.expectEqual(std.c.E.BADF, c.errno(@as(c_int, -1)));
-    }
-    try std.testing.expectEqual(@as(?[2]posix.fd_t, null), reaper.wake);
     try reaper.start(io);
     reaper.kill(io, .zero);
     _ = (try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) orelse return error.TestChildDidNotExit;

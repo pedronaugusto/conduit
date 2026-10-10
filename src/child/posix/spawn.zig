@@ -63,6 +63,8 @@ const c = std.c;
 
 const Child = @import("../contract.zig");
 const tree = @import("../../tree.zig");
+const exit = @import("../../exit.zig");
+const reactor = @import("reactor");
 const options_for_build = @import("conduit_options");
 
 const SpawnError = Child.SpawnError;
@@ -117,10 +119,11 @@ pub fn suits(options: SpawnOptions) bool {
 /// first terminal a session leader opens to its session.
 pub const session_terminal = builtin.target.os.tag == .linux;
 
-/// A child `spawn` started, and the watch on its forks.
+/// A child `spawn` started, and the watches on it: on its forks and on its end.
 pub const Started = struct {
     pid: posix.pid_t,
     forks: tree.Forks,
+    exit_watch: ?reactor.Process,
 };
 
 /// Starts the child, or returns `null` if the descriptors it was given cannot
@@ -144,6 +147,7 @@ pub const Started = struct {
 /// signal is at its default in the child — and sends the parent no
 /// `SIGCHLD`.
 pub fn spawn(
+    io: std.Io,
     plan: [3]PlanTarget,
     extras: []const posix.fd_t,
     candidates: []const [*:0]const u8,
@@ -244,7 +248,7 @@ pub fn spawn(
         var pid: posix.pid_t = undefined;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) {
-            const spawned = try started(pid);
+            const spawned = try started(io, pid);
             return spawned;
         }
         switch (@as(posix.E, @fromBackingInt(@intCast(rc)))) {
@@ -270,21 +274,23 @@ fn absent(path: [*:0]const u8) bool {
     };
 }
 
-/// The watch on a child started suspended, and the child resumed.
-fn started(pid: posix.pid_t) SpawnError!Started {
-    if (!tree.Forks.supported) return .{ .pid = pid, .forks = .none };
+/// The watches on a child started suspended, and the child resumed.
+fn started(io: std.Io, pid: posix.pid_t) SpawnError!Started {
+    var exit_watch = exit.open(io, pid);
+    if (!tree.Forks.supported) return .{ .pid = pid, .forks = .none, .exit_watch = exit_watch };
     var forks: tree.Forks = .watch(pid);
     if (c.kill(pid, .CONT) != 0) {
         // Nothing but a stopped child of this process, unreaped, is there to
         // refuse this. A child that cannot be resumed is not one to hand back.
         const err = c.errno(@as(c_int, -1));
         forks.close();
+        if (exit_watch) |*watch| watch.close(io);
         _ = c.kill(pid, .KILL);
         var status: c_int = undefined;
         while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
         return posix.unexpectedErrno(err);
     }
-    return .{ .pid = pid, .forks = forks };
+    return .{ .pid = pid, .forks = forks, .exit_watch = exit_watch };
 }
 
 /// `posix_spawn` reports a failure in the child by returning its error number,

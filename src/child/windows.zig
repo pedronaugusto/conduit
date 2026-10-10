@@ -6,6 +6,7 @@
 //! that only exists here.
 
 const std = @import("std");
+const reactor = @import("reactor");
 const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
@@ -73,8 +74,8 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     // something outside the job, which is the whole thing the job is for.
     flags.create_suspended = true;
 
-    const job = try createJob(options.job_limits);
-    errdefer job.close();
+    var job = try createJob(io, options.job_limits);
+    errdefer job.close(io);
 
     var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
@@ -124,13 +125,14 @@ fn started(
         .id = information.hProcess,
         .thread = information.hThread,
         .job = job.handle,
-        .job_port = job.port,
+        .job_events = job.events,
         .tree_ended = false,
         .handles_open = true,
         // `CREATE_NEW_PROCESS_GROUP` makes a group whose id is the process id,
         // which is what `GenerateConsoleCtrlEvent` is addressed to.
         .pgid = if (options.detach) information.dwProcessId else null,
         .forks = {},
+        .exit_watch = {},
         .cgroup = {},
         .term = null,
         .stdin = plan.parent[0],
@@ -454,14 +456,14 @@ fn traceSpawn(
 // The job object.
 //======================================================================
 
-/// A job object and the port it reports on.
+/// A job object and what it reports.
 const Job = struct {
     handle: windows.HANDLE,
-    port: windows.HANDLE,
+    events: reactor.Job,
 
-    fn close(job: Job) void {
+    fn close(job: *Job, io: std.Io) void {
+        job.events.detach(io);
         windows.CloseHandle(job.handle);
-        windows.CloseHandle(job.port);
     }
 };
 
@@ -472,11 +474,11 @@ const Job = struct {
 /// `limits` is what the caller wants bounded inside it, and a caller who wants
 /// nothing bounded pays for one extra call and no more.
 ///
-/// The port is associated before anything is in the job, which is what makes
+/// Its reports are attached before anything is in the job, which is what makes
 /// `Child.waitTree` possible: the message that says the job is empty is posted
-/// on the transition to empty, so a port attached after the child had already
+/// on the transition to empty, so a report attached after the child had already
 /// started and stopped would hear nothing and wait forever.
-fn createJob(limits: Child.JobLimits) SpawnError!Job {
+fn createJob(io: std.Io, limits: Child.JobLimits) SpawnError!Job {
     if (limits.cpu_rate) |rate| {
         if (rate < 1 or rate > 10_000) return error.InvalidJobLimit;
     }
@@ -484,29 +486,15 @@ fn createJob(limits: Child.JobLimits) SpawnError!Job {
     const handle = win32.CreateJobObjectW(null, null) orelse return createError();
     errdefer windows.CloseHandle(handle);
 
-    const port = win32.CreateIoCompletionPort(
-        windows.INVALID_HANDLE_VALUE,
-        null,
-        0,
-        1,
-    ) orelse return createError();
-    errdefer windows.CloseHandle(port);
-
-    // The job handle as the key, so a message that arrives on this port can be
-    // told to be this job's. One port per job makes that a formality; a key
-    // that means nothing would not.
-    var association: win32.JobObjectAssociateCompletionPort = .{
-        .CompletionKey = handle,
-        .CompletionPort = port,
+    var events = reactor.Job.attach(io, handle) catch |err| return switch (err) {
+        error.SystemResources => error.SystemResources,
+        // A job made a moment ago has no report attached, and Windows is the one
+        // system this runs on.
+        error.AlreadyAttached, error.Unsupported, error.Unexpected => error.Unexpected,
     };
-    if (win32.SetInformationJobObject(
-        handle,
-        win32.job_object_associate_completion_port_information,
-        &association,
-        @sizeOf(win32.JobObjectAssociateCompletionPort),
-    ) == .FALSE) return createError();
+    errdefer events.detach(io);
 
-    const job: Job = .{ .handle = handle, .port = port };
+    const job: Job = .{ .handle = handle, .events = events };
 
     var extended: win32.JobObjectExtendedLimitInformation = std.mem.zeroes(
         win32.JobObjectExtendedLimitInformation,

@@ -99,7 +99,7 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const tree = @import("tree.zig");
-const wait_for = @import("wait.zig");
+const Deadline = @import("conduit.tty").Deadline;
 const linux = std.os.linux;
 const adoption_record = @import("orphans/adoption_record.zig");
 
@@ -247,7 +247,7 @@ pub const Orphans = struct {
     pub fn killAll(orphans: *Orphans, io: std.Io, grace: std.Io.Duration) KillError!void {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return;
-        const deadline: wait_for.Deadline = .in(io, grace);
+        const deadline: Deadline = .in(io, grace);
         var interval_ms: u32 = 1;
         // A `children` file read while a child is being reaped elsewhere may pass
         // over another child, so "nothing left" is believed after two looks.

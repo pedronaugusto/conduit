@@ -19,7 +19,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "platform handles", .patterns = &.{
         "src/cgroup.zig",
         "src/tty.zig",
-        "src/wait.zig",
+        "src/exit.zig",
     } },
     .{ .name = "Windows calls", .patterns = &.{
         "src/win32.zig",
@@ -78,6 +78,7 @@ pub const references: []const gantry.rules.ReferenceRule = &.{
         "builtin",
         "conduit_options",
         "conduit_test_options",
+        "reactor",
         "shakedown",
         "std",
     } },
@@ -98,7 +99,7 @@ pub const required = [_][]const u8{
     "src/child/windows/search.zig",
     "src/cgroup.zig",
     "src/tty.zig",
-    "src/wait.zig",
+    "src/exit.zig",
     "src/win32.zig",
     "src/trace.zig",
     "src/pty.zig",

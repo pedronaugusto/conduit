@@ -11,9 +11,13 @@ pub fn build(b: *std.Build) void {
     // only be a dependency to explain.
     const link_libc = target.result.os.tag != .windows;
 
-    // The one runtime dependency: aegis, a leaf that needs only std.
+    // The runtime dependencies, both leaves that need only std: aegis, and
+    // reactor, which owns every wait on a kernel object here (a process
+    // ending, a descriptor ready, a job object's messages).
     const aegis_package = b.dependency("aegis", .{ .target = target, .optimize = optimize });
     const aegis = aegis_package.module("aegis");
+    const reactor_package = b.dependency("reactor", .{ .target = target, .optimize = optimize });
+    const reactor = reactor_package.module("reactor");
 
     //=====================================================================
     // The module.
@@ -55,6 +59,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = link_libc,
         .imports = &.{
             .{ .name = "aegis", .module = aegis },
+            .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty_module },
         },
     });
@@ -97,6 +102,7 @@ pub fn build(b: *std.Build) void {
         .sanitize_thread = if (thread_sanitizer) true else null,
         .imports = &.{
             .{ .name = "aegis", .module = aegis },
+            .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty_module },
         },
     });
@@ -267,7 +273,7 @@ pub fn build(b: *std.Build) void {
             .package = "conduit",
             .program = b.path("ci/consumer.zig"),
             .modules = &.{ "conduit", "conduit.tty" },
-            .packages = &.{aegis_package},
+            .packages = &.{ aegis_package, reactor_package },
         });
     }
 }
@@ -281,6 +287,7 @@ const example_sources = [_][]const u8{
 /// Build each benchmark's imports in its own optimization mode.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, options: *std.Build.Step.Options) []const std.Build.Module.Import {
     const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize }).module("aegis");
+    const reactor = b.dependency("reactor", .{ .target = target, .optimize = optimize }).module("reactor");
     const tty = b.createModule(.{
         .root_source_file = b.path("src/tty.zig"),
         .target = target,
@@ -295,6 +302,7 @@ fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
         .link_libc = true,
         .imports = &.{
             .{ .name = "aegis", .module = aegis },
+            .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty },
         },
     });

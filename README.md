@@ -19,10 +19,12 @@ const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimiz
 exe.root_module.addImport("conduit", conduit.module("conduit"));
 ```
 
-One import. The one package conduit builds with is
-[aegis](https://github.com/pedronaugusto/aegis), a leaf that needs only the
-standard library. The options that count bytes take its `units.Bytes(usize)`, so
-a build that sets them imports aegis too. The module links
+One import. conduit builds with two packages of its family, both leaves that
+need only the standard library. [aegis](https://github.com/pedronaugusto/aegis)
+supplies the `units.Bytes(usize)` the options that count bytes take, so a build
+that sets them imports aegis too. [reactor](https://github.com/pedronaugusto/reactor)
+makes the waits on the system's own handle for a child's end, a held process, a
+descriptor and a Windows job. They work over any `std.Io` you pass. The module links
 libc on POSIX and not on Windows, and decides that from the target: the POSIX
 pseudo-terminal interface is a libc interface everywhere, and Darwin has no
 stable ABI to reach past it. Every Windows call is a `kernel32` import.
@@ -81,6 +83,21 @@ a task, and takes an optional `ticket` a program's own handler can bump.
 `SIGPIPE` too — writing to a pipe whose reader is gone raises it, and what to
 do about that is the program's.
 
+**Waits are made on the system's own handle, and every one is a cancelation
+point.** A child's end is a `pidfd` on Linux, a kqueue registration on Darwin
+and the BSDs and the process handle on Windows; `output` waits on that and the
+two pipes in one call; a held process is its `pidfd` or the same registration;
+a Windows job says in its own messages that it holds nothing.
+[reactor](https://github.com/pedronaugusto/reactor) makes each wait. On a
+reactor runtime it is an operation of the calling task's loop and holds no
+thread. On `std.Io.Threaded`, or any other `Io`, it holds the calling thread
+and looks for a cancel every few milliseconds. What the system gives nothing to
+wait on is asked about on an interval: whether a group or a cgroup has emptied
+during a `Reaper`'s grace, and the adoptees of `Orphans` on Linux. Two waits
+are conduit's own for a reason each: `cgroup.events` is waited on for an urgent
+event, and the Windows console wait lives in `conduit.tty`, which imports
+nothing.
+
 **Read the child's output while you wait for it.** A child that fills a pipe
 nobody drains stops there, and on Darwin a process whose terminal still holds
 output blocks *inside exit* until the master is read — so a parent that waits
@@ -117,12 +134,11 @@ that cannot be put in its job is `error.JobAssignmentFailed`, not a child
 whose tree `kill` would miss.
 
 A container the system keeps can also be asked about, which is `waitTree`: the
-job reports to a completion port from before the child is assigned to it, and
+job's reports are attached before the child is assigned to it, and
 the wait ends when the job says it holds nothing; on Linux the child's cgroup
 (below) says the same in `cgroup.events`, whose change wakes a `poll`. So a
 program can watch the whole tree go rather than only the child — and it has
-to ask before `deinit`, which is what closes the job and the port and removes
-the cgroup. POSIX, for a child with no cgroup of its own, has nothing to ask. A process group is an address to send
+to ask before `deinit`, which is what closes the job and removes the cgroup. POSIX, for a child with no cgroup of its own, has nothing to ask. A process group is an address to send
 signals to and the system accounts nothing to it, and the walk `kill` uses goes
 down from the child, where a grandchild whose parent has exited belongs to
 `init` and is related to the child by nothing that can be looked up; a walk
@@ -848,6 +864,7 @@ before `CreateProcessW`; otherwise Windows resolves it.
   interface, not on Linux. On Windows every call is a kernel32 import and
   nothing is linked.
 - [aegis](https://github.com/pedronaugusto/aegis) holds the data beside its lock (`Guarded`, `BlockingGuarded`), the bounded backlog and its owners, and the byte count and duration conversions.
+- [reactor](https://github.com/pedronaugusto/reactor) makes the waits on a child's end, a held process, the pipes `output` reads and a Windows job's messages, native on its runtime and over any other `std.Io`.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
   the tests and CI.
 - **tycho**, every coding agent in one folder (in development).

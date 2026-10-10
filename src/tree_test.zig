@@ -5,7 +5,6 @@ const c = std.c;
 const is_windows = builtin.target.os.tag == .windows;
 const access = @import("tree.zig").test_access;
 const Deadline = access.Deadline;
-const wait_for = access.wait_for;
 const Dirents = @import("tree.zig").Dirents;
 const signalDescendants = @import("tree.zig").signalDescendants;
 const signalDescendantsGuarded = access.signalDescendantsGuarded;

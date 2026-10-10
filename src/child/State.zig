@@ -8,6 +8,7 @@ const windows = std.os.windows;
 const is_windows = builtin.target.os.tag == .windows;
 const tree = @import("../tree.zig");
 const cgroups = @import("../cgroup.zig");
+const reactor = @import("reactor");
 const Id = std.process.Child.Id;
 const Pty = @import("../pty.zig").Pty;
 const Supervisor = @import("../supervisor.zig").Supervisor;
@@ -51,12 +52,13 @@ handles_open: if (is_windows) bool else void,
 /// way a signal to a process group does on POSIX. `null` once `deinit` has
 /// closed it; the lifecycle policy determines whether closing it ends members.
 job: if (is_windows) ?windows.HANDLE else void,
-/// Windows only: the completion port the job posts to, which is how
-/// `waitTree` learns that the job has emptied. Closed alongside `job`.
-job_port: if (is_windows) ?windows.HANDLE else void,
+/// Windows only: what the job reports, which is how `waitTree` learns that the
+/// job has emptied. Attached before anything is in the job and detached before
+/// `job` is closed.
+job_events: if (is_windows) ?reactor.Job else void,
 /// Windows only: whether the job has been heard to empty. `waitTree` sets it,
 /// and answers from it thereafter: the message is posted once and taking it
-/// off the port consumes it.
+/// off the job's reports consumes it.
 tree_ended: if (is_windows) bool else void,
 /// The child's process group, when `detach` asked for one. `null` means the
 /// child is in the process group it inherited, and a signal is addressed to
@@ -67,6 +69,9 @@ pgid: ?ProcessGroupId,
 /// `tree.Forks` says where there is a watch; elsewhere it answers that the
 /// walk is needed. Closed by `deinit`.
 forks: if (is_windows) void else tree.Forks,
+/// POSIX: the watch on the child's end, opened as it was spawned and closed by
+/// `deinit` (`exit.open`). `null` where none could be had.
+exit_watch: if (is_windows) void else ?reactor.Process,
 /// Linux: the cgroup the child was put in before it ran, where this process
 /// may make one, and which everything the child starts is born into. `kill`
 /// ends the whole of it. Elsewhere, and where none could be made, it is

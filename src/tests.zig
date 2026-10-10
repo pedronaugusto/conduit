@@ -87,7 +87,8 @@ test {
 test {
     _ = @import("child/reaper_test.zig");
     if (comptime !is_windows) _ = @import("tree_test.zig");
-    if (comptime !is_windows) _ = @import("wait_test.zig");
+    _ = @import("exit_test.zig");
+    _ = @import("reactor_test.zig");
     _ = @import("handles_test.zig");
     _ = @import("lineage_test.zig");
     _ = @import("expect_test.zig");
