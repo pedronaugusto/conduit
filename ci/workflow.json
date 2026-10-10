@@ -1,7 +1,6 @@
 {
   "land": true,
   "attest": true,
-  "package": "conduit",
   "compile_step": "check",
   "targets": [
     "x86_64-linux-gnu",
@@ -16,6 +15,13 @@
     "x86_64-netbsd"
   ],
   "compile_once": false,
-  "sanitizer": "unit",
-  "before_tests_step": "check-runner"
+  "before_tests_step": "check-runner",
+  "jobs": [
+    {
+      "name": "ThreadSanitizer (Linux)",
+      "step": "unit",
+      "args": ["-Dthread-sanitizer=true", "-Doptimize=debug", "-Dci-lint=false"],
+      "tiers": ["release"]
+    }
+  ]
 }
