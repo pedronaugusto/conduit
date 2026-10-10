@@ -1,6 +1,9 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    // lazyImport compares every package of the dependency tree at comptime;
+    // a large tree runs past the default quota of 1000 branches.
+    @setEvalBranchQuota(100_000);
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -351,6 +354,9 @@ pub fn testing(conduit: *std.Build.Dependency) error{LazyDependencyNeeded}!*std.
 /// The published `conduit.testing`, made once per build of the package, on
 /// shakedown bound to conduit's own aegis.
 fn testingModule(b: *std.Build, conduit: *std.Build.Module) error{LazyDependencyNeeded}!*std.Build.Module {
+    // lazyImport compares every package of the dependency tree at comptime;
+    // a large tree runs past the default quota of 1000 branches.
+    @setEvalBranchQuota(100_000);
     if (b.modules.get("conduit.testing")) |made| return made;
     const target = conduit.resolved_target.?;
     const optimize = conduit.optimize.?;
