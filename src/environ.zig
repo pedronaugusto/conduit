@@ -161,63 +161,51 @@ fn referenceGetenv(entries: []const [*:0]const u8, name: []const u8) ?[]const u8
     return null;
 }
 
-fn readsAsGetenv(_: void, smith: *std.testing.Smith) !void {
-    @disableInstrumentation();
-    if (is_windows) return error.SkipZigTest;
-    const gpa = std.testing.allocator;
-    // Entries out of a few names, equals signs and values, so that names
-    // repeat and entries go without one.
-    const pieces = [_][]const u8{ "A", "B", "AB", "=", "==", "x", "", "\xff", " " };
-    var storage: [8][32:0]u8 = undefined;
-    var entries: [8][*:0]const u8 = undefined;
-    var count: usize = 0;
-    while (count < entries.len and !smith.eosWeightedSimple(4, 1)) : (count += 1) {
-        var len: usize = 0;
-        while (len < 24 and !smith.eosWeightedSimple(2, 1)) {
-            const piece = pieces[smith.index(pieces.len)];
-            @memcpy(storage[count][len..][0..piece.len], piece);
-            len += piece.len;
-        }
-        storage[count][len] = 0;
-        entries[count] = storage[count][0..len :0].ptr;
-    }
-    var map = try mapOfBlock(gpa, entries[0..count]);
-    defer map.deinit();
-    // Every name `getenv` finds is in the map with the value it finds, and
-    // nothing else is.
-    var names: usize = 0;
-    for (entries[0..count], 0..) |pointer, i| {
-        const entry = std.mem.span(pointer);
-        const equals = std.mem.findScalar(u8, entry, '=') orelse continue;
-        if (equals == 0) continue;
-        const name = entry[0..equals];
-        const first = for (entries[0..i]) |earlier| {
-            const before = std.mem.span(earlier);
-            if (before.len > equals and std.mem.startsWith(u8, before, name) and before[equals] == '=') break false;
-        } else true;
-        if (first) names += 1;
-        try std.testing.expectEqualStrings(referenceGetenv(entries[0..count], name).?, map.get(name).?);
-    }
-    try std.testing.expectEqual(names, map.count());
-}
-
 test "an environment block reads as getenv reads it" {
-    try std.testing.fuzz({}, readsAsGetenv, .{});
-}
-
-test "an environment block reads as getenv reads it, over seeded rounds" {
     if (is_windows) return error.SkipZigTest;
-    var prng: std.Random.DefaultPrng = .init(0xe4);
-    var bytes: [256]u8 = undefined;
-    for (0..256) |_| {
-        for (&bytes) |*byte| byte.* = switch (prng.random().uintLessThan(u8, 10)) {
-            0...6 => 0,
-            7, 8 => prng.random().uintLessThan(u8, 16),
-            else => prng.random().int(u8),
-        };
-        var smith: std.testing.Smith = .{ .in = &bytes };
-        try readsAsGetenv({}, &smith);
-    }
+    const shakedown = @import("shakedown");
+    const gen = shakedown.gen;
+    const Property = struct {
+        fn readsAsGetenv(_: void, case: *shakedown.Case) !void {
+            const s = case.source;
+            const gpa = std.testing.allocator;
+            // Entries out of a few names, equals signs and values, so that names
+            // repeat and entries go without one.
+            const pieces = [_][]const u8{ "A", "B", "AB", "=", "==", "x", "", "\xff", " " };
+            var storage: [8][32:0]u8 = undefined;
+            var entries: [8][*:0]const u8 = undefined;
+            var count: usize = 0;
+            while (count < entries.len and s.more(4)) : (count += 1) {
+                var len: usize = 0;
+                while (len < 24 and s.more(2)) {
+                    const piece = gen.oneOf(s, []const u8, &pieces);
+                    @memcpy(storage[count][len..][0..piece.len], piece);
+                    len += piece.len;
+                }
+                storage[count][len] = 0;
+                entries[count] = storage[count][0..len :0].ptr;
+            }
+            var map = try mapOfBlock(gpa, entries[0..count]);
+            defer map.deinit();
+            // Every name `getenv` finds is in the map with the value it finds, and
+            // nothing else is.
+            var names: usize = 0;
+            for (entries[0..count], 0..) |pointer, i| {
+                const entry = std.mem.span(pointer);
+                const equals = std.mem.findScalar(u8, entry, '=') orelse continue;
+                if (equals == 0) continue;
+                const name = entry[0..equals];
+                const first = for (entries[0..i]) |earlier| {
+                    const before = std.mem.span(earlier);
+                    if (before.len > equals and std.mem.startsWith(u8, before, name) and before[equals] == '=') break false;
+                } else true;
+                if (first) names += 1;
+                try std.testing.expectEqualStrings(referenceGetenv(entries[0..count], name).?, map.get(name).?);
+            }
+            try std.testing.expectEqual(names, map.count());
+        }
+    };
+    try shakedown.check(std.testing.allocator, {}, Property.readsAsGetenv, .{});
 }
 
 test "inherit copies the process environment" {

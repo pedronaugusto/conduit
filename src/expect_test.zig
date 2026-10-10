@@ -23,7 +23,10 @@ const testing = std.testing;
 const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 const Deadline = @import("conduit.tty").Deadline;
-const FaultIo = @import("shakedown").FaultIo;
+const shakedown = @import("shakedown");
+const FaultIo = shakedown.FaultIo;
+const gen = shakedown.gen;
+const draw = @import("testing/draw.zig");
 
 /// Generous: it is a failure budget, not a timing assertion.
 const budget_ms = 5000;
@@ -404,7 +407,7 @@ fn waitWithin(io: std.Io, child: *Child) !Child.Term {
 //======================================================================
 
 test "the incremental search finds what a search of the whole buffer would" {
-    try testing.fuzz({}, searchMatchesAFullScan, .{});
+    try shakedown.check(testing.allocator, {}, searchMatchesAFullScan, .{});
 }
 
 /// The property: however the child's bytes are cut into arrivals, the
@@ -417,33 +420,33 @@ test "the incremental search finds what a search of the whole buffer would" {
 /// would hang until its deadline; one that never moved would be correct and
 /// quadratic. Only the first is a fault a reader would not see, and it is the
 /// one an arrival split at an awkward byte finds.
-fn searchMatchesAFullScan(_: void, smith: *std.testing.Smith) !void {
-    @disableInstrumentation();
+fn searchMatchesAFullScan(_: void, case: *shakedown.Case) !void {
+    const s = case.source;
 
     // A three-letter alphabet, so that patterns actually occur: over 256 bytes
     // a match would be a rare accident and the fuzzer would be exercising the
     // miss and nothing else.
-    const alphabet: []const std.testing.Smith.Weight = &.{.rangeAtMost(u8, 'a', 'c', 1)};
+    const alphabet: []const draw.Pick = &.{.{ .lo = 'a', .hi = 'c', .weight = 1 }};
 
     var pattern_storage: [4][8]u8 = undefined;
     var patterns: [4][]const u8 = undefined;
-    const count = smith.valueRangeAtMost(u8, 1, patterns.len);
+    const count = gen.intRange(s, u8, 1, patterns.len);
     for (patterns[0..count], pattern_storage[0..count]) |*pattern, *storage| {
         // An empty pattern matches before anything arrives and `untilAny`
         // answers it without searching, so the search never sees one.
-        const length = smith.valueRangeAtMost(u8, 1, storage.len);
-        smith.bytesWeighted(storage[0..length], alphabet);
+        const length = gen.intRange(s, u8, 1, storage.len);
+        draw.fillWeighted(s, storage[0..length], alphabet);
         pattern.* = storage[0..length];
     }
     const wanted = patterns[0..count];
 
     var stream: [64]u8 = undefined;
-    const said = stream[0..smith.sliceWeightedBytes(&stream, alphabet)];
+    const said = draw.weightedBytes(s, &stream, alphabet);
 
     var search: Search = access.searchInit(wanted);
     var arrived: usize = 0;
     while (arrived < said.len) {
-        arrived += smith.valueRangeAtMost(u8, 1, @intCast(said.len - arrived));
+        arrived += gen.intRange(s, u8, 1, @intCast(said.len - arrived));
         const so_far = said[0..arrived];
 
         const full = fullScan(so_far, wanted);

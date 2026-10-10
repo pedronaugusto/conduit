@@ -47,6 +47,9 @@ const NoForks = access.NoForks;
 const Members = @import("tree.zig").Members;
 const members = @import("tree.zig").members;
 const test_options = @import("conduit_test_options");
+const shakedown = @import("shakedown");
+const gen = shakedown.gen;
+const draw = @import("testing/draw.zig");
 const membersLinux = access.membersLinux;
 const membersDarwin = access.membersDarwin;
 test "a descendant snapshot cannot authorize a signal to an unrelated captured identity" {
@@ -472,34 +475,33 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
 /// A `/proc/<pid>/stat` record around a command name that can hold
 /// anything a name can -- spaces, parentheses, what looks like the fields
 /// after it -- read back field by field.
-fn statReadsBack(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
-    if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
+fn statReadsBack(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     var record: std.ArrayList(u8) = .empty;
     defer record.deinit(std.testing.allocator);
     const gpa = std.testing.allocator;
 
     const pieces = [_][]const u8{ "a", " ", ")", "(", ") S 1 2 3 4", "\n", "\xff", "0", "-1", ") " };
-    try record.print(gpa, "{d} (", .{smith.value(u16)});
-    while (!smith.eosWeightedSimple(2, 1)) try record.appendSlice(gpa, pieces[smith.index(pieces.len)]);
+    try record.print(gpa, "{d} (", .{gen.int(s, u16)});
+    while (s.more(2)) try record.appendSlice(gpa, gen.oneOf(s, []const u8, &pieces));
     const states = "RSDZTtWXxKPI";
-    const state = states[smith.index(states.len)];
-    const ppid: posix.pid_t = smith.valueRangeAtMost(i32, 0, std.math.maxInt(i32));
-    const pgrp: posix.pid_t = smith.valueRangeAtMost(i32, 0, std.math.maxInt(i32));
-    const session: posix.pid_t = smith.valueRangeAtMost(i32, 0, std.math.maxInt(i32));
-    const start = smith.value(u64);
+    const state = gen.oneOf(s, u8, states);
+    const ppid: posix.pid_t = gen.intRange(s, i32, 0, std.math.maxInt(i32));
+    const pgrp: posix.pid_t = gen.intRange(s, i32, 0, std.math.maxInt(i32));
+    const session: posix.pid_t = gen.intRange(s, i32, 0, std.math.maxInt(i32));
+    const start = gen.int(s, u64);
     try record.print(gpa, ") {c} {d} {d} {d}", .{ state, ppid, pgrp, session });
     // Fields 7 to 21, some of them negative, then the start time and the
     // fields after it -- unless the record stops short.
-    const fields = smith.valueRangeAtMost(u8, 0, 18);
+    const fields = gen.intRange(s, u8, 0, 18);
     for (7..7 + @as(usize, fields)) |field| {
         if (field == 22) {
             try record.print(gpa, " {d}", .{start});
-        } else try record.print(gpa, " {d}", .{smith.value(i32)});
+        } else try record.print(gpa, " {d}", .{gen.int(s, i32)});
     }
     // The kernel ends the record with a newline after its last field, which
     // is well past the ones read here.
-    if (7 + @as(usize, fields) > 23 and smith.boolWeighted(1, 1)) try record.append(gpa, '\n');
+    if (7 + @as(usize, fields) > 23 and gen.boolean(s)) try record.append(gpa, '\n');
 
     const relation = parseLinuxStat(record.items) orelse return error.TestExpectedRelation;
     try std.testing.expectEqual(state, relation.state);
@@ -510,35 +512,36 @@ fn statReadsBack(_: void, smith: *std.testing.Smith) anyerror!void {
 
     // Any bytes at all are a relation or none, and never a crash.
     var junk: [64]u8 = undefined;
-    _ = parseLinuxStat(junk[0..smith.slice(&junk)]);
+    _ = parseLinuxStat(draw.bytesInto(s, &junk));
 }
 
 test "a stat record reads back whatever its command name holds" {
-    try std.testing.fuzz({}, statReadsBack, .{});
+    if (builtin.target.os.tag != .linux and builtin.target.os.tag != .macos) return error.SkipZigTest;
+    try shakedown.check(std.testing.allocator, {}, statReadsBack, .{});
 }
 
 /// What `getdents64` wrote, or bytes that only look like it: every name
 /// comes from inside the bytes, holds no NUL, and the walk ends.
-fn direntsStayInside(_: void, smith: *std.testing.Smith) anyerror!void {
-    @disableInstrumentation();
+fn direntsStayInside(_: void, case: *shakedown.Case) anyerror!void {
+    const s = case.source;
     const reclen_at = @offsetOf(std.os.linux.dirent64, "reclen");
     const name_at = @offsetOf(std.os.linux.dirent64, "name");
     const endian = builtin.target.cpu.arch.endian();
     var bytes: [256]u8 = @splat(0);
     var end: usize = 0;
-    while (end + name_at < bytes.len and !smith.eosWeightedSimple(3, 1)) {
-        if (smith.boolWeighted(3, 1)) {
+    while (end + name_at < bytes.len and s.more(3)) {
+        if (s.chance(250_000)) {
             // A record as the kernel writes one: its length rounded up to
             // eight, its name NUL-terminated.
             var name: [24]u8 = undefined;
-            const len = smith.sliceWeightedBytes(&name, &.{.rangeAtMost(u8, 1, 255, 1)});
+            const len = draw.weightedBytes(s, &name, &.{.{ .lo = 1, .hi = 255, .weight = 1 }}).len;
             const reclen = std.mem.alignForward(usize, name_at + len + 1, 8);
             if (end + reclen > bytes.len) break;
             std.mem.writeInt(u16, bytes[end + reclen_at ..][0..2], @intCast(reclen), endian);
             @memcpy(bytes[end + name_at ..][0..len], name[0..len]);
             end += reclen;
         } else {
-            end += smith.slice(bytes[end..]);
+            end += draw.bytesInto(s, bytes[end..]).len;
         }
     }
     var names: Dirents = .{ .bytes = bytes[0..end] };
@@ -553,27 +556,5 @@ fn direntsStayInside(_: void, smith: *std.testing.Smith) anyerror!void {
 }
 
 test "getdents64 records are read from inside what was read" {
-    try std.testing.fuzz({}, direntsStayInside, .{});
-}
-
-test "the stat and dirent properties hold over seeded rounds" {
-    var prng: std.Random.DefaultPrng = .init(0x57a7);
-    var bytes: [256]u8 = undefined;
-    for (0..256) |i| {
-        for (&bytes) |*byte| byte.* = switch (prng.random().uintLessThan(u8, 10)) {
-            0...6 => 0,
-            7, 8 => prng.random().uintLessThan(u8, 16),
-            else => prng.random().int(u8),
-        };
-        inline for (.{ statReadsBack, direntsStayInside }) |property| {
-            var smith: std.testing.Smith = .{ .in = &bytes };
-            property({}, &smith) catch |err| switch (err) {
-                error.SkipZigTest => {},
-                else => {
-                    std.debug.print("seeded round {d}: {t}\n", .{ i, err });
-                    return err;
-                },
-            };
-        }
-    }
+    try shakedown.check(std.testing.allocator, {}, direntsStayInside, .{});
 }
