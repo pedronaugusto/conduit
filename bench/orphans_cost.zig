@@ -1,6 +1,7 @@
 //! What `Orphans` costs, as shakedown rows: spawn and wait of `true` with
 //! `Orphans` off and on, and one look (`Orphans.count`) with 0, 10 and 100 live
-//! children of conduit's own. Linux only: elsewhere it says so and ends.
+//! children of conduit's own. Linux only: elsewhere a timed run says so and
+//! ends, and a smoke run, which `zig build test` makes, ends quietly.
 //!
 //!     orphans-cost [--smoke] [--row <name prefix>] [--samples <n>]
 const std = @import("std");
@@ -59,7 +60,8 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     if (!conduit.Orphans.supported) {
-        try std.Io.File.stderr().writeStreamingAll(init.io, "Orphans tracking unavailable: requires Linux\n");
+        // Zig 0.17 shows a passing run step's stderr under "failed command:".
+        if (!smoke) try std.Io.File.stderr().writeStreamingAll(init.io, "Orphans tracking unavailable: requires Linux\n");
         return;
     }
     var selected = false;
