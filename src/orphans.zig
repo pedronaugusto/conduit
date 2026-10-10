@@ -211,6 +211,7 @@ pub const Orphans = struct {
 
         orphans.was_subreaper = subreaper();
         if (!orphans.was_subreaper) try setSubreaper(true);
+        // glint-ignore: Z026 -- start reports its own error; a flag that cannot be put back only leaves orphans reparenting to this process, and the next start reads the flag again
         errdefer if (!orphans.was_subreaper) setSubreaper(false) catch {};
 
         // Whatever this process has now was started before the contract: it is
@@ -398,7 +399,7 @@ pub const Orphans = struct {
         const orphans = current orelse return;
         orphans.lock.lock();
         defer orphans.lock.unlock();
-        // ziglint-ignore: Z026 an event has no caller to tell; what this look missed the next one, or `count` or `killAll`, finds
+        // glint-ignore: Z026 -- an event has no caller to tell; what this look missed the next one, or `count` or `killAll`, finds
         orphans.look(io) catch {};
         orphans.reapEnded();
     }
@@ -460,7 +461,6 @@ pub const Orphans = struct {
         /// Lets a look happen again, and — after a spawn that started a child —
         /// has one: the spawn is an event of conduit's, and a moment to take in
         /// what is waiting. Idempotent.
-        // ziglint-ignore: Z023 `spawn` is the receiver; ziglint resolves none on a type nested in another
         pub fn finish(spawn: *Spawn, io: std.Io) void {
             const state = spawn;
             if (state.lifetime == .closed) return;

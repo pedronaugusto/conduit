@@ -1,6 +1,6 @@
 //! A table of benchmark rows as shakedown rows. An entry is
 //! `.{ .name, .unit, .run }` with an optional `.initial`, `.setup` and
-//! `.teardown`; its callbacks return inferred error sets, which `ErrorOf`
+//! `.teardown`, which make the row's fixture; its callbacks return inferred error sets, which `ErrorOf`
 //! joins into the one set the runner is given.
 const bench = @import("shakedown").bench;
 
@@ -37,8 +37,12 @@ pub fn of(comptime Context: type, comptime Error: type, comptime table: anytype)
             .unit = entry.unit,
             .initial = if (has.field("initial")) entry.initial else 1,
             .run = entry.run,
-            .setup = if (has.field("setup")) entry.setup else null,
-            .teardown = if (has.field("teardown")) entry.teardown else null,
+            // Built before every batch and released after it, untimed: what each batch uses is its own.
+            .fixture = if (has.field("setup")) .{
+                .lifetime = .batch,
+                .setup = entry.setup,
+                .teardown = if (has.field("teardown")) entry.teardown else null,
+            } else null,
         };
     }
     return out;

@@ -89,6 +89,7 @@ fn start(x: *Context, children: usize) !void {
     x.orphans = .init(x.gpa());
     errdefer x.orphans.deinit();
     try x.orphans.start();
+    // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
     errdefer x.orphans.stop(x.io()) catch {};
     x.live = 0;
     errdefer end(x);
@@ -101,6 +102,7 @@ fn start(x: *Context, children: usize) !void {
 /// Every child ended, then `Orphans` stopped.
 fn end(x: *Context) void {
     for (x.children[0..x.live]) |*child| {
+        // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
         _ = child.killWait(x.io(), .zero) catch {};
         child.deinit(x.io());
     }

@@ -19,6 +19,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Pin the newest green preflight and shakedown. The console layout test now runs with the root module's tests, where before it was never reached.
 - Pin shakedown's fault callbacks, spurious wakes and automatic late timers; replace the Reaper fault layer, stacked refusal wrappers and late-resume tasks while retaining their assertions.
 - Pin preflight's package, test dependency and benchmark contracts. Benchmarks accept `--smoke`; `zig build bench` builds ReleaseFast programs under `zig-out/bench` and runs them with default fixtures.
+- Pin the newest green aegis, reactor, shakedown and preflight. CI gates glint's A004 and Z026 through the `glint` object of `ci/preflight.json` (it ran no rule beyond the A series before); the retired exception files and `ci/glint.json` are gone. Every test child is ended through `testing.support.reap`, which fails the test when the child cannot be ended, where it dropped the error. Benchmark rows declare a shakedown `fixture` (built and released per batch, as the hooks were), and the `check-containment` program's test now runs with `unit`.
 
 ### Breaking
 

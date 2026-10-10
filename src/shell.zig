@@ -145,6 +145,7 @@ pub fn spawnShell(gpa: Allocator, io: std.Io, options: Options) SpawnShellError!
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
     });
+    // glint-ignore: Z026 -- the spawn error is the one returned; a child that cannot be ended here has nowhere else to report
     errdefer _ = child.killWait(io, .zero) catch {};
 
     if (!is_windows) pty.closeSlave(io);

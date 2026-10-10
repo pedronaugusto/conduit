@@ -265,6 +265,12 @@ pub fn build(b: *std.Build) void {
             .test_log_level = .info,
         });
         const containment = preflight.addCheck(b, "check-containment", "ci/containment.zig");
+        // The check program has tests of its own; they run with the rest.
+        const containment_tests = b.addTest(.{
+            .name = "containment-tests",
+            .root_module = b.createModule(.{ .root_source_file = b.path("ci/containment.zig"), .target = target, .optimize = optimize }),
+        });
+        unit_step.dependOn(&b.addRunArtifact(containment_tests).step);
         const probe = b.addRunArtifact(containment);
         probe.addArg("runner");
         b.step("check-runner", "Check the teardown watchdog diagnostic").dependOn(&probe.step);

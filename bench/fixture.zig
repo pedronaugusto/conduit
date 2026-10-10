@@ -115,6 +115,7 @@ pub const Context = struct {
     /// Ends and releases the fixture's child: killed first, unless a row
     /// reaped it.
     pub fn release(x: *Context) void {
+        // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
         if (!x.reaped) _ = x.child.killWait(x.io(), .zero) catch {};
         x.child.deinit(x.io());
         x.reaped = true;

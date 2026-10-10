@@ -611,7 +611,7 @@ pub const Child = struct {
             .detach = true,
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, .zero) catch {};
+        defer @import("testing/support.zig").reap(&child, io);
         const Exit = struct {
             fn beforeWatch(owner: *Child) void {
                 owner.closeStdin(testing.io);
@@ -646,7 +646,7 @@ pub const Child = struct {
             .detach = true,
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, .zero) catch {};
+        defer @import("testing/support.zig").reap(&child, io);
         const before = tree.testing_hook.group_forces.load(.acquire);
         try child.kill(.kill);
         _ = try child.wait(io);
@@ -1086,7 +1086,7 @@ pub const Child = struct {
         if (try child.tryWait(io)) |term| return term;
 
         if (grace.nanoseconds > 0) {
-            // ziglint-ignore: Z026 a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
+            // glint-ignore: Z026 -- a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
             child.kill(.terminate) catch {};
             if (try child.waitWithin(io, .in(io, grace))) |term| return term;
         }
@@ -1453,7 +1453,7 @@ pub const Child = struct {
         if (is_windows) {
             if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
         } else if (state.cgroup.active()) _ = state.cgroup.kill();
-        // ziglint-ignore: Z026 the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
+        // glint-ignore: Z026 -- the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
         _ = child.killWait(io, .zero) catch {};
     }
 
@@ -2041,7 +2041,7 @@ pub const Child = struct {
             .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, .zero) catch {};
+        defer @import("testing/support.zig").reap(&child, io);
         const until: Deadline = .in(io, .fromSeconds(5));
         while (child_exit.ask(child.state.id) == .running) {
             if (until.remainingMs(io) == 0) return error.TestChildDidNotExit;
@@ -2070,7 +2070,7 @@ pub const Child = struct {
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, .zero) catch {};
+        defer @import("testing/support.zig").reap(&child, io);
         child.closeStdin(io);
         _ = (try child.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) orelse return error.TestChildDidNotExit;
 
@@ -2081,7 +2081,7 @@ pub const Child = struct {
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
         });
         defer writer.deinit(io);
-        defer _ = writer.killWait(io, .zero) catch {};
+        defer @import("testing/support.zig").reap(&writer, io);
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
@@ -2119,7 +2119,7 @@ pub const Child = struct {
             .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
         });
         defer witness.deinit(io);
-        defer _ = witness.killWait(io, .zero) catch {};
+        defer @import("testing/support.zig").reap(&witness, io);
         // Substitute an unrelated live process's number for the retired label:
         // exercise PID reuse without relying on the kernel to recycle a pid.
         child.state.id = witness.state.id;

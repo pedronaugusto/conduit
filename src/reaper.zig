@@ -321,11 +321,11 @@ pub const Reaper = struct {
         reaper.pin.check(reaper);
         if (!reaper.killing.request(io, grace)) return;
         if (grace.nanoseconds <= 0) {
-            // ziglint-ignore: Z026 undelivered means ended or ending, as documented above; the term says how
+            // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
             reaper.target().kill(.kill) catch {};
             return;
         }
-        // ziglint-ignore: Z026 undelivered means ended or ending, as documented above; the term says how
+        // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
         reaper.target().kill(.terminate) catch {};
         reaper.group.concurrent(io, insist, .{ reaper, io, grace }) catch {
             // No task to wait out the grace on: insisting now is the one answer
@@ -504,7 +504,7 @@ pub const Reaper = struct {
         switch (contained.populated()) {
             .none => return,
             .others => {
-                // ziglint-ignore: Z026 a member the request misses is still ended by the kill once the grace has passed
+                // glint-ignore: Z026 -- a member the request misses is still ended by the kill once the grace has passed
                 _ = contained.signalMembers(.TERM, reaper.child.state.id, null) catch {};
                 switch (try reaper.treeGrace(io, .{ .contained = contained })) {
                     .empty => return,
@@ -618,7 +618,7 @@ test "a Reaper tree grace counts elapsed time when its sleeps resume late" {
         .detach = true,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer @import("testing/support.zig").reap(&child, io);
     var buffer: [32]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
@@ -668,7 +668,7 @@ test "a rejected Reaper start may be retried" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer @import("testing/support.zig").reap(&child, io);
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
     const refused = try shakedown.FaultIo.init(std.testing.allocator, io, .{ .plan = &.{.{
@@ -691,7 +691,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer @import("testing/support.zig").reap(&child, io);
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(io);
     // Every futex wait wakes spuriously ten milliseconds of the clock later.
@@ -816,7 +816,7 @@ test "a subreaper teardown retains ownership until every direct child is reaped"
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer other.deinit(io);
-    defer _ = other.killWait(io, .zero) catch {};
+    defer @import("testing/support.zig").reap(&other, io);
     try std.testing.expectError(error.DirectChildrenRemain, owner.stop(io));
     var during: c_int = 0;
     const linux = std.os.linux;

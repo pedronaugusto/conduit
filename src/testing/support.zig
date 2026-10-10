@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Deadline = @import("conduit.tty").Deadline;
+const Child = @import("../child.zig").Child;
 
 /// Bounds one step a test promises returns promptly: a stop that must not
 /// wait out a read, a wait that must say at once that nothing more will come.
@@ -76,4 +77,11 @@ test "runner teardown probe" {
     // Intentionally leave a backend task alive after the test body returns.
     // Only zig build check-runner enables this probe, in its own disposable process.
     try teardown_probe_group.concurrent(std.testing.io, Task.run, .{});
+}
+
+/// Ends a child a test is done with, for the `defer` that every test owning
+/// one writes. A child that cannot be ended outlives the run, so that fails the
+/// test (`std.log.err` does) rather than passing in silence.
+pub fn reap(child: *Child, io: std.Io) void {
+    _ = child.killWait(io, .zero) catch |err| std.log.err("the test's child could not be ended: {t}", .{err});
 }

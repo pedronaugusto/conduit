@@ -1,4 +1,5 @@
 const std = @import("std");
+const reap = @import("testing/support.zig").reap;
 const builtin = @import("builtin");
 const c = std.c;
 const exit = @import("exit.zig");
@@ -15,7 +16,7 @@ test "a wait for a child ends when the child does, and leaves it unreaped" {
         .stdio = .ignore,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
 
     try testing.expectEqual(exit.Wait.ended, try exit.wait(io, child.state.id, watchOf(&child), null, Deadline.within(.fromMilliseconds(5000))));
     // Ended, and still there to reap: the status is the owner's to collect.
@@ -30,7 +31,7 @@ test "a wait for a child that is still running times out, and the next wait is s
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
 
     try testing.expectEqual(exit.Wait.timeout, try exit.wait(io, child.state.id, watchOf(&child), null, Deadline.within(.fromMilliseconds(20))));
     child.closeStdin(io);
@@ -59,7 +60,7 @@ test "a child killed a moment before it is waited for is noticed without asking 
             .detach = true,
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, .zero) catch {};
+        defer reap(&child, io);
         try child.kill(.kill);
         try testing.expectEqual(exit.Wait.ended, try exit.wait(counted.io(), child.state.id, watchOf(&child), null, Deadline.within(.fromMilliseconds(5000))));
     }
@@ -75,7 +76,7 @@ test "a wake ends a wait for a child at once, and the child is still waited for 
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     var wake = try reactor.Wake.init(io);
     defer wake.deinit(io);
 
@@ -103,7 +104,7 @@ test "a cancel ends a wait for a child that will not end, which is not the child
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
 
     var waiting = io.concurrent(waitForever, .{ io, child.state.id, watchOf(&child) }) catch return error.SkipZigTest;
     try io.sleep(.fromMilliseconds(20), .awake);
@@ -122,7 +123,7 @@ test "asking whether a child has ended leaves it unreaped" {
         .descendants = .contain,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     const root = child.processId().?;
     // The owned wait identity is the private supervisor on Linux. The root
     // belongs to that supervisor; waitid in this process cannot observe it.

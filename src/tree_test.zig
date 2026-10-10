@@ -1,4 +1,5 @@
 const std = @import("std");
+const reap = @import("testing/support.zig").reap;
 const builtin = @import("builtin");
 const posix = std.posix;
 const c = std.c;
@@ -59,10 +60,10 @@ test "a descendant snapshot cannot authorize a signal to an unrelated captured i
     };
     var root = try Child.spawn(testing.allocator, io, options);
     defer root.deinit(io);
-    defer _ = root.killWait(io, .zero) catch {};
+    defer reap(&root, io);
     var witness = try Child.spawn(testing.allocator, io, options);
     defer witness.deinit(io);
-    defer _ = witness.killWait(io, .zero) catch {};
+    defer reap(&witness, io);
 
     // A listed descendant could have been reaped and its pid reused before
     // capture. Retain a live witness in that snapshot: its stable identity
@@ -85,7 +86,7 @@ test "a group member held before KILL is accounted for while still visible" {
         .detach = true,
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
     var buffer: [32]u8 = undefined;
     var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
@@ -112,7 +113,7 @@ test "the descendants of this process include a child it just started" {
         .stdio = .ignore,
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
 
     var found: std.ArrayList(Process) = .empty;
     var storage: [64 * 1024]u8 = undefined;
@@ -146,7 +147,7 @@ test "a group is empty but for its leader once what the leader started has ended
         .detach = true,
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
     const pgid = child.state.pgid.?;
 
     var deadline: Deadline = .in(testing.io, .fromMilliseconds(5000));
@@ -172,7 +173,7 @@ test "a Linux process with a child of its own is said to have one, and one witho
         .stdio = .ignore,
     });
     defer leaf.deinit(testing.io);
-    defer _ = leaf.killWait(testing.io, .zero) catch {};
+    defer reap(&leaf, testing.io);
     try testing.expect(!hasChildren(leaf.state.id));
 
     // The `;` keeps the shell from replacing itself with `sleep`.
@@ -181,7 +182,7 @@ test "a Linux process with a child of its own is said to have one, and one witho
         .stdio = .ignore,
     });
     defer parent.deinit(testing.io);
-    defer _ = parent.killWait(testing.io, .zero) catch {};
+    defer reap(&parent, testing.io);
     const deadline: Deadline = .in(testing.io, .fromMilliseconds(5000));
     while (!hasChildren(parent.state.id)) {
         if (deadline.remainingMs(testing.io) == 0) return error.TestChildNotSeen;
@@ -230,7 +231,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
     const started = (try startTime(child.state.id)).?;
     try testing.expect((try captureStarted(child.state.id, started + 1)) == null);
     try testing.expect((try captureStarted(child.state.id, started -% 1)) == null);
@@ -264,7 +265,7 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
         .stdio = .ignore,
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
     const since = (try startTime(child.state.id)).?;
     var captured = (try captureStarted(child.state.id, since)).?;
     defer captured.deinit();
@@ -286,7 +287,7 @@ test "killRecorded waits for a recorded root and a descendant it captured" {
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
     var buffer: [32]u8 = undefined;
     var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
@@ -323,7 +324,7 @@ test "a failed tree fixture releases the descendant it still owns" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .pipe } },
     });
     defer child.deinit(testing.io);
-    defer _ = child.killWait(testing.io, .zero) catch {};
+    defer reap(&child, testing.io);
     var buffer: [64]u8 = undefined;
     var output = child.stderrFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
@@ -348,7 +349,7 @@ test "a leaderless Linux group keeps the child its leader started" {
         .detach = true,
     });
     defer leader.deinit(testing.io);
-    defer _ = leader.killWait(testing.io, .zero) catch {};
+    defer reap(&leader, testing.io);
     const group = leader.state.pgid.?;
     const since = (try startTime(leader.state.id)).?;
     var captured = (try captureStarted(leader.state.id, since)).?;
@@ -381,7 +382,7 @@ test "a captured process keeps its identity across exec" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
@@ -410,7 +411,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     var buffer: [64]u8 = undefined;
     var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
@@ -454,7 +455,7 @@ test "Darwin lineage proves the captured birth parent rather than its pid" {
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer child.deinit(std.testing.io);
-    defer _ = child.killWait(std.testing.io, .zero) catch {};
+    defer reap(&child, std.testing.io);
     const held = DarwinProcess.capture(child.state.id).?;
     var parent = DarwinProcess.capture(c.getpid()).?;
     try std.testing.expect(held.childOf(&parent));

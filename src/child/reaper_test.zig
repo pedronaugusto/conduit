@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const reap = @import("../testing/support.zig").reap;
 const Deadline = @import("conduit.tty").Deadline;
 const posix = std.posix;
 const windows = std.os.windows;
@@ -21,7 +22,7 @@ const Observer = struct {
         // Give the Reaper the chance to finish the reap while delivery is
         // paused. With a held identity it must leave the status and handles
         // alone until delivery resumes.
-        // ziglint-ignore: Z026 only a pause for the Reaper; the assertion is what it did meanwhile, read below
+        // glint-ignore: Z026 -- only a pause for the Reaper; the assertion is what it did meanwhile, read below
         _ = probe.reaper.waitTimeout(std.testing.io, Deadline.within(.fromMilliseconds(20))) catch {};
         probe.retired = child.state.reaped.load(.acquire) or if (is_windows) retired: {
             var code: windows.DWORD = undefined;
@@ -42,7 +43,7 @@ test "a Reaper cannot retire the identity while kill is delivering a signal" {
             .detach = iteration % 2 == 0,
         });
         defer child.deinit(io);
-        defer _ = child.killWait(io, .zero) catch {};
+        defer reap(&child, io);
         var reaper: Reaper = .init(&child, .{});
         stage = "starting Reaper";
         try reaper.start(io);
@@ -86,7 +87,7 @@ test "output leaves the reap to the task that holds it" {
         .detach = true,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     const held = child.holdReap().?;
     var released = false;
     defer if (!released) held.release();

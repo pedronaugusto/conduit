@@ -902,6 +902,7 @@ pub const Pty = struct {
             }
         };
         var resizing = try std.Io.concurrent(io, Resize.run, .{ &pty, a, b });
+        // glint-ignore: Z026 -- this runs for a test that has already failed; the passing path awaits the task and takes its error
         defer resizing.cancel(io) catch {};
         for (0..1024) |_| {
             const borrowed = pty.master();

@@ -4,6 +4,7 @@
 //! slices between short waits used to bound.
 const builtin = @import("builtin");
 const std = @import("std");
+const reap = @import("testing/support.zig").reap;
 const reactor = @import("reactor");
 const conduit = @import("conduit.zig");
 const Deadline = @import("conduit.tty").Deadline;
@@ -84,7 +85,7 @@ fn spawnReading(io: std.Io) !Child {
 fn waits(io: std.Io) !void {
     var child = try spawnReading(io);
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
 
     const before = reactor.fallbacks();
     // Running, and the time runs out first.
@@ -127,7 +128,7 @@ fn waitForever(io: std.Io, child: *Child) conduit.Child.WaitError!Term {
 fn cancelled(io: std.Io) !void {
     var child = try spawnReading(io);
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
 
     var waiting = try io.concurrent(waitForever, .{ io, &child });
     // Let it park on the child's end.
@@ -155,7 +156,7 @@ fn collected(io: std.Io) !void {
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .pipe } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     const before = reactor.fallbacks();
     var output = try child.output(std.testing.allocator, io, .{ .timeout = Deadline.within(.fromSeconds(30)) });
     defer output.deinit();
@@ -183,7 +184,7 @@ fn timedOut(io: std.Io) !void {
         .detach = true,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     const before = reactor.fallbacks();
     var output = try child.output(std.testing.allocator, io, .{
         .timeout = Deadline.within(.fromMilliseconds(100)),
@@ -203,7 +204,7 @@ test "output ends a child that outlasts its timeout on a runtime" {
 fn reaped(io: std.Io) !void {
     var child = try spawnReading(io);
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     var reaper: Reaper = .init(&child, .{});
     try reaper.start(io);
     defer reaper.deinit(io);
@@ -225,7 +226,7 @@ test "a Reaper waits for a child on a runtime" {
 fn stopped(io: std.Io) !void {
     var child = try spawnReading(io);
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     var reaper: Reaper = .init(&child, .{});
     try reaper.start(io);
     // The task is parked on the child's end; stopping ends it without a thread
@@ -253,7 +254,7 @@ fn forced(io: std.Io) !void {
         .detach = true,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     var reaper: Reaper = .init(&child, .{});
     try reaper.start(io);
     defer reaper.deinit(io);
@@ -280,7 +281,7 @@ fn captured(io: std.Io) !void {
         .detach = true,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     const pid = child.processId().?;
     var held = (try conduit.captureStarted(pid, (try conduit.startTime(pid)) orelse return error.SkipZigTest)) orelse return error.SkipZigTest;
     defer held.deinit();
@@ -302,7 +303,7 @@ test "a held process is waited for on a runtime" {
 fn jobEmptied(io: std.Io) !void {
     var child = try spawnReading(io);
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     const before = reactor.fallbacks();
     // The job holds the child, so it is not empty.
     try std.testing.expect(!try child.waitTree(io, Deadline.within(.fromMilliseconds(50))));

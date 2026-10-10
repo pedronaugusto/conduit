@@ -1,4 +1,5 @@
 const std = @import("std");
+const reap = @import("testing/support.zig").reap;
 const Deadline = @import("conduit.tty").Deadline;
 const builtin = @import("builtin");
 const posix = std.posix;
@@ -19,7 +20,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer {
-        _ = child.killWait(io, .zero) catch {};
+        reap(&child, io);
         child.deinit(io);
     }
     try testing.expect((try child.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) != null);

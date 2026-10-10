@@ -1,6 +1,7 @@
 //! `Proxy.run` between real pseudo-terminal pairs, with a child on one of them.
 const builtin = @import("builtin");
 const std = @import("std");
+const reap = @import("testing/support.zig").reap;
 const conduit = @import("conduit.zig");
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
@@ -150,7 +151,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
         .detach = true,
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
     terminal.closeSlave(io);
 
     var input_buffer: [256]u8 = undefined;

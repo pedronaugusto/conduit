@@ -1,5 +1,6 @@
 //! Input delivery and lifetime, through the public API and native pipes.
 const std = @import("std");
+const support = @import("testing/support.zig");
 const builtin = @import("builtin");
 const conduit = @import("conduit.zig");
 const InputWriter = conduit.InputWriter;
@@ -21,8 +22,7 @@ fn spawn(mode: []const u8) !Child {
 }
 
 fn reap(child: *Child) void {
-    // ziglint-ignore: Z026 cleanup; release below asserts the child is reaped
-    _ = child.killWait(io, .zero) catch {};
+    support.reap(child, io);
     child.deinit(io);
 }
 
@@ -223,6 +223,7 @@ test "InputWriter cancellation of a waiter leaves delivery running" {
     };
     var entered: std.Io.Event = .unset;
     var waiting = try io.concurrent(Waiter.wait, .{ &writer, &entered });
+    // glint-ignore: Z026 -- this runs for a test that has already failed; the passing path cancels the task below and asserts its error
     defer _ = waiting.cancel(io) catch {};
     try entered.waitTimeout(io, .{ .duration = .{ .raw = .fromMilliseconds(budget_ms), .clock = .awake } });
     try testing.expectError(error.Canceled, waiting.cancel(io));

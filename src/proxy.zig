@@ -246,7 +246,7 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     while (true) {
         if (tty.winSize(resize.source)) |now| {
             if (last == null or !std.meta.eql(last.?, now)) {
-                // ziglint-ignore: Z026 a pair that refuses a size keeps its old one, and this task has no caller to tell
+                // glint-ignore: Z026 -- a pair that refuses a size keeps its old one, and this task has no caller to tell
                 resize.pty.resize(now) catch {};
                 last = now;
             }

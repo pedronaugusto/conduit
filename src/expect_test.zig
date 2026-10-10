@@ -1,4 +1,5 @@
 const std = @import("std");
+const reap = @import("testing/support.zig").reap;
 const builtin = @import("builtin");
 const is_windows = builtin.target.os.tag == .windows;
 const Pty = @import("pty.zig").Pty;
@@ -56,7 +57,7 @@ test "start refuses to put a second reader over the buffer" {
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
 
     var buffer: [64]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -82,7 +83,7 @@ test "a conversation over pipes: wait for what the child echoes, then answer" {
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -117,7 +118,7 @@ test "a conversation on a pseudo-terminal, one prompt at a time" {
         .detach = true,
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
     pty.closeSlave(io);
 
     var buffer: [1024]u8 = undefined;
@@ -161,7 +162,7 @@ test "deinit stops the reader while the terminal is still open" {
         .detach = !is_windows,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     if (!is_windows) pty.closeSlave(io);
 
     var buffer: [1024]u8 = undefined;
@@ -208,7 +209,7 @@ test "untilAny says which of several answers came, and leaves the rest" {
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -236,7 +237,7 @@ test "untilAny takes the earliest match and leaves the later one pending" {
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -270,7 +271,7 @@ test "untilAny with nothing to wait for ends the way a pattern that never comes 
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
 
     var buffer: [256]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -299,7 +300,7 @@ test "bytes waits for a count, and what follows stays pending" {
         .detach = true,
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
     pty.closeSlave(io);
 
     var buffer: [64]u8 = undefined;
@@ -331,7 +332,7 @@ test "a pattern that never comes is a timeout, and what did come is still pendin
         .detach = true,
     });
     defer child.deinit(io);
-    defer _ = child.killWait(io, .zero) catch {};
+    defer reap(&child, io);
     pty.closeSlave(io);
 
     var buffer: [256]u8 = undefined;
@@ -361,7 +362,7 @@ test "a buffer that fills says so, and discard makes room" {
         .stdio = .{ .pipes = .{ .stderr = false } },
     });
     defer child.deinit(io);
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer reap(&child, io);
 
     var buffer: [8]u8 = undefined;
     var expect = child.expect(&buffer).?;
@@ -394,8 +395,7 @@ fn waitWithin(io: std.Io, child: *Child) !Child.Term {
         if (deadline.remainingMs(io) == 0) break;
         try std.Io.sleep(io, .fromMilliseconds(2), .awake);
     }
-    // ziglint-ignore: Z026 the test fails either way; the kill only keeps the child from outliving it
-    _ = child.killWait(io, .zero) catch {};
+    reap(child, io);
     return error.TestChildDidNotExit;
 }
 

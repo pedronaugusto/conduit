@@ -1,5 +1,6 @@
 //! One descendant lifetime contract on every host.
 const std = @import("std");
+const reap = @import("../testing/support.zig").reap;
 const builtin = @import("builtin");
 const Child = @import("../child.zig").Child;
 const windows = builtin.target.os.tag == .windows;
@@ -41,7 +42,7 @@ const Process = if (windows) struct {
     }
     fn end(process: *Process) void {
         _ = process.held.signal(.KILL);
-        // ziglint-ignore: Z026 cleanup after SIGKILL; what the test asserts was asserted before it
+        // glint-ignore: Z026 -- cleanup after SIGKILL; what the test asserts was asserted before it
         _ = process.held.wait(io, within_budget) catch {};
         process.held.deinit();
     }
@@ -70,7 +71,7 @@ const Fixture = struct {
         if (policy == .contain) options.descendants = .contain;
         var child = try Child.spawn(gpa, io, options);
         errdefer child.deinit(io);
-        errdefer _ = child.killWait(io, .zero) catch {};
+        errdefer reap(&child, io);
         var buffer: [64]u8 = undefined;
         var reader = child.stdoutReader(io, &buffer).?;
         const line = try reader.interface.takeDelimiterExclusive('\n');
@@ -94,8 +95,7 @@ const Fixture = struct {
 
     fn deinit(fixture: *Fixture) void {
         if (!fixture.finished) {
-            // ziglint-ignore: Z026 cleanup; finish asserts the child is reaped
-            _ = fixture.child.killWait(io, .zero) catch {};
+            reap(&fixture.child, io);
             fixture.child.deinit(io);
         }
         fixture.daemon.end();
@@ -318,7 +318,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
     defer unrelated.deinit(io);
-    defer _ = unrelated.killWait(io, .zero) catch {};
+    defer reap(&unrelated, io);
     try std.testing.expect(!fixture.child.state.cgroup.active());
     const daemon_id = fixture.daemon.held.processId();
     try reaper.start(io);
@@ -351,7 +351,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     defer {
         if (holding) held.release();
         reaper.kill(io, .zero);
-        _ = fixture.child.killWait(io, .zero) catch {};
+        reap(&fixture.child, io);
         reaper.stop(io) catch unreachable;
         reaper.deinit(io);
         fixture.deinit();
