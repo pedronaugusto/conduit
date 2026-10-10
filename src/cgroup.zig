@@ -50,6 +50,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const reactor = @import("reactor");
 const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
@@ -1003,11 +1004,11 @@ const MemberOps = struct {
     /// Wait for `cgroup.events` to say the cgroup is empty. The event file
     /// wakes a poll when `populated` changes, and is read through the
     /// descriptor the poll waits on: kernfs wakes it for a change after that
-    /// descriptor's last read, so a change between the read and the poll is
-    /// not lost, and nothing is read again until one comes. The poll lasts at
-    /// most a five millisecond slice, between which cancelation is asked
-    /// about. If the file cannot be opened, read or polled, only then use
-    /// bounded 1–4 ms clock-based checks. True means empty; false means the
+    /// descriptor's last read, so a change between the read and the wait is
+    /// not lost, and nothing is read again until one comes. The wait is
+    /// reactor's, a priority event on the descriptor, so cancelation and the
+    /// deadline are its own. If the file cannot be opened, read or waited on,
+    /// only then use bounded 1–4 ms clock-based checks. True means empty; false means the
     /// deadline passed or the state could not be read.
     pub fn waitEmpty(cgroup: *const MemberOps, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
         if (!cgroup.active()) return true;
@@ -1022,19 +1023,12 @@ const MemberOps = struct {
                 .unknown => break :watched,
                 .others => {},
             }
-            while (true) {
-                const left = deadline.remainingMs(io);
-                if (left == 0) return false;
-                var fds = [_]posix.pollfd{.{ .fd = events, .events = posix.POLL.PRI, .revents = 0 }};
-                const rc = std.os.linux.poll(&fds, 1, @intCast(@min(left, 5)));
-                switch (std.os.linux.errno(rc)) {
-                    .SUCCESS => {},
-                    .INTR => continue,
-                    else => break :watched,
-                }
-                try std.Io.checkCancel(io);
-                if (rc > 0) continue :watched;
-            }
+            reactor.wait(io, .{ .priority = events }, timeout) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                error.Timeout => return false,
+                error.Unsupported, error.Unexpected => break :watched,
+            };
+            continue :watched;
         };
         var interval_ms: u32 = 1;
         while (true) {

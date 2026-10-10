@@ -21,7 +21,7 @@ pub const Tracker = if (supported) Darwin else NoTracker;
 
 /// Where there is no fork note to observe: no tracker ever starts.
 const NoTracker = struct {
-    pub fn start(_: posix.pid_t) error{SystemResources}!*NoTracker {
+    pub fn start(_: std.mem.Allocator, _: posix.pid_t) error{SystemResources}!*NoTracker {
         return error.SystemResources;
     }
     pub fn finish(_: *NoTracker) bool {
@@ -47,8 +47,7 @@ const Darwin = struct {
     /// Test handshake: registrations completed by this task, never a borrowed list.
     observed: if (builtin.is_test) std.atomic.Value(usize) else void = if (builtin.is_test) .init(0) else {},
 
-    pub fn start(root: posix.pid_t) error{ OutOfMemory, SystemResources }!*Darwin {
-        const gpa = std.heap.page_allocator;
+    pub fn start(gpa: std.mem.Allocator, root: posix.pid_t) error{ OutOfMemory, SystemResources }!*Darwin {
         const tracker = try gpa.create(Darwin);
         errdefer gpa.destroy(tracker);
         const queue = c.kqueue();

@@ -138,7 +138,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     file(report[1]).close(io);
     plan.closeChildSide(io);
 
-    var watched = watchStarted(io, options, pid, go, supervised) catch |err| {
+    var watched = watchStarted(gpa, io, options, pid, go, supervised) catch |err| {
         discard(pid);
         closePipes(io, report[0..1], go);
         return err;
@@ -239,6 +239,7 @@ const Watched = struct {
 /// with no reader however the child has fared. On an error the caller ends
 /// the child and closes the pipes.
 fn watchStarted(
+    gpa: std.mem.Allocator,
     io: std.Io,
     options: SpawnOptions,
     pid: posix.pid_t,
@@ -248,7 +249,7 @@ fn watchStarted(
     std.debug.assert(pid > 0);
     var tracker: ?*lineage.Tracker = null;
     if (comptime lineage.supported) if (options.descendants == .contain) {
-        tracker = try lineage.Tracker.start(pid);
+        tracker = try lineage.Tracker.start(gpa, pid);
     };
     errdefer if (tracker) |owned| owned.destroy();
     const record: ?Child.SupervisorRecord = if (supervised) supervisorRecord(pid) orelse return error.Unexpected else null;

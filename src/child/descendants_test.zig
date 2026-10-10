@@ -302,7 +302,7 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
     // Activation precedes spawn: an intermediate can exit before start runs.
-    try reaper.enableSubreaper();
+    try reaper.enableSubreaper(gpa);
     fixture = Fixture.start(.contain, "--double-fork") catch |err| {
         reaper.stop(io) catch unreachable;
         reaper.deinit(io);
@@ -340,7 +340,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     defer cgroups.testing_hook.off = false;
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
-    try reaper.enableSubreaper();
+    try reaper.enableSubreaper(gpa);
     fixture = Fixture.start(.survive, "--race") catch |err| {
         reaper.stop(io) catch unreachable;
         reaper.deinit(io);

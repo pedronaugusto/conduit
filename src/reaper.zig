@@ -196,10 +196,9 @@ pub const Reaper = struct {
     /// An independent task observes and reaps exited adoptees every 5 ms, even
     /// if another task owns the root wait. Scheduling and procfs access can
     /// extend that interval.
-    pub fn enableSubreaper(reaper: *Reaper) Orphans.StartError!void {
+    pub fn enableSubreaper(reaper: *Reaper, gpa: std.mem.Allocator) Orphans.StartError!void {
         if (reaper.lifetime.load(.acquire) != .ready or reaper.orphans != null)
             return error.AlreadyStarted;
-        const gpa = std.heap.page_allocator;
         const orphans = try gpa.create(Orphans);
         errdefer gpa.destroy(orphans);
         orphans.* = .init(gpa);
@@ -373,20 +372,28 @@ pub const Reaper = struct {
             // wait. End before restoring the attribute and releasing pidfds.
             try orphans.killAll(io, .zero);
             try orphans.stop(io);
+            const gpa = orphans.gpa;
             orphans.deinit();
-            std.heap.page_allocator.destroy(orphans);
+            gpa.destroy(orphans);
             reaper.orphans = null;
         }
     }
 
     /// Stops waiting and releases the task, as `stop` does, and leaves the
-    /// `Reaper` undefined. With enableSubreaper, `stop` must have succeeded
+    /// `Reaper` undefined. With enableSubreaper, `stop` should have succeeded
     /// first: the adoption scope is process-wide, and only `stop` can report
-    /// what keeps it from ending.
+    /// what keeps it from ending. One that did not is ended here as far as it
+    /// can be, so that `deinit` is safe under an `errdefer`.
     pub fn deinit(reaper: *Reaper, io: std.Io) void {
         reaper.pin.check(reaper);
         reaper.joinTask(io);
-        std.debug.assert(reaper.orphans == null);
+        if (reaper.orphans) |orphans| {
+            const gpa = orphans.gpa;
+            // glint-ignore: Z026 -- deinit has no error to return; `stop` is the call that reports what keeps the scope from ending
+            orphans.killAll(io, .zero) catch {};
+            orphans.deinit();
+            gpa.destroy(orphans);
+        }
         reaper.* = undefined;
     }
 
@@ -767,28 +774,28 @@ test "subreaping belongs to one Reaper and restores the process attribute" {
     // The address a subreaper's child is spawned into, after init.
     var child: Child = undefined;
     var owner: Reaper = .init(&child, .{});
-    try owner.enableSubreaper();
+    try owner.enableSubreaper(std.testing.allocator);
     defer {
         owner.stop(std.testing.io) catch unreachable;
         owner.deinit(std.testing.io);
     }
-    try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
+    try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper(std.testing.allocator));
     var other: Reaper = .init(&child, .{});
     defer {
         other.stop(std.testing.io) catch unreachable;
         other.deinit(std.testing.io);
     }
-    try std.testing.expectError(error.AlreadyStarted, other.enableSubreaper());
+    try std.testing.expectError(error.AlreadyStarted, other.enableSubreaper(std.testing.allocator));
     var during: c_int = 0;
     try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&during), 0, 0, 0)));
     try std.testing.expectEqual(@as(c_int, 1), during);
     try owner.stop(std.testing.io);
     try owner.stop(std.testing.io);
-    try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper());
+    try std.testing.expectError(error.AlreadyStarted, owner.enableSubreaper(std.testing.allocator));
     var after: c_int = 0;
     try std.testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.prctl(@backingInt(linux.PR.GET_CHILD_SUBREAPER), @intFromPtr(&after), 0, 0, 0)));
     try std.testing.expectEqual(before, after);
-    try other.enableSubreaper();
+    try other.enableSubreaper(std.testing.allocator);
 }
 
 test "Reaper subreaping is unsupported off Linux" {
@@ -797,7 +804,7 @@ test "Reaper subreaping is unsupported off Linux" {
     var child: Child = undefined;
     var reaper: Reaper = .init(&child, .{});
     defer reaper.deinit(std.testing.io);
-    try std.testing.expectError(error.Unsupported, reaper.enableSubreaper());
+    try std.testing.expectError(error.Unsupported, reaper.enableSubreaper(std.testing.allocator));
 }
 
 test "a subreaper teardown retains ownership until every direct child is reaped" {
@@ -806,7 +813,7 @@ test "a subreaper teardown retains ownership until every direct child is reaped"
     // The address a subreaper's child is spawned into, after init.
     var child: Child = undefined;
     var owner: Reaper = .init(&child, .{});
-    try owner.enableSubreaper();
+    try owner.enableSubreaper(std.testing.allocator);
     defer {
         owner.stop(io) catch unreachable;
         owner.deinit(io);

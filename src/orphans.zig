@@ -350,6 +350,12 @@ pub const Orphans = struct {
         if (orphans.own.items.len != 0) return error.DirectChildrenRemain;
         if (orphans.adopted.items.len != 0) return error.OrphansRemain;
         if (!orphans.was_subreaper) try setSubreaper(false);
+        orphans.release();
+    }
+
+    /// Ends the scope and gives its lists back; what `stop` does once its
+    /// checks have passed, and what `deinit` does when they have not.
+    fn release(orphans: *Orphans) void {
         active.store(false, .release);
         current = null;
         orphans.running = false;
@@ -360,12 +366,23 @@ pub const Orphans = struct {
         orphans.adopted = .empty;
     }
 
-    /// Leaves the `Orphans` undefined. One that was started must have been
+    /// Leaves the `Orphans` undefined. One that was started should have been
     /// stopped first: the scope is process-wide, and only `stop` can report
-    /// what keeps it from ending.
+    /// what keeps it from ending. One that was not, or whose `stop` failed,
+    /// is ended here as far as it can be, so that `deinit` is safe under an
+    /// `errdefer`: the process attribute is put back, the adoptees' pidfds
+    /// are closed and the lists are freed.
     pub fn deinit(orphans: *Orphans) void {
         orphans.pin.check(orphans);
-        std.debug.assert(!orphans.running);
+        if (orphans.running) {
+            gate.lock();
+            defer gate.unlock();
+            orphans.lock.lock();
+            defer orphans.lock.unlock();
+            // glint-ignore: Z026 -- deinit has no error to return; `stop` is the call that reports a scope that would not end
+            if (comptime supported) if (!orphans.was_subreaper) setSubreaper(false) catch {};
+            orphans.release();
+        }
         orphans.* = undefined;
     }
 

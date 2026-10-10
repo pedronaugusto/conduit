@@ -1,6 +1,7 @@
 //! `Proxy.run` between real pseudo-terminal pairs, with a child on one of them.
 const builtin = @import("builtin");
 const std = @import("std");
+const reactor = @import("reactor");
 const reap = @import("testing/support.zig").reap;
 const conduit = @import("conduit.zig");
 const handles = @import("handles.zig");
@@ -193,7 +194,8 @@ test "the window size is forwarded onto the pair" {
 
     var input_buffer: [64]u8 = undefined;
     var output_buffer: [64]u8 = undefined;
-    var ticket: std.atomic.Value(u32) = .init(0);
+    var wake = try reactor.Wake.init(io);
+    defer wake.deinit(io);
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
@@ -204,9 +206,8 @@ test "the window size is forwarded onto the pair" {
         .resize = .{
             .pty = &terminal,
             .source = user.slaveHandle().?,
-            .ticket = &ticket,
+            .wake = &wake,
             .interval = .fromSeconds(1),
-            .tick = .fromMilliseconds(1),
         },
     } });
     defer group.cancel(io);
@@ -214,10 +215,10 @@ test "the window size is forwarded onto the pair" {
     // The size the program is already at is copied straight away.
     try expectSizeWithin(io, &terminal, .{ .rows = 11, .cols = 37 });
 
-    // And a change is picked up on the ticket rather than at the end of the
-    // one-second interval, which is what the ticket is for.
+    // And a change is picked up on the wake rather than at the end of the
+    // one-second interval, which is what the wake is for.
     try user.resize(.{ .rows = 50, .cols = 160 });
-    _ = ticket.fetchAdd(1, .release);
+    wake.signal();
     try expectSizeWithin(io, &terminal, .{ .rows = 50, .cols = 160 });
 }
 

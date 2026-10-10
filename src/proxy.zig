@@ -39,9 +39,9 @@
 //! signal handler, ever**. A `SIGWINCH` handler is process-wide state, and a
 //! library that installed one would be taking something from the program that
 //! owns it. A program that already has a handler — or that reads Windows
-//! console resize records — can hand over `Options.Resize.ticket` and bump it
-//! from there, and the forwarder will pick the change up on its next tick
-//! instead of waiting out the interval. Either way the cost is one ioctl or
+//! console resize records — can hand over `Options.Resize.wake` and signal it
+//! from there, and the forwarder will pick the change up at once instead of
+//! waiting out the interval. Either way the cost is one ioctl or
 //! one `GetConsoleScreenBufferInfo` every `interval`, and `Pty.resize` is
 //! safe to call while the master is being read and written.
 
@@ -52,6 +52,7 @@ const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
 const Deadline = @import("conduit.tty").Deadline;
+const reactor = @import("reactor");
 
 /// The files to move bytes between, and the buffers to move them in.
 ///
@@ -87,19 +88,17 @@ pub const Resize = struct {
     /// a console *screen buffer* handle — the standard output — because that
     /// is what has a size.
     source: std.Io.File.Handle,
-    /// A counter the program bumps when it learns of a resize some other way:
-    /// from its own `SIGWINCH` handler on POSIX, or from a console window
-    /// event on Windows. Any change to the value makes the forwarder look at
-    /// the size on its next tick rather than at the end of `interval`.
+    /// A reactor `Wake` the program signals when it learns of a resize some
+    /// other way: from its own `SIGWINCH` handler on POSIX, or from a console
+    /// window event on Windows. A signal makes the forwarder look at the size
+    /// at once rather than at the end of `interval`. The program owns it and
+    /// keeps it alive for as long as `run` does.
     ///
     /// `null` polls, which is correct and costs one call per interval.
-    ticket: ?*const std.atomic.Value(u32) = null,
-    /// How often the size is re-read when nothing has bumped `ticket`.
+    wake: ?*reactor.Wake = null,
+    /// How often the size is re-read when nothing has signaled `wake`.
     /// Less than a millisecond uses one, so an idle forwarder still yields.
     interval: std.Io.Duration = .fromMilliseconds(50),
-    /// How often `ticket` is looked at. Only meaningful when there is one.
-    /// Less than a millisecond uses one.
-    tick: std.Io.Duration = .fromMilliseconds(5),
 };
 
 pub const RunError = error{
@@ -241,7 +240,6 @@ fn pump(io: std.Io, from: std.Io.File, to: std.Io.File, buffer: []u8) RunError!v
 /// begins life at whatever size the program is actually at.
 fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     var last: ?tty.Size = null;
-    var seen_ticket: u32 = if (resize.ticket) |ticket| ticket.load(.acquire) else 0;
 
     while (true) {
         if (tty.winSize(resize.source)) |now| {
@@ -255,7 +253,7 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
             // and nothing a caller of `run` could do about it.
         }
 
-        try waitResize(io, resize, &seen_ticket);
+        try waitResize(io, resize);
     }
 }
 
@@ -265,24 +263,18 @@ fn atLeastOneMs(span: std.Io.Duration) std.Io.Duration {
     return if (span.nanoseconds < one.nanoseconds) one else span;
 }
 
-/// One cancelable interval, even when tickets change continuously. The
-/// deadline owns the budget; a delayed tick never spends it a second time.
-fn waitResize(io: std.Io, resize: Resize, seen_ticket: *u32) std.Io.Cancelable!void {
+/// One cancelable interval, ended early by a signal on `resize.wake`.
+fn waitResize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     try std.Io.checkCancel(io);
     const interval = atLeastOneMs(resize.interval);
-    const ticket = resize.ticket orelse return std.Io.sleep(io, interval, .awake);
-    const deadline: Deadline = .in(io, interval);
-    while (true) {
-        const now = ticket.load(.acquire);
-        if (now != seen_ticket.*) {
-            seen_ticket.* = now;
-            return;
-        }
-        const left = deadline.remaining(io);
-        if (left.nanoseconds == 0) return;
-        const tick = atLeastOneMs(resize.tick);
-        try std.Io.sleep(io, if (tick.nanoseconds < left.nanoseconds) tick else left, .awake);
-    }
+    const wake = resize.wake orelse return std.Io.sleep(io, interval, .awake);
+    reactor.wait(io, .{ .wake = wake }, .{ .duration = .{ .raw = interval, .clock = .awake } }) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        // The interval passed, which is when the size is read again anyway.
+        error.Timeout => {},
+        // A wake that cannot be waited on leaves the poll, which is correct.
+        error.Unsupported, error.Unexpected => return std.Io.sleep(io, interval, .awake),
+    };
 }
 
 //======================================================================
@@ -312,37 +304,24 @@ test "empty transfer buffers are rejected before either direction starts" {
     }));
 }
 
-test "Proxy resize waits remain cancelable with a zero interval or a changing ticket" {
-    // A clock that never moves, so the wait always has time left; its first
-    // sleep is canceled, and so is its second look for a cancel.
-    var clock: shakedown.Clock = .init(testing.io, .{});
+test "Proxy resize waits end on a signal, on the interval, and stay cancelable" {
+    const io = testing.io;
+    var wake = try reactor.Wake.init(io);
+    defer wake.deinit(io);
+    var pair: Pty = undefined; // The wait borrows but never accesses the pair.
+    const resize: Resize = .{ .pty = &pair, .source = undefined, .wake = &wake, .interval = .fromSeconds(30) };
+    // A signal ends a thirty-second interval at once.
+    wake.signal();
+    const started: Deadline = .in(io, .fromSeconds(10));
+    try waitResize(io, resize);
+    try testing.expect(started.remainingMs(io) > 0);
+    // With none, the interval does.
+    try waitResize(io, .{ .pty = &pair, .source = undefined, .wake = &wake, .interval = .fromMilliseconds(5) });
+    // And a cancel is seen before either.
+    var clock: shakedown.Clock = .init(io, .{});
     const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{ .plan = &.{
-        .{ .at = .{ .nth = .{ .call = .sleep, .n = 1 } }, .fault = .cancel },
-        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 2 } }, .fault = .cancel },
+        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 1 } }, .fault = .cancel },
     } });
     defer counted.deinit();
-    const controlled_io = counted.io();
-    var ticket: std.atomic.Value(u32) = .init(0);
-    var seen: u32 = 0;
-    var pair: Pty = undefined; // The wait borrows but never accesses the pair.
-    const resize: Resize = .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .zero };
-    try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
-    try testing.expectEqual(@as(u64, 1), counted.count(.sleep));
-    ticket.store(1, .release);
-    try testing.expectError(error.Canceled, waitResize(controlled_io, resize, &seen));
-    try testing.expectEqual(@as(u64, 2), counted.count(.checkCancel));
-}
-
-test "Proxy resize intervals count delayed sleeps once" {
-    // A five-millisecond tick resumes twenty-five milliseconds late.
-    var clock: shakedown.Clock = .init(testing.io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(25) } } });
-    const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{});
-    defer counted.deinit();
-    const start = clock.read(.awake);
-    var ticket: std.atomic.Value(u32) = .init(0);
-    var seen: u32 = 0;
-    var pair: Pty = undefined;
-    try waitResize(counted.io(), .{ .pty = &pair, .source = undefined, .ticket = &ticket, .interval = .fromMilliseconds(50), .tick = .fromMilliseconds(5) }, &seen);
-    try testing.expectEqual(@as(u64, 2), counted.count(.sleep));
-    try testing.expectEqual(std.Io.Duration.fromMilliseconds(60), start.durationTo(clock.read(.awake)));
+    try testing.expectError(error.Canceled, waitResize(counted.io(), resize));
 }

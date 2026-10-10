@@ -23,6 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `Proxy`'s `Resize.ticket` and `Resize.tick` are `Resize.wake`, a reactor `Wake` the program signals when it learns of a resize: the forwarder waits on it for the interval instead of looking at a counter every five milliseconds. Waiting for a cgroup to empty is a reactor priority-event wait on `cgroup.events`, and `console.waitInput` is a reactor wait on the console's input handle, where both sliced their waits in five milliseconds.
+- `Reaper.enableSubreaper` takes the allocator the adoption scope lives in (it used the page allocator), and the Darwin lineage tracker takes the spawning allocator. `Reaper.deinit` and `Orphans.deinit` end a scope whose `stop` failed or was skipped as far as they can, where they asserted and leaked.
 - Byte counts take `aegis.units.Bytes(usize)`: `InputWriter.Options.max_backlog`, `OutputOptions.max_bytes` and `ExchangeOptions.max_bytes` (was `usize`). Build them with `.fromRaw(n)`. conduit now depends on aegis, a leaf that needs only the standard library, and a build that sets these options imports it.
 
 - Every wait with a bound takes a `std.Io.Timeout` instead of milliseconds, and every span (a grace, a drain, an interval) is a `std.Io.Duration`. `.none` waits as long as it takes; `Deadline.within(span)` is a timeout on the awake clock.

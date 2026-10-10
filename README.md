@@ -79,7 +79,7 @@ ignored `SIGINT` and be deaf to Ctrl-C on its own terminal.
 **No signal handler is installed, ever**, and no disposition in the calling
 process is touched: a `SIGWINCH` or `SIGCHLD` handler is process-wide state
 that belongs to the program. `Proxy` forwards the window size by reading it on
-a task, and takes an optional `ticket` a program's own handler can bump.
+a task, and takes an optional reactor `Wake` a program's own handler can signal.
 `SIGPIPE` too — writing to a pipe whose reader is gone raises it, and what to
 do about that is the program's.
 
@@ -480,7 +480,7 @@ No names or scans of init's children are used to guess the lost edge.
 The native test measures immediate double-forks and repeats them with a
 controlled observer delay; successful runs do not prove the race absent.
 
-Linux subreaping is explicit: call `reaper.enableSubreaper()` before spawning
+Linux subreaping is explicit: call `reaper.enableSubreaper(gpa)` before spawning
 into the Child address passed to `Reaper.init`, then call `start`. It needs
 Linux 5.4 or later and readable procfs. One Reaper owns the process setting;
 a second owner, including `Orphans.start`, is refused with `AlreadyStarted`.
