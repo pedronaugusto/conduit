@@ -2,6 +2,7 @@
 //! owns one root and its adoptees, and exits only when that scope is empty.
 //! The caller waits for this process but receives the root's exact wait status.
 const std = @import("std");
+const aegis = @import("aegis");
 const c = std.c;
 const posix = std.posix;
 const linux = std.os.linux;
@@ -210,8 +211,8 @@ fn visitChildren(fd: posix.fd_t, root: posix.pid_t, signal: ?posix.SIG, signalle
         if (n == 0) break;
         for (buffer[0..@intCast(n)]) |byte| {
             if (byte >= '0' and byte <= '9') {
-                number = std.math.mul(posix.pid_t, number, 10) catch return error.Unexpected;
-                number = std.math.add(posix.pid_t, number, byte - '0') catch return error.Unexpected;
+                const scaled = aegis.int.Checked(posix.pid_t).init(number).mul(10) catch return error.Unexpected;
+                number = (scaled.add(byte - '0') catch return error.Unexpected).raw();
             } else if (number != 0) {
                 if (number != root) left += try visit(number, signal, signalled_group);
                 number = 0;

@@ -36,6 +36,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const posix = std.posix;
 const c = std.c;
 const Deadline = @import("conduit.tty").Deadline;
@@ -1044,7 +1045,7 @@ pub const DarwinProcess = struct {
                 pids.shrinkRetainingCapacity(@intCast(count));
                 break;
             }
-            capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
+            capacity = (aegis.int.Checked(usize).init(capacity).mul(2) catch return error.OutOfMemory).raw();
             if (capacity > @as(usize, std.math.maxInt(c_int)) / @sizeOf(posix.pid_t)) return error.OutOfMemory;
         }
 
@@ -1242,7 +1243,7 @@ pub fn observedChildrenOfDarwin(
             return;
         }
         into.shrinkRetainingCapacity(first);
-        capacity = std.math.mul(usize, capacity, 2) catch return error.OutOfMemory;
+        capacity = (aegis.int.Checked(usize).init(capacity).mul(2) catch return error.OutOfMemory).raw();
     }
 }
 

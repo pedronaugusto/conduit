@@ -127,7 +127,7 @@ pub const Child = struct {
     /// real-time signal is its number. Never set by a Windows wait.
     pub fn signalNumber(term: Term) ?u8 {
         return switch (term) {
-            .signal, .stopped => |signal| std.math.cast(u8, @backingInt(signal)),
+            .signal, .stopped => |signal| aegis.int.cast(u8, @backingInt(signal)) catch null,
             else => null,
         };
     }
