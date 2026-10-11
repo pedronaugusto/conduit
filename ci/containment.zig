@@ -57,10 +57,14 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
     }
     try env.put("ZIG_GLOBAL_CACHE_DIR", try std.Io.Dir.path.join(a, &.{ root, ".zig-cache", "runner-global" }));
     try env.put("CONDUIT_TEARDOWN_PROBE", "1");
+    // The gate's steps and options are the development build's: through bay, which
+    // names itself in BAY for what it runs, they are `bay dev`'s.
+    const build: []const []const u8 = if (init.environ_map.get("BAY")) |bay| &.{ bay, "dev" } else &.{ "zig", "build" };
+    const args = [_][]const u8{ "-Dci-lint=false", "-Dtest-filter=runner teardown probe", "-Dtest-watchdog-ms=200" };
     // Compiler work precedes the probe's execution deadline. Its source
     // checks already run in the source gate; the probe verifies teardown.
     const compiled = try std.process.run(a, io, .{
-        .argv = &.{ "zig", "build", "check-unit", "-Dci-lint=false", "-Dtest-filter=runner teardown probe", "-Dtest-watchdog-ms=200" },
+        .argv = try std.mem.concat(a, []const u8, &.{ build, &.{"check-unit"}, &args }),
         .environ_map = &env,
     });
     if (compiled.term != .exited or compiled.term.exited != 0) {
@@ -68,7 +72,7 @@ fn probe(a: std.mem.Allocator, init: std.process.Init) !void {
         return error.RunnerProbeCompileFailed;
     }
     const result = try std.process.run(a, io, .{
-        .argv = &.{ "zig", "build", "unit", "-Dci-lint=false", "-Dtest-filter=runner teardown probe", "-Dtest-watchdog-ms=200" },
+        .argv = try std.mem.concat(a, []const u8, &.{ build, &.{"unit"}, &args }),
         .environ_map = &env,
         .timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } },
     });
