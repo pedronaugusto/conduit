@@ -15,7 +15,6 @@
     "x86_64-netbsd"
   ],
   "compile_once": false,
-  "before_tests_step": "check-runner",
   "jobs": [
     {
       "name": "ThreadSanitizer (Linux)",

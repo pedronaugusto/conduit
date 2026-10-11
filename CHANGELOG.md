@@ -12,6 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The teardown probe is gone, and with it `check-runner`, `-Dtest-watchdog-ms` and the build tool the probe started from inside the build: a runner that names the phase of a stuck Io teardown is preflight's to hold, and its own tests now do.
 - The Smith fuzz tests are shakedown `check` properties.
 - Every wait on a kernel object is [reactor](https://github.com/pedronaugusto/reactor)'s (6d41279): a child's end (`wait`, `waitTimeout`, `killWait`, `output` and `Reaper`), a held process's end (`CapturedPid.wait`) and a Windows job's emptying (`waitTree`). On a reactor runtime each is an operation of the calling task's own loop and holds no thread, so a `Reaper` and a `wait` run on a runtime with no worker beside the home thread, where the wait used to hold that thread. On any other `std.Io` it is a wait on the calling thread that looks for a cancel every few milliseconds, which is reactor's interval and no longer conduit's own five. conduit now depends on reactor, a leaf that needs only std; `conduit.tty` imports it nowhere.
 - `output` waits for the child's end and its two pipes in one reactor call, and reads the streams in turn, where it polled with ten-millisecond slices. A child that has ended and cannot yet be reaped, or whose reap another task holds, is asked about again after a millisecond and then every ten, while its streams go on being read.

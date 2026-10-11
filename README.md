@@ -894,10 +894,10 @@ Most of the suite starts a real child process and reaps it, and CI runs it in
 Debug and ReleaseSafe on Linux, macOS and Windows, and in ReleaseFast on
 Linux: the code between `fork` and `execve` is the kind an inlining decision
 can change. preflight's test runner fails a test that runs past its bound,
-its Io teardown included, by name and phase: preflight's default, or what
-`-Dtest-watchdog-ms` sets. The suite also runs with the
-`posix_spawn` path turned off, because that path is a second implementation of
-one contract and running both is what says they make the same child.
+its Io teardown included, by name and phase, and preflight's own tests hold
+that. The suite also runs with the `posix_spawn` path turned off, because that
+path is a second implementation of one contract and running both is what says
+they make the same child.
 
 Three things here read bytes the package did not write, and each is a property
 `bay test --fuzz` puts a fuzzer on: that the search behind `until` and
