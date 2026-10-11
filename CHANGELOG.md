@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- conduit is developed with [bay](https://github.com/pedronaugusto/bay): preflight is a dev dependency, and the tests, examples, checks and benchmarks are the development build's (`bay test`, `bay check`, `bay bench`). `zig build` builds the modules and nothing else. shakedown is a lazy dependency, for `conduit.testing`, and a dev dependency, for the tests.
+
 ### Changed
 
 - The Smith fuzz tests are shakedown `check` properties.

@@ -32,7 +32,7 @@ stable ABI to reach past it. Every Windows call is a `kernel32` import.
 ## Usage
 
 The block below is a region of [`examples/usage.zig`](examples/usage.zig),
-which `zig build examples` builds and runs; CI compares the two.
+which `bay examples` builds and runs; CI compares the two.
 
 <!-- BEGIN GENERATED zig build docs -- usage -->
 ```zig
@@ -254,7 +254,7 @@ no file action can make. The fast path runs on Linux and macOS, which are the
 systems the suite runs on; the BSDs number the attribute flags differently and
 keep the fork. A child put in a
 cgroup of its own on Linux is forked too, unless the C library can start it in
-the cgroup (above). `zig build test
+the cgroup (above). `bay test
 -Dfork-spawn` runs the whole suite with it turned off.
 
 **A spawn that cannot run the program is an error**, not a child that exits
@@ -842,7 +842,7 @@ system.
 
 Cross-compiled in CI for `x86_64-windows-gnu`, `x86_64-windows-msvc`,
 `aarch64-windows-gnu`, glibc on two architectures and musl on one, both macOS
-architectures, FreeBSD and NetBSD. `zig build check -Dtarget=...` is what
+architectures, FreeBSD and NetBSD. `bay check -Dtarget=...` is what
 those jobs run: it compiles the library, the suite and the examples for the
 target and runs none of them, so a Windows-only path reached from a test and
 from nowhere else is still held to compiling.
@@ -866,22 +866,26 @@ before `CreateProcessW`; otherwise Windows resolves it.
 - [aegis](https://github.com/pedronaugusto/aegis) holds the data beside its lock (`Guarded`, `BlockingGuarded`), the bounded backlog and its owners, and the byte count and duration conversions.
 - [reactor](https://github.com/pedronaugusto/reactor) makes the waits on a child's end, a held process, the pipes `output` reads and a Windows job's messages, native on its runtime and over any other `std.Io`.
 - [preflight](https://github.com/pedronaugusto/preflight) runs the source checks,
-  the tests and CI.
+  the tests and CI, and [shakedown](https://github.com/pedronaugusto/shakedown) holds
+  the tests' clocks and fault plans. Both are dev dependencies, which
+  [bay](https://github.com/pedronaugusto/bay) gives conduit's own development and a
+  project that depends on conduit never sees; shakedown is also a lazy
+  dependency, fetched only by a build that asks for `conduit.testing`.
 - **tycho**, every coding agent in one folder (in development).
 
 ## Testing
 
-Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap through preflight; run `zig build cache` before direct Zig builds (only a rebuild is lost).
+Development runs through bay. Local build scripts clear `.zig-cache/{o,h,z,tmp}` above the measured cap through preflight; run `bay cache` before direct Zig builds (only a rebuild is lost).
 
 ```sh
-zig build test                   # the suite, and the examples, which are run
-zig build test -Dfork-spawn      # the same, with the posix_spawn path off
-zig build test --fuzz            # the three properties, under the fuzzer
-zig build unit -Dthread-sanitizer   # the suite under ThreadSanitizer
-zig build examples               # the examples alone
+bay test                   # the suite, and the examples, which are run
+bay test -Dfork-spawn      # the same, with the posix_spawn path off
+bay test --fuzz            # the three properties, under the fuzzer
+bay unit -Dthread-sanitizer   # the suite under ThreadSanitizer
+bay examples               # the examples alone
 zig fmt --check src examples build.zig
-zig build test -Dtarget=x86_64-linux-musl  # on Linux: the suite on musl, linked statically
-zig build install-unit -Drequire-cgroups && sudo zig-out/bin/conduit-tests
+bay test -Dtarget=x86_64-linux-musl  # on Linux: the suite on musl, linked statically
+bay install-unit -Drequire-cgroups && sudo zig-out/bin/conduit-tests
                                  # on Linux, as root: the cgroup tests, which fail
                                  # rather than skip where no cgroup can be made
 ```
@@ -896,16 +900,16 @@ its Io teardown included, by name and phase: preflight's default, or what
 one contract and running both is what says they make the same child.
 
 Three things here read bytes the package did not write, and each is a property
-`zig build test --fuzz` puts a fuzzer on: that the search behind `until` and
+`bay test --fuzz` puts a fuzzer on: that the search behind `until` and
 `untilAny` reports what a search of the whole buffer would, however the child's
 output is cut into arrivals; that every candidate a `PATH` produces is an entry
 of it with the program on the end; and that an argument list survives the
 Windows command line it is written into, by the rules that parse it back. Each
 keeps a corpus of its own under `.zig-cache/f`.
 
-The package's own benchmarks are in `bench/`: `zig build bench` builds them in
+The package's own benchmarks are in `bench/`: `bay bench` builds them in
 ReleaseFast and runs them, and [bench/README.md](bench/README.md) says what
-each measures. CI never times them; `zig build test` runs each once in smoke
+each measures. CI never times them; `bay test` runs each once in smoke
 mode, so they keep working.
 
 ### Testing code that starts children
@@ -936,7 +940,7 @@ defer routed.destroy();
 The suite runs conduit's own children, terminals, signals, timed waits and
 `Reaper` this way too, and checks that one seed makes one run.
 
-`zig build unit` is the suite without the examples, `-Dtest-filter` runs part
+`bay unit` is the suite without the examples, `-Dtest-filter` runs part
 of it, and `CONDUIT_TRACE` in the environment logs what this package asked
 the operating system for, through `std.log` at the info level under the
 `conduit` scope, which the suite prints.
