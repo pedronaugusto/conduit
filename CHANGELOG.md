@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-12
+
+### Changed
+
+- Pins aegis 0.1.1, reactor 0.2.2, shakedown 0.2.6 and preflight 0.3.4.
+
 ## [0.6.0] - 2026-10-12
 
 ### Breaking
@@ -969,7 +975,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/pedronaugusto/conduit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pedronaugusto/conduit/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.1
 [0.5.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.0
