@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-12
+
 ### Breaking
 
 - `testing(dependency, shakedown)` takes the project's own shakedown module, and `aegis(dependency)` gives the aegis conduit is built on, for the project to bind its shakedown to with shakedown's `useAegis`: a project's tests link the shakedown it pins, and nothing reaches into conduit's modules for one. conduit no longer has a lazy shakedown dependency, and `testing` no longer returns `error.LazyDependencyNeeded`.
@@ -967,7 +969,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/pedronaugusto/conduit/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.1
 [0.5.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.0
 [0.4.0]: https://github.com/pedronaugusto/conduit/releases/tag/v0.4.0
