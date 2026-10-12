@@ -302,11 +302,7 @@ fn conduitPackage(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 /// Build each benchmark's imports in its own optimization mode.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const package = conduitPackage(b, target, optimize);
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
-    const imports = b.allocator.alloc(std.Build.Module.Import, 2) catch @panic("OOM");
-    imports[0] = .{ .name = "conduit", .module = package.module("conduit") };
-    imports[1] = .{ .name = "shakedown", .module = shakedown.module("shakedown") };
-    return imports;
+    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "conduit", .module = package.module("conduit") }}) catch @panic("OOM");
 }
 
 /// The simulated route for a project's tests: the module `conduit.testing`,

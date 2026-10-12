@@ -923,7 +923,9 @@ on files; `kill` ends it as a signal it does not catch would, `wait`,
 `waitTimeout`, `tryWait` and a `Reaper` wait for it on the simulation's clock,
 and the run repeats from its seed. What a simulation cannot be (credentials,
 resource and job limits, a parent-death signal) is `error.Unsupported`, and a
-simulated child's own children are not ended with it.
+simulated child's own children are not ended with it. Under bay your tests link one
+shakedown and one aegis; without bay, pin the aegis release shakedown pins
+(shakedown's README says how).
 
 ```zig
 const conduit_build = @import("conduit"); // conduit's build.zig, at the top of yours
