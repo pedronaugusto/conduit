@@ -92,7 +92,6 @@ pub fn dev(b: *std.Build, tools: type) void {
     const package = conduitPackage(b, target, optimize);
     const p = package.builder;
     const preflight = tools.preflight;
-    use_aegis = tools.shakedown.useAegis;
     const module = package.module("conduit");
     const tty_module = package.module("conduit.tty");
     const aegis_package = p.dependency("aegis", .{ .target = target, .optimize = optimize });
@@ -142,10 +141,9 @@ pub fn dev(b: *std.Build, tools: type) void {
         },
     });
     // The tests' clocks, fault plans and counts, and the simulated route: the
-    // module `conduit.testing`, on shakedown, a dev dependency bound to
-    // conduit's aegis, as a project's tests are.
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
-    use_aegis(shakedown, aegis(package));
+    // module `conduit.testing`, on shakedown, a dev dependency, as a
+    // project's tests are.
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
     test_module.addImport("conduit.testing", testing(package, shakedown.module("shakedown")));
     test_module.addImport("shakedown", shakedown.module("shakedown"));
 
@@ -293,9 +291,6 @@ const example_sources = [_][]const u8{
     "examples/usage.zig",
 };
 
-/// `tools.shakedown.useAegis`, set by `dev` for the benchmark imports, which are built without `tools`.
-var use_aegis: *const fn (*std.Build.Dependency, *std.Build.Module) void = undefined;
-
 /// `-Dfork-spawn`, as `dev` read it, for the benchmarks' imports.
 var forked: bool = false;
 
@@ -307,9 +302,7 @@ fn conduitPackage(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 /// Build each benchmark's imports in its own optimization mode.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const package = conduitPackage(b, target, optimize);
-    // shakedown bound to conduit's aegis, so a binary links one aegis.
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
-    use_aegis(shakedown, aegis(package));
+    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
     const imports = b.allocator.alloc(std.Build.Module.Import, 2) catch @panic("OOM");
     imports[0] = .{ .name = "conduit", .module = package.module("conduit") };
     imports[1] = .{ .name = "shakedown", .module = shakedown.module("shakedown") };
@@ -318,14 +311,12 @@ fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.l
 
 /// The simulated route for a project's tests: the module `conduit.testing`,
 /// for `conduit`'s dependency in that project's build, on `shakedown`, the
-/// project's own, bound to `aegis(conduit)` so that a test binary links one
-/// shakedown and one aegis.
+/// project's own, so that a test binary links one shakedown.
 ///
 ///     const conduit_build = @import("conduit"); // at the top of the build.zig
 ///
 ///     const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimize });
-///     const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
-///     @import("shakedown").useAegis(shakedown, conduit_build.aegis(conduit));
+///     const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
 ///     tests.root_module.addImport("conduit.testing", conduit_build.testing(conduit, shakedown.module("shakedown")));
 ///     tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
 pub fn testing(conduit: *std.Build.Dependency, shakedown: *std.Build.Module) *std.Build.Module {
@@ -339,11 +330,4 @@ pub fn testing(conduit: *std.Build.Dependency, shakedown: *std.Build.Module) *st
             .{ .name = "shakedown", .module = shakedown },
         },
     });
-}
-
-/// The aegis `conduit`'s dependency is built on, for the project's
-/// shakedown to be bound to (shakedown's `useAegis`), and for anything else
-/// of the project's that takes aegis's types from conduit.
-pub fn aegis(conduit: *std.Build.Dependency) *std.Build.Module {
-    return conduit.module("conduit").import_table.get("aegis").?;
 }

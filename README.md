@@ -929,8 +929,7 @@ simulated child's own children are not ended with it.
 const conduit_build = @import("conduit"); // conduit's build.zig, at the top of yours
 
 const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimize });
-const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
-@import("shakedown").useAegis(shakedown, conduit_build.aegis(conduit));
+const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize });
 tests.root_module.addImport("conduit.testing", conduit_build.testing(conduit, shakedown.module("shakedown")));
 tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
 ```

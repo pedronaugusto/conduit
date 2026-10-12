@@ -20,7 +20,7 @@
 //! it.
 //!
 //! A project's build gets this module from `conduit`'s build.zig, on the
-//! project's own shakedown bound to `@import("conduit").aegis(conduit_dependency)`:
+//! project's own shakedown:
 //! `@import("conduit").testing(conduit_dependency, shakedown_module)`.
 const std = @import("std");
 const Io = std.Io;
