@@ -8,7 +8,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
-- conduit is developed with [bay](https://github.com/pedronaugusto/bay): preflight is a dev dependency, and the tests, examples, checks and benchmarks are the development build's (`bay test`, `bay check`, `bay bench`). `zig build` builds the modules and nothing else. shakedown is a lazy dependency, for `conduit.testing`, and a dev dependency, for the tests.
+- `testing(dependency, shakedown)` takes the project's own shakedown module, and `aegis(dependency)` gives the aegis conduit is built on, for the project to bind its shakedown to with shakedown's `useAegis`: a project's tests link the shakedown it pins, and nothing reaches into conduit's modules for one. conduit no longer has a lazy shakedown dependency, and `testing` no longer returns `error.LazyDependencyNeeded`.
+
+- conduit is developed with [bay](https://github.com/pedronaugusto/bay): preflight is a dev dependency, and the tests, examples, checks and benchmarks are the development build's (`bay test`, `bay check`, `bay bench`). `zig build` builds the modules and nothing else. shakedown is a dev dependency, for the tests and `conduit.testing`.
 
 ### Changed
 

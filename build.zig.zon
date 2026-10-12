@@ -21,12 +21,6 @@
             .url = "git+https://github.com/pedronaugusto/reactor#ce27c555a22bb0df29771c6663d5a971c23a151d",
             .hash = "reactor-0.1.0-MjQ-WMMiEgA4JHhVrPor6QH8x8Q-Agbfe4QHT-SN10Rk",
         },
-
-        .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown#ceae2ca774b5ce9fef080cb0283341c8bbb83731",
-            .hash = "shakedown-0.1.0-BR8U40rLFQBHUACfuCT-JBKc_u7isvLkPEETOyurjBK6",
-            .lazy = true,
-        },
     },
     .dev_dependencies = .{
         .shakedown = .{

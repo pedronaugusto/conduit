@@ -19,9 +19,9 @@
 //! `error.Unsupported`. A simulated child's own children are not ended with
 //! it.
 //!
-//! A project's build gets this module from `conduit`'s build.zig:
-//! `@import("conduit").testing(conduit_dependency)`. Only a build that asks
-//! for it fetches shakedown.
+//! A project's build gets this module from `conduit`'s build.zig, on the
+//! project's own shakedown bound to `@import("conduit").aegis(conduit_dependency)`:
+//! `@import("conduit").testing(conduit_dependency, shakedown_module)`.
 const std = @import("std");
 const Io = std.Io;
 const shakedown = @import("shakedown");

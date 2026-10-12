@@ -869,8 +869,8 @@ before `CreateProcessW`; otherwise Windows resolves it.
   the tests and CI, and [shakedown](https://github.com/pedronaugusto/shakedown) holds
   the tests' clocks and fault plans. Both are dev dependencies, which
   [bay](https://github.com/pedronaugusto/bay) gives conduit's own development and a
-  project that depends on conduit never sees; shakedown is also a lazy
-  dependency, fetched only by a build that asks for `conduit.testing`.
+  project that depends on conduit never sees; a project's build that asks for
+  `conduit.testing` gives it its own shakedown.
 - **tycho**, every coding agent in one folder (in development).
 
 ## Testing
@@ -927,7 +927,12 @@ simulated child's own children are not ended with it.
 
 ```zig
 const conduit_build = @import("conduit"); // conduit's build.zig, at the top of yours
-tests.root_module.addImport("conduit.testing", try conduit_build.testing(conduit));
+
+const conduit = b.dependency("conduit", .{ .target = target, .optimize = optimize });
+const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize, .aegis = .consumer });
+@import("shakedown").useAegis(shakedown, conduit_build.aegis(conduit));
+tests.root_module.addImport("conduit.testing", conduit_build.testing(conduit, shakedown.module("shakedown")));
+tests.root_module.addImport("shakedown", shakedown.module("shakedown"));
 ```
 
 ```zig
