@@ -512,7 +512,7 @@ fn statReadsBack(_: void, case: *shakedown.Case) anyerror!void {
 
     // Any bytes at all are a relation or none, and never a crash.
     var junk: [64]u8 = undefined;
-    _ = parseLinuxStat(draw.bytesInto(s, &junk));
+    _ = parseLinuxStat(shakedown.gen.bytesInto(s, &junk));
 }
 
 test "a stat record reads back whatever its command name holds" {
@@ -541,7 +541,7 @@ fn direntsStayInside(_: void, case: *shakedown.Case) anyerror!void {
             @memcpy(bytes[end + name_at ..][0..len], name[0..len]);
             end += reclen;
         } else {
-            end += draw.bytesInto(s, bytes[end..]).len;
+            end += shakedown.gen.bytesInto(s, bytes[end..]).len;
         }
     }
     var names: Dirents = .{ .bytes = bytes[0..end] };

@@ -1,6 +1,6 @@
 //! Bytes drawn from a shakedown `Source`, for the properties that read text
-//! and records: a prefix of a buffer of any length, filled with any bytes or
-//! with bytes of weighted ranges.
+//! and records: a prefix of a buffer of any length, filled with bytes of
+//! weighted ranges (`shakedown.gen.bytesInto` gives any bytes).
 
 const shakedown = @import("shakedown");
 
@@ -24,12 +24,5 @@ pub fn fillWeighted(s: *shakedown.Source, out: []u8, comptime picks: []const Pic
 pub fn weightedBytes(s: *shakedown.Source, out: []u8, comptime picks: []const Pick) []u8 {
     const len = shakedown.gen.intRange(s, usize, 0, out.len);
     fillWeighted(s, out[0..len], picks);
-    return out[0..len];
-}
-
-/// A prefix of `out`, of any length, filled with any bytes.
-pub fn bytesInto(s: *shakedown.Source, out: []u8) []u8 {
-    const len = shakedown.gen.intRange(s, usize, 0, out.len);
-    s.bytes(out[0..len]);
     return out[0..len];
 }

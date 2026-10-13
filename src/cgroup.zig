@@ -312,10 +312,9 @@ fn unescape(text: []const u8, into: []u8) ?[]const u8 {
 // What the kernel's files say, over generated input.
 //======================================================================
 
-/// The properties over the kernel's files, with the generators they draw
-/// from. The test dependencies are parameters, so nothing here refers to them
-/// outside the tests that call it.
-fn Fuzz(comptime shakedown: type, comptime draw: type) type {
+/// The properties over the kernel's files. The test dependency is a
+/// parameter, so nothing here refers to it outside the tests that call it.
+fn Fuzz(comptime shakedown: type) type {
     return struct {
         const gen = shakedown.gen;
 
@@ -379,7 +378,7 @@ fn Fuzz(comptime shakedown: type, comptime draw: type) type {
             // And a line of arbitrary bytes is a mount or not, and never more than
             // its buffers hold.
             var junk: [96]u8 = undefined;
-            const bytes = draw.bytesInto(s, &junk);
+            const bytes = gen.bytesInto(s, &junk);
             var small_point: [8]u8 = undefined;
             var small_root: [8]u8 = undefined;
             if (parseMountLine(bytes, &small_point, &small_root)) |mount| {
@@ -503,26 +502,26 @@ fn Fuzz(comptime shakedown: type, comptime draw: type) type {
 
 test "a mountinfo line reads back the paths it escapes" {
     const shakedown = @import("shakedown");
-    const f = Fuzz(shakedown, @import("testing/draw.zig"));
+    const f = Fuzz(shakedown);
     try shakedown.check(std.testing.allocator, {}, f.mountLinesReadBack, .{});
 }
 
 test "the mountinfo reader finds the first cgroup2 line however long the others are" {
     const shakedown = @import("shakedown");
-    const f = Fuzz(shakedown, @import("testing/draw.zig"));
+    const f = Fuzz(shakedown);
     if (comptime builtin.target.os.tag == .windows) return error.SkipZigTest;
     try shakedown.check(std.testing.allocator, {}, f.mountinfoReadsThroughItsWindow, .{ .cases = 64 });
 }
 
 test "this process's cgroup is the 0:: line that ends" {
     const shakedown = @import("shakedown");
-    const f = Fuzz(shakedown, @import("testing/draw.zig"));
+    const f = Fuzz(shakedown);
     try shakedown.check(std.testing.allocator, {}, f.ownCgroupLines, .{});
 }
 
 test "a boot identity is a UUID's text and nothing else" {
     const shakedown = @import("shakedown");
-    const f = Fuzz(shakedown, @import("testing/draw.zig"));
+    const f = Fuzz(shakedown);
     try shakedown.check(std.testing.allocator, {}, f.bootIdentityIsAUuid, .{});
 }
 
