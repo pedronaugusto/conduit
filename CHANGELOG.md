@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-13
+
 ### Breaking
 
 - `aegis(dependency)` is gone. It gave a project the aegis to bind its shakedown to, and bay gives a graph one aegis, so nothing binds it: `testing` takes the project's shakedown as it is.
@@ -983,7 +985,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/pedronaugusto/conduit/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/pedronaugusto/conduit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pedronaugusto/conduit/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/pedronaugusto/conduit/releases/tag/v0.5.1
