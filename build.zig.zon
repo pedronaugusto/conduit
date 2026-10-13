@@ -1,6 +1,6 @@
 .{
     .name = .conduit,
-    .version = "0.7.0",
+    .version = "0.7.1",
     .minimum_zig_version = "0.17.0",
     .fingerprint = 0xfdbb5281ef00b2e2,
     .paths = .{
@@ -13,24 +13,24 @@
     },
     .dependencies = .{
         .aegis = .{
-            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.2#f2fef4ec6595b6357d683ac258debc4c5184884c",
-            .hash = "aegis-0.1.2-rsxougohBwASqdDTGy3Y46Jb6IDW5sOSrgEO5ggjbgpV",
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.6#2b97b877a07690ea3ac447f82f9efe660743a84a",
+            .hash = "aegis-0.1.6-rsxouvHOBwC2_K3U8Vewo9LnTYL48c57ztMYdlW72Z3r",
         },
 
         .reactor = .{
-            .url = "git+https://github.com/pedronaugusto/reactor?ref=v0.2.2#753c1b393fbba27ed5e6b3f2b9ac88c1f2c3bb67",
-            .hash = "reactor-0.2.2-MjQ-WEZXEgCjs-1BWdtY7fdQPmY4QBq2h6kU77yX6bEJ",
+            .url = "git+https://github.com/pedronaugusto/reactor?ref=v0.4.0#136c2a4db60ce9501e3bb9e8fde7ca42c8a498ad",
+            .hash = "reactor-0.4.0-MjQ-WK1eEgDkTpq8GjNCyYb4aGTjPQS_I7ZzlS657JtX",
         },
     },
     .dev_dependencies = .{
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.3.1#d6948e0e6c99a353c1c4cd32d9bb881610e96fb9",
-            .hash = "shakedown-0.3.1-BR8U44MkFgBSeMWt2542WBfnJvi_s3xAiugtXAnJJr44",
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.4.1#1fd9fd619b105a65c7478525dfd83f24004e1b8a",
+            .hash = "shakedown-0.4.1-BR8U4z_qFQBovSS7wrfzvzZO0Vb8tTGeXEXcEUBXzxQE",
         },
 
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.3.4#a0efa97ac6fb5656d5e2b1a19657926b66a55d11",
-            .hash = "preflight-0.3.4-LX1ZwoE8DgCcci81Z_m2wf0UmKlkxeLCGV74OcKQC8nV",
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.4.5#22e928fba1b897fd5888cc7ef92037b29e1d8e06",
+            .hash = "preflight-0.4.5-LX1ZwgeZDgD4Mmm3Cxjy04JQkPBUlcYKDQa9BPv4_GWW",
         },
     },
 }

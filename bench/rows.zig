@@ -11,15 +11,15 @@ pub fn single(units: u64) error{SampleTooShort}!void {
 
 /// The error set every callback in `entries` can return, joined.
 pub fn ErrorOf(comptime entries: anytype) type {
-    var set: type = error{};
+    var Set: type = error{};
     inline for (entries) |entry| {
         inline for (.{ "run", "setup", "teardown" }) |hook| {
             if (@hasField(@TypeOf(entry), hook)) {
-                set = set || @typeInfo(@typeInfo(@TypeOf(@field(entry, hook))).@"fn".return_type.?).error_union.error_set;
+                Set = Set || @typeInfo(@typeInfo(@TypeOf(@field(entry, hook))).@"fn".return_type.?).error_union.error_set;
             }
         }
     }
-    return set;
+    return Set;
 }
 
 /// `table`, a tuple of `.{ .name, .unit, .run }` with an optional `.initial`,
