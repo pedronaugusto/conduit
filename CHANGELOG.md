@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A run reading on tasks no longer hangs at the end of its drain: each read waits on reactor for its stream first, whose wait takes a cancel on any `Io`, where std's Threaded aimed the cancel at a read blocked in the kernel and lost it now and then (about 3 runs in 20 of the drain test). The drain test runs on the real clock.
+
 ## [0.8.0] - 2026-10-14
 
 ### Breaking

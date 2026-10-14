@@ -1717,7 +1717,18 @@ pub const Child = struct {
         max_bytes: aegis.units.Bytes(usize),
         into: *Collector,
     ) std.Io.Cancelable!void {
-        while (!try collectOnce(gpa, io, f, max_bytes, into)) {}
+        while (true) {
+            // Each read waits on reactor for the stream first, whose wait takes a
+            // cancel on any `Io`: std's Threaded aims one at a read blocked in the
+            // kernel with a signal, and loses it now and then, which left a drain
+            // that ended waiting for its reader forever. A descriptor that cannot
+            // be waited on is read at once, and the read says what is wrong with it.
+            if (!is_windows) reactor.wait(io, .{ .readable = f.handle }, .none) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                error.Timeout, error.Unsupported, error.Unexpected => {},
+            };
+            if (try collectOnce(gpa, io, f, max_bytes, into)) return;
+        }
     }
 
     /// One read of a stream into its collector. True once the stream is finished,
@@ -2149,7 +2160,7 @@ pub const Child = struct {
         try testing.expect((try child.tryWait(io)) != null);
     }
 
-    test "output on tasks ends the drain at its deadline, with one wait and no slices" {
+    test "output on tasks ends the drain at its deadline, its reader canceled" {
         const testing = std.testing;
         const io = testing.io;
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
@@ -2173,16 +2184,17 @@ pub const Child = struct {
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
-        // A sleep resumes eight milliseconds late. The drain is one wait for its
-        // deadline beside the readers, not sleeps between looks: it ends once,
-        // that late, where slices of it each added their own lateness.
-        var clock: shakedown.Clock = .init(io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(8) } } });
-        const delayed_io = clock.io();
-        const start = clock.read(.awake);
-        var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .literal("20ms") }, null);
+        // The drain is one wait for its deadline beside the reader, which a live
+        // writer keeps waiting: the run ends at the deadline, and the reader's
+        // wait takes the cancel that ends it (std's Threaded lost one aimed at a
+        // read blocked in the kernel now and then, and the run never ended).
+        const start = std.Io.Clock.awake.now(io);
+        var collected = try child.outputOnTasks(testing.allocator, io, .{ .drain = .literal("20ms") }, null);
         defer collected.deinit();
         try testing.expect(collected.stdoutTruncated());
-        try testing.expectEqual(std.Io.Duration.fromMilliseconds(28), start.durationTo(clock.read(.awake)));
+        const took = start.durationTo(std.Io.Clock.awake.now(io));
+        try testing.expect(took.nanoseconds >= std.Io.Duration.fromMilliseconds(20).nanoseconds);
+        try testing.expect(took.nanoseconds < std.Io.Duration.fromSeconds(5).nanoseconds);
     }
 
     test "a reap reported elsewhere retires the identity before kill can use its number" {
