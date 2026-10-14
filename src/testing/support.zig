@@ -66,5 +66,5 @@ pub const Watchdog = struct {
 /// one writes. A child that cannot be ended outlives the run, so that fails the
 /// test (`std.log.err` does) rather than passing in silence.
 pub fn reap(child: *Child, io: std.Io) void {
-    _ = child.killWait(io, .zero) catch |err| std.log.err("the test's child could not be ended: {t}", .{err});
+    _ = child.killWait(io, .fromRaw(0)) catch |err| std.log.err("the test's child could not be ended: {t}", .{err});
 }

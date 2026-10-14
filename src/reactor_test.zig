@@ -110,7 +110,7 @@ fn killed(io: std.Io) !void {
     });
     defer child.deinit(io);
     const before = reactor.fallbacks();
-    _ = try child.killWait(io, .fromMilliseconds(100));
+    _ = try child.killWait(io, .literal("100ms"));
     try std.testing.expect(try child.tryWait(io) != null);
     try expectNative(before);
 }
@@ -188,7 +188,7 @@ fn timedOut(io: std.Io) !void {
     const before = reactor.fallbacks();
     var output = try child.output(std.testing.allocator, io, .{
         .timeout = Deadline.within(.fromMilliseconds(100)),
-        .grace = .fromMilliseconds(50),
+        .grace = .literal("50ms"),
     });
     defer output.deinit();
     try std.testing.expect(output.timedOut());
@@ -262,7 +262,7 @@ fn forced(io: std.Io) !void {
     const before = reactor.fallbacks();
     // Asked, not waited for: the grace is waited out on the Reaper's own task,
     // which parks on the runtime's one thread beside the task that waits here.
-    reaper.kill(io, .fromMilliseconds(100));
+    reaper.kill(io, .literal("100ms"));
     const term = (try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(10_000)))) orelse return error.TestChildDidNotExit;
     try std.testing.expect(term == .signal or is_windows);
     try expectNative(before);

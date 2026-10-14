@@ -100,6 +100,7 @@ const Allocator = std.mem.Allocator;
 
 const tree = @import("tree.zig");
 const Deadline = @import("conduit.tty").Deadline;
+const Duration = @import("conduit.tty").Duration;
 const linux = std.os.linux;
 const adoption_record = @import("orphans/adoption_record.zig");
 
@@ -245,10 +246,10 @@ pub const Orphans = struct {
     /// `kill`. What is adopted while this runs is ended too, so a program that is
     /// still leaving orphans keeps this busy; it is the call for the end of a
     /// program. It waits by sleeping between looks, and is a cancelation point.
-    pub fn killAll(orphans: *Orphans, io: std.Io, grace: std.Io.Duration) KillError!void {
+    pub fn killAll(orphans: *Orphans, io: std.Io, grace: Duration) KillError!void {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return;
-        const deadline: Deadline = .in(io, grace);
+        const deadline: Deadline = .after(io, grace);
         var interval_ms: u32 = 1;
         // A `children` file read while a child is being reaped elsewhere may pass
         // over another child, so "nothing left" is believed after two looks.
@@ -263,7 +264,7 @@ pub const Orphans = struct {
                     try orphans.look(io);
                 }
                 orphans.reapEnded();
-                const insisting = grace.nanoseconds <= 0 or deadline.remainingMs(io) == 0;
+                const insisting = grace.eql(.fromRaw(0)) or deadline.remainingMs(io) == 0;
                 for (orphans.adopted.items) |*held| held.ask(if (insisting) .kill else .terminate);
                 break :left orphans.adopted.items.len;
             };

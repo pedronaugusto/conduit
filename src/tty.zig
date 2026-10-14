@@ -82,6 +82,8 @@ pub const opening_is_two_calls = close_on_exec.opening_is_two_calls;
 /// A point on the clock a bounded wait ends at, made from a `std.Io.Timeout`
 /// or a span, and read back in whole milliseconds rounded up.
 pub const Deadline = @import("deadline.zig").Deadline;
+/// A span given to a wait: a grace, a drain.
+pub const Duration = @import("deadline.zig").Duration;
 
 /// A terminal handle. `std.posix.fd_t` on POSIX, `HANDLE` on Windows, which is
 /// what `std.Io.File.Handle` already is on both.

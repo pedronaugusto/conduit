@@ -52,7 +52,7 @@ defer shell.deinit(io);
 // separate standard error to collect.
 var result = try shell.child().output(gpa, io, .{
     .timeout = conduit.Deadline.within(.fromSeconds(5)),
-    .drain = .fromMilliseconds(250),
+    .drain = .literal("250ms"),
 });
 defer result.deinit();
 ```
@@ -576,7 +576,7 @@ machine's processor time, from 1 through 10,000; an out-of-range value is
 accepted, even when the backlog is full. A later `queue` checks again.
 
 ```zig
-var input = try child.inputWriter(gpa, io, .{ .max_backlog = aegis.units.Bytes(usize).fromRaw(1024 * 1024) });
+var input = try child.inputWriter(gpa, io, .{ .max_backlog = .literal("1MiB") });
 defer input.deinit(io);
 try input.queue(io, "first\n");
 try input.queue(io, "second\n");

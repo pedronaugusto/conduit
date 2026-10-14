@@ -128,7 +128,7 @@ test "bytes written to one terminal reach the program on the other, and back" {
 
     // Ending the child closes the last descriptor for its terminal, which is
     // what makes `run` return.
-    _ = try child.killWait(io, .fromMilliseconds(500));
+    _ = try child.killWait(io, .literal("500ms"));
 }
 
 test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {

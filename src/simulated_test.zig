@@ -117,7 +117,7 @@ const Cases = struct {
         // default does nothing.
         if (!is_windows) try child.kill(io, .window_change);
         try testing.expectEqual(@as(?conduit.Term, null), try child.tryWait(io));
-        const term = try child.killWait(io, .fromSeconds(5));
+        const term = try child.killWait(io, .literal("5s"));
         if (is_windows) {
             try testing.expectEqual(@as(?u32, 0xC000013A), Child.exitCode(term));
         } else {
@@ -136,7 +136,7 @@ const Cases = struct {
         try r.start(io);
         try testing.expectEqual(@as(?conduit.Term, null), try r.exit());
         try testing.expectEqual(@as(?conduit.Term, null), try r.waitTimeout(io, .{ .duration = .{ .raw = .fromSeconds(1), .clock = .awake } }));
-        r.kill(io, .zero);
+        r.kill(io, .fromRaw(0));
         const term = try r.wait(io);
         if (!is_windows) try testing.expectEqualStrings("KILL", Child.signalName(term).?);
         try testing.expectEqual(term, try child.wait(io));

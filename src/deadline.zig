@@ -3,6 +3,12 @@
 const std = @import("std");
 const aegis = @import("aegis");
 
+/// A span conduit is given: a kill's grace, a drain's, a tree's. aegis's
+/// duration in nanoseconds, never negative, read and written in its text form
+/// (`200ms`, `1s`) and logged with `{f}`. A timeout stays std's `Io.Timeout`,
+/// a span or a deadline, as std's own waits take it.
+pub const Duration = aegis.units.Duration(.nanosecond, u64);
+
 pub const Deadline = struct {
     /// The moment the wait ends, on the awake clock.
     at: std.Io.Clock.Timestamp,
@@ -15,6 +21,11 @@ pub const Deadline = struct {
     pub fn in(io: std.Io, span: std.Io.Duration) Deadline {
         const now = std.Io.Clock.Timestamp.now(io, .awake);
         return .{ .at = .{ .raw = .{ .nanoseconds = now.raw.nanoseconds +| span.nanoseconds }, .clock = .awake } };
+    }
+
+    /// `span` from now, on the awake clock.
+    pub fn after(io: std.Io, span: Duration) Deadline {
+        return .in(io, span.toIoDuration());
     }
 
     /// The deadline a timeout names, read against the clock now; `null` for
@@ -42,6 +53,12 @@ pub const Deadline = struct {
     pub fn remaining(deadline: Deadline, io: std.Io) std.Io.Duration {
         const left = deadline.at.durationFromNow(io).raw;
         return if (left.nanoseconds <= 0) .zero else left;
+    }
+
+    /// What is left of the wait as a span conduit is given; zero once it has
+    /// passed, and the longest span for a deadline past that.
+    pub fn spanLeft(deadline: Deadline, io: std.Io) Duration {
+        return Duration.fromIoDuration(deadline.remaining(io), .down) catch .fromRaw(std.math.maxInt(u64));
     }
 
     /// What is left, in the whole milliseconds a system wait takes.

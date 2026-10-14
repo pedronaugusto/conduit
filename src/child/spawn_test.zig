@@ -55,6 +55,7 @@ const child_posix = @import("posix.zig");
 const budget_ms = 5000;
 const budget: std.Io.Duration = .fromMilliseconds(budget_ms);
 const within_budget: std.Io.Timeout = .{ .duration = .{ .raw = budget, .clock = .awake } };
+const kill_budget: conduit.Duration = .fromRaw(budget_ms * std.time.ns_per_ms);
 
 /// The shell each system has, and the scripts these tests need from it.
 ///
@@ -412,7 +413,7 @@ test "output gives up on a child that will not end, and ends it" {
     });
     defer child.deinit(io);
 
-    var result = try child.output(gpa, io, .{ .timeout = Deadline.within(.fromMilliseconds(50)), .grace = .fromMilliseconds(50) });
+    var result = try child.output(gpa, io, .{ .timeout = Deadline.within(.fromMilliseconds(50)), .grace = .literal("50ms") });
     defer result.deinit();
 
     try testing.expect(result.timedOut());
@@ -521,7 +522,7 @@ test "killWait is legal while a Reaper is waiting, and the two share one reap" {
     // nothing survives, and then a wait -- while another task is already
     // inside one. Two waits on one child are one status and one error about a
     // child nobody can account for.
-    const term = try child.killWait(io, .zero);
+    const term = try child.killWait(io, .fromRaw(0));
     try testing.expect(!conduit.succeeded(term));
 
     // The same term, by both routes, and nothing left to reap: a second wait
@@ -610,11 +611,11 @@ test "Reaper.kill returns at once and ends a child that ignores the request, by 
     const grace_ms = 300;
     const counted = try FaultIo.init(gpa, io, .{});
     defer counted.deinit();
-    reaper.kill(counted.io(), .fromMilliseconds(grace_ms));
+    reaper.kill(counted.io(), .fromRaw(grace_ms * std.time.ns_per_ms));
     try testing.expectEqual(@as(u64, 1), counted.count(.groupConcurrent));
     // Asked, not waited for: exactly one task owns the grace.
     // A second request with a grace changes nothing.
-    reaper.kill(counted.io(), .fromMilliseconds(grace_ms));
+    reaper.kill(counted.io(), .fromRaw(grace_ms * std.time.ns_per_ms));
     try testing.expectEqual(@as(u64, 1), counted.count(.groupConcurrent));
 
     const term = (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
@@ -645,7 +646,7 @@ test "Reaper.kill is over the moment a child that honours the request ends" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    reaper.kill(io, .fromMilliseconds(60_000));
+    reaper.kill(io, .literal("60s"));
     const term = (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
     // The request, not the force: the grace was never waited out.
     try testing.expectEqual(Child.Term{ .signal = .TERM }, term);
@@ -672,8 +673,8 @@ test "Reaper.kill with no grace is the force, now" {
     try reaper.start(io);
     defer reaper.deinit(io);
 
-    reaper.kill(io, .fromMilliseconds(60_000));
-    reaper.kill(io, .zero);
+    reaper.kill(io, .literal("60s"));
+    reaper.kill(io, .fromRaw(0));
     const term = (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
     try testing.expectEqual(Child.Term{ .signal = .KILL }, term);
     const deadline: Deadline = .in(io, budget);
@@ -697,7 +698,7 @@ test "killWait retires a forced group only after closing its late fork's pipe" {
         defer sink.deinit();
         try sink.start(child.stdoutFile().?);
         _ = try readPid(&sink);
-        try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.killWait(io, .zero));
+        try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.killWait(io, .fromRaw(0)));
         const deadline: Deadline = .in(io, budget);
         while (!sink.ended()) {
             if (deadline.remainingMs(io) == 0) return error.TestForcedGroupRetainedPipe;
@@ -748,7 +749,7 @@ test "end_tree: what a child leaves in its group ends with it, before the child 
     defer _ = c.kill(stubborn, .KILL);
 
     const grace_ms = 300;
-    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .fromMilliseconds(grace_ms) });
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .fromRaw(grace_ms * std.time.ns_per_ms) });
     try reaper.start(io);
     defer reaper.deinit(io);
 
@@ -794,7 +795,7 @@ test "end_tree: a child that ended before its Reaper started still takes what it
     }
     try testing.expect(alive(left));
 
-    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .fromMilliseconds(300) });
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .literal("300ms") });
     try reaper.start(io);
     defer reaper.deinit(io);
     const term = (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
@@ -858,7 +859,7 @@ test "end_tree: a child that leaves nothing is reaped without waiting on its gro
     defer child.deinit(io);
     errdefer reap(&child, io);
 
-    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .fromMilliseconds(60_000) });
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .literal("60s") });
     try reaper.start(io);
     defer reaper.deinit(io);
 
@@ -997,7 +998,7 @@ test "waitTimeout gives up without ending the child" {
     try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, Deadline.within(.fromMilliseconds(50))));
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
 
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
     // And once it has ended, the same call answers at once.
     try testing.expect((try child.waitTimeout(io, Deadline.within(.fromMilliseconds(0)))) != null);
 }
@@ -1027,7 +1028,7 @@ test "succeeded, exitCode and signalName say how a child ended" {
         .detach = true,
     });
     defer killed.deinit(io);
-    const killed_term = try killed.killWait(io, .zero);
+    const killed_term = try killed.killWait(io, .fromRaw(0));
     if (is_windows) {
         try testing.expectEqual(@as(?u32, 1), conduit.exitCode(killed_term));
         try testing.expectEqual(@as(?[]const u8, null), conduit.signalName(killed_term));
@@ -1062,7 +1063,7 @@ test "shellStatus says an end as a shell's $? does, and signalNumber names every
         .detach = true,
     });
     defer killed.deinit(io);
-    const killed_term = try killed.killWait(io, .zero);
+    const killed_term = try killed.killWait(io, .fromRaw(0));
     try testing.expectEqual(@as(u8, if (is_windows) 1 else 128 + 9), conduit.shellStatus(killed_term));
 }
 
@@ -1082,7 +1083,7 @@ test "processExists says whether a process has an id, until it is reaped" {
     defer child.deinit(io);
     const pid = child.processId().?;
     try testing.expectEqual(@as(?bool, true), conduit.processExists(pid));
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
     // Reaped on POSIX: the id is given back, and a pid is taken again only
     // once the counter wraps. On Windows the reap closes the Child's handle,
     // and the id goes back whenever the system lets the ended process go,
@@ -1103,7 +1104,7 @@ test "killWait ends a child that would otherwise outlive the test, and says how"
     });
     defer child.deinit(io);
 
-    const term = try child.killWait(io, .fromMilliseconds(200));
+    const term = try child.killWait(io, .literal("200ms"));
     try expectKilled(term, .TERM);
     // Reaped once: `wait` answers from what `killWait` learned, and so cannot
     // block here.
@@ -1140,7 +1141,7 @@ test "killWait reaches what the child started, not only the child" {
     try std.Io.sleep(io, .fromMilliseconds(200), .awake);
     try testing.expect(!sink.ended());
 
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
 
     // The shell is gone. If what it started were still running it would still
     // be holding the pipe, and this would wait out the whole budget.
@@ -1188,7 +1189,7 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     // prove.
     if (getpgid(grandchild) == child.state.pgid.?) return error.SkipZigTest;
 
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
 
     const deadline: Deadline = .in(io, budget);
     while (deadline.remainingMs(io) > 0) {
@@ -1312,7 +1313,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
         if (on_pty and getpgid(grandchild) == child.state.pgid.?) return error.SkipZigTest;
 
         const before = tree.walks.load(.monotonic);
-        _ = try child.killWait(io, .zero);
+        _ = try child.killWait(io, .fromRaw(0));
 
         const deadline: Deadline = .in(io, budget);
         while (alive(grandchild)) {
@@ -1614,7 +1615,7 @@ test "a recorded cgroup opens only at its original directory identity and remove
     try testing.expectEqual(cgroup.Populated.others, recorded.populated());
     try testing.expect(!recorded.remove());
 
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
     try testing.expect(recorded.remove());
     try testing.expect(cgroup.Cgroup.openRecorded(path, identity) == null);
 }
@@ -1631,7 +1632,7 @@ test "a recorded cgroup whose name now holds another is not removed through it" 
 
     // The recorded cgroup empties and goes, and a new empty one takes its
     // name: only the inode check stands between the handle and removing it.
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
     try testing.expectEqual(@as(c_int, 0), c.rmdir(path));
     try testing.expectEqual(@as(c_int, 0), c.mkdir(path, 0o755));
     defer _ = c.rmdir(path);
@@ -1648,7 +1649,7 @@ test "a recorded cgroup waits on population changes" {
     var recorded = cgroup.Cgroup.openRecorded(child.state.cgroup.path(&where).?, child.state.cgroup.id().?).?;
     defer recorded.close();
     try testing.expect(!try recorded.waitEmpty(io, Deadline.within(.fromMilliseconds(20))));
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
     try testing.expect(try recorded.waitEmpty(io, Deadline.within(.fromMilliseconds(1000))));
 }
 
@@ -1670,7 +1671,7 @@ test "killRecorded ends a verified Linux cgroup and its detached grandchild" {
         .start = since,
         .group = child.state.pgid,
         .cgroup = &recorded,
-        .grace = .fromMilliseconds(20),
+        .grace = .literal("20ms"),
     }));
     _ = try child.wait(io);
     try testing.expect(!recorded.active());
@@ -1723,7 +1724,7 @@ test "a grandchild that double-forks and setsid()s away is still ended with the 
         try testing.expect(cgroupExists(path));
 
         const walks_before = tree.walks.load(.monotonic);
-        const term = try child.killWait(io, .fromMilliseconds(grace_ms));
+        const term = try child.killWait(io, .fromRaw(grace_ms * std.time.ns_per_ms));
         try expectKilled(term, if (grace_ms == 0) .KILL else .TERM);
         try expectGone(orphan);
         // The cgroup did it: no walk was asked.
@@ -1757,7 +1758,7 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
         _ = c.kill(orphan, .KILL);
     };
 
-    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .fromMilliseconds(2000) });
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .literal("2000ms") });
     try reaper.start(io);
     defer reaper.deinit(io);
     child.closeStdin(io);
@@ -2525,7 +2526,7 @@ test "killWait with no grace goes straight to the signal nothing survives" {
     });
     defer child.deinit(io);
 
-    try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.killWait(io, .zero));
+    try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.killWait(io, .fromRaw(0)));
 }
 
 //======================================================================
@@ -2568,7 +2569,7 @@ test "what a child writes to its terminal reaches the master" {
     try sink.expect("on the terminal");
     trace.print("master: the child said what it was asked to", .{});
 
-    _ = try child.killWait(io, budget);
+    _ = try child.killWait(io, kill_budget);
     trace.print("master: reaped", .{});
 }
 
@@ -2614,7 +2615,7 @@ test "a cursor shape the child wrote reaches the master where passthrough was gr
     // Byte for byte, as the child wrote it: `DECSCUSR` with parameter 5.
     try sink.expect("\x1b[5 q");
 
-    _ = try child.killWait(io, budget);
+    _ = try child.killWait(io, kill_budget);
 }
 
 test "a child on a pty sees a terminal" {
@@ -2719,7 +2720,7 @@ test "the same Ctrl-C does not reach a child that has no controlling terminal" {
     // just a byte. The child is still there; `killWait` is what ends it.
     try std.Io.sleep(io, .fromMilliseconds(50), .awake);
     try testing.expectEqual(@as(?Child.Term, null), try child.tryWait(io));
-    try testing.expectEqual(Child.Term{ .signal = .TERM }, try child.killWait(io, .fromMilliseconds(500)));
+    try testing.expectEqual(Child.Term{ .signal = .TERM }, try child.killWait(io, .literal("500ms")));
 }
 
 test "a detached pty child is the terminal's foreground process group, and an attached one is not" {
@@ -3389,7 +3390,7 @@ test "spawnShell starts the user's shell on a pair" {
     try sink.expect("hi");
     trace.print("shell: the shell said what it was asked to", .{});
 
-    _ = try shell.child().killWait(io, budget);
+    _ = try shell.child().killWait(io, kill_budget);
     trace.print("shell: reaped", .{});
 }
 
@@ -4363,7 +4364,7 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     try testing.expectEqual(child.state.id, try conduit.foregroundGroup(pty.readHandle().?));
 
     // Ended, and what it started with it.
-    _ = try child.killWait(io, .zero);
+    _ = try child.killWait(io, .fromRaw(0));
     try expectGone(grandchild);
 }
 

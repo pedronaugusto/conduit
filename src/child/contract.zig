@@ -6,6 +6,7 @@ const windows = std.os.windows;
 const c = std.c;
 const Allocator = std.mem.Allocator;
 const Pty = @import("../pty.zig").Pty;
+const Duration = @import("conduit.tty").Duration;
 const is_windows = builtin.target.os.tag == .windows;
 /// A numeric process id on either platform, never a Windows handle.
 pub const Id = if (is_windows) windows.DWORD else posix.pid_t;
@@ -697,13 +698,13 @@ pub const OutputOptions = struct {
     /// The most that will be kept from each stream. Bytes past it are read and
     /// dropped — the child is never blocked by a full pipe — and the matching
     /// `_truncated` flag is set.
-    max_bytes: aegis.units.Bytes(usize) = .fromRaw(10 * 1024 * 1024),
+    max_bytes: aegis.units.Bytes(usize) = .literal("10MiB"),
     /// How long the child gets before `killWait` ends it. `.none` waits as long
     /// as it takes.
     timeout: std.Io.Timeout = .none,
     /// The grace `killWait` gives on a timeout, in the same sense as its own
     /// parameter.
-    grace: std.Io.Duration = .fromMilliseconds(200),
+    grace: Duration = .literal("200ms"),
     /// How long to keep reading after the child has ended.
     ///
     /// A stream normally finishes the moment the child does, because the child
@@ -712,7 +713,7 @@ pub const OutputOptions = struct {
     /// for end of file would wait for the grandchild, which is not what a call
     /// with a timeout on it means. So the drain is bounded too, and a stream
     /// that has not finished is reported as truncated.
-    drain: std.Io.Duration = .fromSeconds(1),
+    drain: Duration = .literal("1s"),
 };
 
 pub const OutputError = error{
@@ -729,7 +730,7 @@ pub const OutputError = error{
 pub const ExchangeOptions = struct {
     /// The most kept from each stream, as `OutputOptions.max_bytes`: bytes
     /// past it are read and dropped, and the stream is reported truncated.
-    max_bytes: aegis.units.Bytes(usize) = .fromRaw(10 * 1024 * 1024),
+    max_bytes: aegis.units.Bytes(usize) = .literal("10MiB"),
     /// One budget for the whole exchange: writing the input, the child's run,
     /// its end and the reading after it. When it runs out the child is killed
     /// at once, with no grace, and `Output.timedOut` says so. `.none` waits as
@@ -737,7 +738,7 @@ pub const ExchangeOptions = struct {
     timeout: std.Io.Timeout = .none,
     /// How long to keep reading after the child has ended, as
     /// `OutputOptions.drain`, and never past the timeout.
-    drain: std.Io.Duration = .fromSeconds(1),
+    drain: Duration = .literal("1s"),
 };
 
 pub const ExchangeError = OutputError || error{

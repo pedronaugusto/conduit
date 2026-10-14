@@ -52,6 +52,7 @@ const child_exit = @import("exit.zig");
 const reactor = @import("reactor");
 const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
+const Duration = @import("conduit.tty").Duration;
 const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
 const input_writer = @import("input_writer.zig");
 const completion = @import("child/windows/completion.zig");
@@ -314,7 +315,7 @@ pub const Child = struct {
     pub fn finish(child: *Child, io: std.Io) FinishError!void {
         const state = child.state;
         if (state.descendants == .contain and !state.scope_complete) {
-            _ = try child.killWait(io, .zero);
+            _ = try child.killWait(io, .fromRaw(0));
         }
     }
 
@@ -1129,14 +1130,14 @@ pub const Child = struct {
     ///
     /// `error.OutOfMemory` is `kill`'s: the walk could not hold the child's
     /// tree. The child itself was killed and has been reaped when it returns.
-    pub fn killWait(child: *Child, io: std.Io, grace: std.Io.Duration) KillWaitError!Term {
+    pub fn killWait(child: *Child, io: std.Io, grace: Duration) KillWaitError!Term {
         // A child that has already ended is reaped rather than signalled.
         if (try child.tryWait(io)) |term| return term;
 
-        if (grace.nanoseconds > 0) {
+        if (!grace.eql(.fromRaw(0))) {
             // glint-ignore: Z026 -- a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
             child.kill(io, .terminate) catch {};
-            if (try child.waitWithin(io, .in(io, grace))) |term| return term;
+            if (try child.waitWithin(io, .after(io, grace))) |term| return term;
         }
 
         // A walk too large to hold still killed the child itself, so it is
@@ -1462,7 +1463,7 @@ pub const Child = struct {
         }
         var collected = try child.outputUntil(gpa, io, .{
             .max_bytes = options.max_bytes,
-            .grace = .zero,
+            .grace = .fromRaw(0),
             .drain = options.drain,
         }, until);
         errdefer collected.deinit();
@@ -1502,7 +1503,7 @@ pub const Child = struct {
             if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
         } else if (state.cgroup.active()) _ = state.cgroup.kill();
         // glint-ignore: Z026 -- the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
-        _ = child.killWait(io, .zero) catch {};
+        _ = child.killWait(io, .fromRaw(0)) catch {};
     }
 
     fn outputOnTasks(
@@ -1696,7 +1697,7 @@ pub const Child = struct {
     /// When reading stops after the child has ended: `drain` from now, or
     /// `until`, whichever comes first.
     fn drainDeadline(io: std.Io, options: OutputOptions, until: ?Deadline) Deadline {
-        return earlier(Deadline.in(io, options.drain), until).?;
+        return earlier(Deadline.after(io, options.drain), until).?;
     }
 
     fn earlier(a: ?Deadline, b: ?Deadline) ?Deadline {
@@ -1818,7 +1819,7 @@ pub const Child = struct {
                 // and block on: end the child now and report the failure once
                 // the other stream is drained.
                 if (out.readFailed() or err.readFailed()) {
-                    term = try child.killWait(io, .zero);
+                    term = try child.killWait(io, .fromRaw(0));
                 } else if (deadline != null and deadline.?.remainingMs(io) == 0) {
                     timed_out = true;
                     term = try child.killWait(io, options.grace);
@@ -2178,7 +2179,7 @@ pub const Child = struct {
         var clock: shakedown.Clock = .init(io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(8) } } });
         const delayed_io = clock.io();
         const start = clock.read(.awake);
-        var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .fromMilliseconds(20) }, null);
+        var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .literal("20ms") }, null);
         defer collected.deinit();
         try testing.expect(collected.stdoutTruncated());
         try testing.expectEqual(std.Io.Duration.fromMilliseconds(28), start.durationTo(clock.read(.awake)));

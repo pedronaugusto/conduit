@@ -45,7 +45,7 @@ pub fn main() !void {
     // separate standard error to collect.
     var result = try shell.child().output(gpa, io, .{
         .timeout = conduit.Deadline.within(.fromSeconds(5)),
-        .drain = .fromMilliseconds(250),
+        .drain = .literal("250ms"),
     });
     defer result.deinit();
 

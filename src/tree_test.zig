@@ -303,10 +303,10 @@ test "killRecorded waits for a recorded root and a descendant it captured" {
     var captured = (try captureStarted(descendant, (try startTime(descendant)).?)).?;
     defer captured.deinit();
     defer _ = captured.signal(.KILL);
-    try testing.expect(!try killRecorded(testing.io, .{ .pid = child.state.id, .start = since +% 1, .grace = .fromMilliseconds(20) }));
+    try testing.expect(!try killRecorded(testing.io, .{ .pid = child.state.id, .start = since +% 1, .grace = .literal("20ms") }));
     try testing.expect((try startTime(child.state.id)) != null);
     stage = "ending the recorded tree";
-    try testing.expect(try killRecorded(testing.io, .{ .pid = child.state.id, .start = since, .grace = .fromMilliseconds(20) }));
+    try testing.expect(try killRecorded(testing.io, .{ .pid = child.state.id, .start = since, .grace = .literal("20ms") }));
     stage = "observing the descendant's exit";
     // Cleanup proves delivery of KILL, which may precede observable exit.
     // Keep the same 20 ms budget when waiting on the held identity.

@@ -98,6 +98,9 @@ comptime {
     );
 }
 
+/// A span conduit is given (a kill's grace, a drain's): aegis's duration in
+/// nanoseconds, written `.literal("200ms")`.
+pub const Duration = tty.Duration;
 /// A pseudo-terminal pair.
 pub const Pty = @import("pty.zig").Pty;
 /// A child process on a pseudo-terminal, on pipes, or on inherited streams.

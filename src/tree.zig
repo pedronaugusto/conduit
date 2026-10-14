@@ -40,6 +40,7 @@ const aegis = @import("aegis");
 const posix = std.posix;
 const c = std.c;
 const Deadline = @import("conduit.tty").Deadline;
+const Duration = @import("conduit.tty").Duration;
 const reactor = @import("reactor");
 const adoption_record = @import("orphans/adoption_record.zig");
 const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
@@ -629,7 +630,8 @@ pub const RecordedOptions = struct {
     /// Linux: the private adoption owner. It receives TERM as a request to
     /// empty its scope; never kill that owner before it has reaped the tree.
     supervisor: ?SupervisorRecord = null,
-    grace: std.Io.Duration,
+    /// How long the tree gets between being asked to end and being made to.
+    grace: Duration,
 };
 
 /// What `killRecorded` can meet.
@@ -671,7 +673,7 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
             var owner = captured;
             defer owner.deinit();
             if (!owner.signal(.TERM) and owner.alive()) return error.UnableToEnd;
-            if (!try owner.wait(io, Deadline.within(.fromNanoseconds(options.grace.nanoseconds +| std.time.ns_per_s)))) return error.UnableToEnd;
+            if (!try owner.wait(io, Deadline.within(options.grace.saturatingAdd(.literal("1s")).toIoDuration()))) return error.UnableToEnd;
             ended = true;
         }
         if (options.cgroup) |contained| {
@@ -691,7 +693,7 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
             // Even if the member list cannot be read, the verified cgroup
             // can still be ended with cgroup.kill after the grace.
             _ = try contained.signalMembers(.TERM, 0, null);
-            if (!try contained.waitEmpty(io, Deadline.within(options.grace))) {
+            if (!try contained.waitEmpty(io, Deadline.within(options.grace.toIoDuration()))) {
                 if (!contained.kill()) return error.UnableToEnd;
                 if (!try contained.waitEmpty(io, Deadline.within(.fromSeconds(1)))) return error.UnableToEnd;
             }
@@ -746,7 +748,7 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
     }
     _ = root.signal(.TERM);
 
-    const grace: Deadline = .in(io, options.grace);
+    const grace: Deadline = .after(io, options.grace);
     for (found.items, verified.items) |*process, holds| {
         if (holds and process.alive()) _ = try process.wait(io, grace.toTimeout());
     }
