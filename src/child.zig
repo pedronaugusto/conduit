@@ -1521,63 +1521,86 @@ pub const Child = struct {
         errdefer out.list.deinit(gpa);
         errdefer err.list.deinit(gpa);
 
-        var group: std.Io.Group = .init;
-        // Unconditional: the group owns resources as soon as one task starts, and
-        // a reader blocked on a stream that never ends is exactly what the bounded
-        // drain below is for.
-        defer group.cancel(io);
+        // The readers, the wait for the child and the drain's end are tasks of
+        // one select, and this task takes whichever finishes first: a reader
+        // that fails is noticed the moment it does, not at the next look, and
+        // the drain ends when its readers do or its time is up.
+        var finished: [4]Ended = undefined;
+        var select: std.Io.Select(Ended) = .init(io, &finished);
+        // Unconditional: the select owns resources as soon as one task starts,
+        // and a reader blocked on a stream that never ends is exactly what the
+        // bounded drain below is for.
+        defer select.cancelDiscard();
 
         // A stream this process does not hold -- an inherited one, or the standard
         // error of a child on a pseudo-terminal, which has none -- is finished
         // before it starts. Saying so here is what keeps the drain below from
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
-            try group.concurrent(io, collect, .{ serial.allocator(), io, f, options.max_bytes, &out });
+            try select.concurrent(.out, collect, .{ serial.allocator(), io, f, options.max_bytes, &out });
         } else out.done.store(true, .release);
         if (child.state.stderr) |f| {
-            try group.concurrent(io, collect, .{ serial.allocator(), io, f, options.max_bytes, &err });
+            try select.concurrent(.err, collect, .{ serial.allocator(), io, f, options.max_bytes, &err });
         } else err.done.store(true, .release);
+        try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
 
         var timed_out = false;
-        const deadline = runDeadline(io, options, until);
-        const term = term: while (true) {
-            // A reader that cannot continue leaves a pipe the child may fill and
-            // block on. Notice it while the child is still running, end the child,
-            // and report the read failure after both tasks have joined.
-            if (out.readFailed() or err.readFailed()) {
-                break :term try child.killWait(io, .zero);
-            }
-
-            const slice_ms = if (deadline) |run_end| slice: {
-                const left = run_end.remainingMs(io);
-                if (left == 0) {
-                    timed_out = true;
-                    break :term try child.killWait(io, options.grace);
+        // A reader that cannot continue leaves a pipe the child may fill and
+        // block on: the child is ended, and the read failure reported after both
+        // readers have joined. A kill too large to walk the whole tree still
+        // killed the child; its error waits for the reap.
+        var kill_failure: ?KillError = null;
+        const term = term: while (true) switch (try select.await()) {
+            .out, .err => |read| {
+                try read;
+                if (kill_failure == null and (out.readFailed() or err.readFailed())) {
+                    child.kill(io, .kill) catch |failure| switch (failure) {
+                        error.OutOfMemory => kill_failure = failure,
+                        else => return failure,
+                    };
                 }
-                break :slice @min(left, output_wait_slice_ms);
-            } else output_wait_slice_ms;
-            if (try child.waitWithin(io, .in(io, .fromMilliseconds(slice_ms)))) |finished| break :term finished;
+            },
+            .ended => |ended| {
+                if (try ended) |term| break :term term;
+                timed_out = true;
+                break :term try child.killWait(io, options.grace);
+            },
+            .drained => unreachable, // unreachable: the drain starts once the child has ended
         };
+        if (kill_failure) |failure| return failure;
 
         // The child is gone, so its ends of the pipes are closed and the readers
         // are finishing. Anything still holding a stream open is not the child,
         // and is not what this call promised to wait for.
-        const drain = drainDeadline(io, options, until);
-        while (true) {
-            if (out.done.load(.acquire) and err.done.load(.acquire)) break;
-            const left = drain.remainingMs(io);
-            if (left == 0) break;
-            try std.Io.sleep(io, .fromMilliseconds(@min(left, 2)), .awake);
+        if (!(out.done.load(.acquire) and err.done.load(.acquire))) {
+            try select.concurrent(.drained, std.Io.sleep, .{ io, drainDeadline(io, options, until).remaining(io), .awake });
+            while (!(out.done.load(.acquire) and err.done.load(.acquire))) switch (try select.await()) {
+                .out, .err => |read| try read,
+                .drained => |slept| {
+                    try slept;
+                    break;
+                },
+                .ended => unreachable, // unreachable: the wait for the child has finished
+            };
         }
         // Joins the tasks, so the lists below are this task's alone again.
-        group.cancel(io);
+        select.cancelDiscard();
 
         return Collector.output(gpa, &out, &err, term, timed_out);
     }
 
+    /// What finishes in `outputOnTasks`' select: a reader, the wait for the
+    /// child, and the drain's time.
+    const Ended = union(enum) {
+        out: std.Io.Cancelable!void,
+        err: std.Io.Cancelable!void,
+        ended: WaitTimeoutError!?Term,
+        drained: std.Io.Cancelable!void,
+    };
+
     /// One stream's worth of collected bytes, shared between the task reading it
     /// and the task that started it. `done` is the handshake; everything else is
-    /// read only after the group has joined.
+    /// read only after the select has joined.
     const Collector = struct {
         list: std.ArrayList(u8),
         truncated: bool,
@@ -1681,9 +1704,7 @@ pub const Child = struct {
         return first.min(b orelse return first);
     }
 
-    /// How often a run reading its streams on tasks gives them a chance to report
-    /// that one of them cannot keep draining, and the longest a run reading its
-    /// streams itself leaves a child that has ended and cannot yet be reaped
+    /// The longest a run reading its streams itself leaves a child that has ended and cannot yet be reaped
     /// before it asks again. The wait for the child is on its process handle,
     /// not on this interval.
     const output_wait_slice_ms: u32 = 10;
@@ -2110,7 +2131,24 @@ pub const Child = struct {
         try testing.expect(succeeded(collected.term()));
     }
 
-    test "output on tasks bounds draining by elapsed time after a delayed sleep" {
+    test "output on tasks ends a child whose stream cannot be read" {
+        if (is_windows) return error.SkipZigTest;
+        const testing = std.testing;
+        const io = testing.io;
+        var child = try spawn(testing.allocator, io, .{
+            .argv = &.{ "/bin/sleep", "30" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .ignore } },
+        });
+        defer child.deinit(io);
+        defer @import("testing/support.zig").reap(&child, io);
+        child.stdoutFile().?.close(io);
+        child.state.stdout.?.handle = -1;
+        defer _ = child.takeStdout();
+        try testing.expectError(error.ReadFailed, child.outputOnTasks(testing.allocator, io, .{}, null));
+        try testing.expect((try child.tryWait(io)) != null);
+    }
+
+    test "output on tasks ends the drain at its deadline, with one wait and no slices" {
         const testing = std.testing;
         const io = testing.io;
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
@@ -2134,15 +2172,16 @@ pub const Child = struct {
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
-        // Each two-millisecond drain sleep resumes eight milliseconds late.
-        // Only elapsed time determines how much of the drain budget was spent.
+        // A sleep resumes eight milliseconds late. The drain is one wait for its
+        // deadline beside the readers, not sleeps between looks: it ends once,
+        // that late, where slices of it each added their own lateness.
         var clock: shakedown.Clock = .init(io, .{ .advance = .{ .auto = .{ .late = .fromMilliseconds(8) } } });
         const delayed_io = clock.io();
         const start = clock.read(.awake);
         var collected = try child.outputOnTasks(testing.allocator, delayed_io, .{ .drain = .fromMilliseconds(20) }, null);
         defer collected.deinit();
         try testing.expect(collected.stdoutTruncated());
-        try testing.expectEqual(std.Io.Duration.fromMilliseconds(20), start.durationTo(clock.read(.awake)));
+        try testing.expectEqual(std.Io.Duration.fromMilliseconds(28), start.durationTo(clock.read(.awake)));
     }
 
     test "a reap reported elsewhere retires the identity before kill can use its number" {
