@@ -1719,9 +1719,8 @@ pub const Child = struct {
     ) std.Io.Cancelable!void {
         while (true) {
             // Each read waits on reactor for the stream first, whose wait takes a
-            // cancel on any `Io`: std's Threaded aims one at a read blocked in the
-            // kernel with a signal, and loses it now and then, which left a drain
-            // that ended waiting for its reader forever. A descriptor that cannot
+            // cancel on any `Io`: one aimed at a read blocked in the kernel was
+            // lost now and then, and left a drain waiting for its reader forever. A descriptor that cannot
             // be waited on is read at once, and the read says what is wrong with it.
             if (!is_windows) reactor.wait(io, .{ .readable = f.handle }, .none) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
@@ -2186,8 +2185,8 @@ pub const Child = struct {
 
         // The drain is one wait for its deadline beside the reader, which a live
         // writer keeps waiting: the run ends at the deadline, and the reader's
-        // wait takes the cancel that ends it (std's Threaded lost one aimed at a
-        // read blocked in the kernel now and then, and the run never ended).
+        // wait takes the cancel that ends it (one aimed at a read blocked in the
+        // kernel was lost now and then, and the run never ended).
         const start = std.Io.Clock.awake.now(io);
         var collected = try child.outputOnTasks(testing.allocator, io, .{ .drain = .literal("20ms") }, null);
         defer collected.deinit();
