@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `output` and `exchange` reading on tasks (Windows, and a system with no handle for a child's end) wait for the readers, the child and the drain's end together on one `std.Io.Select`: a stream that cannot be read ends the child the moment it fails, where the run looked every 10 ms, and the drain is one wait for its deadline, where it slept in 2 ms slices that each added the clock's lateness.
+
 - The fuzz properties draw any bytes with shakedown's `gen.bytesInto`, where the package kept its own copy.
 
 ## [0.7.1] - 2026-10-14
