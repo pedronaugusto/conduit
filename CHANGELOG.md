@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-14
+
 ### Fixed
 
 - A run reading on tasks no longer hangs at the end of its drain: each read waits on reactor for its stream first, whose wait takes a cancel on any `Io`. A cancel aimed at a read blocked in the kernel was lost now and then: the drain test hung 3 runs in 20 on macOS (std's Threaded under shakedown's clock; with the wait, 0 in 30, and 0 in 20 under that clock). The drain test runs on the real clock and bounds the run.
@@ -1008,7 +1010,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/pedronaugusto/conduit/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pedronaugusto/conduit/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/pedronaugusto/conduit/compare/v0.7.0...v0.7.2
 [0.7.0]: https://github.com/pedronaugusto/conduit/compare/v0.6.1...v0.7.0
