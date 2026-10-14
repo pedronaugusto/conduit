@@ -1758,7 +1758,7 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
         _ = c.kill(orphan, .KILL);
     };
 
-    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .literal("2000ms") });
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .literal("2s") });
     try reaper.start(io);
     defer reaper.deinit(io);
     child.closeStdin(io);
@@ -1994,7 +1994,7 @@ test "an orphan that forked twice and called setsid is adopted, reaped at condui
     try testing.expectEqual(Child.Term{ .exited = 3 }, (try keeper.waitTimeout(io, within_budget)) orelse
         return error.TestChildDidNotExit);
     try testing.expect(alive(kept));
-    try orphans.killAll(io, .fromMilliseconds(2000));
+    try orphans.killAll(io, .literal("2s"));
     try expectGone(kept);
     try testing.expectEqual(@as(usize, 0), try orphans.count(io));
 
@@ -2033,7 +2033,7 @@ test "an idle Orphans wakes for nothing: no look runs over a quiet second" {
     try std.Io.sleep(io, .fromMilliseconds(1000), .awake);
     try testing.expectEqual(before, Orphans.looks.load(.monotonic));
 
-    try orphans.killAll(io, .zero);
+    try orphans.killAll(io, .fromRaw(0));
     try expectGone(orphan);
 }
 
@@ -2088,10 +2088,10 @@ test "an adoption sets the owner's event through the Io of the call whose look f
     try testing.expect(adopted.isSet());
     try testing.expect(orphans.adoptionCount() > seen);
 
-    try orphans.killAll(io, .zero);
+    try orphans.killAll(io, .fromRaw(0));
     try expectGone(first);
     try expectGone(second);
-    _ = try keeper.killWait(io, .zero);
+    _ = try keeper.killWait(io, .fromRaw(0));
 }
 
 test "a Child's status is never taken by the reaping of orphans, however the two race" {
@@ -2131,7 +2131,7 @@ test "a Child's status is never taken by the reaping of orphans, however the two
     try group.await(io);
     try testing.expectEqual(@as(u32, 0), failures.load(.acquire));
 
-    try orphans.killAll(io, .zero);
+    try orphans.killAll(io, .fromRaw(0));
     try testing.expectEqual(@as(usize, 0), try orphans.count(io));
 }
 
@@ -4588,7 +4588,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
         orphans.stop(io) catch unreachable;
         orphans.deinit();
     }
-    defer orphans.killAll(io, .zero) catch |err| std.log.err("the test's orphans could not be ended: {t}", .{err});
+    defer orphans.killAll(io, .fromRaw(0)) catch |err| std.log.err("the test's orphans could not be ended: {t}", .{err});
     var keeper = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
@@ -4606,7 +4606,7 @@ test "Orphans list copies the held identity for a record kept after reaping" {
     try testing.expectEqual((try conduit.startTime(kept)).?, saved.start);
     try testing.expectEqual(getpgid(kept), saved.group);
     try testing.expectEqual(getsid(kept), saved.session);
-    try orphans.killAll(io, .zero);
+    try orphans.killAll(io, .fromRaw(0));
     try testing.expectEqual(@as(usize, 0), (try orphans.list(io, &records)).len);
     try testing.expect((try conduit.captureStarted(saved.pid, saved.start)) == null);
 }

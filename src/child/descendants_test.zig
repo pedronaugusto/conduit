@@ -350,7 +350,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     var holding = true;
     defer {
         if (holding) held.release();
-        reaper.kill(io, .zero);
+        reaper.kill(io, .fromRaw(0));
         reap(&fixture.child, io);
         reaper.stop(io) catch unreachable;
         reaper.deinit(io);
@@ -424,9 +424,9 @@ test "a saved private supervisor ends only its recorded scope" {
     try std.testing.expect(record.supervisor.?.pid != first.child.processId().?);
     var wrong = record.supervisor.?;
     wrong.start += 1;
-    try std.testing.expect(!try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = wrong, .grace = .zero }));
+    try std.testing.expect(!try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = wrong, .grace = .fromRaw(0) }));
     try std.testing.expect(first.daemon.alive());
-    try std.testing.expect(try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = record.supervisor, .grace = .zero }));
+    try std.testing.expect(try tree.killRecorded(io, .{ .pid = first.child.processId().?, .start = 0, .supervisor = record.supervisor, .grace = .fromRaw(0) }));
     try std.testing.expectEqual(Child.Term{ .signal = .KILL }, (try first.child.waitTimeout(io, within_budget)).?);
     try first.expectEnded();
     try std.testing.expect(second.daemon.alive());
