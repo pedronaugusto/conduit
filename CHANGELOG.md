@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-14
+
 ### Breaking
 
 - A span conduit is given is a `conduit.Duration`, aegis's duration in nanoseconds written in its text form (`.literal("200ms")`): `OutputOptions.grace` and `drain`, `ExchangeOptions.drain`, `Reaper.Options.tree_grace`, `killWait`'s and `Reaper.kill`'s grace, `Orphans.killAll`'s and `RecordedOptions.grace`. A timeout stays std's `Io.Timeout`, a span or a deadline, as std's own waits take it. `max_bytes` defaults read `.literal("10MiB")`.
@@ -1002,7 +1004,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/pedronaugusto/conduit/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/pedronaugusto/conduit/compare/v0.7.0...v0.7.2
 [0.7.0]: https://github.com/pedronaugusto/conduit/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/pedronaugusto/conduit/compare/v0.6.0...v0.6.1
