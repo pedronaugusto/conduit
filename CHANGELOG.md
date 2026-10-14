@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-14
+
 ### Changed
 
 - `output` and `exchange` reading on tasks (Windows, and a system with no handle for a child's end) wait for the readers, the child and the drain's end together on one `std.Io.Select`: a stream that cannot be read ends the child the moment it fails, where the run looked every 10 ms, and the drain is one wait for its deadline, where it slept in 2 ms slices that each added the clock's lateness.
@@ -996,7 +998,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/pedronaugusto/conduit/compare/v0.7.0...v0.7.2
 [0.7.0]: https://github.com/pedronaugusto/conduit/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/pedronaugusto/conduit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/pedronaugusto/conduit/compare/v0.5.1...v0.6.0
