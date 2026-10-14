@@ -48,7 +48,7 @@ const Context = struct {
 
     fn release(x: *Context) void {
         // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
-        if (!x.reaped) _ = x.child.killWait(x.io(), .zero) catch {};
+        if (!x.reaped) _ = x.child.killWait(x.io(), .fromRaw(0)) catch {};
         x.child.deinit(x.io());
         x.reaped = true;
     }
@@ -274,7 +274,7 @@ fn wait(x: *Context, units: u64, deadlined: bool) !void {
         });
         defer child.deinit(io);
         // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
-        errdefer _ = child.killWait(io, .zero) catch {};
+        errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         const term = if (deadlined)
             (try child.waitTimeout(io, budget)) orelse return error.ChildDidNotExit
         else
@@ -291,7 +291,7 @@ fn requireFork(x: *Context) !void {
     var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{"/usr/bin/true"}, .stdio = .ignore });
     defer child.deinit(x.io());
     // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
-    errdefer _ = child.killWait(x.io(), .zero) catch {};
+    errdefer _ = child.killWait(x.io(), .fromRaw(0)) catch {};
     var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     if ((try child.containment(&buffer)).cgroup != null) return error.CgroupForcesFork;
     _ = try child.wait(x.io());
@@ -315,7 +315,7 @@ fn spawnWait(x: *Context, units: u64, cwd: ?[]const u8) !void {
         });
         defer child.deinit(io);
         // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
-        errdefer _ = child.killWait(io, .zero) catch {};
+        errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         if (!conduit.succeeded(try child.wait(io))) return error.ChildFailed;
     }
 }
@@ -351,7 +351,7 @@ fn stubbornSetup(x: *Context) !void {
 /// The stop of a child that honours `TERM`, to its end.
 fn stopHonoured(x: *Context, units: u64) !void {
     try single(units);
-    x.reaper.kill(x.io(), .fromMilliseconds(60_000));
+    x.reaper.kill(x.io(), .literal("60s"));
     x.term = (try x.reaper.waitTimeout(x.io(), budget)) orelse return error.ChildDidNotExit;
 }
 
@@ -359,13 +359,13 @@ fn stopHonoured(x: *Context, units: u64) !void {
 /// grace is up.
 fn stopCall(x: *Context, units: u64) !void {
     try single(units);
-    x.reaper.kill(x.io(), .fromMilliseconds(300));
+    x.reaper.kill(x.io(), .literal("300ms"));
 }
 
 /// The stop of a child that ignores `TERM`, to its end: the grace, then `KILL`.
 fn stopForced(x: *Context, units: u64) !void {
     try single(units);
-    x.reaper.kill(x.io(), .fromMilliseconds(300));
+    x.reaper.kill(x.io(), .literal("300ms"));
     x.term = (try x.reaper.waitTimeout(x.io(), budget)) orelse return error.ChildDidNotExit;
 }
 

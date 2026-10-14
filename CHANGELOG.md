@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- A span conduit is given is a `conduit.Duration`, aegis's duration in nanoseconds written in its text form (`.literal("200ms")`): `OutputOptions.grace` and `drain`, `ExchangeOptions.drain`, `Reaper.Options.tree_grace`, `killWait`'s and `Reaper.kill`'s grace, `Orphans.killAll`'s and `RecordedOptions.grace`. A timeout stays std's `Io.Timeout`, a span or a deadline, as std's own waits take it. `max_bytes` defaults read `.literal("10MiB")`.
+
 ## [0.7.2] - 2026-10-14
 
 ### Changed

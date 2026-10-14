@@ -116,7 +116,7 @@ pub const Context = struct {
     /// reaped it.
     pub fn release(x: *Context) void {
         // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
-        if (!x.reaped) _ = x.child.killWait(x.io(), .zero) catch {};
+        if (!x.reaped) _ = x.child.killWait(x.io(), .fromRaw(0)) catch {};
         x.child.deinit(x.io());
         x.reaped = true;
     }

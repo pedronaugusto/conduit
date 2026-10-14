@@ -105,7 +105,7 @@ fn start(x: *Context, children: usize) !void {
 fn end(x: *Context) void {
     for (x.children[0..x.live]) |*child| {
         // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
-        _ = child.killWait(x.io(), .zero) catch {};
+        _ = child.killWait(x.io(), .fromRaw(0)) catch {};
         child.deinit(x.io());
     }
     x.live = 0;

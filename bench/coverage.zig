@@ -107,7 +107,7 @@ fn inputWriter(x: *Context, units: u64) !void {
         });
         defer child.deinit(io);
         // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
-        errdefer _ = child.killWait(io, .zero) catch {};
+        errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         var writer = try child.inputWriter(x.gpa(), io, .{ .max_backlog = .fromRaw(x.input.len) });
         defer writer.deinit(io);
         var at: usize = 0;
@@ -291,7 +291,7 @@ fn proxyTeardown(x: *Context) !void {
     if (p.reader) |reader| reader.join();
     if (p.child) |*child| {
         // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
-        if (!p.reaped) _ = child.killWait(io, .zero) catch {};
+        if (!p.reaped) _ = child.killWait(io, .fromRaw(0)) catch {};
         child.deinit(io);
     }
     p.pty.close(io);
@@ -317,7 +317,7 @@ fn shellSpawn(x: *Context, units: u64) !void {
         defer shell.deinit(io);
         const child = shell.child();
         // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
-        errdefer _ = child.killWait(io, .zero) catch {};
+        errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         var said: [shell_says.len]u8 = undefined;
         var got: usize = 0;
         const master = shell.pty().readFile();

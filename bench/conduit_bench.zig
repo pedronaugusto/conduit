@@ -179,12 +179,12 @@ fn ptyRoundTrip(x: *Context, end: PtyEnd) !u64 {
     });
     defer child.deinit(io);
     // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
-    errdefer _ = child.killWait(io, .zero) catch {};
+    errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
     pty.closeSlave(io);
     try pty.writeFile().writeStreamingAll(io, x.input);
     const checksum = try drainExact(io, pty.readFile(), x.input.len);
     switch (end) {
-        .tree => _ = try child.killWait(io, .zero),
+        .tree => _ = try child.killWait(io, .fromRaw(0)),
         .child => {
             if (c.kill(child.processId().?, .KILL) != 0) return error.KillFailed;
             _ = try child.wait(io);
@@ -357,7 +357,7 @@ fn recordedSetup(x: *Context) !void {
 
 fn endRecorded(x: *Context, units: u64) !void {
     try single(units);
-    if (!try conduit.killRecorded(x.io(), .{ .pid = x.pid, .start = x.started, .grace = .zero })) return error.NothingEnded;
+    if (!try conduit.killRecorded(x.io(), .{ .pid = x.pid, .start = x.started, .grace = .fromRaw(0) })) return error.NothingEnded;
     _ = try x.wait();
 }
 
