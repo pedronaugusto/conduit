@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Cgroup.waitEmptyOrWoken`: `waitEmpty` that a `reactor.Wake` ends early, saying whether the cgroup emptied, the time passed or the wake came.
+
+### Changed
+
+- A `Reaper`'s tree grace over a cgroup waits on its `cgroup.events` instead of looking at it in growing sleeps, and a kill request wakes it: a forcing `kill` ends the grace at once, where the grace looked again only after its next sleep. A process group, which nothing announces empty, is still looked at between sleeps.
+
 ## [0.8.2] - 2026-10-15
 
 ### Fixed
