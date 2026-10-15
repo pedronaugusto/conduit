@@ -29,8 +29,8 @@
         },
 
         .preflight = .{
-            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.5.6#7d5f97b670c7f777392f180187dbf079efc59910",
-            .hash = "preflight-0.5.6-LX1ZwlDqDwBqvy5JbO7G7U-lhZRhdEJLquePX7jFF2Ht",
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.6.1#a4bde5632fa55d11bd6d694c80d4bddb070cebd1",
+            .hash = "preflight-0.6.1-LX1ZwizVEAAv3kBth3p4KAEpPBZMvXtQtk4y0blvflym",
         },
     },
 }
