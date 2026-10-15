@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-15
+
 ### Added
 
 - `Cgroup.waitEmptyOrWoken`: `waitEmpty` that a `reactor.Wake` ends early, saying whether the cgroup emptied, the time passed or the wake came.
@@ -1024,7 +1026,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/pedronaugusto/conduit/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/pedronaugusto/conduit/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/pedronaugusto/conduit/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pedronaugusto/conduit/compare/v0.7.2...v0.8.0
