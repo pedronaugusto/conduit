@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-15
+
 ### Fixed
 
 - The lifecycle benchmark finds `true` on `PATH`, once and before its clock: it named `/usr/bin/true`, which Alpine and other systems that keep `/bin` apart from `/usr/bin` do not have (found running the suite on a riscv64 Alpine kernel).
@@ -1014,7 +1016,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/pedronaugusto/conduit/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/pedronaugusto/conduit/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/pedronaugusto/conduit/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/pedronaugusto/conduit/compare/v0.7.0...v0.7.2
