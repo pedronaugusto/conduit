@@ -65,6 +65,9 @@ pub const supported = builtin.target.os.tag == .linux;
 /// that is always none.
 pub const Cgroup = if (supported) LinuxCgroup else NoCgroup;
 
+/// How a wait for a cgroup to empty ended.
+pub const Emptied = enum { empty, timeout, woken };
+
 /// The boot that gives a recorded directory inode its meaning.
 /// A complete UUID is required; a partial read never becomes an identity.
 pub fn bootIdentity() ?[36]u8 {
@@ -726,6 +729,11 @@ const LinuxCgroup = struct {
         return (MemberOps{ .dir = cgroup.dir }).waitEmpty(io, timeout);
     }
 
+    /// As `waitEmpty`, and ended early by `wake`: `.woken` when it is signaled first.
+    pub fn waitEmptyOrWoken(cgroup: *const LinuxCgroup, io: std.Io, timeout: std.Io.Timeout, wake: *reactor.Wake) std.Io.Cancelable!Emptied {
+        return (MemberOps{ .dir = cgroup.dir }).waitEmptyOr(io, timeout, wake);
+    }
+
     /// Lets go of the cgroup and removes it, or leaves it to be removed once
     /// what is in it has ended. Idempotent.
     pub fn close(cgroup: *LinuxCgroup) void {
@@ -990,7 +998,12 @@ const MemberOps = struct {
     /// only then use bounded 1–4 ms clock-based checks. True means empty; false means the
     /// deadline passed or the state could not be read.
     pub fn waitEmpty(cgroup: *const MemberOps, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
-        if (!cgroup.active()) return true;
+        return try cgroup.waitEmptyOr(io, timeout, null) == .empty;
+    }
+
+    /// Until the cgroup is empty, `timeout` passes, or `wake` is signaled.
+    pub fn waitEmptyOr(cgroup: *const MemberOps, io: std.Io, timeout: std.Io.Timeout, wake: ?*reactor.Wake) std.Io.Cancelable!Emptied {
+        if (!cgroup.active()) return .empty;
         const deadline: Deadline = .of(io, timeout);
         const events = c.openat(cgroup.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         defer {
@@ -998,23 +1011,34 @@ const MemberOps = struct {
         }
         if (events >= 0) watched: while (true) {
             switch (populatedAt(events)) {
-                .none => return true,
+                .none => return .empty,
                 .unknown => break :watched,
                 .others => {},
             }
-            reactor.wait(io, .{ .priority = events }, timeout) catch |err| switch (err) {
+            var set: [2]reactor.Waitable = .{ .{ .priority = events }, undefined };
+            if (wake) |w| set[1] = .{ .wake = w };
+            const ready = reactor.waitAny(io, set[0 .. @as(usize, 1) + @intFromBool(wake != null)], timeout) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
-                error.Timeout => return false,
+                error.Timeout => return .timeout,
                 error.Unsupported, error.Unexpected => break :watched,
             };
+            if (ready == 1) return .woken;
             continue :watched;
         };
         var interval_ms: u32 = 1;
         while (true) {
-            if (cgroup.populated() == .none) return true;
+            if (cgroup.populated() == .none) return .empty;
             const left = deadline.remainingMs(io);
-            if (left == 0) return false;
-            try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+            if (left == 0) return .timeout;
+            const slice: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(@min(left, interval_ms)), .clock = .awake } };
+            if (wake) |w| {
+                if (reactor.wait(io, .{ .wake = w }, slice)) |_| return .woken else |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    error.Timeout => {},
+                    // A wake that cannot be waited on is looked for again after the next look.
+                    error.Unsupported, error.Unexpected => try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake),
+                }
+            } else try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
             interval_ms = @min(interval_ms * 2, 4);
         }
     }
@@ -1167,6 +1191,14 @@ const NoCgroup = struct {
         _ = io;
         _ = timeout;
         return true;
+    }
+
+    pub fn waitEmptyOrWoken(cgroup: *const NoCgroup, io: std.Io, timeout: std.Io.Timeout, wake: *reactor.Wake) std.Io.Cancelable!Emptied {
+        _ = cgroup;
+        _ = io;
+        _ = timeout;
+        _ = wake;
+        return .empty;
     }
 
     pub fn close(cgroup: *NoCgroup) void {

@@ -120,6 +120,11 @@ pub const Reaper = struct {
     /// not a reactor runtime's looks for a cancel only between short waits.
     /// `null` until `start`, and where none could be had.
     wake: if (is_windows) void else ?reactor.Wake,
+    /// Private: on POSIX, what a kill request signals, so that a tree's grace
+    /// waiting on its cgroup takes the new deadline at once. `null` until
+    /// `start`, and where none could be had: the grace then ends at its own
+    /// deadline or when the cgroup empties.
+    rekill: if (is_windows) void else ?reactor.Wake,
 
     /// Private: the explicit process-wide adoption scope, owned until stop.
     orphans: ?*Orphans,
@@ -178,6 +183,7 @@ pub const Reaper = struct {
             .answered = .unset,
             .killing = .{},
             .wake = if (is_windows) {} else null,
+            .rekill = if (is_windows) {} else null,
             .orphans = null,
             .observation_failed = .init(false),
             .lifetime = .init(.ready),
@@ -247,7 +253,10 @@ pub const Reaper = struct {
         reaper.observation_failed.store(false, .release);
         // Without a wake the wait ends at the cancel, which is only later: it
         // is how a wait is ended early, not a condition of waiting at all.
-        if (!is_windows and reaper.child.state.simulated == null) reaper.wake = reactor.Wake.init(io) catch null;
+        if (!is_windows and reaper.child.state.simulated == null) {
+            reaper.wake = reactor.Wake.init(io) catch null;
+            reaper.rekill = reactor.Wake.init(io) catch null;
+        }
         errdefer reaper.closeWake(io);
         if (reaper.orphans != null) {
             try reaper.group.concurrent(io, observeAdoption, .{ reaper, io });
@@ -320,6 +329,8 @@ pub const Reaper = struct {
     pub fn kill(reaper: *Reaper, io: std.Io, grace: Duration) void {
         reaper.pin.check(reaper);
         if (!reaper.killing.request(io, grace)) return;
+        // A grace already waiting on the cgroup takes the new deadline now.
+        if (!is_windows) if (reaper.rekill) |*wake| wake.signal();
         if (grace.eql(.fromRaw(0))) {
             // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
             reaper.target().kill(io, .kill) catch {};
@@ -411,6 +422,10 @@ pub const Reaper = struct {
         if (!is_windows) if (reaper.wake) |*wake| {
             wake.deinit(io);
             reaper.wake = null;
+        };
+        if (!is_windows) if (reaper.rekill) |*wake| {
+            wake.deinit(io);
+            reaper.rekill = null;
         };
     }
 
@@ -570,6 +585,17 @@ pub const Reaper = struct {
     /// looked at between sleeps.
     fn treeGrace(reaper: *Reaper, io: std.Io, reach: TreeReach) std.Io.Cancelable!enum { empty, elapsed } {
         const deadline: Deadline = .after(io, reaper.options.tree_grace);
+        // A cgroup says when it empties (`cgroup.events`), and a kill request wakes
+        // the wait to take its deadline; a process group announces nothing, and is
+        // looked at between sleeps.
+        if (!is_windows) if (reach == .contained) if (reaper.rekill) |*rekill| while (true) {
+            const current = reaper.killing.current() orelse deadline;
+            switch (try reach.contained.waitEmptyOrWoken(io, .{ .deadline = current.at }, rekill)) {
+                .empty => return .empty,
+                .timeout => return .elapsed,
+                .woken => continue,
+            }
+        };
         var slice_ms: u32 = 1;
         while (true) {
             // A kill owns one grace, including cleanup after the root exits.

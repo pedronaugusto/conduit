@@ -1767,6 +1767,40 @@ test "end_tree: what a child left in its cgroup ends with it, orphaned and in a 
     try expectGone(orphan);
 }
 
+test "a kill that forces ends a cgroup tree's grace at once, not at its own deadline" {
+    if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
+
+    // What the child leaves in its cgroup does not end when asked: only the grace's end does.
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/sh", "-c", "(setsid sh -c \"trap '' TERM; sleep 100\" & printf 'pid %d.' \"$!\"); read x; exit 3" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .ignore } },
+    });
+    defer child.deinit(io);
+    defer reap(&child, io);
+    try testing.expect(child.state.cgroup.active());
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(child.stdoutFile().?);
+    const orphan = try readPid(&sink);
+    defer if (alive(orphan)) {
+        _ = c.kill(orphan, .KILL);
+    };
+
+    var reaper: conduit.Reaper = .init(&child, .{ .end_tree = true, .tree_grace = .literal("60s") });
+    try reaper.start(io);
+    defer reaper.deinit(io);
+    const started: std.Io.Clock.Timestamp = .now(io, .awake);
+    child.closeStdin(io);
+    // The child has ended and its grace is running, waiting on the cgroup.
+    try std.Io.sleep(io, .fromMilliseconds(300), .awake);
+    reaper.kill(io, .fromRaw(0));
+    const term = (try reaper.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
+    try testing.expectEqual(Child.Term{ .exited = 3 }, term);
+    try expectGone(orphan);
+    try testing.expect(started.untilNow(io).raw.toSeconds() < 30);
+}
+
 test "deinit signals nothing in a child's cgroup, and the cgroup goes once what is in it has ended" {
     if (is_windows or !try cgroupsHere()) return error.SkipZigTest;
 
