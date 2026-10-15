@@ -32,6 +32,9 @@ const Context = struct {
     term: ?conduit.Term = null,
     /// The signal that ought to have ended the child.
     signal: @TypeOf(std.posix.SIG.KILL) = undefined,
+    /// `true` as PATH finds it, once and before any clock: it is /usr/bin/true on
+    /// macOS and most Linux systems, /bin/true on Alpine and others.
+    true_program: []const u8 = undefined,
 
     fn io(x: *const Context) std.Io {
         return x.init.io;
@@ -109,6 +112,7 @@ pub fn main(init: std.process.Init) !void {
     if (!selected) return error.UnknownRow;
 
     var context: Context = .{ .init = init };
+    context.true_program = try conduit.findProgram(init.arena.allocator(), init.io, init.environ_map, "true") orelse return error.NoTrueProgram;
     var buffer: [4096]u8 = undefined;
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
     const out = &stdout.interface;
@@ -288,7 +292,7 @@ fn wait(x: *Context, units: u64, deadlined: bool) !void {
 /// fork alone. Refuse rather than label that a comparison.
 fn requireFork(x: *Context) !void {
     if (builtin.target.os.tag != .linux) return;
-    var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{"/usr/bin/true"}, .stdio = .ignore });
+    var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{x.true_program}, .stdio = .ignore });
     defer child.deinit(x.io());
     // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
     errdefer _ = child.killWait(x.io(), .fromRaw(0)) catch {};
@@ -309,7 +313,7 @@ fn spawnWait(x: *Context, units: u64, cwd: ?[]const u8) !void {
     const io = x.io();
     for (0..units) |_| {
         var child = try conduit.Child.spawn(x.gpa(), io, .{
-            .argv = &.{"/usr/bin/true"},
+            .argv = &.{x.true_program},
             .cwd = cwd,
             .stdio = .ignore,
         });

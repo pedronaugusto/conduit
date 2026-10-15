@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The lifecycle benchmark finds `true` on `PATH`, once and before its clock: it named `/usr/bin/true`, which Alpine and other systems that keep `/bin` apart from `/usr/bin` do not have (found running the suite on a riscv64 Alpine kernel).
+
 ## [0.8.1] - 2026-10-14
 
 ### Fixed
