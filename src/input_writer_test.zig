@@ -315,11 +315,12 @@ test "InputWriter a zero bound accepts only empty input" {
 
 test "InputWriter checks cancellation when a write makes no progress" {
     // A write that makes no progress, then a look for a cancel that finds
-    // one; any write after it would fail.
+    // one; any write after it would fail. The cancel is the first look after
+    // the stalled write: the writer's own wait may look before it.
     const stalled = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{
         .{ .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } }, .fault = .{ .short = 0 } },
         .{ .at = .{ .nth = .{ .call = .file_write_streaming, .n = 2 } }, .fault = .{ .fail = error.InputOutput }, .times = 0 },
-        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 1 } }, .fault = .cancel, .times = 0 },
+        .{ .at = .{ .nth = .{ .call = .checkCancel, .n = 1, .after = 0 } }, .fault = .cancel, .times = 0 },
     } });
     defer stalled.deinit();
     const stalled_io = stalled.io();

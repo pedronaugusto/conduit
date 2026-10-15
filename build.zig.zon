@@ -24,8 +24,8 @@
     },
     .dev_dependencies = .{
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.4.2#93217f8d5c29d3f72b94da9cf961df321bba8430",
-            .hash = "shakedown-0.4.2-BR8U4-oKFgD-vju9MmZmggQ2e43dhqBS6KhKONWGXV62",
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.4.4#f7cd2adbd12e16f9ddc58a22c37ffb915771e327",
+            .hash = "shakedown-0.4.4-BR8U4-AbFgDp3Kw_EGhL-KOD83A1EkWGNtpOz33aweMv",
         },
 
         .preflight = .{
