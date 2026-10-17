@@ -1536,7 +1536,12 @@ const darwin_proc_pidinfo = if (builtin.target.os.tag == .macos) proc_pidinfo el
 /// a subshell starts it and exits, so it is orphaned, and it calls `setsid`,
 /// so it is in a session and a group of its own. The only thing it still
 /// shares with the child is what it was born into. It prints its pid.
-const orphan_in_own_session = "(setsid sleep 100 & printf 'pid %d.' \"$!\")";
+/// The subshell exits only once the grandchild leads its session (field 6 of
+/// `/proc/<pid>/stat`), so whoever adopts it finds it there: an adoption
+/// that came first would record the session it left (a slow machine, under
+/// ThreadSanitizer); one that is gone is not waited for. `setsid` is
+/// Linux's, as are these tests.
+const orphan_in_own_session = "(setsid sleep 100 & p=$!; until [ \"$(cut -d' ' -f6 /proc/$p/stat 2>/dev/null)\" = \"$p\" ] || [ ! -e /proc/$p ]; do :; done; printf 'pid %d.' \"$p\")";
 
 /// The `setsid` program, or `null` where the system has none.
 fn setsidProgram() ?[]const u8 {
