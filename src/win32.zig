@@ -392,3 +392,22 @@ pub extern "kernel32" fn GenerateConsoleCtrlEvent(
 //======================================================================
 
 pub const GetConsoleMode = console.GetConsoleMode;
+
+//======================================================================
+// Process memory: `Child.memory`.
+//======================================================================
+
+/// `PROCESS_MEMORY_COUNTERS` of `<psapi.h>`.
+pub const ProcessMemoryCounters = extern struct {
+    cb: windows.DWORD,
+    page_fault_count: windows.DWORD,
+    peak_working_set_size: usize,
+    working_set_size: usize,
+    quota_peak_paged_pool_usage: usize,
+    quota_paged_pool_usage: usize,
+    quota_peak_non_paged_pool_usage: usize,
+    quota_non_paged_pool_usage: usize,
+    pagefile_usage: usize,
+    peak_pagefile_usage: usize,
+};
+pub extern "kernel32" fn K32GetProcessMemoryInfo(process: windows.HANDLE, counters: *ProcessMemoryCounters, cb: windows.DWORD) callconv(.winapi) windows.BOOL;

@@ -34,6 +34,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const aegis = @import("aegis");
 const spin = @import("spin.zig");
+const memory_impl = @import("memory.zig");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
@@ -390,6 +391,25 @@ pub const Child = struct {
         defer state.identity.unlock();
         if (state.reaped.load(.acquire) or state.identity_retired) return null;
         return state.process_id;
+    }
+
+    /// What a process holds in memory now and at most since it started: each
+    /// system's own measure, said on `Memory`.
+    pub const Memory = memory_impl.Memory;
+
+    pub const MemoryError = memory_impl.Error;
+
+    /// The child's memory, asked of the live process under its identity, so
+    /// never of another process given its number since. One that has ended,
+    /// reaped or not, is `ProcessEnded`; a simulated child is `Unsupported`.
+    /// The child's own, not its descendants'.
+    pub fn memory(child: *const Child) MemoryError!Memory {
+        const state = child.state;
+        if (state.simulated != null) return error.Unsupported;
+        spin.lock(&state.identity);
+        defer state.identity.unlock();
+        if (state.reaped.load(.acquire) or state.identity_retired) return error.ProcessEnded;
+        return memory_impl.of(if (is_windows) state.id else state.process_id);
     }
 
     /// Containment facts for a survivor record, with no owned handles.

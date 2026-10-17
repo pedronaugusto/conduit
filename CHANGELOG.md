@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Child.memory`: what a live child holds in memory now and the most it has held, asked under its identity (never of a process given its number since): the resident set on Linux (`VmRSS`, `VmHWM`), the physical footprint on Darwin (`proc_pid_rusage`; Darwin tells another process no peak resident size), the working set on Windows. An ended child is `ProcessEnded`. parley's benchmarks read a server's memory at rest and under a large message with it.
+
 ## [0.8.4] - 2026-10-17
 
 ### Fixed

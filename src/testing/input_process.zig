@@ -1,6 +1,7 @@
-//! A native input reader, a child that stays alive without reading, or one
+//! A native input reader, a child that stays alive without reading, one
 //! that says its number into each descriptor it was given above the
-//! standard three.
+//! standard three, or one that held some memory and stays until its input
+//! ends.
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = std.os.windows;
@@ -13,6 +14,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     if (std.mem.eql(u8, args[1], "inherited")) return inherited(try std.fmt.parseInt(usize, args[2], 10));
+    if (std.mem.eql(u8, args[1], "hold")) return hold(init.io, try std.fmt.parseInt(usize, args[2], 10));
     const input = std.Io.File.stdin();
     const output = std.Io.File.stdout();
     var buffer: [4096]u8 = undefined;
@@ -24,6 +26,21 @@ pub fn main(init: std.process.Init) !void {
         if (n != 0) try output.writeStreamingAll(init.io, buffer[0..n]);
     }
     if (std.mem.eql(u8, args[1], "end")) try output.writeStreamingAll(init.io, "EOF");
+}
+
+/// Touches every page of `mib` MiB, gives them back, says `held`, and stays
+/// until its input ends: its peak memory is above `mib`, its current below.
+fn hold(io: std.Io, mib: usize) !void {
+    const block = try std.heap.page_allocator.alloc(u8, mib << 20);
+    @memset(block, 0xa5);
+    std.mem.doNotOptimizeAway(block.ptr);
+    std.heap.page_allocator.free(block);
+    try std.Io.File.stdout().writeStreamingAll(io, "held\n");
+    var buffer: [64]u8 = undefined;
+    while (true) _ = std.Io.File.stdin().readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+        error.EndOfStream => return,
+        else => return err,
+    };
 }
 
 /// Writes `fd <n>\n` into descriptors 3 through `2 + count`. On Windows the
