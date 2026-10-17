@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-17
+
 ### Changed
 
 - Darwin's fork tracker (a contained child's lineage) waits through reactor: its task waits on its kqueue's readability beside a `Wake` asking it to end, where a thread of its own waited in `kevent` on the queue and a pipe; ending a tree waits for the exit notes of the processes it killed, where it looked again every millisecond. It runs as a concurrent task of the spawn's `Io`, so a contained spawn on Darwin needs an `Io` that can run one (`SystemResources` otherwise, as when its thread could not start).
@@ -1054,7 +1056,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/pedronaugusto/conduit/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/pedronaugusto/conduit/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/pedronaugusto/conduit/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/pedronaugusto/conduit/compare/v0.8.2...v0.8.3
