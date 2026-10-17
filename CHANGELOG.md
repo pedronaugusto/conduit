@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Darwin's fork tracker (a contained child's lineage) waits through reactor: its task waits on its kqueue's readability beside a `Wake` asking it to end, where a thread of its own waited in `kevent` on the queue and a pipe; ending a tree waits for the exit notes of the processes it killed, where it looked again every millisecond. It runs as a concurrent task of the spawn's `Io`, so a contained spawn on Darwin needs an `Io` that can run one (`SystemResources` otherwise, as when its thread could not start).
+
 ## [0.9.0] - 2026-10-17
 
 ### Breaking

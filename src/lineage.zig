@@ -3,12 +3,17 @@
 //! register each one before expanding it, and retain kernel unique identities.
 //! A parent that forks and exits before enumeration can still hide its child;
 //! neither process names nor init's children can repair that lost edge.
+//!
+//! The notes arrive on a kqueue of the tracker's own, which its task waits
+//! on through reactor (the queue is readable while it holds events) beside
+//! a `Wake` that asks it to end. Ending kills every known descendant and
+//! waits for their exit notes, expanding any fork they make first, until
+//! none is left.
 const std = @import("std");
 const builtin = @import("builtin");
 const c = std.c;
 const posix = std.posix;
 const tree = @import("tree.zig");
-const tty = @import("conduit.tty");
 const reactor = @import("reactor");
 
 /// Test-only observer delay exposes the window without changing the fixture.
@@ -42,8 +47,9 @@ const NoTracker = struct {
 const Darwin = struct {
     gpa: std.mem.Allocator,
     queue: posix.fd_t,
-    wake: [2]posix.fd_t,
-    thread: ?std.Thread = null,
+    /// Signaled once `ending` is set, for the task that waits on the queue.
+    end: reactor.Wake,
+    task: std.Io.Future(void) = undefined,
     known: std.ArrayList(tree.DarwinProcess) = .empty,
     ending: std.atomic.Value(bool) = .init(false),
     done: std.atomic.Value(bool) = .init(false),
@@ -59,20 +65,16 @@ const Darwin = struct {
         const queue = c.kqueue();
         if (queue < 0) return error.SystemResources;
         errdefer _ = c.close(queue);
-        const wake = tty.pipe(.{}) catch return error.SystemResources;
-        errdefer {
-            _ = c.close(wake[0]);
-            _ = c.close(wake[1]);
-        }
+        var end = reactor.Wake.init(io) catch return error.SystemResources;
+        errdefer end.deinit(io);
         var finished = reactor.Wake.init(io) catch return error.SystemResources;
         errdefer finished.deinit(io);
-        tracker.* = .{ .gpa = gpa, .queue = queue, .wake = wake, .finished = finished };
+        tracker.* = .{ .gpa = gpa, .queue = queue, .end = end, .finished = finished };
         errdefer tracker.known.deinit(gpa);
         try tracker.known.append(gpa, tree.DarwinProcess.capture(root) orelse return error.SystemResources);
-        if (!tracker.register(root, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, tracker.known.items[0].unique_id) or
-            !tracker.register(wake[0], c.EVFILT.READ, 0, 0)) return error.SystemResources;
+        if (!tracker.register(root, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, tracker.known.items[0].unique_id)) return error.SystemResources;
         if (builtin.is_test) tracker.observed.store(1, .release);
-        tracker.thread = std.Thread.spawn(.{}, run, .{tracker}) catch return error.SystemResources;
+        tracker.task = io.concurrent(run, .{ tracker, io }) catch return error.SystemResources;
         return tracker;
     }
 
@@ -84,7 +86,7 @@ const Darwin = struct {
 
     /// Request the final force; nonblocking even for Child.tryWait.
     pub fn finish(tracker: *Darwin) bool {
-        if (!tracker.ending.swap(true, .acq_rel)) _ = c.write(tracker.wake[1], "x", 1);
+        if (!tracker.ending.swap(true, .acq_rel)) tracker.end.signal();
         return tracker.done.load(.acquire);
     }
 
@@ -133,7 +135,7 @@ const Darwin = struct {
         }
     }
 
-    fn run(tracker: *Darwin) void {
+    fn run(tracker: *Darwin, io: std.Io) void {
         defer {
             tracker.done.store(true, .release);
             tracker.finished.signal();
@@ -162,15 +164,25 @@ const Darwin = struct {
                 }
                 if (!alive) return;
             }
-            const timeout: c.timespec = .{ .sec = 0, .nsec = std.time.ns_per_ms };
-            const ready = c.kevent64(tracker.queue, &nothing, 0, &events, events.len, .{}, if (ending) &timeout else null);
+            // The queue's notes, and until ending a request to end. Each one
+            // killed above posts its exit note, and a fork first its own.
+            const members = [_]reactor.Waitable{ .{ .readable = tracker.queue }, .{ .wake = &tracker.end } };
+            _ = reactor.waitAny(io, members[0 .. @as(usize, 1) + @intFromBool(!ending)], .none) catch |err| switch (err) {
+                // Nobody cancels the task but its own end: taken as one.
+                error.Canceled => {
+                    tracker.ending.store(true, .release);
+                    continue;
+                },
+                error.Timeout => unreachable, // unreachable: the wait has no timeout
+                error.Unsupported, error.Unexpected => {
+                    tracker.lost();
+                    continue;
+                },
+            };
+            const ready = c.kevent64(tracker.queue, &nothing, 0, &events, events.len, .{ .IMMEDIATE = true }, null);
             if (ready < 0) {
                 if (posix.errno(-1) == .INTR) continue;
-                // Losing the observer must end its still-held root, so a
-                // contained child cannot keep spawning unobserved descendants.
-                tracker.failed.store(true, .release);
-                _ = tracker.known.items[0].signal(.KILL);
-                tracker.ending.store(true, .release);
+                tracker.lost();
                 continue;
             }
             for (events[0..@intCast(ready)]) |event| {
@@ -178,11 +190,7 @@ const Darwin = struct {
                 // No index or borrowed list pointer survives discover's growth.
                 for (tracker.known.items) |parent| {
                     if (parent.pid != event.ident or parent.unique_id != event.udata) continue;
-                    tracker.discover(parent) catch {
-                        tracker.failed.store(true, .release);
-                        _ = tracker.known.items[0].signal(.KILL);
-                        tracker.ending.store(true, .release);
-                    };
+                    tracker.discover(parent) catch tracker.lost();
                     if (event.fflags & c.NOTE.EXIT != 0 and parent.unique_id != tracker.known.items[0].unique_id) {
                         for (tracker.known.items, 0..) |held, index| {
                             if (held.unique_id == parent.unique_id) {
@@ -197,15 +205,22 @@ const Darwin = struct {
         }
     }
 
+    /// Losing the observer must end its still-held root, so a contained
+    /// child cannot keep spawning unobserved descendants.
+    fn lost(tracker: *Darwin) void {
+        tracker.failed.store(true, .release);
+        _ = tracker.known.items[0].signal(.KILL);
+        tracker.ending.store(true, .release);
+    }
+
     /// Stops the task, closes the queue and frees the tracker: `tracker` is
     /// gone when this returns.
     pub fn destroy(tracker: *Darwin, io: std.Io) void {
         _ = tracker.finish();
-        if (tracker.thread) |thread| thread.join();
+        tracker.task.await(io);
         tracker.finished.deinit(io);
+        tracker.end.deinit(io);
         _ = c.close(tracker.queue);
-        _ = c.close(tracker.wake[0]);
-        _ = c.close(tracker.wake[1]);
         const gpa = tracker.gpa;
         tracker.known.deinit(gpa);
         gpa.destroy(tracker);
