@@ -7,6 +7,10 @@
 //!     lifecycle-claims --quiet-machine [--row <name prefix>]
 //!     lifecycle-claims --smoke
 //!
+//! Where a cgroup forks both sides of the spawn comparison, its rows are left
+//! out, in a smoke run too, and standard error says so: the two would not
+//! differ by the fork alone.
+//!
 //! A ratio is taken between two rows measured in turn, a round of one then a
 //! round of the other, the order swapped each round, so that a machine that
 //! drifts drifts under both; its figure is the best sample of each. A bound is
@@ -63,8 +67,8 @@ const Context = struct {
 const paired = .{
     .{ .name = "wait/blocking", .unit = "spawn", .run = waitBlocking },
     .{ .name = "wait/deadlined", .unit = "spawn", .run = waitDeadlined },
-    .{ .name = "spawn/file_actions", .unit = "spawn", .setup = requireFork, .run = spawnFast },
-    .{ .name = "spawn/fork", .unit = "spawn", .setup = requireFork, .run = spawnForked },
+    .{ .name = "spawn/file_actions", .unit = "spawn", .run = spawnFast },
+    .{ .name = "spawn/fork", .unit = "spawn", .run = spawnForked },
 };
 const bounded = .{
     .{ .name = "stop/honoured", .unit = "stop", .setup = honouredSetup, .run = stopHonoured, .teardown = stopTeardown },
@@ -117,8 +121,12 @@ pub fn main(init: std.process.Init) !void {
     var stdout = std.Io.File.stdout().writerStreaming(init.io, &buffer);
     const out = &stdout.interface;
     const metadata: bench.Metadata = .{ .commit = @import("preflight_bench_options").commit };
+    const fork_alone = try forkAlone(&context);
+    if (!fork_alone) try std.Io.File.stderr().writeStreamingAll(init.io, "spawn/: left out: a cgroup forks both sides here\n");
+    // The spawn rows close the paired table.
+    const paired_here = if (fork_alone) paired_rows[0..] else paired_rows[0..2];
     if (smoke) {
-        try bench.run(WorkloadError, init.gpa, init.io, out, &context, &paired_rows, metadata, .{ .smoke = true, .prefix = prefix });
+        try bench.run(WorkloadError, init.gpa, init.io, out, &context, paired_here, metadata, .{ .smoke = true, .prefix = prefix });
         try bench.run(WorkloadError, init.gpa, init.io, out, &context, &bounded_rows, metadata, .{ .smoke = true, .prefix = prefix });
         try out.flush();
         return;
@@ -135,7 +143,7 @@ pub fn main(init: std.process.Init) !void {
         defer claims.free(got);
         try claims.ratio("deadline/blocking, millionths (limit 3:2)", got[1], got[0], 1_500_000);
     }
-    if (claims.wanted("spawn/")) {
+    if (fork_alone and claims.wanted("spawn/")) {
         const got = try claims.measure(paired_rows[2..4], 5, turn);
         defer claims.free(got);
         try claims.ratio("file-actions/fork, millionths (limit 9:10)", got[0], got[1], 900_000);
@@ -287,18 +295,20 @@ fn wait(x: *Context, units: u64, deadlined: bool) !void {
     }
 }
 
-/// A cgroup adds a join to the forked side, or forks both where the C library
-/// cannot start a child in one: either way the two would not differ by the
-/// fork alone. Refuse rather than label that a comparison.
-fn requireFork(x: *Context) !void {
-    if (builtin.target.os.tag != .linux) return;
+/// Whether the spawn rows differ by the fork alone. A cgroup adds a join to
+/// the forked side, or forks both where the C library cannot start a child
+/// in one: either way they would not, and the rows are left out rather than
+/// labelled a comparison.
+fn forkAlone(x: *Context) !bool {
+    if (builtin.target.os.tag != .linux) return true;
     var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{x.true_program}, .stdio = .ignore });
     defer child.deinit(x.io());
-    // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
+    // glint-ignore: Z026 -- the probe's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
     errdefer _ = child.killWait(x.io(), .fromRaw(0)) catch {};
     var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
-    if ((try child.containment(&buffer)).cgroup != null) return error.CgroupForcesFork;
-    _ = try child.wait(x.io());
+    const contained = (try child.containment(&buffer)).cgroup != null;
+    if (!conduit.succeeded(try child.wait(x.io()))) return error.ChildFailed;
+    return !contained;
 }
 
 fn spawnFast(x: *Context, units: u64) !void {
