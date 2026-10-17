@@ -116,22 +116,11 @@ pub fn dev(b: *std.Build, tools: type) void {
         "Run only the tests whose fully qualified name contains one of these",
     ) orelse &[0][]const u8{};
 
-    // The handshake between `Reaper` and the owner of a `Child` is two tasks
-    // and one child, so it is the one claim here a race detector can check
-    // rather than a reader: `bay unit -Dthread-sanitizer
-    // -Dtest-filter=Reaper`.
-    const thread_sanitizer = b.option(
-        bool,
-        "thread-sanitizer",
-        "Build the tests with ThreadSanitizer",
-    ) orelse false;
-
     const test_module = b.createModule(.{
         .root_source_file = p.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = link_libc,
-        .sanitize_thread = if (thread_sanitizer) true else null,
         .imports = &.{
             .{ .name = "aegis", .module = aegis_package.module("aegis") },
             .{ .name = "reactor", .module = reactor_package.module("reactor") },
@@ -267,6 +256,12 @@ pub fn dev(b: *std.Build, tools: type) void {
     };
     preflight.addCi(b, p, .{
         .tests = test_step,
+        // The release tier fuzzes the parsers' properties and runs the suite
+        // under ThreadSanitizer, where the handshake between `Reaper` and the
+        // owner of a `Child` (two tasks and one child) is a claim a race
+        // detector checks and a reader cannot: `bay hardened-tsan
+        // -Dtest-filter=Reaper` on Linux.
+        .hardened = .{ .fuzz_step = "unit", .tsan_step = "unit" },
         .bench = .{
             .programs = programs,
             .imports = benchImports,

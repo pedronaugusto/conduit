@@ -881,7 +881,9 @@ Development runs through bay. Local build scripts clear `.zig-cache/{o,h,z,tmp}`
 bay test                   # the suite, and the examples, which are run
 bay test -Dfork-spawn      # the same, with the posix_spawn path off
 bay test --fuzz            # the three properties, under the fuzzer
-bay unit -Dthread-sanitizer   # the suite under ThreadSanitizer
+bay hardened              # the suite with safety on, std.testing.allocator on shakedown's quarantine
+bay hardened-fuzz         # the properties under Zig's fuzzer, judged on what it left
+bay hardened-tsan         # on x86_64 or aarch64 Linux: the suite under ThreadSanitizer
 bay examples               # the examples alone
 zig fmt --check src examples build.zig
 bay test -Dtarget=x86_64-linux-musl  # on Linux: the suite on musl, linked statically
