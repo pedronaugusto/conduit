@@ -2190,10 +2190,21 @@ pub const Child = struct {
         const start = std.Io.Clock.awake.now(io);
         var collected = try child.outputOnTasks(testing.allocator, io, .{ .drain = .literal("20ms") }, null);
         defer collected.deinit();
-        try testing.expect(collected.stdoutTruncated());
         const took = start.durationTo(std.Io.Clock.awake.now(io));
-        try testing.expect(took.nanoseconds >= std.Io.Duration.fromMilliseconds(20).nanoseconds);
-        try testing.expect(took.nanoseconds < std.Io.Duration.fromSeconds(5).nanoseconds);
+        // Said whole on a failure: a drain that ended early, with the writer
+        // gone, is the writer's doing, not the drain's (seen once on Windows
+        // on ARM, beside a shell's "Not enough quota" on the suite's output).
+        if (!collected.stdoutTruncated() or took.nanoseconds < std.Io.Duration.fromMilliseconds(20).nanoseconds or
+            took.nanoseconds >= std.Io.Duration.fromSeconds(5).nanoseconds)
+        {
+            std.debug.print("drain: stdout truncated {}, took {d} ms, {d} bytes read, the writer {s}\n", .{
+                collected.stdoutTruncated(),
+                took.toMilliseconds(),
+                collected.stdout().len,
+                if (try writer.tryWait(io)) |_| "ended" else "running",
+            });
+            return error.TestUnexpectedResult;
+        }
     }
 
     test "a reap reported elsewhere retires the identity before kill can use its number" {

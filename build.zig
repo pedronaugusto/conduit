@@ -252,6 +252,14 @@ pub fn dev(b: *std.Build, tools: type) void {
     // CI wiring
     //=====================================================================
 
+    // The check program has tests of its own; they run with the rest, given
+    // to the tests before addCi reads them.
+    const containment_tests = b.addTest(.{
+        .name = "containment-tests",
+        .root_module = b.createModule(.{ .root_source_file = p.path("ci/containment.zig"), .target = target, .optimize = optimize }),
+    });
+    unit_step.dependOn(&b.addRunArtifact(containment_tests).step);
+
     const programs: []const preflight.Bench.Program = if (target.result.os.tag == .windows) &.{} else &.{
         .{ .name = "lifecycle-claims", .source = "bench/lifecycle_claims.zig" },
         .{ .name = "orphans-cost", .source = "bench/orphans_cost.zig" },
@@ -270,12 +278,6 @@ pub fn dev(b: *std.Build, tools: type) void {
         .test_log_level = .info,
     });
     _ = preflight.addCheck(b, p, "check-containment", "ci/containment.zig");
-    // The check program has tests of its own; they run with the rest.
-    const containment_tests = b.addTest(.{
-        .name = "containment-tests",
-        .root_module = b.createModule(.{ .root_source_file = p.path("ci/containment.zig"), .target = target, .optimize = optimize }),
-    });
-    unit_step.dependOn(&b.addRunArtifact(containment_tests).step);
     // The build a consumer gets: nothing conduit fetches for itself.
     preflight.addConsumerCheck(b, p, .{
         .package = "conduit",
