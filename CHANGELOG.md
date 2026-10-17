@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The containment check's own tests join the tests before preflight's `addCi` reads them, so they run under its runner and, on the riscv64 leg, on its machine, where they ran on the host and failed to start. The drain test names what it saw when it fails (one red on windows-11-arm, its cause open).
+
 ## [0.8.3] - 2026-10-15
 
 ### Added
