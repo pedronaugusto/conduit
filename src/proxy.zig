@@ -268,12 +268,10 @@ fn waitResize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     try std.Io.checkCancel(io);
     const interval = atLeastOneMs(resize.interval);
     const wake = resize.wake orelse return std.Io.sleep(io, interval, .awake);
-    reactor.wait(io, .{ .wake = wake }, .{ .duration = .{ .raw = interval, .clock = .awake } }) catch |err| switch (err) {
+    wake.wait(io, .{ .duration = .{ .raw = interval, .clock = .awake } }) catch |err| switch (err) {
         error.Canceled => return error.Canceled,
         // The interval passed, which is when the size is read again anyway.
         error.Timeout => {},
-        // A wake that cannot be waited on leaves the poll, which is correct.
-        error.Unsupported, error.Unexpected => return std.Io.sleep(io, interval, .awake),
     };
 }
 

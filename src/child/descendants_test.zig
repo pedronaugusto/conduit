@@ -349,7 +349,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     const held = fixture.child.holdReap().?;
     var holding = true;
     defer {
-        if (holding) held.release();
+        if (holding) held.release(io);
         reaper.kill(io, .fromRaw(0));
         reap(&fixture.child, io);
         reaper.stop(io) catch unreachable;
@@ -376,7 +376,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     }
     try std.testing.expectEqual(linux.E.CHILD, linux.errno(linux.waitid(.PIDFD, @intCast(fd), &info, flags, null)));
     try std.testing.expectEqual(@as(?Child.Term, null), try reaper.exit());
-    held.release();
+    held.release(io);
     holding = false;
     fixture.child.closeStdin(io);
     try std.testing.expect(Child.succeeded((try reaper.waitTimeout(io, within_budget)).?));

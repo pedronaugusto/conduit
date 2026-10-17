@@ -99,6 +99,7 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const tree = @import("tree.zig");
+const reactor = @import("reactor");
 const Deadline = @import("conduit.tty").Deadline;
 const Duration = @import("conduit.tty").Duration;
 const linux = std.os.linux;
@@ -245,7 +246,10 @@ pub const Orphans = struct {
     /// Children conduit started are not touched: they have their `Child`, and its
     /// `kill`. What is adopted while this runs is ended too, so a program that is
     /// still leaving orphans keeps this busy; it is the call for the end of a
-    /// program. It waits by sleeping between looks, and is a cancelation point.
+    /// program. Between looks it waits, through reactor, for an adopted
+    /// process to end, at most until the next look: nothing announces an
+    /// adoption, so the looks are what find the processes adopted since. It
+    /// is a cancelation point.
     pub fn killAll(orphans: *Orphans, io: std.Io, grace: Duration) KillError!void {
         orphans.pin.check(orphans);
         if (!supported or !orphans.running) return;
@@ -254,7 +258,9 @@ pub const Orphans = struct {
         // A `children` file read while a child is being reaped elsewhere may pass
         // over another child, so "nothing left" is believed after two looks.
         var empty_looks: u8 = 0;
+        var ending: [reactor.wait_max]reactor.Waitable = undefined;
         while (true) {
+            var watched: usize = 0;
             const left = left: {
                 gate.lock();
                 orphans.lock.lock();
@@ -265,7 +271,12 @@ pub const Orphans = struct {
                 }
                 orphans.reapEnded();
                 const insisting = grace.eql(.fromRaw(0)) or deadline.remainingMs(io) == 0;
-                for (orphans.adopted.items) |*held| held.ask(if (insisting) .kill else .terminate);
+                for (orphans.adopted.items) |*held| {
+                    held.ask(if (insisting) .kill else .terminate);
+                    if (watched == ending.len) continue;
+                    ending[watched] = .{ .readable = held.pidfd };
+                    watched += 1;
+                }
                 break :left orphans.adopted.items.len;
             };
             if (left == 0) {
@@ -274,7 +285,15 @@ pub const Orphans = struct {
                 continue;
             }
             empty_looks = 0;
-            try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
+            // A pidfd turns readable when its process ends. One reaped and
+            // closed meanwhile reads as ready, and the next look says why.
+            const next: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(interval_ms), .clock = .awake } };
+            _ = reactor.waitAny(io, ending[0..watched], next) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                error.Timeout => {},
+                error.Unsupported => unreachable, // unreachable: a pidfd's readability is waited on everywhere
+                error.Unexpected => return error.Unexpected,
+            };
             interval_ms = @min(interval_ms * 2, kill_slice_ms);
         }
     }

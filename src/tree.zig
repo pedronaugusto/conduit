@@ -184,45 +184,47 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
 }
 
 /// Wait for a held process to end without reaping it. Linux waits on the held
-/// pidfd; Darwin has reactor watch NOTE_EXIT while the unique process id still
-/// matches. If no watch can be had, a bounded 1–4 ms clock-based check is
-/// used. True means gone; false means the deadline passed.
+/// pidfd; Darwin has reactor watch `NOTE_EXIT` while the unique process id
+/// still matches. A watch that turns ready has seen the end. Where no watch
+/// can be had, a kqueue refused the process because it is a zombie already
+/// (`ProcessNotFound`), which has ended; only with no descriptor to spare is
+/// it looked at between 1–4 ms sleeps. True means gone; false means the
+/// deadline passed.
 fn waitCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.Cancelable!bool {
     if (!process.alive()) return true;
     var opened: ?reactor.Process = null;
     defer if (opened) |*held| held.close(io);
-    var target: ?reactor.Waitable = null;
-    if (builtin.target.os.tag == .linux) {
-        target = .{ .readable = process.pidfd };
-    } else if (reactor.Process.open(io, process.pid)) |watch| {
-        opened = watch;
-        target = .{ .process = &opened.? };
-    } else |_| {}
+    const target: reactor.Waitable = if (builtin.target.os.tag == .linux) .{ .readable = process.pidfd } else watch: {
+        opened = reactor.Process.open(io, process.pid) catch |err| switch (err) {
+            error.ProcessNotFound => return true,
+            error.SystemResources, error.Unexpected => return lookCaptured(io, process, deadline),
+        };
+        break :watch .{ .process = &opened.? };
+    };
     // Registration by number on Darwin is checked against the held unique
     // id immediately afterward; it cannot turn a reused pid into a wait
     // for the wrong process.
     if (!process.alive()) return true;
+    reactor.wait(io, target, deadline.toTimeout()) catch |err| switch (err) {
+        error.Timeout => return !process.alive(),
+        error.Canceled => return error.Canceled,
+        error.Unsupported => unreachable, // unreachable: reactor waits on a process and a descriptor's readability everywhere
+        error.Unexpected => return lookCaptured(io, process, deadline),
+    };
+    return true;
+}
+
+/// `waitCaptured` with nothing to wait on: no descriptor announces the end
+/// of a process that is not a child, so it is looked at between sleeps.
+fn lookCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.Cancelable!bool {
     var interval_ms: u32 = 1;
-    while (true) {
+    while (process.alive()) {
         const left = deadline.remainingMs(io);
-        if (left == 0) return !process.alive();
-        const watching = target orelse {
-            try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
-            interval_ms = @min(interval_ms * 2, 4);
-            if (!process.alive()) return true;
-            continue;
-        };
-        reactor.wait(io, watching, deadline.toTimeout()) catch |err| switch (err) {
-            error.Timeout => return !process.alive(),
-            error.Canceled => return error.Canceled,
-            // A watch that cannot wait: ask again, as with none.
-            error.Unsupported, error.Unexpected => target = null,
-        };
-        if (!process.alive()) return true;
-        // Ready and still alive: the process is ending, or ended and is not yet
-        // gone to `alive`. Give it a moment rather than ask in a tight loop.
-        if (target != null) try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+        if (left == 0) return false;
+        try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+        interval_ms = @min(interval_ms * 2, 4);
     }
+    return true;
 }
 
 /// A child list is only a snapshot. Recheck each link through held process

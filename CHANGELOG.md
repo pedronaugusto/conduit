@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Child.HeldReap.release` takes the `Io`: giving the reap back wakes the tasks waiting for it, through that `Io`'s futex.
+
+### Changed
+
+- Every wait is reactor's or the `Io`'s, none a sleep between looks: a `wait` or `waitTimeout` while another task holds the reap (a `Reaper`) waits on the reap's word and wakes when it is given back, where it looked every 1 to 4 ms; a child with no exit watch is watched by one opened for the wait, where it was asked about in slices; the reap after the end needs no second look, since reactor reports a child once `waitpid` can take it (on Darwin the moment between `NOTE_EXIT` and that was spun through, then slept in 1 ms steps), and waits for a signaller's tree walk and, on Darwin, for the fork tracker's last look, which it signals. `console.waitInput` waits on the input handle through reactor, where it waited in 5 ms slices on the calling thread; `conduit.tty` imports reactor. `Orphans.killAll` waits for an adopted process to end between its looks, and a tree's grace on a process group ends its pass at a kill request. A wake's wait in the resize proxy and the cgroup's emptiness looks is `Wake.wait`, which nothing makes unsupported, so the `sleep` taken in its place is gone.
+- A child's end that reactor cannot wait on is `Unexpected`, where the wait asked again in slices.
+- Pins reactor 0.6.0, aegis 0.1.12 and shakedown 0.4.11.
+
 ## [0.8.5] - 2026-10-17
 
 ### Added

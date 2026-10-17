@@ -9,6 +9,7 @@ const c = std.c;
 const posix = std.posix;
 const tree = @import("tree.zig");
 const tty = @import("conduit.tty");
+const reactor = @import("reactor");
 
 /// Test-only observer delay exposes the window without changing the fixture.
 pub const testing_hook = struct {
@@ -21,16 +22,19 @@ pub const Tracker = if (supported) Darwin else NoTracker;
 
 /// Where there is no fork note to observe: no tracker ever starts.
 const NoTracker = struct {
-    pub fn start(_: std.mem.Allocator, _: posix.pid_t) error{SystemResources}!*NoTracker {
+    pub fn start(_: std.mem.Allocator, _: std.Io, _: posix.pid_t) error{SystemResources}!*NoTracker {
         return error.SystemResources;
     }
     pub fn finish(_: *NoTracker) bool {
         return true;
     }
+    pub fn waitFinished(_: *NoTracker, _: std.Io, _: std.Io.Timeout) std.Io.Cancelable!bool {
+        return true;
+    }
     pub fn failedTracking(_: *const NoTracker) bool {
         return false;
     }
-    pub fn destroy(tracker: *NoTracker) void {
+    pub fn destroy(tracker: *NoTracker, _: std.Io) void {
         tracker.* = undefined;
     }
 };
@@ -43,11 +47,13 @@ const Darwin = struct {
     known: std.ArrayList(tree.DarwinProcess) = .empty,
     ending: std.atomic.Value(bool) = .init(false),
     done: std.atomic.Value(bool) = .init(false),
+    /// Signaled once `done` is set, for a reap that waits on it.
+    finished: reactor.Wake,
     failed: std.atomic.Value(bool) = .init(false),
     /// Test handshake: registrations completed by this task, never a borrowed list.
     observed: if (builtin.is_test) std.atomic.Value(usize) else void = if (builtin.is_test) .init(0) else {},
 
-    pub fn start(gpa: std.mem.Allocator, root: posix.pid_t) error{ OutOfMemory, SystemResources }!*Darwin {
+    pub fn start(gpa: std.mem.Allocator, io: std.Io, root: posix.pid_t) error{ OutOfMemory, SystemResources }!*Darwin {
         const tracker = try gpa.create(Darwin);
         errdefer gpa.destroy(tracker);
         const queue = c.kqueue();
@@ -58,7 +64,9 @@ const Darwin = struct {
             _ = c.close(wake[0]);
             _ = c.close(wake[1]);
         }
-        tracker.* = .{ .gpa = gpa, .queue = queue, .wake = wake };
+        var finished = reactor.Wake.init(io) catch return error.SystemResources;
+        errdefer finished.deinit(io);
+        tracker.* = .{ .gpa = gpa, .queue = queue, .wake = wake, .finished = finished };
         errdefer tracker.known.deinit(gpa);
         try tracker.known.append(gpa, tree.DarwinProcess.capture(root) orelse return error.SystemResources);
         if (!tracker.register(root, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, tracker.known.items[0].unique_id) or
@@ -78,6 +86,16 @@ const Darwin = struct {
     pub fn finish(tracker: *Darwin) bool {
         if (!tracker.ending.swap(true, .acq_rel)) _ = c.write(tracker.wake[1], "x", 1);
         return tracker.done.load(.acquire);
+    }
+
+    /// Asks for the final force, and waits until it is done or `timeout`
+    /// passes: true once done.
+    pub fn waitFinished(tracker: *Darwin, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        while (!tracker.finish()) tracker.finished.wait(io, timeout) catch |err| switch (err) {
+            error.Timeout => return tracker.done.load(.acquire),
+            error.Canceled => return error.Canceled,
+        };
+        return true;
     }
 
     pub fn failedTracking(tracker: *const Darwin) bool {
@@ -116,7 +134,10 @@ const Darwin = struct {
     }
 
     fn run(tracker: *Darwin) void {
-        defer tracker.done.store(true, .release);
+        defer {
+            tracker.done.store(true, .release);
+            tracker.finished.signal();
+        }
         var events: [64]c.kevent64_s = undefined;
         var nothing: [0]c.kevent64_s = undefined;
         while (true) {
@@ -178,9 +199,10 @@ const Darwin = struct {
 
     /// Stops the task, closes the queue and frees the tracker: `tracker` is
     /// gone when this returns.
-    pub fn destroy(tracker: *Darwin) void {
+    pub fn destroy(tracker: *Darwin, io: std.Io) void {
         _ = tracker.finish();
         if (tracker.thread) |thread| thread.join();
+        tracker.finished.deinit(io);
         _ = c.close(tracker.queue);
         _ = c.close(tracker.wake[0]);
         _ = c.close(tracker.wake[1]);

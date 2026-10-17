@@ -11,8 +11,7 @@
 //! ends, a `pidfd` on Linux, a kqueue registration on Darwin and the BSDs, the
 //! process handle on Windows. On a reactor runtime that wait is an operation of
 //! the task's own loop and holds no thread; on any other `Io` it holds the
-//! calling thread and looks for a cancel between short waits. Either way it is a
-//! cancelation point.
+//! calling thread, which a cancel ends. Either way it is a cancelation point.
 //!
 //! **A watch does not reap.** It says the child has ended; `waitpid` is still
 //! what turns that into a status, and `Child` is what holds the right to call
@@ -24,26 +23,24 @@ const std = @import("std");
 const posix = std.posix;
 const c = std.c;
 const reactor = @import("reactor");
-const Deadline = @import("conduit.tty").Deadline;
 
 const is_windows = builtin.target.os.tag == .windows;
 
 /// How a wait for a child to end ended.
 pub const Wait = enum {
-    /// The child has ended and is not reaped.
+    /// The child has ended, `waitpid` can take it, and nobody has.
     ended,
     /// The wake was signalled first.
     woken,
     /// The time ran out first.
     timeout,
-    /// This system cannot say when a child ends, or could not be asked: the way
-    /// left is to try the reap.
-    unavailable,
 };
 
+pub const WaitError = std.Io.Cancelable || std.Io.UnexpectedError;
+
 /// Opens the watch on the child `pid`, which nobody has reaped, to be held for
-/// as long as the child is. `null` where none could be had: a process with no
-/// descriptor to spare, which `wait` then asks about instead.
+/// as long as the child is. `null` where none could be had, which a child of
+/// this process unreaped always can: `wait` then opens one itself.
 ///
 /// It is opened when the child is spawned, and on Darwin before the child can
 /// run: a kqueue refuses a watch on a process that has ended with `ESRCH`, and
@@ -57,53 +54,44 @@ pub fn open(io: std.Io, pid: posix.pid_t) ?reactor.Process {
 /// Waits until the child `id` has ended, or `timeout` passes, or `wake` is
 /// signalled, which the wait reports first when both have come. `id` is a child
 /// of this process that nobody has reaped, and stays unreaped. `watch` is the
-/// one `open` made for it, or `null`.
+/// one `open` made for it, or `null`. The wait is reactor's, which waits on a
+/// process on every `Io`.
 pub fn wait(
     io: std.Io,
     id: std.process.Child.Id,
     watch: ?*const reactor.Process,
     wake: ?*reactor.Wake,
     timeout: std.Io.Timeout,
-) std.Io.Cancelable!Wait {
+) WaitError!Wait {
     if (is_windows) return finished(reactor.wait(io, .{ .object = id }, timeout));
-    const process = watch orelse return asking(io, id, timeout);
+    var opened: ?reactor.Process = null;
+    defer if (opened) |*held| held.close(io);
+    const process = watch orelse process: {
+        // Not a child of this process, or one reaped already: the reap says so.
+        opened = reactor.Process.open(io, id) catch |err| return switch (err) {
+            error.ProcessNotFound => .ended,
+            error.SystemResources, error.Unexpected => error.Unexpected,
+        };
+        break :process &opened.?;
+    };
     const woken = wake orelse return finished(reactor.wait(io, .{ .process = process }, timeout));
     const index = reactor.waitAny(io, &.{ .{ .wake = woken }, .{ .process = process } }, timeout) catch |err| return switch (err) {
         error.Timeout => .timeout,
         error.Canceled => error.Canceled,
-        error.Unsupported, error.Unexpected => .unavailable,
+        error.Unsupported => unreachable, // unreachable: reactor waits on a process and a wake on every `Io`
+        error.Unexpected => error.Unexpected,
     };
     return if (index == 0) .woken else .ended;
 }
 
-fn finished(result: reactor.WaitError!void) std.Io.Cancelable!Wait {
+fn finished(result: reactor.WaitError!void) WaitError!Wait {
     result catch |err| return switch (err) {
         error.Timeout => .timeout,
         error.Canceled => error.Canceled,
-        // A handle that cannot be waited on: the reap is what says so.
-        error.Unsupported, error.Unexpected => .unavailable,
+        error.Unsupported => unreachable, // unreachable: reactor waits on a process on every `Io`
+        error.Unexpected => error.Unexpected,
     };
     return .ended;
-}
-
-/// The wait when no watch could be opened: ask whether the child has ended on an
-/// interval that grows to a few milliseconds, so a child that ends promptly is
-/// noticed promptly and one that does not is not asked about a thousand times a
-/// second.
-fn asking(io: std.Io, id: posix.pid_t, timeout: std.Io.Timeout) std.Io.Cancelable!Wait {
-    const deadline: Deadline = .of(io, timeout);
-    var interval_ms: u32 = 1;
-    while (true) {
-        switch (ask(id)) {
-            .ended => return .ended,
-            .unknown => return .unavailable,
-            .running => {},
-        }
-        const left = deadline.remainingMs(io);
-        if (left == 0) return .timeout;
-        try std.Io.sleep(io, .fromMilliseconds(@min(interval_ms, left)), .awake);
-        interval_ms = @min(interval_ms * 2, 4);
-    }
 }
 
 /// What `ask` can say.

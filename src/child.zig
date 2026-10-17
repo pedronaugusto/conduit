@@ -341,7 +341,7 @@ pub const Child = struct {
             child.closeJob(io);
         } else {
             if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| owner.close();
-            if (state.lineage) |tracker| tracker.destroy();
+            if (state.lineage) |tracker| tracker.destroy(io);
             state.forks.close();
             if (state.exit_watch) |*watch| watch.close(io);
             state.cgroup.close();
@@ -478,14 +478,12 @@ pub const Child = struct {
         // take the status away from it; so this waits for the answer instead, and
         // asks for the wait itself again each time round, because the task that
         // had it may have been cancelled before it reaped anything.
-        var interval_ms: u32 = 1;
         while (true) {
             if (child.settled()) |term| return term;
             if (child.claimReap()) break;
-            try std.Io.sleep(io, .fromMilliseconds(interval_ms), .awake);
-            interval_ms = @min(interval_ms * 2, 4);
+            try child.awaitReap(io, .none);
         }
-        defer child.releaseReap();
+        defer child.releaseReap(io);
         return child.waitClaimed(io);
     }
 
@@ -528,13 +526,22 @@ pub const Child = struct {
 
     /// Takes the right to be inside the operating system's wait for this child.
     fn claimReap(child: *Child) bool {
-        return child.state.reaping.cmpxchgStrong(false, true, .acquire, .monotonic) == null;
+        return child.state.reaping.cmpxchgStrong(0, 1, .acquire, .monotonic) == null;
     }
 
-    fn releaseReap(child: *Child) void {
+    /// Gives the reap back, and wakes the tasks waiting to take it or to
+    /// read what its holder published.
+    fn releaseReap(child: *Child, io: std.Io) void {
         // Only the task that claimed the reap gives it back.
-        std.debug.assert(child.state.reaping.load(.monotonic));
-        child.state.reaping.store(false, .release);
+        std.debug.assert(child.state.reaping.load(.monotonic) == 1);
+        child.state.reaping.store(0, .release);
+        io.futexWake(u32, &child.state.reaping.raw, std.math.maxInt(u32));
+    }
+
+    /// Waits while another task holds the reap, until it gives it back or
+    /// `timeout` passes. It may return early, as a futex may.
+    fn awaitReap(child: *Child, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!void {
+        try io.futexWaitTimeout(u32, &child.state.reaping.raw, 1, timeout);
     }
 
     /// Takes the right to reap the child, for a caller that waits for the child's
@@ -586,7 +593,7 @@ pub const Child = struct {
     fn waitWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         if (child.settled()) |term| return term;
         if (!child.claimReap()) return child.settledWithin(io, deadline);
-        defer child.releaseReap();
+        defer child.releaseReap(io);
         return child.reapWithin(io, deadline);
     }
 
@@ -601,23 +608,21 @@ pub const Child = struct {
         if (builtin.is_test and !is_windows) if (before_exit_watch) |hook| hook(child);
 
         switch (try child_exit.wait(io, child.state.id, child.exitWatch(), null, deadline.toTimeout())) {
-            .ended => return child.reapEnded(io, deadline),
+            .ended => {},
             .woken => unreachable, // unreachable: no wake was given
             .timeout => return child.tryWaitClaimed(io),
-            .unavailable => {},
         }
-
-        // Nothing to wait on: ask again, on an interval that grows to a few
-        // milliseconds so a child that ends promptly is noticed promptly and one
-        // that does not is not asked about a thousand times a second.
-        var interval_ms: u32 = 1;
-        while (true) {
-            const left = deadline.remainingMs(io);
-            if (left == 0) return child.tryWaitClaimed(io);
-            try std.Io.sleep(io, .fromMilliseconds(@min(interval_ms, left)), .awake);
-            if (try child.tryWaitClaimed(io)) |term| return term;
-            interval_ms = @min(interval_ms * 2, 4);
-        }
+        // Ended, and `waitpid` can take it: reactor reports a child once it
+        // can. What may still hold the reap back is waited for: a signaller
+        // walking the tree holds the identity, and on Darwin the fork tracker
+        // takes its last look, which it says it has.
+        if (try child.reapClaimed(io, .wait)) |term| return term;
+        if (!is_windows) if (child.state.lineage) |tracker| {
+            if (!try tracker.waitFinished(io, deadline.toTimeout())) return child.tryWaitClaimed(io);
+            if (try child.reapClaimed(io, .wait)) |term| return term;
+        };
+        // The system said it ended, then would not reap it.
+        return error.Unexpected;
     }
 
     /// The watch on the child's end that `spawn` opened, if it could.
@@ -683,22 +688,19 @@ pub const Child = struct {
 
     /// Waits for whoever holds the reap to publish a term, until `deadline`.
     ///
-    /// The rare path, and the reason it asks again rather than waiting on a
-    /// handle: what it is waiting for is another task's publish, not the child's
-    /// end. The wait is asked for again each time round, because the task that had
+    /// What it waits for is another task's publish, not the child's end: the
+    /// holder gives the reap back once it has published, which wakes this.
+    /// The reap is asked for again each time round, because the task that had
     /// it may have been cancelled before it reaped anything.
     fn settledWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
-        var interval_ms: u32 = 1;
         while (true) {
             if (child.settled()) |term| return term;
             if (child.claimReap()) {
-                defer child.releaseReap();
+                defer child.releaseReap(io);
                 return child.reapWithin(io, deadline);
             }
-            const left = deadline.remainingMs(io);
-            if (left == 0) return null;
-            try std.Io.sleep(io, .fromMilliseconds(@min(interval_ms, left)), .awake);
-            interval_ms = @min(interval_ms * 2, 4);
+            if (deadline.remainingMs(io) == 0) return null;
+            try child.awaitReap(io, deadline.toTimeout());
         }
     }
 
@@ -723,15 +725,24 @@ pub const Child = struct {
         // status out from under the wait in flight is the one thing that must not
         // happen here.
         if (!child.claimReap()) return null;
-        defer child.releaseReap();
+        defer child.releaseReap(io);
         return child.tryWaitClaimed(io);
     }
 
     /// `tryWait` for a caller that already holds the reap.
     fn tryWaitClaimed(child: *Child, io: std.Io) TryWaitError!?Term {
+        return child.reapClaimed(io, .look);
+    }
+
+    /// The reap, for a caller that holds it: `look` stays nonblocking even
+    /// while a signaller walks a tree, and `wait` waits for the signaller to
+    /// let go of the identity, for a child known to have ended.
+    fn reapClaimed(child: *Child, io: std.Io, identity: enum { look, wait }) TryWaitError!?Term {
         if (child.state.simulated != null) return child.pollSimulated(io);
-        // tryWait must stay nonblocking even while a signaller walks a tree.
-        if (!child.state.identity.tryLock()) return null;
+        switch (identity) {
+            .look => if (!child.state.identity.tryLock()) return null,
+            .wait => spin.lock(&child.state.identity),
+        }
         var published = false;
         defer {
             child.state.identity.unlock();
@@ -826,28 +837,6 @@ pub const Child = struct {
         child.state.scope_complete = true;
         child.publish(term);
         return term;
-    }
-
-    /// Reap a child the watch has said is ending.
-    ///
-    /// The note is posted as the process leaves and not as it becomes something
-    /// `waitpid` will hand over: on Darwin the two are a moment apart, and under
-    /// a busy process table the moment is long enough for `WNOHANG` to answer
-    /// "still running" once or twice. Taking that answer as a timeout reported a
-    /// child that had already ended as one that never did. So the reap is asked
-    /// for again, on a short interval, until the deadline the caller gave.
-    fn reapEnded(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
-        var tries: u32 = 0;
-        while (true) {
-            if (try child.tryWaitClaimed(io)) |term| return term;
-            const left = deadline.remainingMs(io);
-            if (left == 0) return null;
-            // The first few asks give the kernel the scheduler tick it needs
-            // without sleeping; after that, a millisecond at a time.
-            if (tries < 8) spin.yield() else try std.Io.sleep(io, .fromMilliseconds(1), .awake);
-            tries += 1;
-            try std.Io.checkCancel(io);
-        }
     }
 
     /// What `kill` sends: the three requests to end that mean the same thing on
@@ -2298,9 +2287,9 @@ pub const ReapHold = struct {
     }
 
     /// Gives the right back, whether or not the child was reaped.
-    pub fn release(held: ReapHold) void {
+    pub fn release(held: ReapHold, io: std.Io) void {
         var child = held.child;
-        child.releaseReap();
+        child.releaseReap(io);
     }
 };
 

@@ -143,7 +143,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
         closePipes(io, report[0..1], go);
         return err;
     };
-    errdefer if (watched.tracker) |owned| owned.destroy();
+    errdefer if (watched.tracker) |owned| owned.destroy(io);
 
     const outcome = readReport(report[0], pid);
     file(report[0]).close(io);
@@ -249,9 +249,9 @@ fn watchStarted(
     std.debug.assert(pid > 0);
     var tracker: ?*lineage.Tracker = null;
     if (comptime lineage.supported) if (options.descendants == .contain) {
-        tracker = try lineage.Tracker.start(gpa, pid);
+        tracker = try lineage.Tracker.start(gpa, io, pid);
     };
-    errdefer if (tracker) |owned| owned.destroy();
+    errdefer if (tracker) |owned| owned.destroy(io);
     const record: ?Child.SupervisorRecord = if (supervised) supervisorRecord(pid) orelse return error.Unexpected else null;
     var exit_watch = exit.open(io, pid);
     errdefer if (exit_watch) |*watch| watch.close(io);

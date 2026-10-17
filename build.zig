@@ -50,7 +50,7 @@ pub fn build(b: *std.Build) void {
             .linux, .windows => null,
             else => true,
         },
-        .imports = &.{.{ .name = "aegis", .module = aegis_module }},
+        .imports = &.{ .{ .name = "aegis", .module = aegis_module }, .{ .name = "reactor", .module = reactor } },
     });
 
     // The seam in front of the process calls conduit makes past `std.Io`: a

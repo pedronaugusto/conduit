@@ -12,7 +12,7 @@
 //! types `std.os.windows` declares are taken from there.
 
 const std = @import("std");
-const Deadline = @import("deadline.zig").Deadline;
+const reactor = @import("reactor");
 const windows = std.os.windows;
 const log = std.log.scoped(.conduit);
 
@@ -138,7 +138,6 @@ comptime {
     std.debug.assert(@offsetOf(InputRecord, "event") == 4);
 }
 
-extern "kernel32" fn WaitForSingleObject(handle: windows.HANDLE, milliseconds: windows.DWORD) callconv(.winapi) windows.DWORD;
 extern "kernel32" fn PeekConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;
 extern "kernel32" fn ReadConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;
 
@@ -152,23 +151,18 @@ pub const WaitInputError = error{
     Canceled,
 };
 
-/// How long one system wait lasts before cancelation is asked about.
-const slice_ms: u32 = 5;
-
 /// Wait for any console input record to arrive, up to `timeout`. A zero
-/// timeout asks and does not wait. The wait is spent in five millisecond
-/// slices, between which cancelation is asked about.
+/// timeout asks and does not wait. The wait is reactor's, on the input
+/// handle as an object: on a runtime it holds no thread, and either way a
+/// cancel ends it.
 pub fn waitInput(io: std.Io, handle: windows.HANDLE, timeout: std.Io.Timeout) WaitInputError!WaitResult {
-    const deadline: Deadline = .of(io, timeout);
-    while (true) {
-        switch (WaitForSingleObject(handle, @min(deadline.windowsMs(io), slice_ms))) {
-            0 => return .ready,
-            0x102 => {},
-            else => return unexpected(windows.GetLastError()),
-        }
-        if (deadline.remainingMs(io) == 0) return .timed_out;
-        try std.Io.checkCancel(io);
-    }
+    reactor.wait(io, .{ .object = handle }, timeout) catch |err| return switch (err) {
+        error.Timeout => .timed_out,
+        error.Canceled => error.Canceled,
+        error.Unsupported => unreachable, // unreachable: reactor waits on a Windows object on every `Io`
+        error.Unexpected => error.Unexpected,
+    };
+    return .ready;
 }
 
 /// Look at queued records without consuming them. A caller can ignore

@@ -101,8 +101,10 @@ reaped: std.atomic.Value(bool) = .init(false),
 /// Exactly one may be: two waits on one child are one status and one `ECHILD`,
 /// and the second is a child nobody can account for. Whoever does not take
 /// this reads the answer the one who did publishes — `tryWait` by saying the
-/// child is still running, `wait` by waiting for the answer to appear.
-reaping: std.atomic.Value(bool) = .init(false),
+/// child is still running, `wait` by waiting for the answer to appear. One
+/// while it is held, zero otherwise: a word a waiter's futex waits on, woken
+/// when it is given back.
+reaping: std.atomic.Value(u32) = .init(0),
 /// The right to use or retire the OS identity. Signalling holds it for the
 /// whole tree walk and delivery; reaping holds it only for the final,
 /// nonblocking wait, handle closure and publication. Waiting for an exit

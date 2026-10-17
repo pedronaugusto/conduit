@@ -478,7 +478,7 @@ pub const Reaper = struct {
         // Held from here to the reap, as any wait in flight holds it: so the child
         // ended is still the child's, unreaped, while its group is ended below.
         const held = reaper.child.holdReap() orelse return reaper.child.wait(io);
-        defer held.release();
+        defer held.release(io);
         // Read the published answer, including status loss, before watching an
         // identity that has been retired. Holding the reap does not conceal the
         // result: result reads it without asking the operating system to reap.
@@ -493,9 +493,6 @@ pub const Reaper = struct {
             // `stop` or `deinit`: the owner is done with this child.
             .woken => return error.Canceled,
             .timeout => try reaper.lookOrphans(io),
-            // Where even the end cannot be asked, the wait is the Child.wait, and
-            // the group is left as it is.
-            .unavailable => return held.wait(io),
         };
         // Ended, and not yet reaped: the group's id is still the child's, and
         // what is left in the group can be addressed by it. A child in a cgroup
@@ -599,10 +596,16 @@ pub const Reaper = struct {
         var slice_ms: u32 = 1;
         while (true) {
             // A kill owns one grace, including cleanup after the root exits.
-            // Re-read it each pass so a force request supersedes that grace.
+            // Re-read it each pass so a force request supersedes that grace;
+            // the request's wake ends the pass early.
             const left = (reaper.killing.current() orelse deadline).remainingMs(io);
             if (left == 0) return .elapsed;
-            try io.sleep(.fromMilliseconds(@min(left, slice_ms)), .awake);
+            const pass: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(@min(left, slice_ms)), .clock = .awake } };
+            const rekill: ?*reactor.Wake = if (is_windows) null else if (reaper.rekill) |*w| w else null;
+            if (rekill) |w| w.wait(io, pass) catch |err| switch (err) {
+                error.Canceled => return error.Canceled,
+                error.Timeout => {},
+            } else try io.sleep(pass.duration.raw, .awake);
             if (reach.empty(reaper.child.state.id)) return .empty;
             slice_ms = @min(slice_ms * 2, tree_slice_ms);
         }

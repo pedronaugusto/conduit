@@ -92,7 +92,7 @@ test "a wake ends a wait for a child at once, and the child is still waited for 
     try testing.expectEqual(exit.Wait.ended, try exit.wait(io, child.state.id, watchOf(&child), &wake, .none));
 }
 
-fn waitForever(io: std.Io, id: std.process.Child.Id, watch: ?*const reactor.Process) std.Io.Cancelable!exit.Wait {
+fn waitForever(io: std.Io, id: std.process.Child.Id, watch: ?*const reactor.Process) exit.WaitError!exit.Wait {
     return exit.wait(io, id, watch, null, .none);
 }
 

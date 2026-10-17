@@ -90,7 +90,7 @@ test "output leaves the reap to the task that holds it" {
     defer reap(&child, io);
     const held = child.holdReap().?;
     var released = false;
-    defer if (!released) held.release();
+    defer if (!released) held.release(io);
 
     var output: HeldOutput = .{ .child = &child };
     defer if (output.result) |result| if (result) |collected| {
@@ -107,7 +107,7 @@ test "output leaves the reap to the task that holds it" {
     try testing.expect(output.result == null);
 
     const term = try held.wait(io);
-    held.release();
+    held.release(io);
     released = true;
     try group.await(io);
     const result = try output.result.?;
