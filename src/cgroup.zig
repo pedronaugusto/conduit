@@ -394,10 +394,6 @@ fn Fuzz(comptime shakedown: type) type {
         /// fits it.
         fn mountinfoReadsThroughItsWindow(_: void, case: *shakedown.Case) anyerror!void {
             const s = case.source;
-            // The test runner sets `std.testing.io` up around each test of an
-            // ordinary run, and leaves it uninitialised around a fuzzing input.
-            if (builtin.fuzz) std.testing.io_instance = .init(std.testing.allocator, .{});
-            defer if (builtin.fuzz) std.testing.io_instance.deinit();
             const gpa = std.testing.allocator;
             const io = std.testing.io;
             var file: std.ArrayList(u8) = .empty;
