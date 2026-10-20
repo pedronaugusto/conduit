@@ -4192,16 +4192,6 @@ test "a child on a terminal gets its extra files above the terminal's three" {
     var f = try tmp.dir.createFile(io, "out", .{});
     defer f.close(io);
 
-    // Windows names no handles beside a pseudoconsole: refused by name.
-    if (is_windows) {
-        try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
-            .argv = &.{ inherited_fixture, "inherited", "1" },
-            .stdio = .{ .pty = &pty },
-            .extra_fds = &.{f},
-        }));
-        return;
-    }
-
     // Enough of them that the pair's own descriptors lie among the slots:
     // closing those after placement would close an extra file instead.
     const count = 32;
@@ -4209,12 +4199,12 @@ test "a child on a terminal gets its extra files above the terminal's three" {
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ inherited_fixture, "inherited", std.fmt.comptimePrint("{d}", .{count}) },
         .stdio = .{ .pty = &pty },
-        .detach = true,
+        .detach = !is_windows,
         .extra_fds = &extras,
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
-    pty.closeSlave(io);
+    if (!is_windows) pty.closeSlave(io);
     var sink: Sink = .{};
     defer sink.deinit();
     try sink.start(pty.readFile());
@@ -4245,6 +4235,99 @@ test "a child on the C runtime finds extra handles at descriptor 3" {
     errdefer reap(&child, io);
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
     try expectSaid(tmp.dir, "out", "through the runtime\r\n");
+}
+
+//======================================================================
+// The channel.
+//======================================================================
+
+/// Says a line over `channel` to a child running the fixture's `channel`,
+/// and gives back what it answered, read to the end: the child closes its
+/// end and exits once it has.
+fn converse(channel: std.Io.File, answer: *std.ArrayList(u8)) !void {
+    try channel.writeStreamingAll(io, "ping\n");
+    var buffer: [256]u8 = undefined;
+    while (true) {
+        const n = channel.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+            error.EndOfStream => return,
+            else => return err,
+        };
+        try answer.appendSlice(gpa, buffer[0..n]);
+    }
+}
+
+test "a child talks both ways over its channel, named after its extra files" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var f = try tmp.dir.createFile(io, "out", .{});
+    defer f.close(io);
+
+    const channel = try conduit.Channel.open();
+    defer channel.parent.close(io);
+    var given = true;
+    defer if (given) channel.child.close(io);
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
+        .stdio = .ignore,
+        .extra_fds = &.{f},
+        .channel = .{ .file = channel.child, .variable = "CONDUIT_TEST_CHANNEL" },
+    });
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+    // This process's copy goes, so the end the child closes is the last.
+    channel.child.close(io);
+    given = false;
+
+    var answer: std.ArrayList(u8) = .empty;
+    defer answer.deinit(gpa);
+    try converse(channel.parent, &answer);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    // The descriptor after the one extra file; on Windows the handle's value.
+    if (!is_windows) try testing.expectEqualStrings("4 ping\n", answer.items);
+    try testing.expect(std.mem.endsWith(u8, answer.items, " ping\n"));
+}
+
+test "a child on a terminal has its channel beside it" {
+    var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
+    defer pty.close(io);
+    const channel = try conduit.Channel.open();
+    defer channel.parent.close(io);
+    var given = true;
+    defer if (given) channel.child.close(io);
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
+        .stdio = .{ .pty = &pty },
+        .detach = !is_windows,
+        .channel = .{ .file = channel.child, .variable = "CONDUIT_TEST_CHANNEL" },
+    });
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+    channel.child.close(io);
+    given = false;
+    if (!is_windows) pty.closeSlave(io);
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(pty.readFile());
+
+    var answer: std.ArrayList(u8) = .empty;
+    defer answer.deinit(gpa);
+    try converse(channel.parent, &answer);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+    if (!is_windows) try testing.expectEqualStrings("3 ping\n", answer.items);
+    try testing.expect(std.mem.endsWith(u8, answer.items, " ping\n"));
+}
+
+test "a channel's variable must be one an environment can hold" {
+    const channel = try conduit.Channel.open();
+    defer channel.parent.close(io);
+    defer channel.child.close(io);
+    for ([_][]const u8{ "", "A=B", "A\x00B" }) |variable| {
+        try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
+            .argv = &.{ inherited_fixture, "exit" },
+            .stdio = .ignore,
+            .channel = .{ .file = channel.child, .variable = variable },
+        }));
+    }
 }
 
 const BorrowedDescriptor = struct {

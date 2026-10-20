@@ -157,6 +157,7 @@ pub fn dev(b: *std.Build, tools: type) void {
                 .target = target,
                 .optimize = optimize,
                 .link_libc = link_libc,
+                .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
             }),
         });
         test_options.addOptionPath("input_fixture", input_fixture.getEmittedBin());

@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Channel`, a two-way byte channel between a parent and a child it starts, and `SpawnOptions.channel` to give the child its end under an environment variable the caller names; `Channel.inherited` opens it in the child (also in `conduit.tty`). POSIX: a pair of Unix stream sockets, the child's end placed after the `extra_fds` and named by its descriptor. Windows: a duplex pipe with no name, both ends asynchronous, the child's end inherited by handle and named by the handle's value. Asked by WAKE's hull and lantern, whose channel was POSIX only.
+- Windows: `extra_fds` together with `.pty`, the handles named in a handle list beside the pseudoconsole attribute, where it was `error.Unsupported`.
+
 ### Changed
 
 - Development: the suite runs under the release tier's hardened profile (`bay hardened`, `bay hardened-fuzz`, `bay hardened-tsan`), which takes the place of the `thread-sanitizer` build option and its declared ThreadSanitizer job.

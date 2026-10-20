@@ -204,6 +204,8 @@ pub const Child = struct {
     /// in an attribute list and nothing else, which is `close_all` already; both
     /// values mean the same thing there.
     pub const FdPolicy = contract.FdPolicy;
+    /// A channel's end for a child, and the variable naming it there.
+    pub const ChannelEnd = contract.ChannelEnd;
 
     /// The user, group and file-creation mask a child starts with. POSIX only.
     ///
@@ -291,6 +293,18 @@ pub const Child = struct {
         for (options.argv) |argument| if (std.mem.findScalar(u8, argument, 0) != null) return error.InvalidArgv;
         if (options.parent_death_signal != null and builtin.target.os.tag != .linux) return error.Unsupported;
         var configured = options;
+        // A channel's end is one more extra file, after the caller's: the
+        // spawn places it as it places them, and names it in the child's
+        // environment by where it was placed.
+        var extras_with_channel: []std.Io.File = &.{};
+        defer gpa.free(extras_with_channel);
+        if (options.channel) |end| {
+            if (!contract.isVariableName(end.variable)) return error.Unsupported;
+            extras_with_channel = try gpa.alloc(std.Io.File, options.extra_fds.len + 1);
+            @memcpy(extras_with_channel[0..options.extra_fds.len], options.extra_fds);
+            extras_with_channel[options.extra_fds.len] = end.file;
+            configured.extra_fds = extras_with_channel;
+        }
         // A private POSIX group belongs to the held child until the reap. It
         // must never be the caller's group, even when detach was not requested.
         if (!is_windows and options.descendants == .contain) configured.detach = true;

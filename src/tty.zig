@@ -77,6 +77,10 @@ pub const PipeError = close_on_exec.PipeError;
 /// in two calls has no close-on-exec flag yet, taken only for the length of a
 /// call. Darwin only; elsewhere it costs nothing.
 pub const ForkGap = close_on_exec.ForkGap;
+/// A two-way byte channel between a process and a child it starts: the
+/// parent's half (`open`, handed to `SpawnOptions.channel`) and the child's
+/// (`inherited`, from the variable the spawn named it in).
+pub const Channel = @import("channel.zig").Channel;
 /// Whether a descriptor here is opened and marked close-on-exec in two calls.
 pub const opening_is_two_calls = close_on_exec.opening_is_two_calls;
 /// A point on the clock a bounded wait ends at, made from a `std.Io.Timeout`

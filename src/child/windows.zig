@@ -15,6 +15,7 @@ const State = @import("State.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("../trace.zig");
+const tty = @import("conduit.tty");
 const win32 = @import("../win32.zig");
 const windows_search = @import("windows/search.zig");
 
@@ -36,11 +37,6 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     const line = try command_line.serialise(arena, options.argv);
     const application = try applicationName(arena, io, options);
 
-    const environment: ?[*:0]const u16 = if (options.environ) |map| env: {
-        const block = try map.createWindowsBlock(arena, .{});
-        break :env block.slice.ptr;
-    } else null;
-
     const cwd = try workingDirectory(arena, options.cwd);
 
     var plan: Plan = try .init(io, options, null);
@@ -50,6 +46,18 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     const given = child_handles.given;
     var extras: Extras = try .init(arena, options.extra_fds);
     defer extras.deinit(options.extra_fds);
+
+    // A channel is the last of the extras (see `Child.spawn`), and the child
+    // finds it by the value of the handle it inherits: the copy made here.
+    const with_channel: ?std.process.Environ.Map = if (options.channel) |end| map: {
+        var text: [tty.Channel.value_max]u8 = undefined;
+        const handle = extras.handles[extras.handles.len - 1];
+        break :map try Child.channelEnviron(arena, options.environ, end, tty.Channel.valueOf(&text, handle));
+    } else null;
+    const environment: ?[*:0]const u16 = if (if (with_channel) |*map| map else options.environ) |map| env: {
+        const block = try map.createWindowsBlock(arena, .{});
+        break :env block.slice.ptr;
+    } else null;
 
     var startup: win32.StartupInfoExW = std.mem.zeroes(win32.StartupInfoExW);
     var flags: windows.CreateProcessFlags = .{
@@ -188,7 +196,7 @@ const Extras = struct {
 /// inherit, so passing FALSE is what keeps unrelated inheritable handles out
 /// of the child.
 fn inheritHandles(options: SpawnOptions, given: [3]?windows.HANDLE, extra_duplicates: usize) windows.BOOL {
-    if (options.stdio == .pty) return .FALSE;
+    if (options.stdio == .pty) return if (extra_duplicates != 0) .TRUE else .FALSE;
     for (given) |slot| {
         const handle = slot orelse continue;
         if (!isConsole(handle)) return .TRUE;
@@ -202,8 +210,9 @@ fn inheritHandles(options: SpawnOptions, given: [3]?windows.HANDLE, extra_duplic
 /// A pseudoconsole is attached through an attribute list rather than through
 /// the standard handles. Naming a standard handle alongside a pseudoconsole
 /// is unsupported; `STARTF_USESTDHANDLES` with three null handles keeps the
-/// parent's streams out. Nothing needs to be inheritable in that case either,
-/// which is why `inheritHandles` differs.
+/// parent's streams out. What the child holds above its standard three is
+/// named in a handle list in the same attribute list, the way it is without
+/// a pseudoconsole, and in the C runtime's table.
 fn describeChild(
     arena: Allocator,
     options: SpawnOptions,
@@ -216,8 +225,14 @@ fn describeChild(
     switch (options.stdio) {
         .pty => |pty| {
             const console = pty.slaveHandle().?;
-            var list = try AttributeList.init(arena, 1);
+            const inheritable = try inheritList(arena, .{ null, null, null }, extras);
+            var list = try AttributeList.init(arena, if (inheritable != null) 2 else 1);
             try list.setPseudoConsole(console);
+            // Beside the pseudoconsole, the handles the child inherits and
+            // nothing else: `bInheritHandles` is true for them, and without
+            // the list it hands over every inheritable handle this process
+            // holds.
+            if (inheritable) |handles| try list.setHandleList(handles);
             if (trace.enabled()) {
                 trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)}); // safe: printed, never dereferenced
             }
@@ -245,6 +260,7 @@ fn describeChild(
             // *naming* a handle, which is why `stderr_to` with `.pty` is
             // refused rather than merged in here.
             startup.StartupInfo.dwFlags = win32.startf_usestdhandles;
+            if (extras.len != 0) try describeRuntimeTable(arena, extras, startup);
         },
         else => {
             startup.StartupInfo.cb = @sizeOf(windows.STARTUPINFOW);
@@ -268,15 +284,17 @@ fn describeChild(
                 flags.extended_startupinfo_present = true;
             }
 
-            // What the child holds above its standard three is said where its C
-            // runtime looks for inherited descriptors.
-            if (extras.len != 0) {
-                const table = try runtimeTable(arena, extras);
-                startup.StartupInfo.cbReserved2 = @intCast(table.len);
-                startup.StartupInfo.lpReserved2 = &table[0];
-            }
+            if (extras.len != 0) try describeRuntimeTable(arena, extras, startup);
         },
     }
+}
+
+/// What the child holds above its standard three, said where its C runtime
+/// looks for inherited descriptors.
+fn describeRuntimeTable(arena: Allocator, extras: []const windows.HANDLE, startup: *win32.StartupInfoExW) Allocator.Error!void {
+    const table = try runtimeTable(arena, extras);
+    startup.StartupInfo.cbReserved2 = @intCast(table.len);
+    startup.StartupInfo.lpReserved2 = &table[0];
 }
 
 /// The child's working directory, as `CreateProcessW` wants it, and `null` for
@@ -388,9 +406,6 @@ fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
     // is nowhere to put the caller's file. Refusing beats accepting the option
     // and quietly dropping it.
     if (options.stdio == .pty and options.stderr_to != null) return error.Unsupported;
-    // The same for the C runtime's table, which names handles in the startup
-    // record a pseudoconsole child is given none in.
-    if (options.stdio == .pty and options.extra_fds.len != 0) return error.Unsupported;
     if (options.extra_fds.len > runtime_table_limit - 3) return error.Unsupported;
 
     // A Windows process runs as the token it was created with. Changing the

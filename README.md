@@ -398,7 +398,7 @@ child itself exited with, including the system's control-exit status.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`, `fd_policy`, `extra_fds`, `job_limits`, `parent_death_signal`, `descendants`.
+`resource_limits`, `fd_policy`, `extra_fds`, `channel`, `job_limits`, `parent_death_signal`, `descendants`.
 
 `descendants = .survive` is the default on every platform. Once the child
 exits normally and is reaped, `deinit` leaves what it started alone. This
@@ -552,8 +552,25 @@ numbers no descriptors: each file goes to the child as an inheritable
 duplicate named in the handle list, and in the table of inherited
 descriptors the Microsoft C runtime reads from the startup record
 (`lpReserved2`), so a child on that runtime — `cmd.exe`, Python, Node — has
-them at 3 and up. A child on no C runtime finds them with `GetStartupInfoW`. With `.pty` it is
-`error.Unsupported` there, as `stderr_to` is.
+them at 3 and up. A child on no C runtime finds them with `GetStartupInfoW`. Beside a
+pseudoconsole the handle list sits in the same attribute list, and the
+standard handles stay unnamed.
+
+`channel` is a stream both ways between the parent and the child, beside
+whatever `stdio` is, a terminal included: bytes, with no protocol of its
+own. `Channel.open` makes one; its `child` end goes in `.channel` with the
+name of an environment variable, and the child opens its end with
+`Channel.inherited(environ_map, name)`. On POSIX it is a pair of Unix stream
+sockets, the child's end the descriptor after the `extra_fds` and the
+variable its number. On Windows it is a duplex pipe with no name, made as the
+standard library makes a child's pipes, so nothing else can open it; the
+child inherits its end by handle, beside the pseudoconsole when there is
+one, and the variable holds the handle's value. Both ends are asynchronous
+there, so a read waiting on one does not hold back a write. Close the
+`child` end once `spawn` returns: a copy left in the parent keeps the
+channel open after the child has gone. The child's half is in `conduit.tty`
+too, for a program that runs no child and links no C library on Linux.
+The Windows half runs in the Windows jobs of CI.
 
 `credentials` is `uid`, `gid` and `umask`, and `resource_limits` a list of
 `std.posix.rlimit_resource` and `std.posix.rlimit` pairs. Both are set in the

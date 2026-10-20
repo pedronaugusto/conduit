@@ -7,6 +7,7 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 const Pty = @import("../pty.zig").Pty;
 const Duration = @import("conduit.tty").Duration;
+const environ = @import("../environ.zig");
 const is_windows = builtin.target.os.tag == .windows;
 /// A numeric process id on either platform, never a Windows handle.
 pub const Id = if (is_windows) windows.DWORD else posix.pid_t;
@@ -230,12 +231,26 @@ pub const SpawnOptions = struct {
     /// runtime — `cmd.exe`, Python, Node, any C program — has them as its
     /// descriptors 3 and up. A child on no C runtime finds them with
     /// `GetStartupInfoW`.
-    /// Together with `.pty` this is `error.Unsupported`: a pseudoconsole is
-    /// attached through the attribute list, which Windows documents as
-    /// incompatible with naming a child's handles, the reason `stderr_to` is
-    /// refused there too. So is a list too long for the startup record's
-    /// 16-bit size, more than 7,000 files.
+    /// Beside a pseudoconsole the handles are named in the same attribute
+    /// list, and the standard handles stay unnamed. A list too long for the
+    /// startup record's 16-bit size, more than 7,000 files, is
+    /// `error.Unsupported`.
     extra_fds: []const std.Io.File = &.{},
+    /// The child's end of a `Channel`, and the environment variable the
+    /// child finds it named in: a stream both ways between the two, beside
+    /// whatever `stdio` is, a pseudo-terminal included.
+    ///
+    /// The end goes to the child as one more of `extra_fds`, after them, and
+    /// the variable is set in the child's environment (`environ`, or this
+    /// process's when that is `null`) to what the child opens it by: the
+    /// descriptor's number on POSIX, the inherited handle's value on Windows.
+    /// The child opens it with `Channel.inherited`. Borrowed as `extra_fds`
+    /// are; close it once `spawn` returns, so the parent's end sees the
+    /// channel end when the child goes.
+    ///
+    /// **Windows**: the end is inherited by handle, named in the attribute
+    /// list beside the pseudoconsole when there is one.
+    channel: ?ChannelEnd = null,
     /// What the child and everything it starts may use. Windows only:
     /// anything set here is `error.Unsupported` elsewhere.
     job_limits: JobLimits = .{},
@@ -326,6 +341,38 @@ pub const JobLimits = struct {
             limits.cpu_rate != null;
     }
 };
+
+/// A channel's end for a child, and the variable it is named in there: see
+/// `SpawnOptions.channel`.
+pub const ChannelEnd = struct {
+    /// The child's end, `Channel.child`.
+    file: std.Io.File,
+    /// The environment variable the child finds it named in. A name an
+    /// environment can hold: not empty, and no `=` or NUL in it.
+    variable: []const u8,
+};
+
+/// Whether an environment can hold `name`: not empty, and no `=` or NUL.
+pub fn isVariableName(name: []const u8) bool {
+    return name.len != 0 and std.mem.findAny(u8, name, "=\x00") == null;
+}
+
+/// The environment a child given a channel starts with: `base`, or this
+/// process's when that is `null`, with `end.variable` set to `value`. The map
+/// is the arena's.
+pub fn channelEnviron(
+    arena: Allocator,
+    base: ?*const std.process.Environ.Map,
+    end: ChannelEnd,
+    value: []const u8,
+) SpawnError!std.process.Environ.Map {
+    var map = if (base) |given| try given.clone(arena) else environ.inherit(arena, &.{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Unexpected => return error.Unexpected,
+    };
+    try map.put(end.variable, value);
+    return map;
+}
 
 /// What a child is given of the descriptors above 2 that the parent holds.
 ///
@@ -499,7 +546,8 @@ pub const SpawnError = error{
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
     /// The combination asked for has no meaning on this system: `stderr_to`
-    /// or `extra_fds` together with `.pty` on Windows, a `path_search` other than
+    /// together with `.pty` on Windows, a `channel` whose variable no
+    /// environment can hold, a `path_search` other than
     /// `.child_environ` there, `credentials` or `resource_limits` anywhere on
     /// Windows, `job_limits` anywhere else, or `parent_death_signal` anywhere
     /// but Linux. The option that cannot be honoured says so.

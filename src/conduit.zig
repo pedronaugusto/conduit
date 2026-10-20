@@ -224,6 +224,11 @@ pub const pipe = tty.pipe;
 pub const PipeOptions = tty.PipeOptions;
 /// What `pipe` can meet.
 pub const PipeError = tty.PipeError;
+/// A two-way byte channel to a child: `Channel.open` in the parent, its
+/// `child` end given by `SpawnOptions.channel` under a variable the caller
+/// names, and `Channel.inherited` in the child. A socket pair on POSIX, a
+/// duplex pipe inherited by handle on Windows, beside a pseudoconsole too.
+pub const Channel = tty.Channel;
 /// A point a bounded wait ends at. `Deadline.fromTimeout` reads a
 /// `std.Io.Timeout` against the clock, and `remainingMs` and `windowsMs` say
 /// what is left in the whole milliseconds a system wait takes, rounded up:

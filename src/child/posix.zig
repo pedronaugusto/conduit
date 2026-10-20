@@ -283,7 +283,15 @@ const Exec = struct {
             slot.* = (try arena.dupeSentinel(u8, arg, 0)).ptr;
         }
 
-        const envp: [*:null]const ?[*:0]const u8 = if (options.environ) |map| envp: {
+        // A channel is the last of the extras, at the descriptor after the
+        // caller's (see `Child.spawn`), and the child finds it by that number.
+        const with_channel: ?std.process.Environ.Map = if (options.channel) |end| map: {
+            var text: [tty.Channel.value_max]u8 = undefined;
+            const fd: posix.fd_t = @intCast(3 + options.extra_fds.len - 1);
+            break :map try Child.channelEnviron(arena, options.environ, end, tty.Channel.valueOf(&text, fd));
+        } else null;
+        const environment: ?*const std.process.Environ.Map = if (with_channel) |*map| map else options.environ;
+        const envp: [*:null]const ?[*:0]const u8 = if (environment) |map| envp: {
             const block = try map.createPosixBlock(arena, .{});
             break :envp block.slice.ptr;
         } else c.environ;

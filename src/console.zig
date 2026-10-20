@@ -77,6 +77,10 @@ pub extern "kernel32" fn WriteFile(
     lpOverlapped: ?*anyopaque,
 ) callconv(.winapi) windows.BOOL;
 
+/// `FILE_TYPE_PIPE`, what `GetFileType` answers for a pipe or a socket.
+pub const file_type_pipe: windows.DWORD = 0x0003;
+pub extern "kernel32" fn GetFileType(hFile: windows.HANDLE) callconv(.winapi) windows.DWORD;
+
 pub extern "kernel32" fn GetConsoleMode(
     hConsoleHandle: windows.HANDLE,
     lpMode: *windows.DWORD,

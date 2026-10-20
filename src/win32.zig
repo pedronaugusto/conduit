@@ -328,8 +328,8 @@ pub const startf_usestdhandles: windows.DWORD = 0x00000100;
 /// What kind of object a handle is, for the C runtime's flags on an
 /// inherited descriptor.
 pub const file_type_char: windows.DWORD = 0x0002;
-pub const file_type_pipe: windows.DWORD = 0x0003;
-pub extern "kernel32" fn GetFileType(hFile: windows.HANDLE) callconv(.winapi) windows.DWORD;
+pub const file_type_pipe = console.file_type_pipe;
+pub const GetFileType = console.GetFileType;
 
 //======================================================================
 // Processes.

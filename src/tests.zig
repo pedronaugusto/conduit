@@ -66,6 +66,7 @@ test {
     _ = Orphans;
     _ = @import("deadline_test.zig");
     _ = @import("close_on_exec_test.zig");
+    _ = @import("channel_test.zig");
     _ = @import("pin.zig");
     _ = @import("spin.zig");
     _ = console;
@@ -74,7 +75,7 @@ test {
     _ = Expect;
     // A module of its own, so its declarations are named here to be
     // compiled for every target the check builds.
-    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty, tty.openControlling, tty.Controlling, tty.Deadline, tty.ForkGap }) |decl| _ = decl;
+    inline for (.{ tty.Size, tty.Saved, tty.rawMode, tty.restore, tty.winSize, tty.isTty, tty.openControlling, tty.Controlling, tty.Deadline, tty.ForkGap, tty.Channel }) |decl| _ = decl;
     _ = environ_impl;
     _ = shell;
     _ = @import("find.zig");

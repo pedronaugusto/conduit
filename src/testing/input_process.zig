@@ -1,10 +1,11 @@
 //! A native input reader, a child that stays alive without reading, one
 //! that says its number into each descriptor it was given above the
-//! standard three, or one that held some memory and stays until its input
-//! ends.
+//! standard three, one that answers over the channel its parent named, or
+//! one that held some memory and stays until its input ends.
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = std.os.windows;
+const tty = @import("conduit.tty");
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -13,6 +14,7 @@ pub fn main(init: std.process.Init) !void {
         try init.io.sleep(.fromSeconds(30), .awake);
         return;
     }
+    if (std.mem.eql(u8, args[1], "channel")) return channel(init, args[2]);
     if (std.mem.eql(u8, args[1], "inherited")) return inherited(try std.fmt.parseInt(usize, args[2], 10));
     if (std.mem.eql(u8, args[1], "hold")) return hold(init.io, try std.fmt.parseInt(usize, args[2], 10));
     const input = std.Io.File.stdin();
@@ -26,6 +28,22 @@ pub fn main(init: std.process.Init) !void {
         if (n != 0) try output.writeStreamingAll(init.io, buffer[0..n]);
     }
     if (std.mem.eql(u8, args[1], "end")) try output.writeStreamingAll(init.io, "EOF");
+}
+
+/// Reads a line from the channel `variable` names and answers it with the
+/// variable's value and the line, then closes its end.
+fn channel(init: std.process.Init, variable: []const u8) !void {
+    const value = init.environ_map.get(variable) orelse return error.FixtureNoChannel;
+    const end = (try tty.Channel.inherited(init.environ_map, variable)).?;
+    defer end.close(init.io);
+    var line: [256]u8 = undefined;
+    var got: usize = 0;
+    while (std.mem.findScalar(u8, line[0..got], '\n') == null) {
+        if (got == line.len) return error.FixtureLineTooLong;
+        got += try end.readStreaming(init.io, &.{line[got..]});
+    }
+    var answer: [512]u8 = undefined;
+    try end.writeStreamingAll(init.io, try std.mem.print(&answer, "{s} {s}", .{ value, line[0..got] }));
 }
 
 /// Touches every page of `mib` MiB, gives them back, says `held`, and stays
