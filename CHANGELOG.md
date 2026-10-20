@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Development: the test of `isOpen` on a contended queue holds the queue through its guard (`tryAcquire`, released in the fault hook) instead of writing the guarded mutex's word, which aegis's A001 names as a bypass of the guard.
+
 ## [0.9.3] - 2026-10-20
 
 ### Changed
