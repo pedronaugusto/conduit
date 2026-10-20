@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-20
+
+### Changed
+
+- reactor 0.7.1 (was 0.6.0), so a graph with uplink 0.8.3 holds conduit and uplink on one reactor line.
+
 ## [0.9.2] - 2026-10-20
 
 ### Added
