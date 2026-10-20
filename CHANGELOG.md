@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-20
+
 ### Added
 
 - `Channel`, a two-way byte channel between a parent and a child it starts, and `SpawnOptions.channel` to give the child its end under an environment variable the caller names; `Channel.inherited` opens it in the child (also in `conduit.tty`). POSIX: a pair of Unix stream sockets, the child's end placed after the `extra_fds` and named by its descriptor. Windows: a duplex pipe with no name, both ends asynchronous, the child's end inherited by handle and named by the handle's value. Asked by WAKE's hull and lantern, whose channel was POSIX only.
