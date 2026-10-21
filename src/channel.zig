@@ -30,7 +30,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const close_on_exec = @import("close_on_exec.zig");
-const console = @import("console.zig");
+const win32 = @import("win32");
 const posix = std.posix;
 const system = posix.system;
 const windows = std.os.windows;
@@ -253,7 +253,7 @@ fn fromValueWindows(value: []const u8) Channel.InheritedError!std.Io.File {
     const number = std.fmt.parseInt(usize, value, 10) catch return error.NotAChannel;
     if (number == 0) return error.NotAChannel;
     const handle: windows.HANDLE = @ptrFromInt(number); // safe: a handle value the parent wrote, checked below as a pipe before any use
-    if (console.GetFileType(handle) != console.file_type_pipe) return error.NotAChannel;
+    if (win32.GetFileType(handle) != win32.file_type_pipe) return error.NotAChannel;
 
     // How the handle was opened decides how a read on it is made: a parent
     // that made the end synchronous gets a synchronous file.

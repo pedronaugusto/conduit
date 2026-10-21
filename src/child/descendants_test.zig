@@ -4,7 +4,7 @@ const reap = @import("../testing/support.zig").reap;
 const builtin = @import("builtin");
 const Child = @import("../child.zig").Child;
 const windows = builtin.target.os.tag == .windows;
-const win32 = @import("../win32.zig");
+const win32 = @import("win32");
 const tree = @import("../tree.zig");
 const cgroups = @import("../cgroup.zig");
 const io = std.testing.io;

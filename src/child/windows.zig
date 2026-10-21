@@ -16,7 +16,7 @@ const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const trace = @import("../trace.zig");
 const tty = @import("conduit.tty");
-const win32 = @import("../win32.zig");
+const win32 = @import("win32");
 const windows_search = @import("windows/search.zig");
 
 const SpawnError = Child.SpawnError;

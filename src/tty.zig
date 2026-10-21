@@ -59,11 +59,10 @@ const system = posix.system;
 const is_windows = builtin.target.os.tag == .windows;
 const is_linux = builtin.target.os.tag == .linux;
 const is_darwin = builtin.target.os.tag.isDarwin();
-const win32 = if (is_windows) console else struct {};
+const win32 = if (is_windows) @import("win32") else struct {};
 const windows = std.os.windows;
 
-/// The console calls the primitives make on Windows, for conduit's own
-/// Windows code to take from here rather than declare twice.
+/// A Windows console's input records, and a bounded wait for the next.
 pub const console = @import("console.zig");
 
 /// A pipe, both ends close-on-exec, for a wake a program writes itself.

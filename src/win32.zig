@@ -8,8 +8,10 @@
 //! attribute-list and pseudoconsole entry points, and a package that needs
 //! them has to spell them out somewhere.
 //!
-//! This file is compiled only on Windows targets. Nothing in it is public API;
-//! it is the seam between `Pty`, `Child` and `tty` and the operating system.
+//! Nothing in it is public API: it is a module of its own (`win32`) that
+//! `conduit.tty` and `conduit` import and neither exports, so a binding both
+//! need is declared once, and it is the seam between `Pty`, `Child` and `tty`
+//! and the operating system. Nothing here is reached off Windows.
 //!
 //! Windows' names, in Zig's casing: `JOBOBJECT_BASIC_LIMIT_INFORMATION` is
 //! `JobObjectBasicLimitInformation`, `WAIT_TIMEOUT` is `wait_timeout`, and the
@@ -27,13 +29,26 @@
 
 const std = @import("std");
 const windows = std.os.windows;
-const console = @import("conduit.tty").console;
+const log = std.log.scoped(.conduit);
 
 pub const Hresult = windows.LONG;
 
-/// `GetLastError` as `error.Unexpected`, keeping the number. Declared with
-/// the console calls in the terminal module, which needs it too.
-pub const unexpected = console.unexpected;
+/// `GetLastError` as `error.Unexpected`, keeping the number.
+///
+/// Not `std.os.windows.unexpectedError`, which in a Debug build prints the
+/// code by its tag name — and `Win32Error` is a non-exhaustive enum, so a code
+/// nobody has named ends the process rather than returning the error the
+/// caller was about to handle. A library may not do that to a program over a
+/// failure it can describe. The number says as much as the name and cannot
+/// fail to be printed.
+pub fn unexpected(err: windows.Win32Error) std.Io.UnexpectedError {
+    @branchHint(.cold);
+    if (std.options.unexpected_error_tracing) {
+        log.warn("error.Unexpected: GetLastError({d})", .{@backingInt(err)});
+        std.debug.dumpCurrentStackTrace(.{ .first_address = @returnAddress() });
+    }
+    return error.Unexpected;
+}
 
 /// `S_OK`. Every `HRESULT` this package reads is either this or a failure.
 pub const ok: Hresult = 0;
@@ -268,12 +283,24 @@ pub extern "kernel32" fn DuplicateHandle(
     dwOptions: windows.DWORD,
 ) callconv(.winapi) windows.BOOL;
 
-pub const generic_read = console.generic_read;
-pub const generic_write = console.generic_write;
-pub const file_share_read = console.file_share_read;
-pub const file_share_write = console.file_share_write;
-pub const open_existing = console.open_existing;
-pub const CreateFileW = console.CreateFileW;
+pub const generic_read: windows.DWORD = 0x80000000;
+pub const generic_write: windows.DWORD = 0x40000000;
+pub const file_share_read: windows.DWORD = 0x00000001;
+pub const file_share_write: windows.DWORD = 0x00000002;
+pub const open_existing: windows.DWORD = 3;
+
+/// Opens a file or a device by name: here, `CONIN$` and `CONOUT$`, the
+/// console's input buffer and screen buffer, whatever the standard handles
+/// were redirected to.
+pub extern "kernel32" fn CreateFileW(
+    lpFileName: windows.LPCWSTR,
+    dwDesiredAccess: windows.DWORD,
+    dwShareMode: windows.DWORD,
+    lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
+    dwCreationDisposition: windows.DWORD,
+    dwFlagsAndAttributes: windows.DWORD,
+    hTemplateFile: ?windows.HANDLE,
+) callconv(.winapi) windows.HANDLE;
 
 //======================================================================
 // Process and thread attribute lists.
@@ -328,8 +355,9 @@ pub const startf_usestdhandles: windows.DWORD = 0x00000100;
 /// What kind of object a handle is, for the C runtime's flags on an
 /// inherited descriptor.
 pub const file_type_char: windows.DWORD = 0x0002;
-pub const file_type_pipe = console.file_type_pipe;
-pub const GetFileType = console.GetFileType;
+/// `FILE_TYPE_PIPE`, what `GetFileType` answers for a pipe or a socket.
+pub const file_type_pipe: windows.DWORD = 0x0003;
+pub extern "kernel32" fn GetFileType(hFile: windows.HANDLE) callconv(.winapi) windows.DWORD;
 
 //======================================================================
 // Processes.
@@ -388,10 +416,53 @@ pub extern "kernel32" fn GenerateConsoleCtrlEvent(
 ) callconv(.winapi) windows.BOOL;
 
 //======================================================================
-// Console mode: declared in the terminal module, whose call it is.
+// The console: its modes and its screen buffer, `tty`'s calls.
 //======================================================================
 
-pub const GetConsoleMode = console.GetConsoleMode;
+pub const enable_processed_input: windows.DWORD = 0x0001;
+pub const enable_line_input: windows.DWORD = 0x0002;
+pub const enable_echo_input: windows.DWORD = 0x0004;
+pub const enable_window_input: windows.DWORD = 0x0008;
+pub const enable_mouse_input: windows.DWORD = 0x0010;
+pub const enable_insert_mode: windows.DWORD = 0x0020;
+pub const enable_quick_edit_mode: windows.DWORD = 0x0040;
+pub const enable_extended_flags: windows.DWORD = 0x0080;
+pub const enable_virtual_terminal_input: windows.DWORD = 0x0200;
+
+pub const enable_processed_output: windows.DWORD = 0x0001;
+pub const enable_wrap_at_eol_output: windows.DWORD = 0x0002;
+pub const enable_virtual_terminal_processing: windows.DWORD = 0x0004;
+pub const disable_newline_auto_return: windows.DWORD = 0x0008;
+
+pub extern "kernel32" fn GetConsoleMode(
+    hConsoleHandle: windows.HANDLE,
+    lpMode: *windows.DWORD,
+) callconv(.winapi) windows.BOOL;
+
+pub extern "kernel32" fn SetConsoleMode(
+    hConsoleHandle: windows.HANDLE,
+    dwMode: windows.DWORD,
+) callconv(.winapi) windows.BOOL;
+
+pub const SmallRect = extern struct {
+    Left: windows.SHORT,
+    Top: windows.SHORT,
+    Right: windows.SHORT,
+    Bottom: windows.SHORT,
+};
+
+pub const ConsoleScreenBufferInfo = extern struct {
+    dwSize: windows.COORD,
+    dwCursorPosition: windows.COORD,
+    wAttributes: windows.WORD,
+    srWindow: SmallRect,
+    dwMaximumWindowSize: windows.COORD,
+};
+
+pub extern "kernel32" fn GetConsoleScreenBufferInfo(
+    hConsoleOutput: windows.HANDLE,
+    lpConsoleScreenBufferInfo: *ConsoleScreenBufferInfo,
+) callconv(.winapi) windows.BOOL;
 
 //======================================================================
 // Process memory: `Child.memory`.

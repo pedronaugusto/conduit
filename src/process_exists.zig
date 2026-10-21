@@ -6,7 +6,7 @@ const posix = std.posix;
 const Id = @import("child/contract.zig").Id;
 
 const is_windows = builtin.target.os.tag == .windows;
-const win32 = @import("win32.zig");
+const win32 = @import("win32");
 
 /// Whether a process has the id `pid` now: `true`, `false`, or `null` where
 /// the system will not say.

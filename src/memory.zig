@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const c = std.c;
 const posix = std.posix;
 const windows = std.os.windows;
-const win32 = @import("win32.zig");
+const win32 = @import("win32");
 
 /// What a process holds now and the most it has held since it started, in
 /// bytes, each system's own measure of it:

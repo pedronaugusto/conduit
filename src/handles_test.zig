@@ -41,7 +41,7 @@ test "readAvailable reads what a pipe holds and returns rather than wait for the
     const io = testing.io;
     const readAvailable = @import("handles.zig").readAvailable;
     const ends: [2]std.Io.File = if (is_windows) ends: {
-        const win32 = @import("win32.zig");
+        const win32 = @import("win32");
         var read_end: std.os.windows.HANDLE = undefined;
         var write_end: std.os.windows.HANDLE = undefined;
         if (win32.CreatePipe(&read_end, &write_end, null, 0) == .FALSE) return error.PipeFailed;

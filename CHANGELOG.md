@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking:** `conduit.console` and `conduit.tty.console` no longer carry kernel32's console bindings: `CreateFileW`, `WriteFile`, `GetConsoleMode`, `SetConsoleMode`, `GetConsoleScreenBufferInfo`, `GetFileType`, `SmallRect`, `ConsoleScreenBufferInfo`, the mode, access and file-type constants, and `unexpected`. They are declared once in a module of conduit's own that both of its modules import and neither exports, beside the rest of its Windows calls. The console's input records and waits stay (`InputRecord`, `KeyEvent`, `key_event`, `waitInput`, `peekInput`, `readInput`). `openControlling` opens `CONIN$` and `CONOUT$`; a write with no `std.Io` to hand has `std.os.windows.ntdll.NtWriteFile`.
+
 ## [0.9.5] - 2026-10-21
 
 ### Added

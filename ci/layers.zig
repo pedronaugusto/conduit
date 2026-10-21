@@ -6,6 +6,9 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "seam", .patterns = &.{
         "src/seam.zig",
     } },
+    .{ .name = "Windows calls", .patterns = &.{
+        "src/win32.zig",
+    } },
     .{ .name = "primitives", .patterns = &.{
         "src/orphans/**",
         "src/child/command_line.zig",
@@ -24,9 +27,6 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/tty.zig",
         "src/channel.zig",
         "src/exit.zig",
-    } },
-    .{ .name = "Windows calls", .patterns = &.{
-        "src/win32.zig",
     } },
     .{ .name = "tracing", .patterns = &.{
         "src/trace.zig",
@@ -78,10 +78,12 @@ pub const layers: []const gantry.rules.Layer = &.{
 pub const entries: []const []const u8 = &.{};
 
 /// The seam is a module of its own, so conduit and `conduit.testing` share it
-/// without either exporting it.
+/// without either exporting it; so are the Windows bindings, which conduit
+/// and `conduit.tty` share.
 pub const modules: []const gantry.NamedModule = &.{
     .{ .name = "conduit.tty", .path = "src/tty.zig" },
     .{ .name = "seam", .path = "src/seam.zig" },
+    .{ .name = "win32", .path = "src/win32.zig" },
     .{ .name = "conduit.testing", .path = "src/testing.zig" },
 };
 pub const references: []const gantry.rules.ReferenceRule = &.{

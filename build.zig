@@ -42,6 +42,15 @@ pub fn build(b: *std.Build) void {
     // program that draws its own screen and runs no child. On Linux they are
     // system calls and link no C library; elsewhere the C library is the
     // system interface and is linked whatever a program does.
+    // The Windows calls `std.os.windows` does not declare, which both modules
+    // make: a module of its own that neither exports, so a binding is declared
+    // once and is no part of either API.
+    const win32 = b.createModule(.{
+        .root_source_file = b.path("src/win32.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const tty_module = b.addModule("conduit.tty", .{
         .root_source_file = b.path("src/tty.zig"),
         .target = target,
@@ -50,7 +59,11 @@ pub fn build(b: *std.Build) void {
             .linux, .windows => null,
             else => true,
         },
-        .imports = &.{ .{ .name = "aegis", .module = aegis_module }, .{ .name = "reactor", .module = reactor } },
+        .imports = &.{
+            .{ .name = "aegis", .module = aegis_module },
+            .{ .name = "reactor", .module = reactor },
+            .{ .name = "win32", .module = win32 },
+        },
     });
 
     // The seam in front of the process calls conduit makes past `std.Io`: a
@@ -72,6 +85,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "reactor", .module = reactor },
             .{ .name = "conduit.tty", .module = tty_module },
             .{ .name = "seam", .module = seam },
+            .{ .name = "win32", .module = win32 },
         },
     });
     module.addOptions("conduit_options", conduit_options);
@@ -126,6 +140,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .{ .name = "reactor", .module = reactor_package.module("reactor") },
             .{ .name = "conduit.tty", .module = tty_module },
             .{ .name = "seam", .module = module.import_table.get("seam").? },
+            .{ .name = "win32", .module = module.import_table.get("win32").? },
             .{ .name = "conduit_options", .module = module.import_table.get("conduit_options").? },
         },
     });
@@ -168,7 +183,10 @@ pub fn dev(b: *std.Build, tools: type) void {
                 .target = target,
                 .optimize = optimize,
                 .link_libc = link_libc,
-                .imports = &.{.{ .name = "conduit.tty", .module = tty_module }},
+                .imports = &.{
+                    .{ .name = "conduit.tty", .module = tty_module },
+                    .{ .name = "win32", .module = module.import_table.get("win32").? },
+                },
             }),
         });
         test_options.addOptionPath("tty_fixture", tty_fixture.getEmittedBin());

@@ -43,7 +43,7 @@ const gpa = std.testing.allocator;
 const testing = std.testing;
 
 const is_windows = builtin.target.os.tag == .windows;
-const win32 = @import("../win32.zig");
+const win32 = @import("win32");
 const windows = std.os.windows;
 const placeMasterForTest = @import("../pty.zig").placeMasterForTest;
 const spawn_path = @import("posix/spawn.zig");

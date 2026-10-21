@@ -6,7 +6,7 @@ const windows = std.os.windows;
 const c = std.c;
 const is_windows = builtin.target.os.tag == .windows;
 const Child = @import("../child.zig").Child;
-const win32 = @import("../win32.zig");
+const win32 = @import("win32");
 const access = @import("../child.zig").test_access;
 const Reaper = @import("../reaper.zig").Reaper;
 const Observer = struct {

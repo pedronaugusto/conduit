@@ -56,7 +56,7 @@ const c = std.c;
 const Child = @import("child.zig").Child;
 
 const is_windows = builtin.target.os.tag == .windows;
-const win32 = @import("win32.zig");
+const win32 = @import("win32");
 const tty = @import("conduit.tty");
 const tree = @import("tree.zig");
 const Orphans = @import("orphans.zig").Orphans;

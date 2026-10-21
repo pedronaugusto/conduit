@@ -46,7 +46,7 @@ const Pty = @import("pty.zig").Pty;
 const trace = @import("trace.zig");
 const handles = @import("handles.zig");
 const is_windows = builtin.target.os.tag == .windows;
-const win32 = @import("win32.zig");
+const win32 = @import("win32");
 const tree = @import("tree.zig");
 const cgroups = @import("cgroup.zig");
 const child_exit = @import("exit.zig");

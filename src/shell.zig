@@ -16,7 +16,7 @@ const environ = @import("environ.zig");
 const tty = @import("conduit.tty");
 
 const is_windows = builtin.target.os.tag == .windows;
-const win32 = @import("win32.zig");
+const win32 = @import("win32");
 
 /// The longest program path `fromEnvironment` will take from the environment,
 /// in WTF-16 units.

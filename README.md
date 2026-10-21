@@ -797,9 +797,10 @@ output one.
 
 `openControlling(io)` opens the process's own terminal rather than its standard
 streams: `/dev/tty` on POSIX, `CONIN$` and `CONOUT$` on Windows, as one
-`Controlling` with an `input` and an `output` file. `conduit.console` also
-carries `CreateFileW` and `WriteFile` for Windows code that writes to the
-console with no `std.Io` to hand, a panic handler among it.
+`Controlling` with an `input` and an `output` file. The kernel32 calls behind
+these are conduit's own and no part of its API; code that writes to a console
+with no `std.Io` to hand, a panic handler among it, has `std.os.windows`'s
+`NtWriteFile`.
 
 `rawMode` and `restore` take effect at once and throw away input nobody read;
 neither waits for the output to drain, so a terminal that has stopped reading

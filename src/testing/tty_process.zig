@@ -2,6 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const tty = @import("conduit.tty");
+const win32 = @import("win32");
 
 pub fn main(init: std.process.Init) !void {
     if (comptime builtin.target.os.tag == .windows) {
@@ -9,8 +10,8 @@ pub fn main(init: std.process.Init) !void {
         if (args.len > 1 and std.mem.eql(u8, args[1], "cursor")) {
             const out = std.Io.File.stdout();
             var mode: std.os.windows.DWORD = undefined;
-            if (tty.console.GetConsoleMode(out.handle, &mode) == .FALSE) return error.FixtureNoConsole;
-            if (tty.console.SetConsoleMode(out.handle, mode | tty.console.enable_virtual_terminal_processing) == .FALSE)
+            if (win32.GetConsoleMode(out.handle, &mode) == .FALSE) return error.FixtureNoConsole;
+            if (win32.SetConsoleMode(out.handle, mode | win32.enable_virtual_terminal_processing) == .FALSE)
                 return error.FixtureConsoleModeFailed;
             try out.writeStreamingAll(init.io, "\x1b[5 q");
             try init.io.sleep(.fromSeconds(30), .awake);

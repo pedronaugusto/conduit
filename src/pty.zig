@@ -40,7 +40,7 @@ const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
 const is_windows = builtin.target.os.tag == .windows;
-const win32 = @import("win32.zig");
+const win32 = @import("win32");
 const seam = @import("seam");
 
 const Size = tty.Size;
