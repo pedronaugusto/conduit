@@ -784,6 +784,8 @@ fn placeDescriptors(plan: Plan, extras: []posix.fd_t) bool {
         // child was asked to have no descriptor at that number, and it does
         // not.
         .close => _ = c.close(@intCast(slot)),
+        // Standard output is in place by now: the slots run in order.
+        .stdout => if (!place(posix.STDOUT_FILENO, @intCast(slot))) return false,
     };
     for (extras, 3..) |fd, slot| if (!place(fd, @intCast(slot))) return false;
 

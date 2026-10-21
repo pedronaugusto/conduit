@@ -150,6 +150,11 @@ const Cases = struct {
         var pty = try Pty.open(testing.allocator, testing.io, .{});
         defer pty.close(testing.io);
         try testing.expectError(error.Unsupported, Child.spawn(testing.allocator, io, .{ .argv = &.{"prompt"}, .stdio = .{ .pty = &pty } }));
+        // `std.process` cannot hand one pipe to two streams.
+        try testing.expectError(error.Unsupported, Child.spawn(testing.allocator, io, .{
+            .argv = &.{"shout"},
+            .stdio = .{ .streams = .{ .stdout = .pipe, .stderr = .stdout } },
+        }));
     }
 };
 

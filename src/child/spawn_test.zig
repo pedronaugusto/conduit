@@ -2895,6 +2895,106 @@ test "each stream is chosen on its own" {
     try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
 }
 
+test "standard error can share standard output's pipe" {
+    // Both writes arrive on the one pipe, in the order the child made them,
+    // and there is no second pipe to drain.
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &script.out_and_err,
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .stdout } },
+    });
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
+
+    var result = try child.output(gpa, io, .{ .timeout = within_budget });
+    defer result.deinit();
+
+    const out = std.mem.find(u8, result.stdout(), "to stdout") orelse return error.TestUnexpectedResult;
+    const err = std.mem.find(u8, result.stdout(), "to stderr") orelse return error.TestUnexpectedResult;
+    try testing.expect(out < err);
+    try testing.expectEqualStrings("", result.stderr());
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
+}
+
+test "standard error shares standard output's pipe on the forked path too" {
+    // A working directory is what file actions cannot say, so this child is
+    // forked and its descriptors placed by hand.
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &script.out_and_err,
+        .cwd = if (is_windows) null else "/",
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .stdout } },
+    });
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+
+    var result = try child.output(gpa, io, .{ .timeout = within_budget });
+    defer result.deinit();
+
+    try testing.expect(std.mem.find(u8, result.stdout(), "to stdout") != null);
+    try testing.expect(std.mem.find(u8, result.stdout(), "to stderr") != null);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
+}
+
+test "standard error follows standard output to a file" {
+    // POSIX only, for the fixture: the terminal end of a second pair is the
+    // writable file this package opens without touching the filesystem.
+    if (is_windows) return error.SkipZigTest;
+
+    var sink_pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
+    defer sink_pty.close(io);
+
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'one '; printf 'two' 1>&2" },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .{ .file = sink_pty.slaveFile() }, .stderr = .stdout } },
+    });
+    defer child.deinit(io);
+    defer reap(&child, io);
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(sink_pty.readFile());
+
+    try sink.expect("one two");
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
+}
+
+test "standard output's handle is for standard error alone" {
+    for ([_]Child.Streams{
+        .{ .stdin = .stdout, .stdout = .pipe, .stderr = .ignore },
+        .{ .stdin = .ignore, .stdout = .stdout, .stderr = .ignore },
+    }) |streams| {
+        try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
+            .argv = &script.out_and_err,
+            .stdio = .{ .streams = streams },
+        }));
+    }
+}
+
+test "stderr_to wins over standard error on standard output" {
+    if (is_windows) return error.SkipZigTest;
+
+    var sink_pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
+    defer sink_pty.close(io);
+
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &script.out_and_err,
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .stdout } },
+        .stderr_to = sink_pty.slaveFile(),
+    });
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+
+    var sink: Sink = .{};
+    defer sink.deinit();
+    try sink.start(sink_pty.readFile());
+
+    var result = try child.output(gpa, io, .{ .timeout = within_budget });
+    defer result.deinit();
+    try testing.expect(std.mem.find(u8, result.stdout(), "to stderr") == null);
+    try sink.expect("to stderr");
+    try testing.expectEqual(Child.Term{ .exited = 0 }, result.term());
+}
+
 test "the terminal end of a pair can be one stream and a pipe another" {
     // POSIX only: the claim needs the terminal end to be a file, and on
     // Windows a pseudoconsole is an object a whole process is attached to.

@@ -38,9 +38,10 @@ pub const PipeOptions = struct {
 
 /// What one of the child's three standard streams is connected to.
 ///
-/// The five are the standard library's — `std.process.SpawnOptions.StdIo` has
-/// the same ones under the same names — because a caller who already knows
-/// that vocabulary should not have to learn a second one here.
+/// The first five are the standard library's — `std.process.SpawnOptions.StdIo`
+/// has the same ones under the same names — because a caller who already knows
+/// that vocabulary should not have to learn a second one here. The sixth,
+/// `.stdout`, is the shell's `2>&1`, which `std.process` has no way to say.
 pub const Stream = union(enum) {
     /// The parent's own descriptor for that stream.
     ///
@@ -70,6 +71,16 @@ pub const Stream = union(enum) {
     /// arrives somewhere nobody meant. For the rare program that requires it,
     /// not for tidiness: `.ignore` is what "I do not want this output" means.
     close,
+    /// Standard error only: whatever standard output is connected to, as one
+    /// handle shared by both, the shell's `2>&1`. With `.stdout = .pipe` the
+    /// child's output and its errors arrive interleaved on the one pipe, in
+    /// the order the child wrote them, through `stdoutFile`; `stderrFile` is
+    /// `null`. A hook whose output is relayed as one stream is the case.
+    ///
+    /// At standard input or standard output it means nothing and `spawn` is
+    /// `error.Unsupported`. `stderr_to` still wins over it, as over any
+    /// other choice for standard error.
+    stdout,
 };
 
 /// The child's three standard streams, each named on its own.
@@ -545,8 +556,9 @@ pub const SpawnError = error{
     ResourceLimitsFailed,
     /// `cwd` does not exist or is not a directory.
     BadWorkingDirectory,
-    /// The combination asked for has no meaning on this system: `stderr_to`
-    /// together with `.pty` on Windows, a `channel` whose variable no
+    /// The combination asked for has no meaning on this system: `.stdout`
+    /// for standard input or output, `stderr_to` together with `.pty` on
+    /// Windows, a `channel` whose variable no
     /// environment can hold, a `path_search` other than
     /// `.child_environ` there, `credentials` or `resource_limits` anywhere on
     /// Windows, `job_limits` anywhere else, or `parent_death_signal` anywhere

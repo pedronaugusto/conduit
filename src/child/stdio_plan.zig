@@ -2,8 +2,9 @@
 //! handles.
 //!
 //! The decisions are the same on both systems: which stream gets what, that
-//! one null device serves every stream that asked for it, that `stderr_to` is
-//! applied last and undoes a standard-error pipe that was already planned, and
+//! one null device serves every stream that asked for it, that standard error
+//! may be standard output's own handle, that `stderr_to` is applied last and
+//! undoes a standard-error pipe that was already planned, and
 //! which of the handles involved the parent must close once the child has its
 //! own copies. What differs is the calls that make a handle, and those are the
 //! two the caller supplies.
@@ -39,6 +40,10 @@ pub const Target = union(enum) {
     place: Handle,
     /// Nothing: the child starts with no stream there.
     close,
+    /// Standard error only: a copy of whatever standard output was given,
+    /// made once standard output is in place. Left to each system because
+    /// `.inherit` means a different handle on each.
+    stdout,
 };
 
 /// Builds a `Plan` with `system`'s handles.
@@ -99,6 +104,10 @@ pub fn Plan(comptime system: type) type {
                             plan.child[slot] = .{ .place = ends.child };
                             plan.owned[slot] = ends.child;
                             plan.parent[slot] = handles.file(ends.parent);
+                        },
+                        .stdout => {
+                            if (slot != 2) return error.Unsupported;
+                            plan.child[slot] = .stdout;
                         },
                     };
                 },

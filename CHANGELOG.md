@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Stream.stdout`, for standard error only: the handle standard output gets, the shell's `2>&1`. With `.stdout = .pipe` the child's output and errors arrive interleaved on the one pipe, in the order written; `stderrFile` is `null`. At standard input or output it is `error.Unsupported`, and `stderr_to` still wins over it. A simulated child refuses it on a pipe, which `std.process` cannot hand to two streams. Asked by relic for hook output relayed as one stream.
+
 ## [0.9.4] - 2026-10-21
 
 ### Changed

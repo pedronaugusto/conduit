@@ -177,6 +177,10 @@ pub fn spawn(
         // See the file comment: neither of these two is expressible here in a
         // way that means the same thing on both systems.
         .close => return null,
+        // The actions run in order, so standard output is in place by now.
+        .stdout => if (posix_spawn_file_actions_adddup2(&actions, posix.STDOUT_FILENO, @intCast(slot)) != 0) {
+            return error.SystemResources;
+        },
         .place => |fd| {
             if (session and fd == options.stdio.pty.slaveHandle().?) {
                 if (terminal_slot) |first| {

@@ -585,6 +585,8 @@ fn childHandles(plan: *const Plan) [3]?windows.HANDLE {
         .inherit => inherited[slot],
         .place => |handle| handle,
         .close => null,
+        // Standard output's slot is said before this one.
+        .stdout => given[1],
     };
     return given;
 }

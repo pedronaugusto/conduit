@@ -6,8 +6,9 @@
 //! simulated pair `Pty.open` made through the same route.
 //!
 //! What a simulation cannot be is refused, never pretended: credentials,
-//! resource limits, a job object's limits, a parent-death signal and extra
-//! descriptors are `error.Unsupported`. A simulated child's group is the
+//! resource limits, a job object's limits, a parent-death signal, extra
+//! descriptors and standard error on standard output's pipe are
+//! `error.Unsupported`. A simulated child's group is the
 //! child alone: a signal reaches it and not what it started.
 const builtin = @import("builtin");
 const std = @import("std");
@@ -37,6 +38,15 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
                 .ignore => .ignore,
                 .pipe => .pipe,
                 .close => .close,
+                // `std.process` has no shared stream, so standard error is
+                // given what standard output is where that is a value, and a
+                // shared pipe, which only a second handle to one pipe could
+                // be, is refused.
+                .stdout => if (i != 2) return error.Unsupported else switch (streams[1]) {
+                    .inherit => .{ .file = .stdout() },
+                    .pipe => return error.Unsupported,
+                    else => streams[1],
+                },
             };
         },
     }
