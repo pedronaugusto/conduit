@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- aegis 0.1.14 (from 0.1.12), which preflight 0.12.1 selects.
+- Development: preflight 0.12.1, and the lint gates the aegis pack, glint's A001-A005 (A004 already).
+
 ### Fixed
 
 - Development: the test of `isOpen` on a contended queue holds the queue through its guard (`tryAcquire`, released in the fault hook) instead of writing the guarded mutex's word, which aegis's A001 names as a bypass of the guard.
