@@ -635,6 +635,17 @@ pub const Child = struct {
             if (!try tracker.waitFinished(io, deadline.toTimeout())) return child.tryWaitClaimed(io);
             if (try child.reapClaimed(io, .wait)) |term| return term;
         };
+        // Windows: the root has ended and the reap has ended its job, whose
+        // members `TerminateJobObject` ends as it returns, not by then. The
+        // reap waits for the job's own report that it holds no process.
+        if (is_windows) {
+            const emptied = child.waitTreeWindows(io, deadline.toTimeout()) catch |err| return switch (err) {
+                error.Canceled => error.Canceled,
+                error.Unexpected, error.Unsupported => error.Unexpected,
+            };
+            if (!emptied) return child.tryWaitClaimed(io);
+            if (try child.reapClaimed(io, .wait)) |term| return term;
+        }
         // The system said it ended, then would not reap it.
         return error.Unexpected;
     }
