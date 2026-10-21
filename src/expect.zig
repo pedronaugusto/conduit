@@ -57,8 +57,6 @@ const Deadline = @import("conduit.tty").Deadline;
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
 
-const is_windows = builtin.target.os.tag == .windows;
-
 pub const Expect = struct {
     /// Private: what the child says, and where a reply goes.
     ///

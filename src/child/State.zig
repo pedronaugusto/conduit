@@ -1,9 +1,7 @@
 //! The child lifecycle, shared only by the process implementation and Reaper.
-const State = @This();
 const builtin = @import("builtin");
 const std = @import("std");
 const Child = @import("contract.zig");
-const posix = std.posix;
 const windows = std.os.windows;
 const is_windows = builtin.target.os.tag == .windows;
 const tree = @import("../tree.zig");

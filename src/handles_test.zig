@@ -2,8 +2,6 @@ const std = @import("std");
 const reap = @import("testing/support.zig").reap;
 const Deadline = @import("conduit.tty").Deadline;
 const builtin = @import("builtin");
-const posix = std.posix;
-const c = std.c;
 const is_windows = builtin.target.os.tag == .windows;
 const file = @import("handles.zig").file;
 const writeStreamingAll = @import("handles.zig").writeStreamingAll;

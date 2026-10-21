@@ -1256,8 +1256,6 @@ test "a cgroup2 line of mountinfo names its mount point and root, and nothing el
 test "deferred cgroup cleanup keeps directory ownership instead of removing a replacement" {
     if (builtin.target.os.tag == .windows) return error.SkipZigTest;
     const Replacement = struct {
-        var unlinks: usize = 0;
-        var closes: usize = 0;
         var retained: ?LinuxCgroup = null;
 
         fn remove(_: *LinuxCgroup) bool {
@@ -1265,25 +1263,14 @@ test "deferred cgroup cleanup keeps directory ownership instead of removing a re
             // belongs to a replacement. The identity-aware removal refuses.
             return false;
         }
-        fn close(_: posix.fd_t) void {
-            closes += 1;
-        }
-        fn removeName(_: Name) bool {
-            unlinks += 1;
-            return true;
-        }
         fn remember(cgroup: LinuxCgroup) void {
             retained = cgroup;
         }
         fn sweep() void {}
     };
-    Replacement.unlinks = 0;
-    Replacement.closes = 0;
     Replacement.retained = null;
     var cgroup = LinuxCgroup.init(7, .{ .owner = 123, .sequence = 1 });
     cgroup.closeWith(Replacement);
-    try std.testing.expectEqual(@as(usize, 0), Replacement.unlinks);
-    try std.testing.expectEqual(@as(usize, 0), Replacement.closes);
     try std.testing.expect(!cgroup.active());
     var retained = Replacement.retained orelse return error.TestDirectoryOwnerLost;
     try std.testing.expect(retained.active());
