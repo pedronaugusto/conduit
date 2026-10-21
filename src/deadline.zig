@@ -55,6 +55,17 @@ pub const Deadline = struct {
         return if (left.nanoseconds <= 0) .zero else left;
     }
 
+    /// Sleeps until the deadline by the awake clock. A system's sleep can end
+    /// before it (Windows rounds a wait to its clock tick, which the awake
+    /// clock does not), so it sleeps again while time is left.
+    pub fn sleep(deadline: Deadline, io: std.Io) std.Io.Cancelable!void {
+        while (true) {
+            const left = deadline.remaining(io);
+            if (left.nanoseconds == 0) return;
+            try std.Io.sleep(io, left, .awake);
+        }
+    }
+
     /// What is left of the wait as a span conduit is given; zero once it has
     /// passed, and the longest span for a deadline past that.
     pub fn spanLeft(deadline: Deadline, io: std.Io) Duration {

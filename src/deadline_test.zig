@@ -64,3 +64,12 @@ test "no timeout is a deadline that never comes, and the earlier of two wins" {
     clock.advance(.fromSeconds(2));
     try std.testing.expectEqual(std.Io.Duration.zero, second.remaining(io));
 }
+
+test "a sleep to a deadline returns at it, never before" {
+    const io = std.testing.io;
+    for (0..5) |_| {
+        const deadline: Deadline = .in(io, .fromMilliseconds(20));
+        try deadline.sleep(io);
+        try std.testing.expect(deadline.remaining(io).nanoseconds == 0);
+    }
+}

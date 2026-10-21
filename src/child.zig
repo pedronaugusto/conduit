@@ -1608,7 +1608,7 @@ pub const Child = struct {
         // are finishing. Anything still holding a stream open is not the child,
         // and is not what this call promised to wait for.
         if (!(out.done.load(.acquire) and err.done.load(.acquire))) {
-            try select.concurrent(.drained, std.Io.sleep, .{ io, drainDeadline(io, options, until).remaining(io), .awake });
+            try select.concurrent(.drained, Deadline.sleep, .{ drainDeadline(io, options, until), io });
             while (!(out.done.load(.acquire) and err.done.load(.acquire))) switch (try select.await()) {
                 .out, .err => |read| try read,
                 .drained => |slept| {

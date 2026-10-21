@@ -6,8 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Deadline.sleep`: sleeps until the deadline by the awake clock, again while time is left.
+
 ### Fixed
 
+- An output drain could end a tick before its deadline on Windows, which rounds a wait to its clock tick (18 ms of a 20 ms drain, the drain test's red on Windows on ARM 2026-10-16 and on x64 since): the drain sleeps until its deadline (`Deadline.sleep`).
 - Windows: a wait or a `killWait` for a contained child said `Unexpected` once the child had ended while its job still held what it started: the reap ends the job, whose members `TerminateJobObject` ends as it returns, not by then. The reap now waits, within the deadline, for the job's own report that it holds no process (six tests red on every Windows leg since 2026-10-18; conduit 0.9.0 had moved the waits onto reactor and the Windows reap lost the wait for the job's end).
 - The simulated pipes test on Windows, where the test process's standard output and error share a handle: shakedown 0.4.16 for development, whose simulation keeps them apart.
 
