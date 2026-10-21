@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `hostName`: the machine's name, into a buffer of `max_host_name` bytes, on every target: POSIX `gethostname`'s, and on Windows the DNS host name without its domain (`GetComputerNameExW`'s `ComputerNameDnsHostname`, what Winsock's `gethostname` returns) as WTF-8. For a lock that names the machine beside a pid, as git's `gc.pid` does.
+
 ## [0.10.0] - 2026-10-21
 
 ### Removed

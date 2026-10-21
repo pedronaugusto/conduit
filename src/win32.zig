@@ -482,3 +482,12 @@ pub const ProcessMemoryCounters = extern struct {
     peak_pagefile_usage: usize,
 };
 pub extern "kernel32" fn K32GetProcessMemoryInfo(process: windows.HANDLE, counters: *ProcessMemoryCounters, cb: windows.DWORD) callconv(.winapi) windows.BOOL;
+
+//======================================================================
+// The machine's name: `hostName`.
+//======================================================================
+
+/// `COMPUTER_NAME_FORMAT`'s `ComputerNameDnsHostname`: the DNS host name,
+/// without the domain, which Winsock's `gethostname` returns.
+pub const computer_name_dns_hostname: c_int = 1;
+pub extern "kernel32" fn GetComputerNameExW(NameType: c_int, lpBuffer: ?[*]u16, nSize: *windows.DWORD) callconv(.winapi) windows.BOOL;

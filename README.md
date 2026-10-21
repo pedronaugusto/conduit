@@ -683,6 +683,9 @@ process or nothing; it is `null` for a start time that does not match.
 `conduit.processExists(pid)` says whether any process has an id now, on POSIX
 and Windows; one that has ended but is not yet reaped still has it, and a
 reused id is told apart only by the start time written down beside it.
+`conduit.hostName(&buf)` gives the machine's name to write down beside a
+pid in a lock (POSIX `gethostname`'s; on Windows the DNS host name Winsock's
+`gethostname` returns, as WTF-8).
 `CapturedPid` exposes no token or handle. `captured.processId()` reads its
 number for reports. Release it exactly once with `deinit`; do not copy an
 owning capture. Darwin checks the stable unique id on every lookup, so exec

@@ -248,6 +248,15 @@ pub const ReadAvailableError = @import("handles.zig").ReadAvailableError;
 /// tell a process from a successor given its number.
 pub const processExists = @import("process_exists.zig").processExists;
 
+/// The name this machine goes by: POSIX `gethostname`'s, and on Windows the
+/// DNS host name without its domain (what Winsock's `gethostname` returns),
+/// as WTF-8. For a lock or a record that says which machine wrote it.
+pub const hostName = @import("host_name.zig").hostName;
+/// The longest name `hostName` gives, in bytes.
+pub const max_host_name = @import("host_name.zig").max_len;
+/// What `hostName` can meet.
+pub const HostNameError = @import("host_name.zig").Error;
+
 /// When a running process started, as a number no later process given the
 /// same pid shares: a pid written down with it can be told, later, from a
 /// stranger given the number since. `null` when there is no such process or
