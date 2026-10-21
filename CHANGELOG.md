@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-21
+
 ### Removed
 
 - **Breaking:** `conduit.console` and `conduit.tty.console` no longer carry kernel32's console bindings: `CreateFileW`, `WriteFile`, `GetConsoleMode`, `SetConsoleMode`, `GetConsoleScreenBufferInfo`, `GetFileType`, `SmallRect`, `ConsoleScreenBufferInfo`, the mode, access and file-type constants, and `unexpected`. They are declared once in a module of conduit's own that both of its modules import and neither exports, beside the rest of its Windows calls. The console's input records and waits stay (`InputRecord`, `KeyEvent`, `key_event`, `waitInput`, `peekInput`, `readInput`). `openControlling` opens `CONIN$` and `CONOUT$`; a write with no `std.Io` to hand has `std.os.windows.ntdll.NtWriteFile`.
@@ -1098,7 +1100,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/pedronaugusto/conduit/compare/v0.9.5...v0.10.0
 [0.9.5]: https://github.com/pedronaugusto/conduit/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/pedronaugusto/conduit/compare/v0.9.1...v0.9.4
 [0.9.1]: https://github.com/pedronaugusto/conduit/compare/v0.9.0...v0.9.1
