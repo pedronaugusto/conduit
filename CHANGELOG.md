@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-21
+
 ### Changed
 
 - aegis 0.1.14 (from 0.1.12), which preflight 0.12.1 selects.
@@ -1086,7 +1088,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.9.4...HEAD
+[0.9.4]: https://github.com/pedronaugusto/conduit/compare/v0.9.1...v0.9.4
 [0.9.1]: https://github.com/pedronaugusto/conduit/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/pedronaugusto/conduit/compare/v0.8.4...v0.9.0
 [0.8.4]: https://github.com/pedronaugusto/conduit/compare/v0.8.3...v0.8.4
