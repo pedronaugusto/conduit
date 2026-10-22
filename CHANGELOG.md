@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-22
+
 ### Fixed
 
 - Linux: a captured process's pidfd was closed with the kernel's own `close`, past the C library conduit links. ThreadSanitizer forgets a descriptor only at a close it sees, so the next file another thread opened under that number read as a data race "in close". It is closed through the C library, as conduit's other pidfds are.
@@ -1122,7 +1124,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/pedronaugusto/conduit/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/pedronaugusto/conduit/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/pedronaugusto/conduit/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/pedronaugusto/conduit/compare/v0.9.5...v0.10.0
