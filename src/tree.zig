@@ -964,7 +964,7 @@ const LinuxProcess = struct {
     }
 
     pub fn deinit(process: *LinuxProcess) void {
-        _ = std.os.linux.close(process.pidfd);
+        _ = c.close(process.pidfd);
         process.* = undefined;
     }
 };

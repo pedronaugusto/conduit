@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux: a captured process's pidfd was closed with the kernel's own `close`, past the C library conduit links. ThreadSanitizer forgets a descriptor only at a close it sees, so the next file another thread opened under that number read as a data race "in close". It is closed through the C library, as conduit's other pidfds are.
+
 ## [0.10.2] - 2026-10-21
 
 ### Added
