@@ -1,4 +1,5 @@
-//! `Child.exchange`: input in, output out, one deadline, through native pipes.
+//! `Child.exchange` and `Child.exchangeInto`: input in, output out, one
+//! deadline, through native pipes.
 const std = @import("std");
 const Deadline = @import("conduit.tty").Deadline;
 const conduit = @import("../conduit.zig");
@@ -116,4 +117,66 @@ test "output takes an allocator nobody shares" {
     defer result.deinit();
     try testing.expect(Child.succeeded(result.term()));
     try testing.expectEqualStrings("EOF", result.stdout());
+}
+
+test "exchangeInto reads into a small writer's buffer, which drains as it fills and is flushed at the end" {
+    const input = try bulk();
+    defer gpa.free(input);
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(io, "out", .{});
+    defer file.close(io);
+    var buffer: [16]u8 = undefined;
+    var out = file.writer(io, &buffer);
+    var err = std.Io.Writer.Discarding.init(&.{});
+    var child = try spawn("end");
+    defer child.deinit(io);
+    const ended = try child.exchangeInto(io, input, .{ .stdout = &out.interface, .stderr = &err.writer }, .{ .timeout = within_budget });
+    try testing.expect(Child.succeeded(ended.term));
+    try testing.expect(!ended.timed_out);
+    try testing.expect(!ended.stdout_truncated);
+    // Nothing is left in the writer's buffer: all of it reached the file.
+    try testing.expectEqual(0, out.interface.end);
+    const written = try tmp.dir.readFileAlloc(io, "out", gpa, .unlimited);
+    defer gpa.free(written);
+    try testing.expectEqual(input.len + 3, written.len);
+    try testing.expectEqualSlices(u8, input, written[0..input.len]);
+    try testing.expectEqualStrings("EOF", written[input.len..]);
+}
+
+test "exchangeInto writes to a writer with no buffer what it reads, up to max_bytes" {
+    const input = try bulk();
+    defer gpa.free(input);
+    var out = std.Io.Writer.Discarding.init(&.{});
+    var err = std.Io.Writer.Discarding.init(&.{});
+    var child = try spawn("echo");
+    defer child.deinit(io);
+    const kept = input.len / 2 + 1;
+    const ended = try child.exchangeInto(io, input, .{ .stdout = &out.writer, .stderr = &err.writer }, .{
+        .timeout = within_budget,
+        .max_bytes = .fromRaw(kept),
+    });
+    try testing.expect(Child.succeeded(ended.term));
+    try testing.expect(ended.stdout_truncated);
+    try testing.expectEqual(kept, out.fullCount());
+}
+
+test "a writer that fails is not written again, and is reported once the child has ended" {
+    const input = try bulk();
+    defer gpa.free(input);
+    // Full after 100 bytes, and with nowhere to drain to.
+    var held: [100]u8 = undefined;
+    var out = std.Io.Writer.fixed(&held);
+    var err = std.Io.Writer.Discarding.init(&.{});
+    var child = try spawn("echo");
+    defer child.deinit(io);
+    // The child goes on writing past the writer's end: it is read to the
+    // end regardless, so it never blocks on a full pipe and ends well before
+    // the deadline.
+    try testing.expectError(error.WriteFailed, child.exchangeInto(io, input, .{ .stdout = &out, .stderr = &err.writer }, .{
+        .timeout = within_budget,
+    }));
+    const term = (try child.result()) orelse return error.TestChildNotReaped;
+    try testing.expect(Child.succeeded(term));
+    try testing.expectEqualSlices(u8, input[0..100], out.buffered());
 }

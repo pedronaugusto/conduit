@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Child.exchangeInto(io, input, sinks, options)`: `exchange` with stdout and stderr written into the caller's `*std.Io.Writer`s (`Child.Sinks`), each read landing in its writer's own buffer, and how the run ended returned (`Child.Ended`). A writer over storage that is wiped when let go (aegis `SecretBytes.Writer`) keeps what a credential helper prints out of any other memory. `exchange` and `output` are the same path into growing writers.
+
 ## [0.10.4] - 2026-10-22
 
 ### Changed

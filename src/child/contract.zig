@@ -776,14 +776,19 @@ pub const OutputOptions = struct {
     drain: Duration = .literal("1s"),
 };
 
-pub const OutputError = error{
-    OutOfMemory,
+/// What running a child to its end while its streams are read can meet.
+pub const RunError = error{
     /// A stream could not be read, for a reason other than ending.
     ReadFailed,
     /// The `std.Io` implementation cannot run the readers alongside the wait.
     /// Two streams have to be read at once or a full pipe deadlocks the child.
     ConcurrencyUnavailable,
 } || WaitError || TryWaitError || WaitTimeoutError || KillError || std.Io.Cancelable;
+
+pub const OutputError = error{OutOfMemory} || RunError;
+
+/// What a run whose streams go to `Sinks` can meet: a run's, and a writer's.
+pub const CollectError = RunError || std.Io.Writer.Error;
 
 /// What `Child.exchange` takes: `output`'s bounds, with one deadline over
 /// everything.
@@ -802,6 +807,32 @@ pub const ExchangeOptions = struct {
 };
 
 pub const ExchangeError = OutputError || error{
+    /// There is input to give and the child's standard input is not a pipe
+    /// this `Child` holds.
+    NoStdinPipe,
+} || std.Io.File.Writer.Error;
+
+/// Where `Child.exchangeInto` writes what the child writes: each read lands in
+/// the writer's buffer, and each writer is flushed once its stream is done.
+/// The two are written from different tasks where the streams are read on
+/// tasks, so storage they share must be safe to use from both.
+pub const Sinks = struct {
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+};
+
+/// How a run whose streams went to `Sinks` ended.
+pub const Ended = struct {
+    term: Term,
+    /// The run's budget ran out and the child was killed.
+    timed_out: bool,
+    /// Bytes past `max_bytes` were read and dropped, or the stream had not
+    /// finished when the drain ended.
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+};
+
+pub const ExchangeIntoError = CollectError || error{
     /// There is input to give and the child's standard input is not a pipe
     /// this `Child` holds.
     NoStdinPipe,

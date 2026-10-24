@@ -282,7 +282,8 @@ argument, environment and search-path arrays exist only for the spawn call.
 the bytes
 it collects and `environ` the map it returns; both say whose they are.
 `Child.exchange` allocates what `output` does, one call at a time, and copies
-none of its input.
+none of its input. `Child.exchangeInto` allocates nothing of its own: each read
+lands in the caller's writer's buffer, which grows only as that writer does.
 The descendant walks of POSIX signalling and `killRecorded` use the bounded
 workspace the kill section describes. Recorded
 cgroup handles use fixed storage and allocate nothing. `Orphans` keeps its
@@ -353,6 +354,7 @@ to read while a wait or Reaper runs.
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
 | `child.output(gpa, io, options)` | Run to the end and collect it: a cap (`max_bytes`, an `aegis.units.Bytes(usize)`), a timeout, a bounded drain, both streams read on their own tasks. |
 | `child.exchange(gpa, io, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
+| `child.exchangeInto(io, input, sinks, options)` | `exchange` with the streams written into the caller's two `*std.Io.Writer`s (`Sinks`), each read straight into its writer's buffer, and how the run ended (`Ended`) returned; `exchange` is this into growing writers. A writer over storage wiped when let go keeps a secret the child prints out of any other memory. Each writer takes at most `max_bytes` and is flushed at the end; one that fails is not written again, its stream is still read to the end, and `error.WriteFailed` follows the run. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait(io)` | Never blocks. `null` while the child runs. |

@@ -1392,6 +1392,14 @@ pub const Child = struct {
 
     pub const OutputError = contract.OutputError;
 
+    pub const Sinks = contract.Sinks;
+
+    pub const Ended = contract.Ended;
+
+    pub const ExchangeIntoError = contract.ExchangeIntoError;
+
+    const CollectError = contract.CollectError;
+
     /// Runs the child to the end and collects what it wrote.
     ///
     /// Both streams are read as either has bytes, because a child that fills
@@ -1416,18 +1424,69 @@ pub const Child = struct {
         io: std.Io,
         options: OutputOptions,
     ) OutputError!Output {
-        return child.outputUntil(gpa, io, options, null);
+        var collecting: Collecting = undefined;
+        collecting.init(gpa, io);
+        defer collecting.deinit();
+        const ended = child.collectInto(io, collecting.sinks(), options, null) catch |failure| switch (failure) {
+            // An allocating writer fails only for want of memory.
+            error.WriteFailed => return error.OutOfMemory,
+            else => |e| return e,
+        };
+        return collecting.output(gpa, ended);
     }
 
-    /// `output`, with `until` a deadline over the whole of it: the run's own
-    /// timeout and every drain end by it at the latest.
-    fn outputUntil(
+    /// The writers `output` and `exchange` collect into: growing on `gpa`, and
+    /// where the streams are read on tasks both grow at once, so their
+    /// allocations are made one at a time and the caller's allocator need not
+    /// be safe to share. Stays where it is while it is used.
+    const Collecting = struct {
+        serial: SerialAllocator,
+        out: std.Io.Writer.Allocating,
+        err: std.Io.Writer.Allocating,
+
+        fn init(collecting: *Collecting, gpa: Allocator, io: std.Io) void {
+            collecting.serial = SerialAllocator.init(gpa, io);
+            collecting.out = std.Io.Writer.Allocating.init(collecting.serial.allocator());
+            collecting.err = std.Io.Writer.Allocating.init(collecting.serial.allocator());
+        }
+
+        fn sinks(collecting: *Collecting) Sinks {
+            return .{ .stdout = &collecting.out.writer, .stderr = &collecting.err.writer };
+        }
+
+        /// What was collected, as the `Output` of a run that ended so, freed
+        /// with `gpa`: the writers hold none of it after.
+        fn output(collecting: *Collecting, gpa: Allocator, ended: Ended) Allocator.Error!Output {
+            const stdout_bytes = try collecting.out.toOwnedSlice();
+            errdefer gpa.free(stdout_bytes);
+            const stderr_bytes = try collecting.err.toOwnedSlice();
+            return Output.init(gpa, .{
+                .stdout = stdout_bytes,
+                .stderr = stderr_bytes,
+                .stdout_truncated = ended.stdout_truncated,
+                .stderr_truncated = ended.stderr_truncated,
+                .term = ended.term,
+                .timed_out = ended.timed_out,
+            });
+        }
+
+        fn deinit(collecting: *Collecting) void {
+            collecting.out.deinit();
+            collecting.err.deinit();
+        }
+    };
+
+    /// Runs the child to the end with its streams written into `sinks`, the
+    /// one way `output` and `exchangeInto` read them: with `until` a deadline
+    /// over the whole of it, by which the run's own timeout and every drain
+    /// end at the latest.
+    fn collectInto(
         child: *Child,
-        gpa: Allocator,
         io: std.Io,
+        sinks: Sinks,
         options: OutputOptions,
         until: ?Deadline,
-    ) OutputError!Output {
+    ) CollectError!Ended {
         errdefer child.abandon(io);
         // On a system with a handle that becomes readable when the child ends,
         // the two pipes and that handle are watched together from this task, so
@@ -1437,20 +1496,43 @@ pub const Child = struct {
         if (!is_windows) {
             // A published term needs only stream draining. Never register an OS
             // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(gpa, io, options, until, null, published);
-            if (child.exitWatch()) |watch| return child.outputPolled(gpa, io, options, until, watch, null);
+            if (published != null) return child.outputPolled(io, sinks, options, until, null, published);
+            if (child.exitWatch()) |watch| return child.outputPolled(io, sinks, options, until, watch, null);
         }
-        return child.outputOnTasks(gpa, io, options, until);
+        return child.outputOnTasks(io, sinks, options, until);
     }
 
     pub const ExchangeOptions = contract.ExchangeOptions;
 
     pub const ExchangeError = contract.ExchangeError;
 
+    /// `exchangeInto`, collecting what the child wrote: the bytes grow on
+    /// `gpa`, which need not be safe to use from several threads, since every
+    /// allocation of the call is serialized. The returned `Output` is freed
+    /// with `gpa`. A writer that fails here is memory that ran out, so
+    /// `error.OutOfMemory`.
+    pub fn exchange(
+        child: *Child,
+        gpa: Allocator,
+        io: std.Io,
+        input: []const u8,
+        options: ExchangeOptions,
+    ) ExchangeError!Output {
+        var collecting: Collecting = undefined;
+        collecting.init(gpa, io);
+        defer collecting.deinit();
+        const ended = child.exchangeInto(io, input, collecting.sinks(), options) catch |failure| switch (failure) {
+            // An allocating writer fails only for want of memory.
+            error.WriteFailed => return error.OutOfMemory,
+            else => |e| return e,
+        };
+        return collecting.output(gpa, ended);
+    }
+
     /// Runs the child to the end with `input` on its standard input, which
-    /// then closes, and collects what it wrote: `output` with the input
-    /// written alongside, so neither side waits on a full pipe, under one
-    /// deadline.
+    /// then closes, and writes what it writes into `sinks`: `output` with the
+    /// input written alongside, so neither side waits on a full pipe, under
+    /// one deadline.
     ///
     /// `input` is borrowed for the call and written from one task as it is,
     /// never copied. Input the child does not read is not an error: a program
@@ -1459,26 +1541,32 @@ pub const Child = struct {
     /// input is closed at once; input for a child whose standard input is not
     /// a pipe this `Child` holds is `error.NoStdinPipe`.
     ///
+    /// Each stream is read into its writer's own buffer where it has one, so
+    /// what the child writes is never copied on its way: a writer over
+    /// storage that is wiped when let go keeps a secret the child prints out
+    /// of any other memory. Each writer takes at most `max_bytes`, and is
+    /// flushed once the child has ended and its stream is drained. A writer
+    /// that fails is not written again; its stream is read to the end
+    /// regardless, so the child is never left blocked on a full pipe, and
+    /// `error.WriteFailed` is returned once it has ended.
+    ///
     /// `ExchangeOptions.timeout` bounds the whole call: the input, the run,
     /// the reap and the drain after it. A child still running then is killed
-    /// with no grace and `Output.timedOut` is true; a write still blocked —
+    /// with no grace and `Ended.timed_out` is true; a write still blocked —
     /// on something the child started that holds its input and never reads —
     /// is interrupted. The call returns by the deadline, give or take the
     /// moment a kill takes.
     ///
-    /// `gpa` need not be safe to use from several threads: every
-    /// allocation of the call is serialized, and grows only the two collected
-    /// streams, each bounded by `max_bytes`. The returned `Output` is freed
-    /// with `gpa`. As with `output`, the child is reaped when this
-    /// returns, an error included — except `error.NoStdinPipe`, which refuses
-    /// the call before it starts and leaves the child running.
-    pub fn exchange(
+    /// As with `output`, the child is reaped when this returns, an error
+    /// included — except `error.NoStdinPipe`, which refuses the call before it
+    /// starts and leaves the child running.
+    pub fn exchangeInto(
         child: *Child,
-        gpa: Allocator,
         io: std.Io,
         input: []const u8,
+        sinks: Sinks,
         options: ExchangeOptions,
-    ) ExchangeError!Output {
+    ) ExchangeIntoError!Ended {
         // A call refused for how it was made leaves the child as it was.
         const state = child.state;
         if (input.len != 0 and state.stdin == null) return error.NoStdinPipe;
@@ -1495,17 +1583,16 @@ pub const Child = struct {
             // The task closes it once written.
             state.stdin = null;
         }
-        var collected = try child.outputUntil(gpa, io, .{
+        const ended = try child.collectInto(io, sinks, .{
             .max_bytes = options.max_bytes,
             .grace = .fromRaw(0),
             .drain = options.drain,
         }, until);
-        errdefer collected.deinit();
         // The child has ended. What still holds its input is not the child,
         // and a write to it is not waited for.
         group.cancel(io);
         if (feed.failure) |err| return err;
-        return collected;
+        return ended;
     }
 
     /// The input of an `exchange`, written on a task of its own.
@@ -1540,28 +1627,24 @@ pub const Child = struct {
         _ = child.killWait(io, .fromRaw(0)) catch {};
     }
 
+    /// `collectInto` with each stream read on a task of its own, into its
+    /// writer from that task.
     fn outputOnTasks(
         child: *Child,
-        gpa: Allocator,
         io: std.Io,
+        sinks: Sinks,
         options: OutputOptions,
         until: ?Deadline,
-    ) OutputError!Output {
-        // The readers grow the collected streams on tasks of their own; their
-        // allocations are made one at a time, so the caller's allocator need
-        // not be safe to share.
-        var serial: SerialAllocator = .init(gpa, io);
-        var out: Collector = .init;
-        var err: Collector = .init;
-        errdefer out.list.deinit(gpa);
-        errdefer err.list.deinit(gpa);
+    ) CollectError!Ended {
+        var out = Collector.init(sinks.stdout);
+        var err = Collector.init(sinks.stderr);
 
         // The readers, the wait for the child and the drain's end are tasks of
         // one select, and this task takes whichever finishes first: a reader
         // that fails is noticed the moment it does, not at the next look, and
         // the drain ends when its readers do or its time is up.
-        var finished: [4]Ended = undefined;
-        var select: std.Io.Select(Ended) = .init(io, &finished);
+        var finished: [4]Finished = undefined;
+        var select: std.Io.Select(Finished) = .init(io, &finished);
         // Unconditional: the select owns resources as soon as one task starts,
         // and a reader blocked on a stream that never ends is exactly what the
         // bounded drain below is for.
@@ -1572,10 +1655,10 @@ pub const Child = struct {
         // before it starts. Saying so here is what keeps the drain below from
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
-            try select.concurrent(.out, collect, .{ serial.allocator(), io, f, options.max_bytes, &out });
+            try select.concurrent(.out, collect, .{ io, f, options.max_bytes, &out });
         } else out.done.store(true, .release);
         if (child.state.stderr) |f| {
-            try select.concurrent(.err, collect, .{ serial.allocator(), io, f, options.max_bytes, &err });
+            try select.concurrent(.err, collect, .{ io, f, options.max_bytes, &err });
         } else err.done.store(true, .release);
         try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
 
@@ -1618,61 +1701,64 @@ pub const Child = struct {
                 .ended => unreachable, // unreachable: the wait for the child has finished
             };
         }
-        // Joins the tasks, so the lists below are this task's alone again.
+        // Joins the tasks, so the writers below are this task's alone again.
         select.cancelDiscard();
 
-        return Collector.output(gpa, &out, &err, term, timed_out);
+        return Collector.ended(&out, &err, term, timed_out);
     }
 
     /// What finishes in `outputOnTasks`' select: a reader, the wait for the
     /// child, and the drain's time.
-    const Ended = union(enum) {
+    const Finished = union(enum) {
         out: std.Io.Cancelable!void,
         err: std.Io.Cancelable!void,
         ended: WaitTimeoutError!?Term,
         drained: std.Io.Cancelable!void,
     };
 
-    /// One stream's worth of collected bytes, shared between the task reading it
-    /// and the task that started it. `done` is the handshake; everything else is
-    /// read only after the select has joined.
+    /// One stream on its way into its writer, shared between the task reading
+    /// it and the task that started it. `done` is the handshake, and `failure`
+    /// is read by both; everything else is read only after the select has
+    /// joined.
     const Collector = struct {
-        list: std.ArrayList(u8),
+        sink: *std.Io.Writer,
+        /// What the writer has been given, which `max_bytes` bounds.
+        kept: usize,
         truncated: bool,
         failure: std.atomic.Value(Failure),
         done: std.atomic.Value(bool),
 
-        const Failure = enum(u8) { none, read_failed, out_of_memory };
+        const Failure = enum(u8) { none, read_failed, write_failed };
 
-        const init: Collector = .{
-            .list = .empty,
-            .truncated = false,
-            .failure = .init(.none),
-            .done = .init(false),
-        };
+        fn init(sink: *std.Io.Writer) Collector {
+            return .{
+                .sink = sink,
+                .kept = 0,
+                .truncated = false,
+                .failure = .init(.none),
+                .done = .init(false),
+            };
+        }
 
         fn readFailed(collector: *const Collector) bool {
             return collector.failure.load(.acquire) == .read_failed;
         }
 
-        /// What the two collectors hold, as the `Output` of a run that ended
-        /// with `term`: theirs no longer, and the first failure either met.
-        fn output(gpa: Allocator, out: *Collector, err: *Collector, term: Term, timed_out: bool) OutputError!Output {
+        /// How a run that ended with `term` ended, its writers flushed: or
+        /// the first failure either collector met.
+        fn ended(out: *Collector, err: *Collector, term: Term, timed_out: bool) CollectError!Ended {
             const out_failure = out.failure.load(.acquire);
             const err_failure = err.failure.load(.acquire);
             if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
-            if (out_failure == .out_of_memory or err_failure == .out_of_memory) return error.OutOfMemory;
-            const stdout_bytes = try out.list.toOwnedSlice(gpa);
-            errdefer gpa.free(stdout_bytes);
-            const stderr_bytes = try err.list.toOwnedSlice(gpa);
-            return Output.init(gpa, .{
-                .stdout = stdout_bytes,
-                .stderr = stderr_bytes,
-                .stdout_truncated = out.truncated or !out.done.load(.acquire),
-                .stderr_truncated = err.truncated or !err.done.load(.acquire),
+            if (out_failure == .write_failed or err_failure == .write_failed) return error.WriteFailed;
+            try out.sink.flush();
+            try err.sink.flush();
+            return .{
                 .term = term,
                 .timed_out = timed_out,
-            });
+                .stdout_truncated = out.truncated or !out.done.load(.acquire),
+                .stderr_truncated = err.truncated or !err.done.load(.acquire),
+            };
         }
     };
 
@@ -1692,20 +1778,19 @@ pub const Child = struct {
         /// wait that reports the lowest ready member still serves both
         /// streams in turn.
         fn init(
-            gpa: Allocator,
             io: std.Io,
             streams: [2]?std.Io.File,
             collectors: [2]*Collector,
             max_bytes: aegis.units.Bytes(usize),
             first: u1,
             ending: ?*const reactor.Process,
-        ) OutputError!PollSet {
+        ) std.Io.Cancelable!PollSet {
             var set: PollSet = .{ .members = undefined, .which = undefined, .count = 0 };
             for (0..2) |turn| {
                 const i = turn ^ first;
                 if (collectors[i].done.load(.acquire)) continue;
                 if (streams[i].?.handle < 0) {
-                    _ = try collectOnce(gpa, io, streams[i].?, max_bytes, collectors[i]);
+                    _ = try collectOnce(io, streams[i].?, max_bytes, collectors[i]);
                     continue;
                 }
                 set.add(.{ .readable = streams[i].?.handle }, @intCast(i));
@@ -1745,7 +1830,6 @@ pub const Child = struct {
     const output_wait_slice_ms: u32 = 10;
 
     fn collect(
-        gpa: Allocator,
         io: std.Io,
         f: std.Io.File,
         max_bytes: aegis.units.Bytes(usize),
@@ -1760,60 +1844,68 @@ pub const Child = struct {
                 error.Canceled => return error.Canceled,
                 error.Timeout, error.Unsupported, error.Unexpected => {},
             };
-            if (try collectOnce(gpa, io, f, max_bytes, into)) return;
+            if (try collectOnce(io, f, max_bytes, into)) return;
         }
     }
 
-    /// One read of a stream into its collector. True once the stream is finished,
+    /// Where one read of a stream lands: in its writer's buffer, in a buffer
+    /// of the reader's copied to a writer that has none, or nowhere, past
+    /// `max_bytes` or once the writer has failed.
+    const Landing = enum { direct, copied, dropped };
+
+    /// One read of a stream into its writer. True once the stream is finished,
     /// by its end or by a failure the collector now records; `done` is set then.
     fn collectOnce(
-        gpa: Allocator,
         io: std.Io,
         f: std.Io.File,
         max_bytes: aegis.units.Bytes(usize),
         into: *Collector,
     ) std.Io.Cancelable!bool {
-        var discard: [64 * 1024]u8 = undefined;
-        {
-            // Both counts are bytes, so this arithmetic cannot mix kinds of value;
-            // the cap is a `Bytes` at the public boundary and raw only here.
-            const room = max_bytes.raw() -| into.list.items.len;
-            var keeping = into.failure.load(.acquire) != .out_of_memory and room != 0;
-            const buffer = if (keeping) buffer: {
-                if (into.list.capacity == into.list.items.len) {
-                    // Start large enough to drain an ordinary pipe in a handful
-                    // of reads, then grow geometrically. The read lands in the
-                    // allocation itself: no stack-buffer-to-list copy follows it,
-                    // and after a growth there is no allocation in the steady
-                    // state.
-                    const additional = @min(room, @max(@as(usize, 16 * 1024), into.list.items.len));
-                    into.list.ensureUnusedCapacity(gpa, additional) catch {
-                        into.failure.store(.out_of_memory, .release);
-                        into.truncated = true;
-                        keeping = false;
-                        break :buffer discard[0..];
-                    };
-                }
-                break :buffer into.list.unusedCapacitySlice()[0..@min(room, into.list.capacity - into.list.items.len)];
-            } else discard[0..];
+        var spare: [64 * 1024]u8 = undefined;
+        // Both counts are bytes, so this arithmetic cannot mix kinds of value;
+        // the cap is a `Bytes` at the public boundary and raw only here.
+        const room = max_bytes.raw() -| into.kept;
+        var landing: Landing = if (room == 0 or into.failure.load(.acquire) == .write_failed)
+            .dropped
+        else if (into.sink.buffer.len == 0) .copied else .direct;
+        var buffer: []u8 = &spare;
+        if (landing == .direct) {
+            // The read lands in the writer's buffer itself: no copy follows it,
+            // and a writer that grows its buffer grows it geometrically.
+            if (into.sink.writableSliceGreedy(1)) |slice| {
+                buffer = slice;
+            } else |_| {
+                into.failure.store(.write_failed, .release);
+                landing = .dropped;
+            }
+        }
+        if (landing != .dropped) buffer = buffer[0..@min(room, buffer.len)];
 
-            const n = handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
-                error.Canceled => return error.Canceled,
-                else => {
-                    if (!handles.finished(e)) into.failure.store(.read_failed, .release);
-                    into.done.store(true, .release);
-                    return true;
-                },
-            };
-            if (!keeping) {
-                // Allocation failed, but reading must continue until the child
-                // exits or it can fill this pipe and make the wait deadlock.
+        const n = handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
+            error.Canceled => return error.Canceled,
+            else => {
+                if (!handles.finished(e)) into.failure.store(.read_failed, .release);
+                into.done.store(true, .release);
+                return true;
+            },
+        };
+        switch (landing) {
+            .direct => into.sink.advance(n),
+            .copied => into.sink.writeAll(buffer[0..n]) catch {
+                into.failure.store(.write_failed, .release);
                 into.truncated = true;
                 return false;
-            }
-            into.list.items.len += n;
-            return false;
+            },
+            .dropped => {
+                // Past the cap, or the writer failed; either way reading goes
+                // on until the child exits, or it can fill this pipe and make
+                // the wait deadlock.
+                into.truncated = true;
+                return false;
+            },
         }
+        into.kept += n;
+        return false;
     }
 
     /// `output` on one task: the pipes and the child's end are waited on together.
@@ -1828,17 +1920,15 @@ pub const Child = struct {
     /// `process` is the watch on the child, null once its term is `published`.
     fn outputPolled(
         child: *Child,
-        gpa: Allocator,
         io: std.Io,
+        sinks: Sinks,
         options: OutputOptions,
         until: ?Deadline,
         process: ?*const reactor.Process,
         published: ?Term,
-    ) OutputError!Output {
-        var out: Collector = .init;
-        var err: Collector = .init;
-        errdefer out.list.deinit(gpa);
-        errdefer err.list.deinit(gpa);
+    ) CollectError!Ended {
+        var out = Collector.init(sinks.stdout);
+        var err = Collector.init(sinks.stderr);
 
         const streams = [2]?std.Io.File{ child.stdoutFile(), child.state.stderr };
         const collectors = [2]*Collector{ &out, &err };
@@ -1876,7 +1966,7 @@ pub const Child = struct {
             }
             if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
 
-            var set = try PollSet.init(gpa, io, streams, collectors, options.max_bytes, first, if (term == null and !ended) process.? else null);
+            var set = try PollSet.init(io, streams, collectors, options.max_bytes, first, if (term == null and !ended) process.? else null);
             const members = set.members[0..set.count];
             // A stream read directly, above, may be the one that failed.
             if (out.readFailed() or err.readFailed()) continue;
@@ -1909,12 +1999,12 @@ pub const Child = struct {
                 ended = true;
                 continue;
             }
-            _ = try collectOnce(gpa, io, streams[which].?, options.max_bytes, collectors[which]);
+            _ = try collectOnce(io, streams[which].?, options.max_bytes, collectors[which]);
             first = @intCast(which ^ 1); // safe: `which` is a stream here, 0 or 1
             lag_ms = 1;
         }
 
-        return Collector.output(gpa, &out, &err, term.?, timed_out);
+        return Collector.ended(&out, &err, term.?, timed_out);
     }
 
     //======================================================================
@@ -2189,7 +2279,10 @@ pub const Child = struct {
         child.stdoutFile().?.close(io);
         child.state.stdout.?.handle = -1;
         defer _ = child.takeStdout();
-        try testing.expectError(error.ReadFailed, child.outputOnTasks(testing.allocator, io, .{}, null));
+        var collecting: Collecting = undefined;
+        collecting.init(testing.allocator, io);
+        defer collecting.deinit();
+        try testing.expectError(error.ReadFailed, child.outputOnTasks(io, collecting.sinks(), .{}, null));
         try testing.expect((try child.tryWait(io)) != null);
     }
 
@@ -2222,19 +2315,21 @@ pub const Child = struct {
         // wait takes the cancel that ends it (one aimed at a read blocked in the
         // kernel was lost now and then, and the run never ended).
         const start = std.Io.Clock.awake.now(io);
-        var collected = try child.outputOnTasks(testing.allocator, io, .{ .drain = .literal("20ms") }, null);
-        defer collected.deinit();
+        var collecting: Collecting = undefined;
+        collecting.init(testing.allocator, io);
+        defer collecting.deinit();
+        const ended = try child.outputOnTasks(io, collecting.sinks(), .{ .drain = .literal("20ms") }, null);
         const took = start.durationTo(std.Io.Clock.awake.now(io));
         // Said whole on a failure: a drain that ended early, with the writer
         // gone, is the writer's doing, not the drain's (seen once on Windows
         // on ARM, beside a shell's "Not enough quota" on the suite's output).
-        if (!collected.stdoutTruncated() or took.nanoseconds < std.Io.Duration.fromMilliseconds(20).nanoseconds or
+        if (!ended.stdout_truncated or took.nanoseconds < std.Io.Duration.fromMilliseconds(20).nanoseconds or
             took.nanoseconds >= std.Io.Duration.fromSeconds(5).nanoseconds)
         {
             std.debug.print("drain: stdout truncated {}, took {d} ms, {d} bytes read, the writer {s}\n", .{
-                collected.stdoutTruncated(),
+                ended.stdout_truncated,
                 took.toMilliseconds(),
-                collected.stdout().len,
+                collecting.out.written().len,
                 if (try writer.tryWait(io)) |_| "ended" else "running",
             });
             return error.TestUnexpectedResult;
