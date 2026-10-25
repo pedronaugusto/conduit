@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-25
+
 ### Added
 
 - `Child.exchangeInto(io, input, sinks, options)`: `exchange` with stdout and stderr written into the caller's `*std.Io.Writer`s (`Child.Sinks`), each read landing in its writer's own buffer, and how the run ended returned (`Child.Ended`). A writer over storage that is wiped when let go (aegis `SecretBytes.Writer`) keeps what a credential helper prints out of any other memory. `exchange` and `output` are the same path into growing writers.
@@ -1134,7 +1136,8 @@ First release. Requires Zig 0.16.0. POSIX only: Linux, macOS, the BSDs.
   terminal ioctls on a descriptor, for either end of a pair or for the
   program's own standard input.
 
-[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.10.4...HEAD
+[Unreleased]: https://github.com/pedronaugusto/conduit/compare/v0.10.5...HEAD
+[0.10.5]: https://github.com/pedronaugusto/conduit/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/pedronaugusto/conduit/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/pedronaugusto/conduit/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/pedronaugusto/conduit/compare/v0.10.1...v0.10.2
