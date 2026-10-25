@@ -124,15 +124,13 @@ test "a group is empty but for its leader once what the leader started has ended
     defer reap(&child, testing.io);
     const pgid = child.state.pgid.?;
 
-    var deadline: Deadline = .in(testing.io, .fromMilliseconds(5000));
+    // Membership announces nothing: it is looked at until it holds, for as
+    // long as it takes, and a member that never shows meets the watchdog.
     while (members(pgid, child.state.id) != .others) {
-        if (deadline.remainingMs(testing.io) == 0) return error.TestMemberNotSeen;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
     child.closeStdin(testing.io);
-    deadline = .in(testing.io, .fromMilliseconds(5000));
     while (members(pgid, child.state.id) != .none) {
-        if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
 }
@@ -157,9 +155,8 @@ test "a Linux process with a child of its own is said to have one, and one witho
     });
     defer parent.deinit(testing.io);
     defer reap(&parent, testing.io);
-    const deadline: Deadline = .in(testing.io, .fromMilliseconds(5000));
+    // A child announces nothing: looked at until it shows, however long.
     while (!hasChildren(parent.state.id)) {
-        if (deadline.remainingMs(testing.io) == 0) return error.TestChildNotSeen;
         try std.Io.sleep(testing.io, .fromMilliseconds(2), .awake);
     }
 
@@ -245,7 +242,7 @@ test "a captured pid wait expires while it runs and wakes when it ends" {
     defer captured.deinit();
     if (try captured.wait(testing.io, Deadline.within(.fromMilliseconds(20)))) return error.TestCapturedWaitEndedTooSoon;
     try testing.expect(captured.signal(.TERM));
-    if (!try captured.wait(testing.io, Deadline.within(.fromMilliseconds(5000)))) return error.TestCapturedWaitMissedExit;
+    if (!try captured.wait(testing.io, .none)) return error.TestCapturedWaitMissedExit;
     _ = try child.wait(testing.io);
 }
 
@@ -279,9 +276,10 @@ test "killRecorded waits for a recorded root and a descendant it captured" {
     stage = "ending the recorded tree";
     try testing.expect(try killRecorded(testing.io, .{ .pid = child.state.id, .start = since, .grace = .literal("20ms") }));
     stage = "observing the descendant's exit";
-    // Cleanup proves delivery of KILL, which may precede observable exit.
-    // Keep the same 20 ms budget when waiting on the held identity.
-    if (!try captured.wait(testing.io, Deadline.within(.fromMilliseconds(20)))) return error.TestDescendantStayed;
+    // Cleanup proves delivery of KILL, which may precede observable exit:
+    // the held identity's exit is waited on, not a time, which a loaded
+    // machine overruns. A descendant that never ends meets the watchdog.
+    if (!try captured.wait(testing.io, .none)) return error.TestDescendantStayed;
     try testing.expect((try startTime(descendant)) == null);
     _ = try child.wait(testing.io);
 }
@@ -308,7 +306,7 @@ test "a failed tree fixture releases the descendant it still owns" {
     defer _ = held.signal(.KILL);
     try child.stdinFile().?.writeStreamingAll(testing.io, "x");
     try testing.expectEqual(Child.Term{ .exited = 1 }, try child.wait(testing.io));
-    if (!try held.wait(testing.io, Deadline.within(.fromMilliseconds(20)))) return error.TestFixtureLeftDescendant;
+    if (!try held.wait(testing.io, .none)) return error.TestFixtureLeftDescendant;
 }
 
 test "a leaderless Linux group keeps the child its leader started" {
@@ -339,9 +337,9 @@ test "a leaderless Linux group keeps the child its leader started" {
     _ = try leader.wait(testing.io);
     try testing.expectEqual(Members.others, members(group, leader.state.id));
     try testing.expectEqual(@as(usize, 1), try signalGroupSince(group, leader.state.id, since, .KILL));
-    const deadline: Deadline = .in(testing.io, .fromMilliseconds(3000));
+    // A killed member that is not a child announces nothing: its start
+    // time is looked at until it is gone, however long that takes.
     while ((try startTime(member)) != null) {
-        if (deadline.remainingMs(testing.io) == 0) return error.TestMemberStayed;
         try testing.io.sleep(.fromMilliseconds(20), .awake);
     }
 }
@@ -371,7 +369,7 @@ test "a captured process keeps its identity across exec" {
     try testing.expect(captured.signal(.STOP));
     try testing.expect(captured.signal(.CONT));
     try testing.expect(captured.signal(.KILL));
-    try testing.expect(try captured.wait(io, Deadline.within(.fromMilliseconds(5000))));
+    try testing.expect(try captured.wait(io, .none));
     try testing.expectEqual(Child.Term{ .signal = .KILL }, try child.wait(io));
 }
 

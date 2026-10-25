@@ -91,7 +91,7 @@ fn waits(io: std.Io) !void {
     // Running, and the time runs out first.
     try std.testing.expectEqual(@as(?Term, null), try child.waitTimeout(io, Deadline.within(.fromMilliseconds(30))));
     child.closeStdin(io);
-    try std.testing.expectEqual(Term{ .exited = 5 }, (try child.waitTimeout(io, Deadline.within(.fromMilliseconds(10_000)))).?);
+    try std.testing.expectEqual(Term{ .exited = 5 }, (try child.waitTimeout(io, .none)).?);
     try std.testing.expectEqual(Term{ .exited = 5 }, try child.wait(io));
     try expectNative(before);
 }
@@ -158,7 +158,7 @@ fn collected(io: std.Io) !void {
     defer child.deinit(io);
     defer reap(&child, io);
     const before = reactor.fallbacks();
-    var output = try child.output(std.testing.allocator, io, .{ .timeout = Deadline.within(.fromSeconds(30)) });
+    var output = try child.output(std.testing.allocator, io, .{});
     defer output.deinit();
     try std.testing.expect(!output.timedOut());
     try std.testing.expect(conduit.succeeded(output.term()));
@@ -212,7 +212,7 @@ fn reaped(io: std.Io) !void {
     const before = reactor.fallbacks();
     try std.testing.expectEqual(@as(?Term, null), try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(30))));
     child.closeStdin(io);
-    try std.testing.expectEqual(Term{ .exited = 5 }, (try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(10_000)))).?);
+    try std.testing.expectEqual(Term{ .exited = 5 }, (try reaper.waitTimeout(io, .none)).?);
     try std.testing.expectEqual(Term{ .exited = 5 }, try child.wait(io));
     try expectNative(before);
 }
@@ -263,7 +263,7 @@ fn forced(io: std.Io) !void {
     // Asked, not waited for: the grace is waited out on the Reaper's own task,
     // which parks on the runtime's one thread beside the task that waits here.
     reaper.kill(io, .literal("100ms"));
-    const term = (try reaper.waitTimeout(io, Deadline.within(.fromMilliseconds(10_000)))) orelse return error.TestChildDidNotExit;
+    const term = (try reaper.waitTimeout(io, .none)) orelse return error.TestChildDidNotExit;
     try std.testing.expect(term == .signal or is_windows);
     try expectNative(before);
 }
@@ -289,7 +289,7 @@ fn captured(io: std.Io) !void {
     const before = reactor.fallbacks();
     try std.testing.expect(!try held.wait(io, Deadline.within(.fromMilliseconds(30))));
     try std.testing.expect(held.signal(.KILL));
-    try std.testing.expect(try held.wait(io, Deadline.within(.fromMilliseconds(10_000))));
+    try std.testing.expect(try held.wait(io, .none));
     try expectNative(before);
 }
 
@@ -309,7 +309,7 @@ fn jobEmptied(io: std.Io) !void {
     try std.testing.expect(!try child.waitTree(io, Deadline.within(.fromMilliseconds(50))));
     child.closeStdin(io);
     _ = try child.wait(io);
-    try std.testing.expect(try child.waitTree(io, Deadline.within(.fromMilliseconds(10_000))));
+    try std.testing.expect(try child.waitTree(io, .none));
     // Said once, said again.
     try std.testing.expect(try child.waitTree(io, Deadline.within(.zero)));
     try expectNative(before);

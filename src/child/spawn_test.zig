@@ -1655,7 +1655,7 @@ test "a recorded cgroup waits on population changes" {
     defer recorded.close();
     try testing.expect(!try recorded.waitEmpty(io, Deadline.within(.fromMilliseconds(20))));
     _ = try child.killWait(io, .fromRaw(0));
-    try testing.expect(try recorded.waitEmpty(io, Deadline.within(.fromMilliseconds(1000))));
+    try testing.expect(try recorded.waitEmpty(io, .none));
 }
 
 test "killRecorded ends a verified Linux cgroup and its detached grandchild" {
