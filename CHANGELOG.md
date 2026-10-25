@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Expect.untilMatch` and `Expect.Matcher`: a wait for a caller's matcher, a regex, a glob or a prompt with a counter in it, which no literal pattern can say. It is the one wait: `until` and `untilAny` run on it through their literal matcher and keep its incremental search. A matcher is asked for the earliest match (`Found`: which pattern, where) each time more arrives, is told when the stream has ended so it can match at the end, and with a `window` is shown only that much of the tail. The bench gains `expect-match`, compiled for now.
+
 ## [0.10.5] - 2026-10-25
 
 ### Added

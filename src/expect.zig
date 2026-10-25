@@ -23,11 +23,14 @@
 //! decides — a larger buffer, or `discard` to say the pending bytes do not
 //! matter.
 //!
-//! # Patterns are bytes
+//! # Patterns are bytes, or the caller's
 //!
 //! A pattern is a byte string, matched literally. Zig's standard library has
 //! no regular-expression engine, and a pattern language shipped inside a
-//! process package would be a second, worse one.
+//! process package would be a second, worse one. A caller with a language
+//! of its own (a regex, a glob, a parser for a prompt with a counter in it)
+//! brings it as a `Matcher` to `untilMatch`, the one wait `until` and
+//! `untilAny` run on.
 //!
 //! # The reading runs on a task
 //!
@@ -120,6 +123,30 @@ pub const Expect = struct {
         /// is here so that `before.ptr + before.len` needs no arithmetic and a
         /// caller keeping the whole exchange can print the two together.
         found: []const u8,
+    };
+
+    /// Where a matcher found its match in what it was shown: which pattern
+    /// it was (zero for a matcher with one), and the bytes it covers.
+    pub const Found = struct {
+        index: usize = 0,
+        at: usize,
+        len: usize,
+    };
+
+    /// A caller's pattern: what `untilMatch` asks, each time more of what the
+    /// child said has arrived, for the earliest match in it.
+    pub const Matcher = struct {
+        context: ?*anyopaque,
+        /// The earliest match in `said`, or null for none yet. `ended` is
+        /// true when nothing more will arrive, so a matcher can take what is
+        /// left at the end of the stream. The match must lie inside `said`.
+        findFn: *const fn (context: ?*anyopaque, said: []const u8, ended: bool) ?Found,
+        /// How far back from the newest byte a match can begin, when the
+        /// matcher knows: it is then shown only that much of what is pending.
+        /// With none it is shown everything pending on every arrival, so a
+        /// wait for a match that never comes costs the length of what the
+        /// child said, squared.
+        window: ?usize = null,
     };
 
     /// An `Expect` that is not reading yet. `start` puts the reading task in
@@ -270,8 +297,29 @@ pub const Expect = struct {
             if (pattern.len > expect.buffer.len) return error.BufferFull;
         }
 
+        var literal: Literal = .{ .patterns = patterns, .search = .init(patterns) };
+        return expect.untilMatch(io, literal.matcher(), timeout);
+    }
+
+    /// Waits for `matcher` to find its match in what the child says, and
+    /// consumes everything up to and including it: the wait `until` and
+    /// `untilAny` are. The earliest match the matcher reports wins; bytes
+    /// after it stay pending for the next call, and `Match.index` is the
+    /// matcher's `Found.index`.
+    ///
+    /// A buffer full of bytes the matcher finds nothing in is
+    /// `error.BufferFull`; a stream that ends with no match, after the
+    /// matcher was asked once more with `ended`, is `error.EndOfStream`.
+    pub fn untilMatch(
+        expect: *Expect,
+        io: std.Io,
+        matcher: Matcher,
+        timeout: std.Io.Timeout,
+    ) WaitError!Match {
+        expect.pin.check(expect);
+        expect.compact(io);
+
         const deadline = Deadline.of(io, timeout);
-        var search: Search = .init(patterns);
         while (true) {
             expect.arrived.reset();
             // Read before the buffer: a reader seen finished here has appended
@@ -287,14 +335,17 @@ pub const Expect = struct {
                 defer held.deinit(io);
                 const intake = held.value();
 
-                if (search.find(expect.buffer[0..intake.filled], patterns)) |found| {
-                    const pattern = patterns[found.index];
+                const shown = if (matcher.window) |w| intake.filled -| w else 0;
+                const said = expect.buffer[shown..intake.filled];
+                if (matcher.findFn(matcher.context, said, intake.ended or intake.failed or finished)) |found| {
+                    std.debug.assert(found.at + found.len <= said.len);
+                    const at = shown + found.at;
                     winner = .{
                         .index = found.index,
-                        .before = expect.buffer[0..found.at],
-                        .found = expect.buffer[found.at..][0..pattern.len],
+                        .before = expect.buffer[0..at],
+                        .found = expect.buffer[at..][0..found.len],
                     };
-                    intake.consumed = found.at + pattern.len;
+                    intake.consumed = at + found.len;
                 } else {
                     full = intake.filled == expect.buffer.len;
                     ended = intake.ended;
@@ -309,6 +360,23 @@ pub const Expect = struct {
             try expect.sleepUntil(io, deadline);
         }
     }
+
+    /// `untilAny`'s patterns as a matcher, searched incrementally.
+    const Literal = struct {
+        patterns: []const []const u8,
+        search: Search,
+
+        fn matcher(l: *Literal) Matcher {
+            return .{ .context = l, .findFn = find };
+        }
+
+        fn find(context: ?*anyopaque, said: []const u8, ended: bool) ?Found {
+            _ = ended;
+            const l: *Literal = @ptrCast(@alignCast(context.?)); // safe: `matcher` gives its own `*Literal`
+            const found = l.search.find(said, l.patterns) orelse return null;
+            return .{ .index = found.index, .at = found.at, .len = l.patterns[found.index].len };
+        }
+    };
 
     /// The search `untilAny` runs again every time more bytes arrive.
     ///
@@ -328,7 +396,7 @@ pub const Expect = struct {
         /// still complete.
         longest: usize,
 
-        const Found = struct { index: usize, at: usize };
+        const Hit = struct { index: usize, at: usize };
 
         fn init(patterns: []const []const u8) Search {
             var longest: usize = 0;
@@ -341,8 +409,8 @@ pub const Expect = struct {
         ///
         /// **The earliest match wins**, whatever order the patterns were listed
         /// in; two that begin at the same byte are settled by that order.
-        fn find(search: *Search, said: []const u8, patterns: []const []const u8) ?Found {
-            var winner: ?Found = null;
+        fn find(search: *Search, said: []const u8, patterns: []const []const u8) ?Hit {
+            var winner: ?Hit = null;
             var earliest: usize = said.len;
             for (patterns, 0..) |pattern, index| {
                 const at = std.mem.findPos(u8, said, search.from, pattern) orelse continue;
@@ -562,7 +630,7 @@ pub const Expect = struct {
 
 pub const test_access = if (builtin.is_test) struct {
     pub const Search = Expect.Search;
-    pub const Found = Expect.Search.Found;
+    pub const Found = Expect.Search.Hit;
     pub const searchInit = Expect.Search.init;
     pub const searchFind = Expect.Search.find;
     pub const read = Expect.read;

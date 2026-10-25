@@ -272,6 +272,7 @@ pub fn dev(b: *std.Build, tools: type) void {
         .{ .name = "lifecycle-claims", .source = "bench/lifecycle_claims.zig" },
         .{ .name = "orphans-cost", .source = "bench/orphans_cost.zig" },
         .{ .name = "conduit-bench", .source = "bench/conduit_bench.zig" },
+        .{ .name = "expect-match", .source = "bench/expect_match.zig" },
     };
     preflight.addCi(b, p, .{
         .tests = test_step,

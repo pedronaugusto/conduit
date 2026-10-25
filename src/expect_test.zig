@@ -547,3 +547,110 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         try testing.expectEqualStrings("b", expect.pending(io));
     }
 }
+
+/// A matcher for a run of ASCII digits, complete once a byte that is not a
+/// digit follows it or the stream has ended: the shape a prompt with a
+/// counter in it has, which no literal pattern can say.
+const Digits = struct {
+    /// The most bytes it was shown at once.
+    widest: usize = 0,
+
+    fn matcher(d: *Digits, window: ?usize) Expect.Matcher {
+        return .{ .context = d, .findFn = find, .window = window };
+    }
+
+    fn find(context: ?*anyopaque, said: []const u8, ended: bool) ?Expect.Found {
+        const d: *Digits = @ptrCast(@alignCast(context.?)); // safe: `matcher` gives its own `*Digits`
+        d.widest = @max(d.widest, said.len);
+        const at = for (said, 0..) |c, i| {
+            if (std.ascii.isDigit(c)) break i;
+        } else return null;
+        var end = at;
+        while (end < said.len and std.ascii.isDigit(said[end])) end += 1;
+        if (end == said.len and !ended) return null;
+        return .{ .at = at, .len = end - at };
+    }
+};
+
+fn spawnSaying(gpa: std.mem.Allocator, io: std.Io, comptime text: []const u8) !Child {
+    const argv: []const []const u8 = if (is_windows)
+        &.{ "cmd.exe", "/c", "echo " ++ text }
+    else
+        &.{ "/bin/sh", "-c", "printf '" ++ text ++ "\\n'" };
+    return Child.spawn(gpa, io, .{ .argv = argv, .stdio = .{ .pipes = .{ .stderr = false } } });
+}
+
+test "untilMatch takes a caller's matcher: the earliest match, what came before, the rest pending" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var child = try spawnSaying(gpa, io, "ticket 4711 ok 42");
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+
+    var buffer: [256]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+
+    var digits: Digits = .{};
+    const match = try expect.untilMatch(io, digits.matcher(null), within_budget);
+    try testing.expectEqual(@as(usize, 0), match.index);
+    try testing.expectEqualStrings("4711", match.found);
+    try testing.expectEqualStrings("ticket ", match.before);
+    const next = try expect.untilMatch(io, digits.matcher(null), within_budget);
+    try testing.expectEqualStrings("42", next.found);
+    try testing.expectEqualStrings(" ok ", next.before);
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
+
+test "a matcher's window is all it is shown, and its match is placed in the whole" {
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var child = try spawnSaying(gpa, io, "abcdefghijklmnopqrstuvwxyz 99");
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+
+    var buffer: [256]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+
+    var digits: Digits = .{};
+    const match = try expect.untilMatch(io, digits.matcher(6), within_budget);
+    try testing.expectEqualStrings("99", match.found);
+    try testing.expectEqualStrings("abcdefghijklmnopqrstuvwxyz ", match.before);
+    try testing.expect(digits.widest <= 6);
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
+
+test "a matcher is asked once more when the stream ends, and a wait after it ends in EndOfStream" {
+    if (is_windows) return error.SkipZigTest; // the fixture needs output with no line end, which `echo` always adds
+    const io = testing.io;
+    const gpa = testing.allocator;
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ "/bin/sh", "-c", "printf 'count 7'" },
+        .stdio = .{ .pipes = .{ .stderr = false } },
+    });
+    defer child.deinit(io);
+    errdefer reap(&child, io);
+
+    var buffer: [256]u8 = undefined;
+    var expect = child.expect(&buffer).?;
+    try expect.start(io);
+    defer expect.deinit(io);
+
+    // The run of digits is the last thing said: it is complete only once
+    // the stream has ended.
+    var digits: Digits = .{};
+    const match = try expect.untilMatch(io, digits.matcher(null), within_budget);
+    try testing.expectEqualStrings("7", match.found);
+    try testing.expectEqualStrings("count ", match.before);
+    try testing.expectError(error.EndOfStream, expect.untilMatch(io, digits.matcher(null), within_budget));
+
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(io, &child));
+}
