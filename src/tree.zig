@@ -47,9 +47,11 @@ const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
 const cgroups = @import("cgroup.zig");
 
 // A recycled entry in a process-table snapshot, before it is signalled.
-var snapshot_witness: if (builtin.is_test) ?posix.pid_t else void = if (builtin.is_test) null else {};
+var snapshot_witness: if (builtin.is_test) aegis.Atomic(Witness) else void = if (builtin.is_test) .init(.none) else {};
 // A controlled exec between identity lookup and token delivery.
-var before_token_delivery: if (builtin.is_test) ?*const fn () void else void = if (builtin.is_test) null else {};
+var before_token_delivery: if (builtin.is_test) aegis.Atomic(?*const fn () void) else void = if (builtin.is_test) .init(null) else {};
+/// The process a test slips into a snapshot; no process has id 0.
+const Witness = enum(posix.pid_t) { none = 0, _ };
 
 /// The names in what `getdents64` wrote, read from its bytes rather than cast
 /// out of them: a record that would run past them, or that does not hold a
@@ -146,12 +148,15 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
         found.deinit(gpa);
     }
     try collect(gpa, root, in_group, &found);
-    if (builtin.is_test) if (snapshot_witness) |pid| {
-        var process = Process.capture(pid) orelse unreachable;
-        found.append(gpa, process) catch |err| {
-            process.deinit();
-            return err;
-        };
+    if (builtin.is_test) switch (snapshot_witness.load(.acquire)) {
+        .none => {},
+        else => |witness| {
+            var process = Process.capture(@backingInt(witness)) orelse unreachable;
+            found.append(gpa, process) catch |err| {
+                process.deinit();
+                return err;
+            };
+        },
     };
 
     // A read of the process table may have outlived the root. In that case
@@ -1015,7 +1020,7 @@ pub const DarwinProcess = struct {
             var token: AuditToken = .{ .val = @splat(0) };
             token.val[5] = @bitCast(process.pid);
             token.val[7] = @bitCast(info.unique.id_version);
-            if (builtin.is_test) if (before_token_delivery) |exec| exec();
+            if (builtin.is_test) if (before_token_delivery.load(.acquire)) |exec| exec();
             if (proc_signal_with_audittoken(&token, @intCast(@backingInt(sig))) == 0) return true;
             previous = info.unique.id_version;
         }
@@ -1754,10 +1759,10 @@ pub const test_access = if (builtin.is_test) struct {
     pub const membersDarwin = fixtureMembersDarwin;
 
     pub fn snapshot(pid: ?posix.pid_t) void {
-        snapshot_witness = pid;
+        snapshot_witness.store(if (pid) |p| @fromBackingInt(p) else .none, .release);
     }
     pub fn delivery(callback: ?*const fn () void) void {
-        before_token_delivery = callback;
+        before_token_delivery.store(callback, .release);
     }
 } else struct {};
 const FixtureDeadline = Deadline;
