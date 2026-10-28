@@ -1281,8 +1281,8 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     //
     // About the walk, so not in a cgroup, which would reach the grandchild
     // with no walk at all.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
     for ([_]bool{ false, true }) |on_pty| {
         var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
@@ -2191,13 +2191,13 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
         };
         defer child.deinit(io);
         if (i % 2 == 1) try std.Io.sleep(io, .fromMilliseconds(3), .awake);
-        const term = child.waitTimeout(io, within_budget) catch |err| switch (err) {
+        const term = (child.waitTimeout(io, within_budget) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => {
                 _ = failures.fetchAdd(1, .monotonic);
                 continue;
             },
-        } orelse {
+        }) orelse {
             _ = failures.fetchAdd(1, .monotonic);
             reap(&child, io);
             continue;
@@ -2438,8 +2438,8 @@ test "waitTree on Linux says the child's cgroup has emptied, and does not say it
 
 test "waitTree on Linux refuses a child with no cgroup of its own" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.deinit(io);
@@ -3582,8 +3582,8 @@ test "both spawn paths start the same child" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
     // spawns that take `posix_spawn`: those where no cgroup is made.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     // The same spawn twice, once down each path. `cwd` is what sends the
     // second one back to the fork -- there is no file action for a working
@@ -3615,8 +3615,8 @@ test "a child on the posix_spawn path starts with the same clean slate" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
     // spawns that take `posix_spawn`: those where no cgroup is made.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     // The claim the fork child makes by hand, made here by an attribute: an
     // ignored signal is back at its default action.
@@ -3644,8 +3644,8 @@ test "a child on the posix_spawn path starts with the same clean slate" {
 
 test "a spawn expressible by file actions makes no fork call" {
     if (is_windows or !fast_path) return error.SkipZigTest;
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
     try Forks.start();
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.deinit(io);
@@ -4174,9 +4174,9 @@ test "extra files arrive at descriptor 3 and up, in order" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     // About the spawn path, so not in a cgroup, which always forks.
-    if (comptime !is_windows) cgroup.testing_hook.off = true;
+    if (comptime !is_windows) cgroup.testing_hook.cgroups.store(.off, .monotonic);
     defer if (comptime !is_windows) {
-        cgroup.testing_hook.off = false;
+        cgroup.testing_hook.cgroups.store(.on, .monotonic);
     };
 
     // The default policy, which takes posix_spawn where it can, and
@@ -4552,8 +4552,8 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A cgroup of the child's own sends any spawn to the fork: this is about
     // the ones that take `posix_spawn`.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 20, .cols = 70 });
     defer pty.close(io);

@@ -75,7 +75,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     // A cgroup of the child's own, where this process may make one: the
     // fork child joins it before it does anything else, so nothing it ever
     // starts is outside it. `null` elsewhere, and on every system but Linux.
-    var contained: ?cgroup.Pending = cgroup.Cgroup.prepare();
+    var contained: ?cgroup.Pending = cgroup.Cgroup.prepare(io);
     errdefer if (contained) |*pending| pending.abandon();
 
     // Held from before the child exists until it is on the list of children

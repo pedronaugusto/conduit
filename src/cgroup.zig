@@ -52,7 +52,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const aegis = @import("aegis");
 const reactor = @import("reactor");
-const spin = @import("spin.zig");
 const posix = std.posix;
 const c = std.c;
 const Deadline = tty.Deadline;
@@ -117,8 +116,9 @@ test "a boot identity is a whole UUID and nothing else" {
 /// Test builds only: what lets a test run a child on the walk where a cgroup
 /// could be had.
 pub const testing_hook = struct {
-    /// `prepare` answers `null` while this is set.
-    pub var off: bool = false;
+    /// `prepare` answers `null` while this is `.off`.
+    pub var cgroups: aegis.Atomic(Cgroups) = .init(.on);
+    pub const Cgroups = enum(u8) { on, off };
 };
 
 /// Whether anything but the leader's zombie is left: `tree.Members` in all
@@ -131,39 +131,45 @@ pub const Populated = enum { others, none, unknown };
 
 /// The directory of the cgroup this process is in, found once and kept.
 const Place = struct {
-    const Found = enum(u8) { unknown, finding, found, none };
-    var found: std.atomic.Value(Found) = .init(.unknown);
-    /// Written once, while `found` is `finding`, and read after `found`.
-    var path_buffer: [std.Io.Dir.max_path_bytes:0]u8 = undefined;
-    var path_len: usize = 0;
-    /// Set once a cgroup could not be made or joined here: no more are
-    /// tried. Those already made are still where `path` says.
-    var refused: std.atomic.Value(bool) = .init(false);
+    /// The directory, found by the first `usable` and kept.
+    const Found = struct {
+        buffer: [std.Io.Dir.max_path_bytes:0]u8 = undefined,
+        len: usize = 0,
+        /// Whether a cgroup v2 hierarchy with `cgroup.kill` was found.
+        here: bool = false,
+    };
+    var found: aegis.Lazy(Found) = .init();
+    /// `.refused` once a cgroup could not be made or joined here: no more
+    /// are tried. Those already made are still where `path` says.
+    var refused: aegis.Atomic(Refusal) = .init(.open);
+    const Refusal = enum(u8) { open, refused };
 
+    /// The directory, once a `usable` has found it; it never waits, and
+    /// every name is made after one has.
     fn path() ?[:0]const u8 {
-        while (true) switch (found.load(.acquire)) {
-            .found => return path_buffer[0..path_len :0],
-            .none => return null,
-            .finding => spin.yield(),
-            .unknown => {
-                if (found.cmpxchgStrong(.unknown, .finding, .acquire, .monotonic) != null) continue;
-                const ok = find();
-                found.store(if (ok) .found else .none, .release);
-            },
-        };
+        const place = found.get() orelse return null;
+        if (!place.here) return null;
+        return place.buffer[0..place.len :0];
     }
 
-    /// Where a new cgroup may be made, or `null`.
-    fn usable() ?[:0]const u8 {
-        if (refused.load(.monotonic)) return null;
+    /// Where a new cgroup may be made, or `null`: found on the first call,
+    /// which another task waits for on `io`.
+    fn usable(io: std.Io) ?[:0]const u8 {
+        if (refused.load(.monotonic) == .refused) return null;
+        _ = found.getOrInit(io, {}, fill);
         return path();
     }
 
     fn refuse() void {
-        refused.store(true, .monotonic);
+        refused.store(.refused, .monotonic);
     }
 
-    fn find() bool {
+    fn fill(_: void, place: *Found) void {
+        place.* = .{};
+        place.here = find(place);
+    }
+
+    fn find(place: *Found) bool {
         var own_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const own = ownCgroup(&own_buffer) orelse return false;
         var mount_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
@@ -179,11 +185,11 @@ const Place = struct {
             own[mount.root.len..]
         else
             return false;
-        const joined = std.mem.printSentinel(&path_buffer, "{s}{s}", .{
+        const joined = std.mem.printSentinel(&place.buffer, "{s}{s}", .{
             mount.point,
             if (std.mem.eql(u8, below, "/")) "" else below,
         }, 0) catch return false;
-        path_len = joined.len;
+        place.len = joined.len;
 
         // A kernel with no `cgroup.kill` (before 5.14) has no way to end a
         // cgroup at once, and this file does not pretend otherwise.
@@ -589,7 +595,9 @@ const Leftovers = struct {
 // A child's cgroup.
 //======================================================================
 
-var sequence: std.atomic.Value(u32) = .init(0);
+/// Cgroups this process has named, wrapping: a name is fresh among the
+/// owner's live ones long before the count comes round.
+var sequence: aegis.Atomic(aegis.units.Count(Name, u32)) = .init(.fromRaw(0));
 
 const LinuxCgroup = struct {
     /// Private: the child's cgroup directory, opened `O_PATH`, or -1 for none.
@@ -631,15 +639,15 @@ const LinuxCgroup = struct {
     /// A new cgroup for a child about to be started, and the descriptor the
     /// fork child joins it through. `null` where this process may not make
     /// one, and from then on.
-    pub fn prepare() ?Pending {
-        if (builtin.is_test and testing_hook.off) return null;
-        _ = Place.usable() orelse return null;
+    pub fn prepare(io: std.Io) ?Pending {
+        if (builtin.is_test and testing_hook.cgroups.load(.monotonic) == .off) return null;
+        _ = Place.usable(io) orelse return null;
         Leftovers.sweep();
 
         const owner = c.getpid();
         var tries: u8 = 0;
         const name: Name = while (tries < 8) : (tries += 1) {
-            const candidate: Name = .{ .owner = owner, .sequence = sequence.fetchAdd(1, .monotonic) };
+            const candidate: Name = .{ .owner = owner, .sequence = sequence.fetchAddWrapping(.fromRaw(1), .monotonic).raw() };
             var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
             const at = candidate.path(&buffer) orelse return null;
             if (c.mkdir(at, 0o755) == 0) break candidate;
@@ -1147,7 +1155,8 @@ const NoCgroup = struct {
         return true;
     }
 
-    pub fn prepare() ?Pending {
+    pub fn prepare(io: std.Io) ?Pending {
+        _ = io;
         return null;
     }
 

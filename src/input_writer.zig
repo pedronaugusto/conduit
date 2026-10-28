@@ -237,10 +237,10 @@ const State = struct {
             state.closed.set(io);
         }
         while (true) {
-            const node = state.next(io) catch |err| {
+            const node = (state.next(io) catch |err| {
                 failure = err;
                 return;
-            } orelse return;
+            }) orelse return;
             handles.writeStreamingAll(io, state.file, node.batch.borrow().bytes) catch |err| {
                 var held = state.queue.acquireUncancelable(io);
                 defer held.deinit(io);

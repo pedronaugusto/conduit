@@ -9,6 +9,11 @@ const aegis = @import("aegis");
 /// a span or a deadline, as std's own waits take it.
 pub const Duration = aegis.units.Duration(.nanosecond, u64);
 
+/// A moment on the awake clock, and a signed span between two: the clock's
+/// own terms, as std's timestamps carry them.
+const Awake = aegis.units.Instant(.awake, .nanosecond, i96);
+const Span = aegis.units.Duration(.nanosecond, i96);
+
 pub const Deadline = struct {
     /// The moment the wait ends, on the awake clock.
     at: std.Io.Clock.Timestamp,
@@ -19,8 +24,8 @@ pub const Deadline = struct {
     /// `span` from now, on the awake clock. A span too long to add to the
     /// clock is `never`; a negative one has already passed.
     pub fn in(io: std.Io, span: std.Io.Duration) Deadline {
-        const now = std.Io.Clock.Timestamp.now(io, .awake);
-        return .{ .at = .{ .raw = .{ .nanoseconds = now.raw.nanoseconds +| span.nanoseconds }, .clock = .awake } };
+        const now = Awake.fromTimestamp(std.Io.Clock.Timestamp.now(io, .awake).raw, .exact);
+        return .{ .at = .{ .raw = now.saturatingAdd(Span.fromIoDuration(span, .exact)).toTimestamp(), .clock = .awake } };
     }
 
     /// `span` from now, on the awake clock.
@@ -74,13 +79,12 @@ pub const Deadline = struct {
 
     /// What is left, in the whole milliseconds a system wait takes.
     pub fn remainingMs(deadline: Deadline, io: std.Io) u32 {
-        const left = deadline.at.durationFromNow(io).raw.nanoseconds;
-        if (left <= 0) return 0;
+        const left = Span.fromIoDuration(deadline.at.durationFromNow(io).raw, .exact);
+        if (left.compare(.fromRaw(0)) != .gt) return 0;
         // Kernel waits take whole milliseconds. A positive fraction still
         // belongs to the budget; rounding it down would declare expiry early.
-        const span = aegis.units.Duration(.nanosecond, i128).fromRaw(left);
         // A wait too long for a count of u32 milliseconds is the longest one.
-        const milliseconds = span.convert(.millisecond, u32, .up) catch return std.math.maxInt(u32);
+        const milliseconds = left.convert(.millisecond, u32, .up) catch return std.math.maxInt(u32);
         return milliseconds.raw();
     }
 

@@ -619,7 +619,7 @@ pub const Child = struct {
     fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         if (child.state.simulated != null) return child.reapSimulated(io, deadline.toTimeout());
         if (try child.tryWaitClaimed(io)) |term| return term;
-        if (builtin.is_test and !is_windows) if (before_exit_watch) |hook| hook(child);
+        if (builtin.is_test and !is_windows) if (before_exit_watch.load(.acquire)) |hook| hook(child);
 
         switch (try child_exit.wait(io, child.state.id, child.exitWatch(), null, deadline.toTimeout())) {
             .ended => {},
@@ -656,7 +656,7 @@ pub const Child = struct {
         return if (child.state.exit_watch) |*watch| watch else null;
     }
 
-    var before_exit_watch: if (builtin.is_test) ?*const fn (*Child) void else void = if (builtin.is_test) null else {};
+    var before_exit_watch: if (builtin.is_test) aegis.Atomic(?*const fn (*Child) void) else void = if (builtin.is_test) .init(null) else {};
 
     test "an exit before the wait begins is reaped without a fallback sleep" {
         if (is_windows) return error.SkipZigTest;
@@ -684,8 +684,8 @@ pub const Child = struct {
         };
         const counted = try shakedown.FaultIo.init(testing.allocator, io, .{});
         defer counted.deinit();
-        before_exit_watch = Exit.beforeWatch;
-        defer before_exit_watch = null;
+        before_exit_watch.store(Exit.beforeWatch, .release);
+        defer before_exit_watch.store(null, .release);
         // A termination request still owns the final group force before reap.
         child.state.end_descendants = true;
         _ = try child.wait(counted.io());
@@ -965,7 +965,7 @@ pub const Child = struct {
         if (child.settled() != null or child.state.identity_retired) return;
         if (!signal.valid()) return error.Unsupported;
         if (signal.ends()) child.state.end_descendants = true;
-        if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
+        if (builtin.is_test) if (signal_probe.load(.acquire)) |probe| probe.beforeSignal(child);
         if (is_windows) return child.killWindows(signal);
         const sig = signal.toPosix();
 
@@ -1656,10 +1656,10 @@ pub const Child = struct {
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
             try select.concurrent(.out, collect, .{ io, f, options.max_bytes, &out });
-        } else out.done.store(true, .release);
+        } else out.done.store(.done, .release);
         if (child.state.stderr) |f| {
             try select.concurrent(.err, collect, .{ io, f, options.max_bytes, &err });
-        } else err.done.store(true, .release);
+        } else err.done.store(.done, .release);
         try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
 
         var timed_out = false;
@@ -1690,9 +1690,9 @@ pub const Child = struct {
         // The child is gone, so its ends of the pipes are closed and the readers
         // are finishing. Anything still holding a stream open is not the child,
         // and is not what this call promised to wait for.
-        if (!(out.done.load(.acquire) and err.done.load(.acquire))) {
+        if (!((out.done.load(.acquire) == .done) and (err.done.load(.acquire) == .done))) {
             try select.concurrent(.drained, Deadline.sleep, .{ drainDeadline(io, options, until), io });
-            while (!(out.done.load(.acquire) and err.done.load(.acquire))) switch (try select.await()) {
+            while (!((out.done.load(.acquire) == .done) and (err.done.load(.acquire) == .done))) switch (try select.await()) {
                 .out, .err => |read| try read,
                 .drained => |slept| {
                     try slept;
@@ -1725,10 +1725,11 @@ pub const Child = struct {
         /// What the writer has been given, which `max_bytes` bounds.
         kept: usize,
         truncated: bool,
-        failure: std.atomic.Value(Failure),
-        done: std.atomic.Value(bool),
+        failure: aegis.Atomic(Failure),
+        done: aegis.Atomic(Progress),
 
         const Failure = enum(u8) { none, read_failed, write_failed };
+        const Progress = enum(u8) { reading, done };
 
         fn init(sink: *std.Io.Writer) Collector {
             return .{
@@ -1736,7 +1737,7 @@ pub const Child = struct {
                 .kept = 0,
                 .truncated = false,
                 .failure = .init(.none),
-                .done = .init(false),
+                .done = .init(.reading),
             };
         }
 
@@ -1756,8 +1757,8 @@ pub const Child = struct {
             return .{
                 .term = term,
                 .timed_out = timed_out,
-                .stdout_truncated = out.truncated or !out.done.load(.acquire),
-                .stderr_truncated = err.truncated or !err.done.load(.acquire),
+                .stdout_truncated = out.truncated or out.done.load(.acquire) != .done,
+                .stderr_truncated = err.truncated or err.done.load(.acquire) != .done,
             };
         }
     };
@@ -1788,7 +1789,7 @@ pub const Child = struct {
             var set: PollSet = .{ .members = undefined, .which = undefined, .count = 0 };
             for (0..2) |turn| {
                 const i = turn ^ first;
-                if (collectors[i].done.load(.acquire)) continue;
+                if (collectors[i].done.load(.acquire) == .done) continue;
                 if (streams[i].?.handle < 0) {
                     _ = try collectOnce(io, streams[i].?, max_bytes, collectors[i]);
                     continue;
@@ -1885,7 +1886,7 @@ pub const Child = struct {
             error.Canceled => return error.Canceled,
             else => {
                 if (!handles.finished(e)) into.failure.store(.read_failed, .release);
-                into.done.store(true, .release);
+                into.done.store(.done, .release);
                 return true;
             },
         };
@@ -1934,7 +1935,7 @@ pub const Child = struct {
         const collectors = [2]*Collector{ &out, &err };
         // A stream this process does not hold is finished before it starts.
         for (streams, collectors) |stream, collector| {
-            if (stream == null) collector.done.store(true, .release);
+            if (stream == null) collector.done.store(.done, .release);
         }
 
         var timed_out = false;
@@ -1946,8 +1947,8 @@ pub const Child = struct {
         var lag_ms: u32 = 1;
         while (true) {
             try std.Io.checkCancel(io);
-            const out_done = out.done.load(.acquire);
-            const err_done = err.done.load(.acquire);
+            const out_done = out.done.load(.acquire) == .done;
+            const err_done = err.done.load(.acquire) == .done;
             if (term == null) {
                 // A reader that cannot continue leaves a pipe the child may fill
                 // and block on: end the child now and report the failure once
@@ -1964,7 +1965,7 @@ pub const Child = struct {
                 }
                 if (term != null) drain = drainDeadline(io, options, until);
             }
-            if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
+            if (term != null and ((out_done and err_done) or drain.?.remainingMs(io) == 0)) break;
 
             var set = try PollSet.init(io, streams, collectors, options.max_bytes, first, if (term == null and !ended) process.? else null);
             const members = set.members[0..set.count];
@@ -2226,7 +2227,7 @@ pub const Child = struct {
 
     // A test can stop delivery at the boundary between taking the child's name
     // and using it. No hook or storage reaches a consumer build.
-    var signal_probe: if (builtin.is_test) ?*SignalProbe else void = if (builtin.is_test) null else {};
+    var signal_probe: if (builtin.is_test) aegis.Atomic(?*SignalProbe) else void = if (builtin.is_test) .init(null) else {};
 
     const SignalProbe = if (builtin.is_test) struct {
         context: *anyopaque,
@@ -2416,6 +2417,6 @@ pub const ReapHold = struct {
 pub const test_access = if (builtin.is_test) struct {
     pub const SignalProbe = Child.SignalProbe;
     pub fn probe(value: ?*Child.SignalProbe) void {
-        Child.signal_probe = value;
+        Child.signal_probe.store(value, .release);
     }
 } else struct {};

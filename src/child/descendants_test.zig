@@ -207,8 +207,8 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
 test "a walk too large to hold still kills and reaps the child itself" {
     if (windows) return error.SkipZigTest;
     // The walk is what is under test: a child in a cgroup is ended without one.
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     tree.testing_hook.walk_full = true;
     defer tree.testing_hook.walk_full = false;
     {
@@ -297,8 +297,8 @@ test "Darwin measures the fork then exit registration race" {
 
 test "a Reaper subreaper ends and reaps a detached orphan without stealing another child" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
     // Activation precedes spawn: an intermediate can exit before start runs.
@@ -336,8 +336,8 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
 test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const linux = std.os.linux;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
     try reaper.enableSubreaper(gpa);
@@ -384,8 +384,8 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
 
 test "independent contained Linux children end only their own detached orphans" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var first = try Fixture.start(.contain, "--race");
     defer first.deinit();
     var second = try Fixture.start(.contain, "--race");
@@ -412,8 +412,8 @@ test "a private supervisor preserves the root exit code and signal" {
 
 test "a saved private supervisor ends only its recorded scope" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var first = try Fixture.start(.contain, "--race");
     defer first.deinit();
     var second = try Fixture.start(.contain, "--race");
@@ -475,8 +475,8 @@ test "a private supervisor has its own session and process group" {
 
 test "every catchable supervisor stop ends and reaps its detached adoptee" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     inline for (.{ std.posix.SIG.HUP, std.posix.SIG.INT, std.posix.SIG.QUIT, std.posix.SIG.TERM, std.posix.SIG.TSTP }) |signal| {
         var fixture = try Fixture.start(.contain, "--race");
         defer fixture.deinit();

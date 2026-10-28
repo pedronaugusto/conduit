@@ -181,7 +181,8 @@ fn openWindows() Channel.OpenError!Channel {
 
     var server: windows.HANDLE = undefined;
     var status_block: windows.IO_STATUS_BLOCK = undefined;
-    const timeout: windows.LARGE_INTEGER = -120 * std.time.ns_per_s / 100;
+    // 120 s in NT's 100 ns units, negative for a time relative to now.
+    const timeout: windows.LARGE_INTEGER = -1_200_000_000;
     switch (windows.ntdll.NtCreateNamedPipeFile(
         &server,
         .{
