@@ -805,6 +805,7 @@ pub const Child = struct {
             }
         }
         var status: c_int = undefined;
+        // aegis: no-danger: a nonblocking waitpid, repeated only when a signal interrupts it
         while (true) {
             const rc = c.waitpid(child.state.id, &status, c.W.NOHANG);
             if (rc == 0) return null;
