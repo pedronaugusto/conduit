@@ -652,7 +652,7 @@ fn detachChild(options: SpawnOptions, report: posix.fd_t) void {
     switch (options.stdio) {
         .pty => |pty| {
             if (c.setsid() < 0) bail(report, .detach);
-            if (c.ioctl(pty.slaveHandle().?, @bitCast(tty.T.SCTTY), @as(usize, 0)) != 0) {
+            if (c.ioctl(pty.slaveHandle().?, @bitCast(tty.ioctl_request.set_controlling_terminal), @as(usize, 0)) != 0) {
                 bail(report, .controlling_terminal);
             }
         },

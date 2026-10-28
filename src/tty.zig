@@ -323,7 +323,7 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
         };
     }
     var ws: posix.winsize = undefined;
-    switch (posix.errno(system.ioctl(handle, request(T.GWINSZ), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
+    switch (posix.errno(system.ioctl(handle, request(ioctl_request.get_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return .fromWinsize(ws),
         .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
@@ -354,7 +354,7 @@ pub fn setWinSize(handle: Handle, size: Size) SetWinSizeError!void {
 
 fn setWinSizePosix(handle: Handle, size: Size) SetWinSizeError!void {
     const ws = size.toWinsize();
-    switch (posix.errno(system.ioctl(handle, request(T.SWINSZ), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
+    switch (posix.errno(system.ioctl(handle, request(ioctl_request.set_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return,
         .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
@@ -697,20 +697,21 @@ fn request(v: anytype) IoctlRequest {
     return if (@typeInfo(IoctlRequest).int.signedness == .signed) @bitCast(bits) else @intCast(bits);
 }
 
-/// The ioctl request numbers this package issues.
+/// The ioctl request numbers this package issues: `TIOCGWINSZ`,
+/// `TIOCSWINSZ` and `TIOCSCTTY`.
 ///
 /// The Darwin table in the standard library stops at `TIOCGWINSZ`, so the
 /// Darwin branch spells all three out from `<sys/ttycom.h>`.
-pub const T = switch (builtin.target.os.tag) {
+pub const ioctl_request = switch (builtin.target.os.tag) {
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => struct {
-        pub const GWINSZ: u32 = 0x40087468;
-        pub const SWINSZ: u32 = 0x80087467;
-        pub const SCTTY: u32 = 0x20007461;
+        pub const get_window_size: u32 = 0x40087468;
+        pub const set_window_size: u32 = 0x80087467;
+        pub const set_controlling_terminal: u32 = 0x20007461;
     },
     .windows => struct {},
     else => struct {
-        pub const GWINSZ: u32 = posix.T.IOCGWINSZ;
-        pub const SWINSZ: u32 = posix.T.IOCSWINSZ;
-        pub const SCTTY: u32 = posix.T.IOCSCTTY;
+        pub const get_window_size: u32 = posix.T.IOCGWINSZ;
+        pub const set_window_size: u32 = posix.T.IOCSWINSZ;
+        pub const set_controlling_terminal: u32 = posix.T.IOCSCTTY;
     },
 };

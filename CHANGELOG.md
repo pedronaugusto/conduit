@@ -14,6 +14,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Owned: `Channel.open`'s `parent` and `child`, and the end `Channel.inherited` and `Channel.fromValue` give. Close them with `deinit(io)`; read and write through `borrow()`; give a spawn `.channel = .{ .file = channel.child.lend().get(), .variable = ... }`.
   - `tty.Controlling`'s `input` and `output` are methods that lend its files (`own.input().get().handle`), and `close` takes `*Controlling`.
 - `Cgroup.prepare` takes the `std.Io` it waits with.
+- `conduit.tty.T` is `conduit.tty.ioctl_request`, its numbers named in snake case: `get_window_size`, `set_window_size`, `set_controlling_terminal`.
 
 ### Changed
 
