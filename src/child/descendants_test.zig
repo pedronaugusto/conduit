@@ -209,8 +209,8 @@ test "a walk too large to hold still kills and reaps the child itself" {
     // The walk is what is under test: a child in a cgroup is ended without one.
     cgroups.testing_hook.cgroups.store(.off, .monotonic);
     defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
-    tree.testing_hook.walk_full = true;
-    defer tree.testing_hook.walk_full = false;
+    tree.testing_hook.walk.store(.full, .monotonic);
+    defer tree.testing_hook.walk.store(.normal, .monotonic);
     {
         var fixture = try Fixture.start(.survive, "--escape");
         defer fixture.deinit();
@@ -277,10 +277,10 @@ test "containment ends a double-forked session after normal exit" {
 test "Darwin measures the fork then exit registration race" {
     if (builtin.target.os.tag != .macos or !test_options.measure) return error.SkipZigTest;
     const attempts = 100;
-    const hook = &lineage.testing_hook.delay_ms;
+    const hook = &lineage.testing_hook.delay;
     defer hook.store(0, .release);
     for ([_]u32{ 0, 20 }) |delay_ms| {
-        hook.store(delay_ms, .release);
+        hook.store(.fromRaw(delay_ms), .release);
         var escapes: usize = 0;
         for (0..attempts) |_| {
             var fixture = try Fixture.start(.contain, "--race");
@@ -493,12 +493,12 @@ test "a failed private scope finish keeps ownership for retry" {
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
     const scope = fixture.child.state.id;
-    supervisor.testing_hook.fail_request = true;
-    defer supervisor.testing_hook.fail_request = false;
+    supervisor.testing_hook.request.store(.fail, .monotonic);
+    defer supervisor.testing_hook.request.store(.normal, .monotonic);
     try std.testing.expectError(error.Unexpected, fixture.finish());
     try std.testing.expectEqual(scope, fixture.child.state.id);
     try std.testing.expect(fixture.daemon.alive());
-    supervisor.testing_hook.fail_request = false;
+    supervisor.testing_hook.request.store(.normal, .monotonic);
     try fixture.finish();
     try std.testing.expect(!fixture.daemon.alive());
 }

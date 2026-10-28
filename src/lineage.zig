@@ -10,6 +10,7 @@
 //! waits for their exit notes, expanding any fork they make first, until
 //! none is left.
 const std = @import("std");
+const aegis = @import("aegis");
 const builtin = @import("builtin");
 const c = std.c;
 const posix = std.posix;
@@ -18,9 +19,16 @@ const reactor = @import("reactor");
 
 /// Test-only observer delay exposes the window without changing the fixture.
 pub const testing_hook = struct {
-    pub var fail_enumeration: std.atomic.Value(bool) = .init(false);
-    pub var delay_ms: std.atomic.Value(u32) = .init(0);
+    pub var enumeration: aegis.Atomic(Enumeration) = .init(.normal);
+    pub var delay: aegis.Atomic(aegis.units.Duration(.millisecond, u32)) = .init(.fromRaw(0));
+    pub const Enumeration = enum(u8) { normal, fail };
 };
+
+/// Whether a tracker has been asked to end, whether its task has finished
+/// watching, and whether a look failed.
+const Ending = enum(u8) { running, ending };
+const Watching = enum(u8) { watching, done };
+const Outcome = enum(u8) { ok, failed };
 
 pub const supported = if (builtin.target.os.tag == .windows) false else tree.Forks.supported;
 pub const Tracker = if (supported) Darwin else NoTracker;
@@ -51,11 +59,11 @@ const Darwin = struct {
     end: reactor.Wake,
     task: std.Io.Future(void) = undefined,
     known: std.ArrayList(tree.DarwinProcess) = .empty,
-    ending: std.atomic.Value(bool) = .init(false),
-    done: std.atomic.Value(bool) = .init(false),
+    ending: aegis.Atomic(Ending) = .init(.running),
+    done: aegis.Atomic(Watching) = .init(.watching),
     /// Signaled once `done` is set, for a reap that waits on it.
     finished: reactor.Wake,
-    failed: std.atomic.Value(bool) = .init(false),
+    failed: aegis.Atomic(Outcome) = .init(.ok),
     /// Test handshake: registrations completed by this task, never a borrowed list.
     observed: if (builtin.is_test) std.atomic.Value(usize) else void = if (builtin.is_test) .init(0) else {},
 
@@ -86,30 +94,30 @@ const Darwin = struct {
 
     /// Request the final force; nonblocking even for Child.tryWait.
     pub fn finish(tracker: *Darwin) bool {
-        if (!tracker.ending.swap(true, .acq_rel)) tracker.end.signal();
-        return tracker.done.load(.acquire);
+        if (tracker.ending.swap(.ending, .acq_rel) != .ending) tracker.end.signal();
+        return tracker.done.load(.acquire) == .done;
     }
 
     /// Asks for the final force, and waits until it is done or `timeout`
     /// passes: true once done.
     pub fn waitFinished(tracker: *Darwin, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
         while (!tracker.finish()) tracker.finished.wait(io, timeout) catch |err| switch (err) {
-            error.Timeout => return tracker.done.load(.acquire),
+            error.Timeout => return tracker.done.load(.acquire) == .done,
             error.Canceled => return error.Canceled,
         };
         return true;
     }
 
     pub fn failedTracking(tracker: *const Darwin) bool {
-        return tracker.failed.load(.acquire);
+        return tracker.failed.load(.acquire) == .failed;
     }
 
     fn discover(tracker: *Darwin, parent: tree.DarwinProcess) !void {
         if (builtin.is_test) {
-            if (testing_hook.fail_enumeration.load(.acquire)) return error.SystemResources;
-            const delay_ms = testing_hook.delay_ms.load(.acquire);
-            if (delay_ms != 0) {
-                const delay: c.timespec = .{ .sec = 0, .nsec = @intCast(@as(u64, delay_ms) * std.time.ns_per_ms) };
+            if (testing_hook.enumeration.load(.acquire) == .fail) return error.SystemResources;
+            const hold = testing_hook.delay.load(.acquire);
+            if (hold.compare(.fromRaw(0)) == .gt) {
+                const delay: c.timespec = .{ .sec = 0, .nsec = @intCast(hold.convert(.nanosecond, u64, .exact).raw()) }; // aegis: boundary: nanosleep takes the nanoseconds as a C integer
                 _ = c.nanosleep(&delay, null);
             }
         }
@@ -137,20 +145,20 @@ const Darwin = struct {
 
     fn run(tracker: *Darwin, io: std.Io) void {
         defer {
-            tracker.done.store(true, .release);
+            tracker.done.store(.done, .release);
             tracker.finished.signal();
         }
         var events: [64]c.kevent64_s = undefined;
         var nothing: [0]c.kevent64_s = undefined;
         while (true) {
-            const ending = tracker.ending.load(.acquire);
+            const ending = tracker.ending.load(.acquire) == .ending;
             if (ending) {
                 // Expand before ending a parent, so cleanup itself does not
                 // erase an edge that was still available to enumeration.
                 var index: usize = 0;
                 while (index < tracker.known.items.len) : (index += 1)
                     tracker.discover(tracker.known.items[index]) catch {
-                        tracker.failed.store(true, .release);
+                        tracker.failed.store(.failed, .release);
                     };
                 var alive = false;
                 var reverse = tracker.known.items.len;
@@ -170,7 +178,7 @@ const Darwin = struct {
             _ = reactor.waitAny(io, members[0 .. @as(usize, 1) + @intFromBool(!ending)], .none) catch |err| switch (err) {
                 // Nobody cancels the task but its own end: taken as one.
                 error.Canceled => {
-                    tracker.ending.store(true, .release);
+                    tracker.ending.store(.ending, .release);
                     continue;
                 },
                 error.Timeout => unreachable, // unreachable: the wait has no timeout
@@ -208,9 +216,9 @@ const Darwin = struct {
     /// Losing the observer must end its still-held root, so a contained
     /// child cannot keep spawning unobserved descendants.
     fn lost(tracker: *Darwin) void {
-        tracker.failed.store(true, .release);
+        tracker.failed.store(.failed, .release);
         _ = tracker.known.items[0].signal(.KILL);
-        tracker.ending.store(true, .release);
+        tracker.ending.store(.ending, .release);
     }
 
     /// Stops the task, closes the queue and frees the tracker: `tracker` is

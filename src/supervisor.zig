@@ -10,7 +10,8 @@ const Child = @import("child/contract.zig");
 const builtin = @import("builtin");
 
 pub const testing_hook = struct {
-    pub var fail_request = false;
+    pub var request: aegis.Atomic(Request) = .init(.normal);
+    pub const Request = enum(u8) { normal, fail };
 };
 
 pub const Supervisor = struct {
@@ -19,7 +20,7 @@ pub const Supervisor = struct {
 
     /// Any signal Linux has fits the low seven bits: it numbers them below 65.
     pub fn request(self: Supervisor, sig: posix.SIG, cgroup_signalled: bool) Child.KillError!void {
-        if (builtin.is_test and testing_hook.fail_request) return error.Unexpected;
+        if (builtin.is_test and testing_hook.request.load(.monotonic) == .fail) return error.Unexpected;
         const byte: u8 = @as(u8, @intCast(@backingInt(sig))) | (if (cgroup_signalled) @as(u8, 128) else 0);
         while (true) {
             const rc = linux.sendto(self.channel, std.mem.asBytes(&byte).ptr, 1, linux.MSG.NOSIGNAL | linux.MSG.DONTWAIT, null, 0);

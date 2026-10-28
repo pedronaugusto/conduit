@@ -8,8 +8,8 @@ const supported = @import("lineage.zig").supported;
 const Child = @import("child.zig").Child;
 test "a contained wait reports lost observation after reaping its held root" {
     if (!supported) return error.SkipZigTest;
-    testing_hook.fail_enumeration.store(true, .release);
-    defer testing_hook.fail_enumeration.store(false, .release);
+    testing_hook.enumeration.store(.fail, .release);
+    defer testing_hook.enumeration.store(.normal, .release);
     var child = try Child.spawn(std.testing.allocator, std.testing.io, .{
         .argv = &.{ "/bin/sh", "-c", "read x" },
         .descendants = .contain,

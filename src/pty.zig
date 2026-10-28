@@ -485,6 +485,7 @@ pub const Pty = struct {
     /// to wait with, so a blocking guard would be a public change of its own
     /// (an OS boundary).
     const Geometry = struct {
+        // aegis: design: held across ResizePseudoConsole, which can block, by callers with no Io to wait with (above)
         mutex: std.atomic.Mutex = .unlocked,
         size: Size,
         gpa: std.mem.Allocator,

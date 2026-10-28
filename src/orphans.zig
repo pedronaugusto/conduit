@@ -92,6 +92,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const Pin = @import("pin.zig").Pin;
 const spin = @import("spin.zig");
 const posix = std.posix;
@@ -136,7 +137,7 @@ pub const Orphans = struct {
     /// without calling an owner's code while `lock` is held; an owner compares
     /// this after resetting `adoption_event`, so a concurrent adoption is not
     /// lost.
-    adoptions: std.atomic.Value(u64),
+    adoptions: aegis.Atomic(Adoptions),
     /// Private: set through the `std.Io` of whichever call's look adopted
     /// something; this keeps no `std.Io` of its own.
     adoption_event: std.Io.Event,
@@ -149,6 +150,9 @@ pub const Orphans = struct {
     /// files in `/proc`; `start` finds out whether the running kernel has them.
     pub const supported = builtin.target.os.tag == .linux;
 
+    /// Processes adopted, counted wrapping: an owner compares two readings.
+    const Adoptions = aegis.units.Count(Orphans, u64);
+
     /// An `Orphans` that is not running. `start` makes it run.
     pub fn init(gpa: Allocator) Orphans {
         return .{
@@ -159,7 +163,7 @@ pub const Orphans = struct {
             .lock = .{},
             .was_subreaper = false,
             .running = false,
-            .adoptions = .init(0),
+            .adoptions = .init(.fromRaw(0)),
             .adoption_event = .unset,
         };
     }
@@ -178,7 +182,7 @@ pub const Orphans = struct {
 
     pub fn adoptionCount(orphans: *const Orphans) u64 {
         orphans.pin.check(orphans);
-        return orphans.adoptions.load(.acquire);
+        return orphans.adoptions.load(.acquire).raw();
     }
 
     pub const LookError = error{
@@ -228,7 +232,7 @@ pub const Orphans = struct {
         orphans.running = true;
         orphans.pin.set(orphans);
         current = orphans;
-        active.store(true, .release);
+        active.store(.running, .release);
     }
 
     pub const KillError = LookError || std.Io.Cancelable;
@@ -376,7 +380,7 @@ pub const Orphans = struct {
     /// Ends the scope and gives its lists back; what `stop` does once its
     /// checks have passed, and what `deinit` does when they have not.
     fn release(orphans: *Orphans) void {
-        active.store(false, .release);
+        active.store(.idle, .release);
         current = null;
         orphans.running = false;
         orphans.releaseAll();
@@ -415,23 +419,26 @@ pub const Orphans = struct {
     /// `Orphans`' list of conduit's own, and alone by whatever looks at this
     /// process's children or turns adoption on or off. A lock of atomics and
     /// nothing else, because a reap has no `std.Io` to wait with.
+    // aegis: design: a writer-first gate of atomics, many spawns or one look, which also orders `own`'s two-lock protocol; a reap has no Io to wait with (Orphans' locks)
     var gate: GateLock = .{};
     /// The `Orphans` running in this process, if one is. Read and written
     /// holding `gate`.
+    // aegis: design: read and written holding `gate`, whose protocol it is part of
     var current: ?*Orphans = null;
     /// Whether one is running: the one load a reap pays when none is.
-    var active: std.atomic.Value(bool) = .init(false);
+    var active: aegis.Atomic(Activity) = .init(.idle);
+    const Activity = enum(u8) { idle, running };
 
     /// How many looks have run, in a test build: what lets a test say an idle
     /// process looked at nothing.
-    pub var looks: std.atomic.Value(usize) = .init(0);
+    pub var looks: aegis.Atomic(aegis.units.Count(Orphans, usize)) = .init(.fromRaw(0));
 
     /// Something of conduit's has happened — a child it started has been reaped,
     /// or a spawn has returned one — and, if an `Orphans` runs, a look goes with
     /// it: the processes that child left are this one's by now, and what has
     /// ended among the adopted is reaped. One atomic load when none runs.
     pub fn event(io: std.Io) void {
-        if (!supported or !active.load(.acquire)) return;
+        if (!supported or active.load(.acquire) == .idle) return;
         gate.lock();
         defer gate.unlock();
         const orphans = current orelse return;
@@ -522,6 +529,7 @@ pub const Orphans = struct {
     /// A mutex that spins, yielding. Every section it guards is a handful of
     /// system calls, but for `killAll`'s, which is the end of a program.
     const SpinLock = struct {
+        // aegis: design: a spin mutex held across a whole look that reads procfs, past a spin guard's bounded sections (Orphans' locks)
         held: std.atomic.Value(bool) = .init(false),
 
         fn lock(spin_lock: *SpinLock) void {
@@ -540,6 +548,7 @@ pub const Orphans = struct {
     /// a stream of spawns cannot hold a look off forever; the spawns in flight
     /// are each a `fork` long.
     const GateLock = struct {
+        // aegis: design: the gate's word: readers, a waiting look and a writing look in one, set by compare-and-swap (Orphans' locks)
         state: std.atomic.Value(u32) = .init(0),
 
         const writing: u32 = 1 << 31;
@@ -730,7 +739,7 @@ pub const Orphans = struct {
     /// adopted already, and adopts it. The caller holds `gate` alone and `lock`.
     /// An adoption sets the owner's event through `io`, the caller's own.
     fn look(orphans: *Orphans, io: std.Io) LookError!void {
-        if (builtin.is_test) _ = looks.fetchAdd(1, .monotonic);
+        if (builtin.is_test) _ = looks.fetchAddWrapping(.fromRaw(1), .monotonic);
         // A child of conduit's own that its owner has reaped is no longer a child
         // at all, and its pid may be given to a process this one should adopt.
         var i: usize = 0;
@@ -748,7 +757,7 @@ pub const Orphans = struct {
         }
         const before = orphans.adoptions.load(.monotonic);
         // An adoption made before an error is announced all the same.
-        defer if (orphans.adoptions.load(.monotonic) != before) orphans.adoption_event.set(io);
+        defer if (!orphans.adoptions.load(.monotonic).eql(before)) orphans.adoption_event.set(io);
         try forEachChild(orphans, consider);
     }
 
@@ -763,7 +772,7 @@ pub const Orphans = struct {
             held.close();
             return error.OutOfMemory;
         };
-        _ = orphans.adoptions.fetchAdd(1, .release);
+        _ = orphans.adoptions.fetchAddWrapping(.fromRaw(1), .release);
     }
 
     /// `start`'s look: every child there is is somebody's.

@@ -116,7 +116,7 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
 /// Forks of that leader have completed by now; repeated passes cover forks
 /// of surviving members. The caller must retain reap ownership throughout.
 pub fn forceHeldGroup(pgid: posix.pid_t, leader: posix.pid_t) void {
-    if (builtin.is_test) _ = testing_hook.group_forces.fetchAdd(1, .monotonic);
+    if (builtin.is_test) _ = testing_hook.group_forces.fetchAddWrapping(.fromRaw(1), .monotonic);
     for (0..3) |_| {
         _ = c.kill(-pgid, .KILL);
         if (members(pgid, leader) == .none) break;
@@ -132,8 +132,8 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     defer if (captured_root) |*held| held.deinit();
     const anchor = guard orelse if (captured_root) |*held| held else return 0;
     if (!anchor.alive()) return 0;
-    if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
-    if (builtin.is_test and testing_hook.walk_full) return error.OutOfMemory;
+    if (builtin.is_test) _ = walks.fetchAddWrapping(.fromRaw(1), .monotonic);
+    if (builtin.is_test and testing_hook.walk.load(.monotonic) == .full) return error.OutOfMemory;
     // Exhausting this bounded workspace reports OutOfMemory before sending
     // a partial pass.
     var storage: [64 * 1024]u8 = undefined;
@@ -1257,7 +1257,8 @@ pub fn observedChildrenOfDarwin(
 
 /// How many walks `signalDescendants` has started, in a test build: what
 /// lets a test say a stop took the plain path.
-pub var walks: std.atomic.Value(usize) = .init(0);
+pub var walks: aegis.Atomic(Walks) = .init(.fromRaw(0));
+pub const Walks = aegis.units.Count(Forks, usize);
 
 /// Whether this system can say that a child has nothing below it without a
 /// walk: Darwin by the watch on its forks (`Forks`), Linux by `hasChildren`.
@@ -1363,11 +1364,14 @@ pub const DarwinForks = struct {
     /// A note once taken off the queue. The registration clears on reading
     /// (the kernel makes every `EVFILT_PROC` one `EV_CLEAR`), so what one
     /// question learned is kept here for the next.
-    seen: std.atomic.Value(bool) = .init(false),
+    seen: aegis.Atomic(Seen) = .init(.nothing),
     /// Held by the task reading the queue. A second task that asks meanwhile
     /// could otherwise find the queue emptied by the first and the note not
     /// yet kept, so it answers `true` instead, which is the walk.
-    reading: std.atomic.Value(bool) = .init(false),
+    reading: aegis.Atomic(Reading) = .init(.idle),
+
+    const Seen = enum(u8) { nothing, fork };
+    const Reading = enum(u8) { idle, reading };
 
     pub const supported = true;
     pub const none: DarwinForks = .{ .queue = null };
@@ -1404,10 +1408,10 @@ pub const DarwinForks = struct {
     /// made was noted before that: a `fork` posts its note before it returns
     /// to the process that called it.
     pub fn any(forks: *DarwinForks) bool {
-        if (forks.seen.load(.acquire)) return true;
+        if (forks.seen.load(.acquire) == .fork) return true;
         const queue = forks.queue orelse return true;
-        if (forks.reading.swap(true, .acquire)) return true;
-        defer forks.reading.store(false, .release);
+        if (forks.reading.swap(.reading, .acquire) == .reading) return true;
+        defer forks.reading.store(.idle, .release);
         // `KEVENT_FLAG_IMMEDIATE` rather than a timeout of zero, which only
         // `kevent64` takes, without entering a timed wait.
         var events: [2]c.kevent64_s = undefined;
@@ -1415,9 +1419,9 @@ pub const DarwinForks = struct {
         const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{ .IMMEDIATE = true }, null);
         if (ready < 0) return true;
         for (events[0..@intCast(ready)]) |event| {
-            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
+            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(.fork, .release);
         }
-        return forks.seen.load(.acquire);
+        return forks.seen.load(.acquire) == .fork;
     }
 
     pub fn close(forks: *DarwinForks) void {
@@ -1428,25 +1432,39 @@ pub const DarwinForks = struct {
 
 /// Test builds only: what a test needs to show the watch has no window.
 pub const testing_hook = struct {
-    pub var group_forces: std.atomic.Value(usize) = .init(0);
-    /// Makes every descendant walk fail as one too large to hold would.
-    pub var walk_full: bool = false;
+    pub var group_forces: aegis.Atomic(aegis.units.Count(Forks, usize)) = .init(.fromRaw(0));
+    /// `.full` makes every descendant walk fail as one too large to hold would.
+    pub var walk: aegis.Atomic(Walk) = .init(.normal);
+    pub const Walk = enum(u8) { normal, full };
     /// How long `Forks.watch` waits before it registers: time in which a
     /// child that was not being held would run its program, and fork.
-    pub var hold_ms: u32 = 0;
+    pub var hold: aegis.Atomic(aegis.units.Duration(.millisecond, u32)) = .init(.fromRaw(0));
     /// Whether the child had run its program by the time `Forks.watch`
     /// registered, for the last watch made: `null` before the first.
-    pub var ran_before_watch: ?bool = null;
+    pub var ran_before_watch: aegis.Atomic(Ran) = .init(.unknown);
+    pub const Ran = enum(u8) { unknown, ran, not_yet };
+
+    /// `ran_before_watch` as the test reads it.
+    pub fn ranBeforeWatch() ?bool {
+        return switch (ran_before_watch.load(.acquire)) {
+            .unknown => null,
+            .ran => true,
+            .not_yet => false,
+        };
+    }
 
     fn atWatch(pid: posix.pid_t) void {
-        if (hold_ms > 0) {
+        const held = hold.load(.acquire);
+        if (held.compare(.fromRaw(0)) == .gt) {
+            const seconds = held.convert(.second, u32, .down);
+            const rest = held.sub(seconds.convert(.millisecond, u32, .exact) catch unreachable) catch unreachable; // unreachable: whole seconds of a span are no more than it
             const pause_for: c.timespec = .{
-                .sec = @intCast(hold_ms / 1000),
-                .nsec = @intCast(@as(u64, hold_ms % 1000) * std.time.ns_per_ms),
+                .sec = @intCast(seconds.raw()), // aegis: boundary: nanosleep takes whole seconds as a C integer
+                .nsec = @intCast(rest.convert(.nanosecond, u64, .exact).raw()), // aegis: boundary: and the nanoseconds past them
             };
             _ = c.nanosleep(&pause_for, null);
         }
-        ran_before_watch = ranProgram(pid);
+        ran_before_watch.store(if (ranProgram(pid)) .ran else .not_yet, .release);
     }
 
     /// A child held by `posix_spawn` is stopped (`SSTOP`), and one held by

@@ -1286,8 +1286,8 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     for ([_]bool{ false, true }) |on_pty| {
         var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
-        if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
-        defer tree.testing_hook.hold_ms = 0;
+        if (tree.Forks.supported) tree.testing_hook.hold.store(.fromRaw(200), .release);
+        defer tree.testing_hook.hold.store(.fromRaw(0), .release);
         var child = try Child.spawn(gpa, io, .{
             .argv = if (on_pty)
                 &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf 'pid %d.' \"$!\"; wait" }
@@ -1296,10 +1296,10 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
             .stdio = if (on_pty) .{ .pty = &pty } else .{ .pipes = .{ .stdin = false, .stderr = false } },
             .detach = on_pty,
         });
-        tree.testing_hook.hold_ms = 0;
+        tree.testing_hook.hold.store(.fromRaw(0), .release);
         defer child.deinit(io);
         defer reap(&child, io);
-        const ran_before_watch = tree.testing_hook.ran_before_watch;
+        const ran_before_watch = tree.testing_hook.ranBeforeWatch();
         if (on_pty) pty.closeSlave(io);
 
         var sink: Sink = .{};
@@ -1320,7 +1320,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
             if (deadline.remainingMs(io) == 0) return error.TestGrandchildOutlivedTheKill;
             try std.Io.sleep(io, .fromMilliseconds(10), .awake);
         }
-        try testing.expect(tree.walks.load(.monotonic) > before);
+        try testing.expect(tree.walks.load(.monotonic).compare(before) == .gt);
         // Held until the watch was in: the child had run nothing when it was
         // registered, the shell was the one waiting and not the watch.
         if (tree.Forks.supported) try testing.expectEqual(@as(?bool, false), ran_before_watch);
