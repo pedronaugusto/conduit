@@ -1,5 +1,6 @@
 //! Keep the containment promise and the test runner's teardown diagnostic explicit.
 const std = @import("std");
+const aegis = @import("aegis");
 
 const log = std.log.scoped(.containment);
 
@@ -25,14 +26,14 @@ pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(init.gpa);
     defer arena.deinit();
     const a = arena.allocator();
-    const readme = try std.Io.Dir.cwd().readFileAlloc(init.io, "README.md", a, .limited(1024 * 1024));
+    const readme = try aegis.own.readFile(init.io, .cwd(), "README.md", a, .literal("1MiB"));
     var lines = std.mem.splitScalar(u8, readme, '\n');
     var row: ?[]const u8 = null;
     while (lines.next()) |line| {
         if (std.mem.startsWith(u8, line, "| macOS |") and std.mem.find(u8, line, "lineage") != null) row = line;
     }
     try boundary(a, row orelse return error.MissingDarwinPlatformRow);
-    const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "src/child/contract.zig", a, .limited(1024 * 1024));
+    const source = try aegis.own.readFile(init.io, .cwd(), "src/child/contract.zig", a, .literal("1MiB"));
     const start = (std.mem.find(u8, source, "pub const Descendants = enum {") orelse return error.MissingDescendantsPolicy) + "pub const Descendants = enum {".len;
     const end = std.mem.findPos(u8, source, start, "contain,") orelse return error.MissingContainmentPolicy;
     try boundary(a, source[start..end]);
