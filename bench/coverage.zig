@@ -136,7 +136,7 @@ fn readAvailableSetup(x: *Context) !void {
     });
     errdefer x.release();
     x.pipe = x.child.takeStdout() orelse return error.NoPipe;
-    errdefer x.pipe.close(io);
+    errdefer x.pipe.deinit(io);
     if (!conduit.succeeded(try x.wait())) return error.ChildFailed;
     x.drained = 0;
 }
@@ -146,14 +146,14 @@ fn readAvailable(x: *Context, units: u64) !void {
     try single(units);
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const got = try conduit.readAvailable(x.io(), x.pipe, &buffer);
+        const got = try conduit.readAvailable(x.io(), x.pipe.borrow().*, &buffer);
         if (got == 0) break;
         x.drained += got;
     }
 }
 
 fn readAvailableTeardown(x: *Context) !void {
-    x.pipe.close(x.io());
+    x.pipe.deinit(x.io());
     x.release();
     if (x.drained != x.input.len + 1) return error.BadOutput;
 }
@@ -320,7 +320,7 @@ fn shellSpawn(x: *Context, units: u64) !void {
         errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         var said: [shell_says.len]u8 = undefined;
         var got: usize = 0;
-        const master = shell.pty().readFile();
+        const master = shell.pty().readFile().get();
         while (got < said.len) {
             const n = try master.readStreaming(io, &.{said[got..]});
             if (n == 0) return error.EarlyEof;
@@ -505,7 +505,7 @@ fn signalSetup(x: *Context) !void {
         .detach = true,
     });
     errdefer x.release();
-    x.signal_out = x.child.stdoutFile().?.handle;
+    x.signal_out = x.child.stdoutFile().?.get().handle;
     try readExact(x.signal_out, "r\n");
 }
 

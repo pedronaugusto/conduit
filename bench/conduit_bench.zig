@@ -182,8 +182,8 @@ fn ptyRoundTrip(x: *Context, end: PtyEnd) !u64 {
     // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
     errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
     pty.closeSlave(io);
-    try pty.writeFile().writeStreamingAll(io, x.input);
-    const checksum = try drainExact(io, pty.readFile(), x.input.len);
+    try pty.writeFile().get().writeStreamingAll(io, x.input);
+    const checksum = try drainExact(io, pty.readFile().get(), x.input.len);
     switch (end) {
         .tree => _ = try child.killWait(io, .fromRaw(0)),
         .child => {
@@ -239,11 +239,11 @@ fn throughputSetup(x: *Context) !void {
 fn throughput(x: *Context, units: u64) !void {
     try single(units);
     const io = x.io();
-    var ctx: WriteCtx = .{ .io = io, .file = x.pty.writeFile(), .bytes = x.input };
+    var ctx: WriteCtx = .{ .io = io, .file = x.pty.writeFile().get(), .bytes = x.input };
     var group: std.Io.Group = .init;
     defer group.cancel(io);
     try group.concurrent(io, writeAll, .{&ctx});
-    const checksum = try drainExact(io, x.pty.readFile(), x.input.len);
+    const checksum = try drainExact(io, x.pty.readFile().get(), x.input.len);
     group.cancel(io);
     if (ctx.failed.load(.acquire) or checksum == 0) return error.TransferFailed;
 }

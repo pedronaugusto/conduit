@@ -20,12 +20,12 @@ pub fn main(init: std.process.Init) !void {
     }
     // POSIX only: a console is waited on through its handle, not poll
     const out = std.Io.File.stdout();
-    const own = tty.openControlling(init.io) catch {
+    var own = tty.openControlling(init.io) catch {
         try out.writeStreamingAll(init.io, "terminal none.");
         return;
     };
     defer own.close(init.io);
-    var fds = [_]std.posix.pollfd{.{ .fd = own.input.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+    var fds = [_]std.posix.pollfd{.{ .fd = own.input().get().handle, .events = std.posix.POLL.IN, .revents = 0 }};
     _ = try std.posix.poll(&fds, 0);
     const said = if (fds[0].revents & std.posix.POLL.NVAL != 0) "terminal refused." else "terminal pollable.";
     try out.writeStreamingAll(init.io, said);

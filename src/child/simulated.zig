@@ -12,6 +12,7 @@
 //! child alone: a signal reaches it and not what it started.
 const builtin = @import("builtin");
 const std = @import("std");
+const OwnedFile = @import("conduit.tty").OwnedFile;
 const seam = @import("seam");
 const contract = @import("contract.zig");
 const State = @import("State.zig");
@@ -30,7 +31,7 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
         .pty => |pty| {
             // A simulated child is on a simulated pair or on none.
             const slave = pty.simulatedSlave() orelse return error.Unsupported;
-            streams = @splat(.{ .file = slave });
+            streams = @splat(.{ .file = slave.get() });
         },
         else => for (options.stdio.perStream(), 0..) |stream, i| {
             streams[i] = switch (stream) {
@@ -93,9 +94,9 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
         .exit_watch = if (is_windows) {} else null,
         .cgroup = if (is_windows) {} else cgroups.Cgroup.none,
         .term = null,
-        .stdin = stdin,
-        .stdout = stdout,
-        .stderr = stderr,
+        .stdin = if (stdin) |f| OwnedFile.init(f) else null,
+        .stdout = if (stdout) |f| OwnedFile.init(f) else null,
+        .stderr = if (stderr) |f| OwnedFile.init(f) else null,
         .pty = switch (options.stdio) {
             .pty => |pty| pty.master(),
             else => null,

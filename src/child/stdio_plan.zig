@@ -17,7 +17,7 @@
 const std = @import("std");
 
 const Child = @import("contract.zig");
-const handles = @import("../handles.zig");
+const held = @import("conduit.tty").held;
 
 /// A stream handle: `std.posix.fd_t` on POSIX, `HANDLE` on Windows.
 pub const Handle = std.Io.File.Handle;
@@ -63,8 +63,8 @@ pub fn Plan(comptime system: type) type {
         /// more than one stream appears once, at the stream that opened it.
         owned: [3]?Handle = @splat(null),
         /// The parent's end of each pipe, by the stream it serves in the
-        /// child.
-        parent: [3]?std.Io.File = @splat(null),
+        /// child, until `takeParent` hands it to the child's owner.
+        parent: [3]?held.OwnedFile = @splat(null),
 
         const Self = @This();
 
@@ -103,7 +103,7 @@ pub fn Plan(comptime system: type) type {
                             const ends = try system.openPipe(slot == 0);
                             plan.child[slot] = .{ .place = ends.child };
                             plan.owned[slot] = ends.child;
-                            plan.parent[slot] = handles.file(ends.parent);
+                            plan.parent[slot] = held.own(ends.parent);
                         },
                         .stdout => {
                             if (slot != 2) return error.Unsupported;
@@ -118,11 +118,11 @@ pub fn Plan(comptime system: type) type {
                 // asked for the file instead, and the file is theirs, not this
                 // `Plan`'s.
                 if (plan.owned[2]) |handle| {
-                    handles.file(handle).close(io);
+                    held.close(io, handle);
                     plan.owned[2] = null;
                 }
-                if (plan.parent[2]) |end| {
-                    end.close(io);
+                if (plan.parent[2]) |*end| {
+                    end.deinit(io);
                     plan.parent[2] = null;
                 }
                 plan.child[2] = .{ .place = f.handle };
@@ -136,7 +136,7 @@ pub fn Plan(comptime system: type) type {
         pub fn closeChildSide(plan: *Self, io: std.Io) void {
             for (&plan.owned) |*slot| {
                 const handle = slot.* orelse continue;
-                handles.file(handle).close(io);
+                held.close(io, handle);
                 slot.* = null;
             }
         }
@@ -148,10 +148,17 @@ pub fn Plan(comptime system: type) type {
         pub fn closeAll(plan: *Self, io: std.Io) void {
             plan.closeChildSide(io);
             for (&plan.parent) |*slot| {
-                const f = slot.* orelse continue;
-                f.close(io);
+                if (slot.*) |*end| end.deinit(io);
                 slot.* = null;
             }
+        }
+
+        /// The parent's end of the pipe for `slot`, handed to the child's
+        /// owner: this `Plan` no longer closes it.
+        pub fn takeParent(plan: *Self, slot: usize) ?held.OwnedFile {
+            const end = if (plan.parent[slot]) |*owned| owned.move() else null;
+            plan.parent[slot] = null;
+            return end;
         }
     };
 }

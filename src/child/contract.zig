@@ -52,7 +52,7 @@ pub const Stream = union(enum) {
     /// A file the caller opened. Borrowed: `deinit` does not close it, and it
     /// must stay open until `spawn` returns.
     ///
-    /// The terminal end of a pair is one of these — `pty.slaveFile()` — which
+    /// The terminal end of a pair is one of these — `pty.slaveFile().get()` — which
     /// is how a child is given a terminal for one stream and a pipe or a file
     /// for the others. POSIX only for that particular file: a pseudoconsole is
     /// not a stream, and `Pty.slaveFile` is a compile error on Windows.

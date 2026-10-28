@@ -95,12 +95,12 @@ test "one deadline ends a child that neither reads its input nor ends" {
 test "exchange refuses input for a child with no stdin pipe and leaves it running" {
     var child = try spawn("end");
     defer child.deinit(io);
-    const stdin = child.takeStdin().?;
+    var stdin = child.takeStdin().?;
     try testing.expectError(error.NoStdinPipe, child.exchange(gpa, io, "input", .{ .timeout = within_budget }));
     try testing.expectEqual(null, try child.tryWait(io));
     // The refused call left the child alone: it still reads what it is given.
-    try stdin.writeStreamingAll(io, "still here ");
-    stdin.close(io);
+    try stdin.borrow().writeStreamingAll(io, "still here ");
+    stdin.deinit(io);
     var result = try child.output(gpa, io, .{ .timeout = within_budget });
     defer result.deinit();
     try testing.expect(Child.succeeded(result.term()));
@@ -179,4 +179,30 @@ test "a writer that fails is not written again, and is reported once the child h
     const term = (try child.result()) orelse return error.TestChildNotReaped;
     try testing.expect(Child.succeeded(term));
     try testing.expectEqualSlices(u8, input[0..100], out.buffered());
+}
+
+test "a taken stream is the taker's: deinit closes what was not taken, each once" {
+    var child = try Child.spawn(gpa, io, .{
+        .argv = &.{ test_options.input_fixture, "end" },
+        .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .pipe, .stderr = .pipe } },
+    });
+    var out = child.takeStdout().?;
+    defer out.deinit(io);
+    // Taken once: the Child no longer lends it, nor hands it on again.
+    try testing.expect(child.stdoutFile() == null);
+    try testing.expect(child.takeStdout() == null);
+    try child.stdinFile().?.get().writeStreamingAll(io, "said ");
+    child.closeStdin(io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
+    // Standard error is closed here and standard input not again: a second
+    // close of either, or a close of the taken pipe, would fail in Debug.
+    child.deinit(io);
+    // The taken pipe is still open, and reads what the child wrote to its end.
+    var buffer: [64]u8 = undefined;
+    var got: usize = 0;
+    while (true) got += out.borrow().readStreaming(io, &.{buffer[got..]}) catch |err| switch (err) {
+        error.EndOfStream => break,
+        else => return err,
+    };
+    try testing.expectEqualStrings("said EOF", buffer[0..got]);
 }

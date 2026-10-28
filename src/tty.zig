@@ -65,6 +65,14 @@ const windows = std.os.windows;
 /// A Windows console's input records, and a bounded wait for the next.
 pub const console = @import("console.zig");
 
+/// How this package holds a file: owned and closed once, or lent by the
+/// owner that closes it; and a raw handle made one or the other.
+pub const held = @import("held.zig");
+/// A file its owner closes, once, with `deinit(io)`.
+pub const OwnedFile = held.OwnedFile;
+/// A file another owner closes, lent to read or write: `get`.
+pub const LentFile = held.LentFile;
+
 /// A pipe, both ends close-on-exec, for a wake a program writes itself.
 /// POSIX only.
 pub const pipe = close_on_exec.pipe;
@@ -374,17 +382,28 @@ pub fn isTty(handle: Handle) bool {
 
 /// The process's own terminal, opened by `openControlling`.
 pub const Controlling = struct {
+    /// Private: the terminal, `output`; on POSIX `input` too.
+    output_file: OwnedFile,
+    /// Private: on Windows the console's input buffer, `input`. On POSIX the
+    /// terminal is one file, `output_file`.
+    input_file: if (is_windows) OwnedFile else void,
+
     /// Where keys arrive. On POSIX the same file as `output`; on Windows the
     /// console's input buffer.
-    input: std.Io.File,
+    pub fn input(c: *Controlling) LentFile {
+        return if (is_windows) c.input_file.lend() else c.output_file.lend();
+    }
+
     /// Where output goes, and the handle `winSize` wants. On Windows the
     /// console's screen buffer.
-    output: std.Io.File,
+    pub fn output(c: *Controlling) LentFile {
+        return c.output_file.lend();
+    }
 
     /// Closes it: the one file on POSIX, both on Windows.
-    pub fn close(c: Controlling, io: std.Io) void {
-        c.output.close(io);
-        if (c.input.handle != c.output.handle) c.input.close(io);
+    pub fn close(c: *Controlling, io: std.Io) void {
+        c.output_file.deinit(io);
+        if (is_windows) c.input_file.deinit(io);
     }
 };
 
@@ -416,22 +435,19 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
         const input = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONIN$"));
         errdefer windows.CloseHandle(input);
         const output = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONOUT$"));
-        return .{
-            .input = .{ .handle = input, .flags = .{ .nonblocking = false } },
-            .output = .{ .handle = output, .flags = .{ .nonblocking = false } },
-        };
+        return .{ .input_file = held.own(input), .output_file = held.own(output) };
     }
-    const file = try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write });
+    var file = held.own((try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write })).handle);
     if (builtin.target.os.tag == .macos) {
         var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        if (deviceOf(file.handle, &path)) |device| {
+        if (deviceOf(file.borrow().handle, &path)) |device| {
             if (std.Io.Dir.openFileAbsolute(io, device, .{ .mode = .read_write })) |pollable| {
-                file.close(io);
-                return .{ .input = pollable, .output = pollable };
+                file.deinit(io);
+                return .{ .output_file = held.own(pollable.handle), .input_file = {} };
             } else |_| {}
         }
     }
-    return .{ .input = file, .output = file };
+    return .{ .output_file = file.move(), .input_file = {} };
 }
 
 /// The device behind `/dev/tty`: the one a standard stream is open on when

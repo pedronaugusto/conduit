@@ -13,7 +13,6 @@ const Allocator = std.mem.Allocator;
 
 const Child = @import("contract.zig");
 const State = @import("State.zig");
-const handles = @import("../handles.zig");
 const posix_spawn = @import("posix/spawn.zig");
 const stdio_plan = @import("stdio_plan.zig");
 const tty = @import("conduit.tty");
@@ -25,7 +24,7 @@ const Orphans = @import("../orphans.zig").Orphans;
 const supervisor = @import("../supervisor.zig");
 const lineage = @import("../lineage.zig");
 
-const file = handles.file;
+const held = tty.held;
 
 /// What the tests read of how a child was started.
 pub const testing_hook = if (builtin.is_test) struct {
@@ -135,7 +134,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
         _ = c.close(ends[1]);
         ends[1] = -1;
     }
-    file(report[1]).close(io);
+    held.close(io, report[1]);
     plan.closeChildSide(io);
 
     var watched = watchStarted(gpa, io, options, pid, go, supervised) catch |err| {
@@ -146,7 +145,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     errdefer if (watched.tracker) |owned| owned.destroy(io);
 
     const outcome = readReport(report[0], pid);
-    file(report[0]).close(io);
+    held.close(io, report[0]);
     if (outcome.failure) |record| {
         // The child is about to exit, if it has not already; reap it so it does
         // not linger as a zombie nobody is going to wait for.
@@ -259,8 +258,8 @@ fn watchStarted(
     if (go) |ends| {
         forks = .watch(pid);
         while (c.write(ends[1], "g", 1) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
-        file(ends[1]).close(io);
-        file(ends[0]).close(io);
+        held.close(io, ends[1]);
+        held.close(io, ends[0]);
     }
     return .{ .tracker = tracker, .record = record, .forks = forks, .exit_watch = exit_watch };
 }
@@ -396,10 +395,10 @@ fn supervisorRecord(pid: posix.pid_t) ?Child.SupervisorRecord {
 /// Closes the parent's ends of the report pipe in `report` and both ends of
 /// the go pipe, on a spawn that is not going on.
 fn closePipes(io: std.Io, report: []const posix.fd_t, go: ?[2]posix.fd_t) void {
-    for (report) |fd| file(fd).close(io);
+    for (report) |fd| held.close(io, fd);
     if (go) |ends| {
-        file(ends[0]).close(io);
-        file(ends[1]).close(io);
+        held.close(io, ends[0]);
+        held.close(io, ends[1]);
     }
 }
 
@@ -462,7 +461,7 @@ fn started(
     forks: tree.Forks,
     exit_watch: ?reactor.Process,
     contained: cgroup.Cgroup,
-    plan: *const Plan,
+    plan: *Plan,
     options: SpawnOptions,
 ) *State {
     state.* = .{
@@ -480,9 +479,9 @@ fn started(
         .exit_watch = exit_watch,
         .cgroup = contained,
         .term = null,
-        .stdin = plan.parent[0],
-        .stdout = plan.parent[1],
-        .stderr = plan.parent[2],
+        .stdin = plan.takeParent(0),
+        .stdout = plan.takeParent(1),
+        .stderr = plan.takeParent(2),
         .pty = switch (options.stdio) {
             .pty => |pty| pty.master(),
             else => null,

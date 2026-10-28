@@ -193,8 +193,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
             } else if (comptime std.mem.eql(u8, operation, "killWait")) {
                 _ = try fixture.child.killWait(io, .literal("50ms"));
             } else {
-                fixture.child.stdoutFile().?.close(io);
-                fixture.child.state.stdout.?.handle = if (windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
+                @import("../testing/support.zig").unreadableStdout(&fixture.child, io);
                 defer _ = fixture.child.takeStdout();
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }

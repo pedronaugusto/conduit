@@ -44,7 +44,8 @@ const win32 = @import("win32");
 const seam = @import("seam");
 
 const Size = tty.Size;
-const file = handles.file;
+const held = tty.held;
+const LentFile = tty.LentFile;
 
 pub const Pty = struct {
     /// Private: the master's reading handle, or null once closed.
@@ -93,9 +94,9 @@ pub const Pty = struct {
     /// The master end as two `std.Io.File`s.
     pub const Master = struct {
         /// What the child wrote to its terminal.
-        read: std.Io.File,
+        read: LentFile,
         /// What the child will see as typed at its terminal.
-        write: std.Io.File,
+        write: LentFile,
     };
 
     /// The initial terminal geometry of a new pair, and what the console on the
@@ -210,8 +211,8 @@ pub const Pty = struct {
     }
 
     /// The terminal end a child spawned on a simulated pair is given.
-    pub fn simulatedSlave(pty: Pty) ?std.Io.File {
-        return if (pty.simulated_slave) |h| file(h) else null;
+    pub fn simulatedSlave(pty: Pty) ?LentFile {
+        return if (pty.simulated_slave) |h| held.lend(h) else null;
     }
 
     pub const ResizeError = error{
@@ -239,7 +240,7 @@ pub const Pty = struct {
         if (pty.simulated) {
             const route = seam.routeOf(io) orelse return error.Unexpected;
             const read = pty.read orelse return error.Unexpected;
-            return route.setWindowSize(file(read), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
+            return route.setWindowSize(held.lend(read).get(), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
                 error.NotTerminalDevice => error.NotATerminal,
                 error.BadHandle => error.Unexpected,
             };
@@ -271,7 +272,7 @@ pub const Pty = struct {
         if (pty.simulated) {
             const route = seam.routeOf(io) orelse return error.Unexpected;
             const read = pty.read orelse return error.Unexpected;
-            const got = route.windowSize(file(read)) catch |err| return switch (err) {
+            const got = route.windowSize(held.lend(read).get()) catch |err| return switch (err) {
                 error.NotTerminalDevice => error.NotATerminal,
                 error.BadHandle => error.Unexpected,
             };
@@ -287,28 +288,26 @@ pub const Pty = struct {
         return tty.winSize(read);
     }
 
-    /// Both master ends as `std.Io.File`s.
+    /// Both master ends, lent: the `Pty` closes them (`close`, `closeMaster`).
     ///
-    /// The files share the handles rather than duplicating them: closing one
-    /// closes that end of the pair, and so does `close`. Pick one.
+    /// The files share the handles rather than duplicating them.
     ///
     /// Asserts the master is still open.
     pub fn master(pty: Pty) Master {
         return .{ .read = pty.readFile(), .write = pty.writeFile() };
     }
 
-    /// The end to read, as a `std.Io.File`. Asserts it is still open.
-    pub fn readFile(pty: Pty) std.Io.File {
-        return file(pty.read.?);
+    /// The end to read, lent. Asserts it is still open.
+    pub fn readFile(pty: Pty) LentFile {
+        return held.lend(pty.read.?);
     }
 
-    /// The end to write, as a `std.Io.File`. Asserts it is still open.
-    pub fn writeFile(pty: Pty) std.Io.File {
-        return file(pty.write.?);
+    /// The end to write, lent. Asserts it is still open.
+    pub fn writeFile(pty: Pty) LentFile {
+        return held.lend(pty.write.?);
     }
 
-    /// The terminal end as a `std.Io.File`. POSIX only, and asserts it is still
-    /// open.
+    /// The terminal end, lent. POSIX only, and asserts it is still open.
     ///
     /// The same sharing rule as `master` applies. A parent that has spawned a
     /// child on this pair rarely wants this file; it wants `closeSlave`.
@@ -316,14 +315,9 @@ pub const Pty = struct {
     /// Calling this on Windows is a compile error: a
     /// pseudoconsole is an object a process is attached to, not a stream anything
     /// reads or writes.
-    pub fn slaveFile(pty: Pty) std.Io.File {
+    pub fn slaveFile(pty: Pty) LentFile {
         if (is_windows) @compileError("Pty.slaveFile is POSIX-only: a pseudoconsole is not a stream");
-        if (pty.simulated) return file(pty.simulated_slave.?);
-        return slaveFilePosix(pty);
-    }
-
-    fn slaveFilePosix(pty: Pty) std.Io.File {
-        return file(pty.slave.?);
+        return held.lend(if (pty.simulated) pty.simulated_slave.? else pty.slave.?);
     }
 
     /// Closes whichever ends are still open.
@@ -388,7 +382,7 @@ pub const Pty = struct {
     /// Reads the master and throws it away, so the console host has somewhere to
     /// put what it flushes on its way out.
     fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
-        const f = file(handle);
+        const f = held.lend(handle).get();
         var buffer: [4096]u8 = undefined;
         while (true) {
             _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
@@ -421,7 +415,7 @@ pub const Pty = struct {
     pub fn closeSlave(pty: *Pty, io: std.Io) void {
         defer if (is_windows) pty.releaseGeometry();
         if (pty.simulated_slave) |handle| {
-            file(handle).close(io);
+            held.close(io, handle);
             pty.simulated_slave = null;
         }
         const slave = pty.slave orelse return;
@@ -434,7 +428,7 @@ pub const Pty = struct {
             trace.print("pty: ClosePseudoConsole returned", .{});
             return;
         }
-        file(slave).close(io);
+        held.close(io, slave);
     }
 
     /// Closes both master ends.
@@ -468,11 +462,11 @@ pub const Pty = struct {
         // The same handle twice on POSIX, so it is closed once.
         const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
         if (pty.read) |handle| {
-            file(handle).close(io);
+            held.close(io, handle);
             pty.read = null;
         }
         if (pty.write) |handle| {
-            if (!same) file(handle).close(io);
+            if (!same) held.close(io, handle);
             pty.write = null;
         }
     }
@@ -765,7 +759,7 @@ pub const Pty = struct {
         // reads the master itself on Windows while the console host goes.
         var drain: Drain = .{};
         defer drain.deinit(io);
-        try drain.start(io, pty.readFile());
+        try drain.start(io, pty.readFile().get());
 
         const opened = try pty.size(std.testing.io);
         try testing.expectEqual(@as(u16, 30), opened.rows);
@@ -952,7 +946,7 @@ pub const Pty = struct {
         var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
         defer pty.close(io);
         var drain: Drain = .{};
-        try drain.start(io, pty.readFile());
+        try drain.start(io, pty.readFile().get());
         defer drain.deinit(io);
         const Resize = struct {
             fn run(pair: *Pty, first: Size, second: Size) !void {
@@ -967,7 +961,7 @@ pub const Pty = struct {
         defer resizing.cancel(io) catch {};
         for (0..1024) |_| {
             const borrowed = pty.master();
-            try testing.expectEqual(pty.read.?, borrowed.read.handle);
+            try testing.expectEqual(pty.read.?, borrowed.read.get().handle);
             const got = try pty.size(std.testing.io);
             try testing.expect(std.meta.eql(got, a) or std.meta.eql(got, b));
             try std.Io.sleep(io, .fromNanoseconds(1), .awake);

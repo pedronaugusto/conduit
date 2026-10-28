@@ -34,16 +34,16 @@ pub fn main(init: std.process.Init) !void {
 /// variable's value and the line, then closes its end.
 fn channel(init: std.process.Init, variable: []const u8) !void {
     const value = init.environ_map.get(variable) orelse return error.FixtureNoChannel;
-    const end = (try tty.Channel.inherited(init.environ_map, variable)).?;
-    defer end.close(init.io);
+    var end = (try tty.Channel.inherited(init.environ_map, variable)).?;
+    defer end.deinit(init.io);
     var line: [256]u8 = undefined;
     var got: usize = 0;
     while (std.mem.findScalar(u8, line[0..got], '\n') == null) {
         if (got == line.len) return error.FixtureLineTooLong;
-        got += try end.readStreaming(init.io, &.{line[got..]});
+        got += try end.borrow().readStreaming(init.io, &.{line[got..]});
     }
     var answer: [512]u8 = undefined;
-    try end.writeStreamingAll(init.io, try std.mem.print(&answer, "{s} {s}", .{ value, line[0..got] }));
+    try end.borrow().writeStreamingAll(init.io, try std.mem.print(&answer, "{s} {s}", .{ value, line[0..got] }));
 }
 
 /// Touches every page of `mib` MiB, gives them back, says `held`, and stays

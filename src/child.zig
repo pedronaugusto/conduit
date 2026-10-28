@@ -53,6 +53,8 @@ const child_exit = @import("exit.zig");
 const reactor = @import("reactor");
 const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
+const OwnedFile = @import("conduit.tty").OwnedFile;
+const LentFile = @import("conduit.tty").LentFile;
 const Duration = @import("conduit.tty").Duration;
 const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
 const input_writer = @import("input_writer.zig");
@@ -345,9 +347,9 @@ pub const Child = struct {
     pub fn deinit(child: *Child, io: std.Io) void {
         if (child.state.descendants == .contain and !child.state.scope_complete) child.abandon(io);
         const state = child.state;
-        if (state.stdin) |f| f.close(io);
-        if (state.stdout) |f| f.close(io);
-        if (state.stderr) |f| f.close(io);
+        if (state.stdin) |*f| f.deinit(io);
+        if (state.stdout) |*f| f.deinit(io);
+        if (state.stderr) |*f| f.deinit(io);
         if (state.simulated != null) {
             // The simulation holds nothing of this process's for it.
         } else if (is_windows) {
@@ -382,9 +384,8 @@ pub const Child = struct {
     /// Idempotent, and safe after the child has been reaped.
     pub fn closeStdin(child: *Child, io: std.Io) void {
         const state = child.state;
-        const f = state.stdin orelse return;
+        if (state.stdin) |*f| f.deinit(io);
         state.stdin = null;
-        f.close(io);
     }
 
     /// Takes the stdin pipe and starts a bounded writer on its own task. Bytes
@@ -1287,11 +1288,11 @@ pub const Child = struct {
     /// `.pipes` made one, the pseudo-terminal master when the child is on a pair,
     /// and `null` when the child's input is something this process does not hold.
     ///
-    /// Borrowed either way. The pipe is closed by `deinit` and the master by the
+    /// Lent either way. The pipe is closed by `deinit` and the master by the
     /// `Pty`.
-    pub fn stdinFile(child: Child) ?std.Io.File {
+    pub fn stdinFile(child: Child) ?LentFile {
         const state = child.state;
-        if (state.stdin) |f| return f;
+        if (state.stdin) |*f| return f.lend();
         if (child.state.pty) |m| return m.write;
         return null;
     }
@@ -1303,46 +1304,47 @@ pub const Child = struct {
     /// A child on a pseudo-terminal has one stream for output and error together,
     /// because a terminal is one stream. That is the terminal's doing, not this
     /// package's.
-    pub fn stdoutFile(child: Child) ?std.Io.File {
+    pub fn stdoutFile(child: Child) ?LentFile {
         const state = child.state;
-        if (state.stdout) |f| return f;
+        if (state.stdout) |*f| return f.lend();
         if (child.state.pty) |m| return m.read;
         return null;
     }
 
-    /// The separate standard-error pipe, borrowed until closure or deinit.
-    pub fn stderrFile(child: Child) ?std.Io.File {
+    /// The separate standard-error pipe, lent until taken or deinit.
+    pub fn stderrFile(child: Child) ?LentFile {
         const state = child.state;
-        return state.stderr;
+        return if (state.stderr) |*f| f.lend() else null;
     }
 
-    /// The borrowed terminal streams, when spawned on a pair.
+    /// The terminal streams, lent by the `Pty`, when spawned on a pair.
     pub fn terminalMaster(child: Child) ?Pty.Master {
         const state = child.state;
         return state.pty;
     }
 
-    /// Transfers the stdin pipe to the caller, who must close it. Terminal streams stay borrowed.
-    pub fn takeStdin(child: *Child) ?std.Io.File {
-        const state = child.state;
-        const taken = state.stdin;
-        state.stdin = null;
-        return taken;
+    /// Transfers the stdin pipe to the caller, who closes it with `deinit(io)`;
+    /// `deinit` here no longer does. Terminal streams stay lent.
+    pub fn takeStdin(child: *Child) ?OwnedFile {
+        return take(&child.state.stdin);
     }
 
-    /// Transfers the stdout pipe to the caller, who must close it. Terminal streams stay borrowed.
-    pub fn takeStdout(child: *Child) ?std.Io.File {
-        const state = child.state;
-        const taken = state.stdout;
-        state.stdout = null;
-        return taken;
+    /// Transfers the stdout pipe to the caller, who closes it with `deinit(io)`;
+    /// `deinit` here no longer does. Terminal streams stay lent.
+    pub fn takeStdout(child: *Child) ?OwnedFile {
+        return take(&child.state.stdout);
     }
 
-    /// Transfers the stderr pipe to the caller, who must close it. Terminal streams stay borrowed.
-    pub fn takeStderr(child: *Child) ?std.Io.File {
-        const state = child.state;
-        const taken = state.stderr;
-        state.stderr = null;
+    /// Transfers the stderr pipe to the caller, who closes it with `deinit(io)`;
+    /// `deinit` here no longer does.
+    pub fn takeStderr(child: *Child) ?OwnedFile {
+        return take(&child.state.stderr);
+    }
+
+    /// The pipe in `slot`, moved out of it, the slot left empty.
+    fn take(slot: *?OwnedFile) ?OwnedFile {
+        const taken = if (slot.*) |*f| f.move() else null;
+        slot.* = null;
         return taken;
     }
 
@@ -1354,7 +1356,7 @@ pub const Child = struct {
     /// for this.
     pub fn stdinWriter(child: Child, io: std.Io, buffer: []u8) ?std.Io.File.Writer {
         const f = child.stdinFile() orelse return null;
-        return f.writerStreaming(io, buffer);
+        return f.get().writerStreaming(io, buffer);
     }
 
     /// `stdoutFile` as a buffered `std.Io.Reader`, whose reader is the `.interface`
@@ -1363,7 +1365,7 @@ pub const Child = struct {
     /// `buffer` must outlive the reader.
     pub fn stdoutReader(child: Child, io: std.Io, buffer: []u8) ?std.Io.File.Reader {
         const f = child.stdoutFile() orelse return null;
-        return f.readerStreaming(io, buffer);
+        return f.get().readerStreaming(io, buffer);
     }
 
     /// An `Expect` over the child's streams, for a conversation: wait for what it
@@ -1579,10 +1581,12 @@ pub const Child = struct {
         if (input.len == 0) {
             child.closeStdin(io);
         } else {
-            const stdin = state.stdin.?;
-            try group.concurrent(io, Feed.run, .{ io, &feed, stdin, input });
-            // The task closes it once written.
-            state.stdin = null;
+            // The feed holds it from here, and its task closes it once written.
+            feed.input = child.takeStdin();
+            group.concurrent(io, Feed.run, .{ io, &feed, input }) catch |err| {
+                state.stdin = feed.input.?.move();
+                return err;
+            };
         }
         const ended = try child.collectInto(io, sinks, .{
             .max_bytes = options.max_bytes,
@@ -1599,11 +1603,14 @@ pub const Child = struct {
     /// The input of an `exchange`, written on a task of its own.
     const Feed = struct {
         failure: ?std.Io.File.Writer.Error = null,
+        /// The child's input pipe, taken from it for this task.
+        input: ?OwnedFile = null,
 
-        fn run(io: std.Io, feed: *Feed, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {
+        fn run(io: std.Io, feed: *Feed, bytes: []const u8) std.Io.Cancelable!void {
             // Only this task uses or closes the pipe once it has started.
-            defer file.close(io);
-            handles.writeStreamingAll(io, file, bytes) catch |err| switch (err) {
+            const input = &feed.input.?;
+            defer input.deinit(io);
+            handles.writeStreamingAll(io, input.borrow().*, bytes) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 // The child ended, or closed its input, before taking all of it.
                 error.BrokenPipe => {},
@@ -1656,10 +1663,10 @@ pub const Child = struct {
         // before it starts. Saying so here is what keeps the drain below from
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
-            try select.concurrent(.out, collect, .{ io, f, options.max_bytes, &out });
+            try select.concurrent(.out, collect, .{ io, f.get(), options.max_bytes, &out });
         } else out.done.store(.done, .release);
-        if (child.state.stderr) |f| {
-            try select.concurrent(.err, collect, .{ io, f, options.max_bytes, &err });
+        if (child.stderrFile()) |f| {
+            try select.concurrent(.err, collect, .{ io, f.get(), options.max_bytes, &err });
         } else err.done.store(.done, .release);
         try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
 
@@ -1932,7 +1939,10 @@ pub const Child = struct {
         var out = Collector.init(sinks.stdout);
         var err = Collector.init(sinks.stderr);
 
-        const streams = [2]?std.Io.File{ child.stdoutFile(), child.state.stderr };
+        const streams = [2]?std.Io.File{
+            if (child.stdoutFile()) |f| f.get() else null,
+            if (child.stderrFile()) |f| f.get() else null,
+        };
         const collectors = [2]*Collector{ &out, &err };
         // A stream this process does not hold is finished before it starts.
         for (streams, collectors) |stream, collector| {
@@ -2278,8 +2288,7 @@ pub const Child = struct {
         });
         defer child.deinit(io);
         defer @import("testing/support.zig").reap(&child, io);
-        child.stdoutFile().?.close(io);
-        child.state.stdout.?.handle = -1;
+        @import("testing/support.zig").unreadableStdout(&child, io);
         defer _ = child.takeStdout();
         var collecting: Collecting = undefined;
         collecting.init(testing.allocator, io);

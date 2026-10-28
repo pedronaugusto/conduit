@@ -68,3 +68,14 @@ pub const Watchdog = struct {
 pub fn reap(child: *Child, io: std.Io) void {
     _ = child.killWait(io, .fromRaw(0)) catch |err| std.log.err("the test's child could not be ended: {t}", .{err});
 }
+
+/// Makes a child's standard-output pipe one no read can use: the pipe is taken
+/// and closed, and a handle that names nothing is put in its place. The test
+/// takes it back out (`_ = child.takeStdout()`) before `deinit`, which would
+/// otherwise close it.
+pub fn unreadableStdout(child: *Child, io: std.Io) void {
+    var pipe = child.takeStdout().?;
+    pipe.deinit(io);
+    const nothing: std.Io.File.Handle = if (@import("builtin").target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
+    child.state.stdout = .init(.{ .handle = nothing, .flags = .{ .nonblocking = false } });
+}

@@ -70,15 +70,15 @@ test {
 
 test "the process's own terminal opens as a terminal, or says there is none" {
     const io = std.testing.io;
-    const own = tty.openControlling(io) catch |err| switch (err) {
+    var own = tty.openControlling(io) catch |err| switch (err) {
         // A test run with no terminal of its own: a CI runner, a service.
         error.NotATerminal, error.NoDevice, error.FileNotFound, error.AccessDenied => return error.SkipZigTest,
         else => return err,
     };
     defer own.close(io);
-    try std.testing.expect(tty.isTty(own.input.handle));
-    try std.testing.expect(tty.isTty(own.output.handle));
-    if (!is_windows) try std.testing.expectEqual(own.input.handle, own.output.handle);
+    try std.testing.expect(tty.isTty(own.input().get().handle));
+    try std.testing.expect(tty.isTty(own.output().get().handle));
+    if (!is_windows) try std.testing.expectEqual(own.input().get().handle, own.output().get().handle);
 }
 
 test {

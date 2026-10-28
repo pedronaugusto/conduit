@@ -1,4 +1,5 @@
-//! The three one-line things the rest of this package does to a handle.
+//! The small things the rest of this package does to a handle; making a raw
+//! handle an owned or a lent file is `conduit.tty`'s `held`.
 //!
 //! Each of them was written out in two or three files, which is two or three
 //! places for one idea to drift. They are here instead, named once.
@@ -11,14 +12,6 @@ const posix = std.posix;
 const c = std.c;
 
 const is_windows = builtin.target.os.tag == .windows;
-
-/// A raw handle as a `std.Io.File`.
-///
-/// The file shares the handle rather than duplicating it: closing the file
-/// closes the handle, and whoever owns the handle owns the file.
-pub fn file(handle: std.Io.File.Handle) std.Io.File {
-    return .{ .handle = handle, .flags = .{ .nonblocking = false } };
-}
 
 /// Marks a descriptor close-on-exec, so an unrelated child started while this
 /// process holds it is not handed it. POSIX only.

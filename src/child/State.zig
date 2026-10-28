@@ -10,14 +10,16 @@ const cgroups = @import("../cgroup.zig");
 const reactor = @import("reactor");
 const Id = std.process.Child.Id;
 const Pty = @import("../pty.zig").Pty;
+const OwnedFile = @import("conduit.tty").OwnedFile;
 const Supervisor = @import("../supervisor.zig").Supervisor;
 const Tracker = @import("../lineage.zig").Tracker;
 const ProcessGroupId = Child.ProcessGroupId;
 const Term = Child.Term;
 
-stdin: ?std.Io.File = null,
-stdout: ?std.Io.File = null,
-stderr: ?std.Io.File = null,
+/// The parent's ends of the pipes `.pipes` made, until taken or closed.
+stdin: ?OwnedFile = null,
+stdout: ?OwnedFile = null,
+stderr: ?OwnedFile = null,
 pty: ?Pty.Master = null,
 gpa: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.

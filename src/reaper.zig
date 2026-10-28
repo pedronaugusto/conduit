@@ -670,7 +670,7 @@ test "a Reaper tree grace counts elapsed time when its sleeps resume late" {
     defer child.deinit(io);
     defer @import("testing/support.zig").reap(&child, io);
     var buffer: [32]u8 = undefined;
-    var reader = child.stdoutFile().?.reader(io, &buffer);
+    var reader = child.stdoutFile().?.get().reader(io, &buffer);
     try testing.expectEqualStrings("ready", (try reader.interface.takeDelimiter('\n')).?);
 
     // Each sleep resumes two milliseconds late, on the test's clock.

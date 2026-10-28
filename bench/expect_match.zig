@@ -45,16 +45,17 @@ fn feed(io: Io, file: Io.File, total: usize) void {
 
 fn wait(io: Io, gpa: std.mem.Allocator, row: Row, total: usize) !u64 {
     const fds = try conduit.pipe(.{});
-    const read: Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = false } };
-    const write: Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };
-    defer read.close(io);
+    var read = conduit.held.own(fds[0]);
+    defer read.deinit(io);
+    var write = conduit.held.own(fds[1]);
+    defer write.deinit(io);
     const buffer = try gpa.alloc(u8, total + 64);
     defer gpa.free(buffer);
-    var expect = Expect.init(.{ .read = read, .write = write }, buffer);
+    var expect = Expect.init(.{ .read = read.lend(), .write = write.lend() }, buffer);
     try expect.start(io);
     defer expect.deinit(io);
     const t0 = Io.Clock.awake.now(io);
-    var writer = try io.concurrent(feed, .{ io, write, total });
+    var writer = try io.concurrent(feed, .{ io, write.lend().get(), total });
     const timeout: Io.Timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } };
     switch (row) {
         .literal => _ = try expect.until(io, "END", timeout),
@@ -63,7 +64,6 @@ fn wait(io: Io, gpa: std.mem.Allocator, row: Row, total: usize) !u64 {
     }
     const took = t0.durationTo(Io.Clock.awake.now(io)).nanoseconds;
     writer.await(io);
-    write.close(io);
     return @intCast(took);
 }
 

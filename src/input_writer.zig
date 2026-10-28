@@ -15,6 +15,7 @@
 const std = @import("std");
 const aegis = @import("aegis");
 const handles = @import("handles.zig");
+const OwnedFile = @import("conduit.tty").OwnedFile;
 
 pub fn Writer(comptime Child: type) type {
     return struct {
@@ -39,13 +40,13 @@ pub fn Writer(comptime Child: type) type {
             /// A terminal has no separate input to close and is `error.NoStdinPipe`.
             /// Do not use an earlier copy of the pipe after this succeeds.
             pub fn init(gpa: std.mem.Allocator, io: std.Io, child: *Child, options: Options) StartError!InputWriter {
-                const child_state = child.state;
-                const file = child_state.stdin orelse return error.NoStdinPipe;
+                if (child.state.stdin == null) return error.NoStdinPipe;
                 const state = try gpa.create(State);
                 errdefer gpa.destroy(state);
-                state.* = .init(gpa, file, options.max_backlog);
+                state.* = .init(gpa, child.takeStdin().?, options.max_backlog);
+                // Not started: the pipe goes back to the child, untouched.
+                errdefer child.state.stdin = state.file.move();
                 try state.group.concurrent(io, State.run, .{ state, io });
-                child.state.stdin = null;
                 return .{ .state = state };
             }
 
@@ -176,14 +177,14 @@ const Queue = struct {
 /// has started.
 const State = struct {
     gpa: std.mem.Allocator,
-    file: std.Io.File,
+    file: OwnedFile,
     queue: aegis.BlockingGuarded(Queue),
     /// The one waiter is the writing task, waiting for a batch or an end.
     more: aegis.Condition = .initLimit(1),
     closed: std.Io.Event = .unset,
     group: std.Io.Group = .init,
 
-    fn init(gpa: std.mem.Allocator, file: std.Io.File, max_backlog: aegis.units.Bytes(usize)) State {
+    fn init(gpa: std.mem.Allocator, file: OwnedFile, max_backlog: aegis.units.Bytes(usize)) State {
         return .{ .gpa = gpa, .file = file, .queue = .init(.{ .backlog = .init(max_backlog.raw()) }) };
     }
 
@@ -221,7 +222,7 @@ const State = struct {
         var failure: ?std.Io.File.Writer.Error = null;
         defer {
             // Only this task ever uses or closes the transferred pipe.
-            state.file.close(io);
+            state.file.deinit(io);
             var held = state.queue.acquireUncancelable(io);
             defer held.deinit(io);
             const queue = held.value();
@@ -241,7 +242,7 @@ const State = struct {
                 failure = err;
                 return;
             }) orelse return;
-            handles.writeStreamingAll(io, state.file, node.batch.borrow().bytes) catch |err| {
+            handles.writeStreamingAll(io, state.file.borrow().*, node.batch.borrow().bytes) catch |err| {
                 var held = state.queue.acquireUncancelable(io);
                 defer held.deinit(io);
                 // Publish the failure before releasing the batch's backlog.

@@ -32,7 +32,7 @@ pub const Context = struct {
     descendants: [8]std.posix.pid_t = undefined,
     descendant_count: usize = 0,
     /// What `readAvailable` reads, and how much of it arrived.
-    pipe: std.Io.File = undefined,
+    pipe: conduit.OwnedFile = undefined,
     drained: usize = 0,
     /// A conversation with a terminal child, and the buffer it keeps.
     conversation: conduit.Expect = undefined,

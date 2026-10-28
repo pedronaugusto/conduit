@@ -124,7 +124,7 @@ fn started(
     options: SpawnOptions,
     information: windows.PROCESS.INFORMATION,
     job: Job,
-    plan: *const Plan,
+    plan: *Plan,
 ) *State {
     state.* = .{
         .gpa = state.gpa,
@@ -143,9 +143,9 @@ fn started(
         .exit_watch = {},
         .cgroup = {},
         .term = null,
-        .stdin = plan.parent[0],
-        .stdout = plan.parent[1],
-        .stderr = plan.parent[2],
+        .stdin = plan.takeParent(0),
+        .stdout = plan.takeParent(1),
+        .stderr = plan.takeParent(2),
         .pty = switch (options.stdio) {
             .pty => |pty| pty.master(),
             else => null,

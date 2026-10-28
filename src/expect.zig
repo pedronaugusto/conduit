@@ -488,7 +488,7 @@ pub const Expect = struct {
     /// `"\x04"`.
     pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
         expect.pin.check(expect);
-        handles.writeStreamingAll(io, expect.master.write, reply) catch |err| switch (err) {
+        handles.writeStreamingAll(io, expect.master.write.get(), reply) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             error.BrokenPipe => return error.BrokenPipe,
             else => return error.WriteFailed,
@@ -549,7 +549,7 @@ pub const Expect = struct {
                 continue;
             }
 
-            const n = handles.readStreaming(io, expect.master.read, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
+            const n = handles.readStreaming(io, expect.master.read.get(), &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
             };

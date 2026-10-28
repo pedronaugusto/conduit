@@ -282,17 +282,17 @@ test "InputWriter allocation refusal leaves the queue and the bound intact" {
 test "InputWriter failed startup leaves the pipe with the child" {
     var child = try spawn("echo");
     defer reap(&child);
-    const file = child.stdinFile().?;
+    const file = child.stdinFile().?.get();
     var failing = testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
     try testing.expectError(error.OutOfMemory, child.inputWriter(failing.allocator(), io, .{ .max_backlog = .fromRaw(10) }));
-    try testing.expectEqual(file.handle, child.stdinFile().?.handle);
+    try testing.expectEqual(file.handle, child.stdinFile().?.get().handle);
     const refused = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .groupConcurrent, .n = 1 } },
         .fault = .{ .fail = error.ConcurrencyUnavailable },
     }} });
     defer refused.deinit();
     try testing.expectError(error.ConcurrencyUnavailable, child.inputWriter(gpa, refused.io(), .{ .max_backlog = .fromRaw(10) }));
-    try testing.expectEqual(file.handle, child.stdinFile().?.handle);
+    try testing.expectEqual(file.handle, child.stdinFile().?.get().handle);
     try file.writeStreamingAll(io, "still open");
     child.closeStdin(io);
     try output(&child, "still open");

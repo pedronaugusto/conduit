@@ -151,14 +151,14 @@ pub fn run(io: std.Io, options: Options) RunError!void {
     try group.concurrent(io, pumpTask, .{
         io,
         options.input,
-        options.master.write,
+        options.master.write.get(),
         options.input_buffer,
         Direction.input,
         &completion,
     });
     try group.concurrent(io, pumpTask, .{
         io,
-        options.master.read,
+        options.master.read.get(),
         options.output,
         options.output_buffer,
         Direction.output,

@@ -346,7 +346,7 @@ fn stopSetup(x: *Context, stubborn: bool) !void {
     });
     errdefer x.release();
     var buffer: [64]u8 = undefined;
-    var reader = x.child.stdoutFile().?.reader(io, &buffer);
+    var reader = x.child.stdoutFile().?.get().reader(io, &buffer);
     if (!std.mem.eql(u8, (try reader.interface.takeDelimiter('\n')).?, "ready")) return error.NotReady;
     x.reaper = .init(&x.child, .{});
     try x.reaper.start(io);
