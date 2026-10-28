@@ -22,7 +22,7 @@ pub const SerialAllocator = struct {
     }
 
     fn of(raw: *anyopaque) *SerialAllocator {
-        return @ptrCast(@alignCast(raw)); // safe: `allocator` installs a live SerialAllocator as the pointer.
+        return @ptrCast(@alignCast(raw)); // aegis: internal: `allocator` installs a live SerialAllocator as the pointer.
     }
 
     fn alloc(raw: *anyopaque, len: usize, alignment: std.mem.Alignment, ret: usize) ?[*]u8 {

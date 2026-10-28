@@ -133,7 +133,7 @@ fn current() std.process.Environ {
 fn posixBlock() []const [*:0]const u8 {
     var count: usize = 0;
     while (std.c.environ[count] != null) count += 1;
-    return @ptrCast(std.c.environ[0..count]); // safe: the first `count` entries are not null, counted above
+    return @ptrCast(std.c.environ[0..count]); // aegis: boundary: libc's environ, whose first `count` entries are not null, counted above
 }
 
 test "an environment entry without a name or an equals sign is no variable" {

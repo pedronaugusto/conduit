@@ -158,7 +158,7 @@ fn fromValuePosix(value: []const u8) Channel.InheritedError!std.Io.File {
     // nothing, a file, a pipe -- is not the channel the variable promises.
     var kind: i32 = undefined;
     var len: posix.socklen_t = @sizeOf(i32);
-    switch (posix.errno(system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.TYPE, @ptrCast(&kind), &len))) { // safe: the option is an int, its size beside it
+    switch (posix.errno(system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.TYPE, @ptrCast(&kind), &len))) { // aegis: boundary: the option is an int, its size beside it
         .SUCCESS => {},
         .BADF, .NOTSOCK => return error.NotAChannel,
         else => |err| return posix.unexpectedErrno(err),
@@ -239,7 +239,7 @@ fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
     switch (windows.ntdll.NtOpenFile(
         &device,
         .{ .STANDARD = .{ .SYNCHRONIZE = true } },
-        &.{ .ObjectName = @constCast(&windows.UNICODE_STRING.init(name)) }, // safe: the call reads the name and never writes it
+        &.{ .ObjectName = @constCast(&windows.UNICODE_STRING.init(name)) }, // aegis: boundary: the call reads the name and never writes it
         &status_block,
         .VALID_FLAGS,
         .{ .IO = .SYNCHRONOUS_NONALERT },
@@ -253,7 +253,7 @@ fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
 fn fromValueWindows(value: []const u8) Channel.InheritedError!std.Io.File {
     const number = std.fmt.parseInt(usize, value, 10) catch return error.NotAChannel;
     if (number == 0) return error.NotAChannel;
-    const handle: windows.HANDLE = @ptrFromInt(number); // safe: a handle value the parent wrote, checked below as a pipe before any use
+    const handle: windows.HANDLE = @ptrFromInt(number); // aegis: boundary: a handle value the parent wrote, checked below as a pipe before any use
     if (win32.GetFileType(handle) != win32.file_type_pipe) return error.NotAChannel;
 
     // How the handle was opened decides how a read on it is made: a parent

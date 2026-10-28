@@ -376,7 +376,7 @@ pub const Expect = struct {
 
         fn find(context: ?*anyopaque, said: []const u8, ended: bool) ?Found {
             _ = ended;
-            const l: *Literal = @ptrCast(@alignCast(context.?)); // safe: `matcher` gives its own `*Literal`
+            const l: *Literal = @ptrCast(@alignCast(context.?)); // aegis: internal: `matcher` gives its own `*Literal`
             const found = l.search.find(said, l.patterns) orelse return null;
             return .{ .index = found.index, .at = found.at, .len = l.patterns[found.index].len };
         }

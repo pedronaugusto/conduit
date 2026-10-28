@@ -70,6 +70,7 @@ pub const Hpcon = *anyopaque;
 /// and writes what the controlling program will read from the other end of
 /// `hOutput`. The console duplicates both, so the caller closes its copies as
 /// soon as this returns.
+// aegis: boundary: kernel32's CreatePseudoConsole, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn CreatePseudoConsole(
     size: windows.COORD,
     hInput: windows.HANDLE,
@@ -92,6 +93,7 @@ pub const pseudoconsole_passthrough_mode: windows.DWORD = 0x00000008;
 /// Changes a pseudoconsole's geometry. The attached client is told the way a
 /// program on a POSIX terminal is told by `SIGWINCH`: through the console API
 /// it already polls.
+// aegis: boundary: kernel32's ResizePseudoConsole, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn ResizePseudoConsole(
     hPC: Hpcon,
     size: windows.COORD,
@@ -101,6 +103,7 @@ pub extern "kernel32" fn ResizePseudoConsole(
 ///
 /// This ends the attached client: there is no Windows counterpart of closing
 /// only the parent's copy of a slave descriptor while the child keeps its own.
+// aegis: boundary: kernel32's ClosePseudoConsole, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn ClosePseudoConsole(hPC: Hpcon) callconv(.winapi) void;
 
 //======================================================================
@@ -111,11 +114,13 @@ pub extern "kernel32" fn ClosePseudoConsole(hPC: Hpcon) callconv(.winapi) void;
 /// process assigned to one puts everything it starts in the same job, and the
 /// job can be ended or accounted for as a unit. It is the Windows answer to
 /// the question a POSIX process group answers.
+// aegis: boundary: kernel32's CreateJobObjectW, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn CreateJobObjectW(
     lpJobAttributes: ?*windows.SECURITY_ATTRIBUTES,
     lpName: ?windows.LPCWSTR,
 ) callconv(.winapi) ?windows.HANDLE;
 
+// aegis: boundary: kernel32's AssignProcessToJobObject, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn AssignProcessToJobObject(
     hJob: windows.HANDLE,
     hProcess: windows.HANDLE,
@@ -123,6 +128,7 @@ pub extern "kernel32" fn AssignProcessToJobObject(
 
 /// Whether a held process belongs to this specific job. The test fixtures
 /// prove this before asking job termination to reach the grandchild.
+// aegis: boundary: kernel32's IsProcessInJob, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn IsProcessInJob(
     ProcessHandle: windows.HANDLE,
     JobHandle: windows.HANDLE,
@@ -130,11 +136,13 @@ pub extern "kernel32" fn IsProcessInJob(
 ) callconv(.winapi) windows.BOOL;
 
 /// Ends every process in the job, each with `uExitCode`.
+// aegis: boundary: kernel32's TerminateJobObject, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn TerminateJobObject(
     hJob: windows.HANDLE,
     uExitCode: windows.UINT,
 ) callconv(.winapi) windows.BOOL;
 
+// aegis: boundary: kernel32's QueryInformationJobObject, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn QueryInformationJobObject(
     hJob: windows.HANDLE,
     JobObjectInformationClass: c_int,
@@ -143,6 +151,7 @@ pub extern "kernel32" fn QueryInformationJobObject(
     lpReturnLength: ?*windows.DWORD,
 ) callconv(.winapi) windows.BOOL;
 
+// aegis: boundary: kernel32's SetInformationJobObject, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn SetInformationJobObject(
     hJob: windows.HANDLE,
     JobObjectInformationClass: c_int,
@@ -223,12 +232,14 @@ pub const JobObjectExtendedLimitInformation = extern struct {
 
 /// Lets a thread `CreateProcessW` started suspended begin running. Returns the
 /// previous suspend count, or `maxInt(DWORD)` on failure.
+// aegis: boundary: kernel32's ResumeThread, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn ResumeThread(hThread: windows.HANDLE) callconv(.winapi) windows.DWORD;
 
 //======================================================================
 // Handles and pipes.
 //======================================================================
 
+// aegis: boundary: kernel32's CreatePipe, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn CreatePipe(
     hReadPipe: *windows.HANDLE,
     hWritePipe: *windows.HANDLE,
@@ -242,6 +253,7 @@ pub const handle_flag_inherit: windows.DWORD = 0x00000001;
 pub const invalid_file_attributes: windows.DWORD = 0xFFFFFFFF;
 pub const file_attribute_directory: windows.DWORD = 0x00000010;
 
+// aegis: boundary: kernel32's GetFileAttributesW, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetFileAttributesW(
     lpFileName: [*:0]const u16,
 ) callconv(.winapi) windows.DWORD;
@@ -252,12 +264,14 @@ pub extern "kernel32" fn GetFileAttributesW(
 /// need and zero when there is no such variable, which is all a presence check
 /// wants. One call, and no walk of the process environment block under the
 /// loader's lock.
+// aegis: boundary: kernel32's GetEnvironmentVariableW, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetEnvironmentVariableW(
     lpName: [*:0]const u16,
     lpBuffer: ?[*]u16,
     nSize: windows.DWORD,
 ) callconv(.winapi) windows.DWORD;
 
+// aegis: boundary: kernel32's SetHandleInformation, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn SetHandleInformation(
     hObject: windows.HANDLE,
     dwMask: windows.DWORD,
@@ -266,6 +280,7 @@ pub extern "kernel32" fn SetHandleInformation(
 
 /// What `SetHandleInformation` would be changing. Read before a spawn marks a
 /// caller's handle inheritable, so that the flag can be put back after.
+// aegis: boundary: kernel32's GetHandleInformation, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetHandleInformation(
     hObject: windows.HANDLE,
     lpdwFlags: *windows.DWORD,
@@ -273,6 +288,7 @@ pub extern "kernel32" fn GetHandleInformation(
 
 pub const duplicate_same_access: windows.DWORD = 0x00000002;
 
+// aegis: boundary: kernel32's DuplicateHandle, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn DuplicateHandle(
     hSourceProcessHandle: windows.HANDLE,
     hSourceHandle: windows.HANDLE,
@@ -292,6 +308,7 @@ pub const open_existing: windows.DWORD = 3;
 /// Opens a file or a device by name: here, `CONIN$` and `CONOUT$`, the
 /// console's input buffer and screen buffer, whatever the standard handles
 /// were redirected to.
+// aegis: boundary: kernel32's CreateFileW, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn CreateFileW(
     lpFileName: windows.LPCWSTR,
     dwDesiredAccess: windows.DWORD,
@@ -321,6 +338,7 @@ pub const proc_thread_attribute_pseudoconsole: usize = 0x00020016;
 /// three a child is being given.
 pub const proc_thread_attribute_handle_list: usize = 0x00020002;
 
+// aegis: boundary: kernel32's InitializeProcThreadAttributeList, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn InitializeProcThreadAttributeList(
     lpAttributeList: ?*ProcThreadAttributeList,
     dwAttributeCount: windows.DWORD,
@@ -328,6 +346,7 @@ pub extern "kernel32" fn InitializeProcThreadAttributeList(
     lpSize: *windows.SIZE_T,
 ) callconv(.winapi) windows.BOOL;
 
+// aegis: boundary: kernel32's UpdateProcThreadAttribute, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn UpdateProcThreadAttribute(
     lpAttributeList: *ProcThreadAttributeList,
     dwFlags: windows.DWORD,
@@ -338,6 +357,7 @@ pub extern "kernel32" fn UpdateProcThreadAttribute(
     lpReturnSize: ?*windows.SIZE_T,
 ) callconv(.winapi) windows.BOOL;
 
+// aegis: boundary: kernel32's DeleteProcThreadAttributeList, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn DeleteProcThreadAttributeList(
     lpAttributeList: *ProcThreadAttributeList,
 ) callconv(.winapi) void;
@@ -357,12 +377,14 @@ pub const startf_usestdhandles: windows.DWORD = 0x00000100;
 pub const file_type_char: windows.DWORD = 0x0002;
 /// `FILE_TYPE_PIPE`, what `GetFileType` answers for a pipe or a socket.
 pub const file_type_pipe: windows.DWORD = 0x0003;
+// aegis: boundary: kernel32's GetFileType, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetFileType(hFile: windows.HANDLE) callconv(.winapi) windows.DWORD;
 
 //======================================================================
 // Processes.
 //======================================================================
 
+// aegis: boundary: kernel32's TerminateProcess, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn TerminateProcess(
     hProcess: windows.HANDLE,
     uExitCode: windows.UINT,
@@ -375,12 +397,14 @@ pub const synchronize: windows.DWORD = 0x00100000;
 pub const process_terminate: windows.DWORD = 0x00000001;
 pub const process_query_limited_information: windows.DWORD = 0x00001000;
 
+// aegis: boundary: kernel32's OpenProcess, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn OpenProcess(
     dwDesiredAccess: windows.DWORD,
     bInheritHandle: windows.BOOL,
     dwProcessId: windows.DWORD,
 ) callconv(.winapi) ?windows.HANDLE;
 
+// aegis: boundary: kernel32's GetExitCodeProcess, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetExitCodeProcess(
     hProcess: windows.HANDLE,
     lpExitCode: *windows.DWORD,
@@ -388,6 +412,7 @@ pub extern "kernel32" fn GetExitCodeProcess(
 
 pub const wait_object_0: windows.DWORD = 0;
 pub const wait_timeout: windows.DWORD = 258;
+// aegis: boundary: kernel32's WaitForSingleObject, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn WaitForSingleObject(
     hHandle: windows.HANDLE,
     dwMilliseconds: windows.DWORD,
@@ -401,15 +426,19 @@ pub const ctrl_break_event: windows.DWORD = 1;
 /// that shares this process's console.
 /// An event, for the tests: two handles to one event can be shown to be
 /// one object by signalling through one and waiting on the other.
+// aegis: boundary: kernel32's CreateEventW, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn CreateEventW(
     lpEventAttributes: ?*windows.SECURITY_ATTRIBUTES,
     bManualReset: windows.BOOL,
     bInitialState: windows.BOOL,
     lpName: ?windows.LPCWSTR,
 ) callconv(.winapi) ?windows.HANDLE;
+// aegis: boundary: kernel32's SetEvent, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn SetEvent(hEvent: windows.HANDLE) callconv(.winapi) windows.BOOL;
+// aegis: boundary: kernel32's ResetEvent, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn ResetEvent(hEvent: windows.HANDLE) callconv(.winapi) windows.BOOL;
 
+// aegis: boundary: kernel32's GenerateConsoleCtrlEvent, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GenerateConsoleCtrlEvent(
     dwCtrlEvent: windows.DWORD,
     dwProcessGroupId: windows.DWORD,
@@ -434,11 +463,13 @@ pub const enable_wrap_at_eol_output: windows.DWORD = 0x0002;
 pub const enable_virtual_terminal_processing: windows.DWORD = 0x0004;
 pub const disable_newline_auto_return: windows.DWORD = 0x0008;
 
+// aegis: boundary: kernel32's GetConsoleMode, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetConsoleMode(
     hConsoleHandle: windows.HANDLE,
     lpMode: *windows.DWORD,
 ) callconv(.winapi) windows.BOOL;
 
+// aegis: boundary: kernel32's SetConsoleMode, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn SetConsoleMode(
     hConsoleHandle: windows.HANDLE,
     dwMode: windows.DWORD,
@@ -459,6 +490,7 @@ pub const ConsoleScreenBufferInfo = extern struct {
     dwMaximumWindowSize: windows.COORD,
 };
 
+// aegis: boundary: kernel32's GetConsoleScreenBufferInfo, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetConsoleScreenBufferInfo(
     hConsoleOutput: windows.HANDLE,
     lpConsoleScreenBufferInfo: *ConsoleScreenBufferInfo,
@@ -481,6 +513,7 @@ pub const ProcessMemoryCounters = extern struct {
     pagefile_usage: usize,
     peak_pagefile_usage: usize,
 };
+// aegis: boundary: kernel32's K32GetProcessMemoryInfo, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn K32GetProcessMemoryInfo(process: windows.HANDLE, counters: *ProcessMemoryCounters, cb: windows.DWORD) callconv(.winapi) windows.BOOL;
 
 //======================================================================
@@ -490,4 +523,5 @@ pub extern "kernel32" fn K32GetProcessMemoryInfo(process: windows.HANDLE, counte
 /// `COMPUTER_NAME_FORMAT`'s `ComputerNameDnsHostname`: the DNS host name,
 /// without the domain, which Winsock's `gethostname` returns.
 pub const computer_name_dns_hostname: c_int = 1;
+// aegis: boundary: kernel32's GetComputerNameExW, declared as Microsoft's documentation gives it
 pub extern "kernel32" fn GetComputerNameExW(NameType: c_int, lpBuffer: ?[*]u16, nSize: *windows.DWORD) callconv(.winapi) windows.BOOL;

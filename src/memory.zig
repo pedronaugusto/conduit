@@ -127,6 +127,7 @@ const RusageInfoV4 = extern struct {
     runnable_time: u64,
 };
 const rusage_info_v4 = 4;
+// aegis: boundary: Darwin's proc_pid_rusage, declared as libproc's header gives it
 extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *RusageInfoV4) c_int;
 
 fn darwinMemory(pid: posix.pid_t) Error!Memory {

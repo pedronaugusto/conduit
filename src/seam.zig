@@ -67,7 +67,7 @@ pub const RoutedState = struct { route: Route, base: Io };
 /// The routed layer's `processSpawn`: `std.process.spawn` on the base, the
 /// simulation's.
 pub fn routedSpawn(userdata: ?*anyopaque, options: std.process.SpawnOptions) std.process.SpawnError!std.process.Child {
-    const state: *RoutedState = @ptrCast(@alignCast(userdata.?)); // safe: an Io whose processSpawn is routedSpawn carries a RoutedState as userdata
+    const state: *RoutedState = @ptrCast(@alignCast(userdata.?)); // aegis: internal: an Io whose processSpawn is routedSpawn carries a RoutedState as userdata
     return std.process.spawn(state.base, options);
 }
 
@@ -79,6 +79,6 @@ fn isRouted(io: Io) bool {
 /// The route `io` carries, if it carries one: one compare.
 pub fn routeOf(io: Io) ?*const Route {
     if (!isRouted(io)) return null;
-    const state: *const RoutedState = @ptrCast(@alignCast(io.userdata.?)); // safe: an Io whose processSpawn is routedSpawn carries a RoutedState as userdata
+    const state: *const RoutedState = @ptrCast(@alignCast(io.userdata.?)); // aegis: internal: an Io whose processSpawn is routedSpawn carries a RoutedState as userdata
     return &state.route;
 }
