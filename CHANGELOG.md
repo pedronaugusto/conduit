@@ -8,6 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `Pty.ResizeError` (and `SizeError`) carries `Canceled`: on Windows a resize holds the pair's geometry across `ResizePseudoConsole`, which blocks while the output pipe is undrained, and a task waiting for it (another resize, or `size`) now waits through its `Io` behind an `aegis.BlockingGuarded`, which a cancel ends, where it spun on a lock with no way out. `Proxy`'s size forwarder ends on that cancel, where it passed every refusal over.
 - A file's type says who closes it. `conduit.OwnedFile` (aegis `own.OwnedIo` over `std.Io.File`) is a file its one owner closes with `deinit(io)`; `conduit.LentFile` (aegis `own.Lent`) is one another owner closes, lent to read or write through `get()`. Both are in `conduit.tty` too, with `held`, which makes a raw handle one or the other.
   - Lent: `Child.stdinFile`, `stdoutFile` and `stderrFile`; `Pty.readFile`, `writeFile`, `slaveFile` and `simulatedSlave`; `Pty.Master`'s `read` and `write`. Add `.get()` where a `std.Io.File` was used: `child.stdoutFile().?.get().reader(io, &buffer)`.
   - Owned: `Child.takeStdin`, `takeStdout` and `takeStderr` return `?OwnedFile`. Close a taken pipe with `deinit(io)` where `close(io)` was, and reach it with `borrow()`. A taken pipe is no longer the `Child`'s: its `deinit` closes only what was not taken.

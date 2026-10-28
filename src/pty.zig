@@ -31,7 +31,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const spin = @import("spin.zig");
+const aegis = @import("aegis");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
@@ -219,7 +219,7 @@ pub const Pty = struct {
         /// POSIX: the master is not a terminal, which cannot happen for a `Pty`
         /// this package opened.
         NotATerminal,
-    } || tty.UnexpectedError;
+    } || tty.UnexpectedError || std.Io.Cancelable;
 
     /// Changes the geometry of the pair.
     ///
@@ -247,13 +247,15 @@ pub const Pty = struct {
         }
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
-            geometry.lock();
-            defer geometry.mutex.unlock();
+            // Held across the resize, which can block while the output pipe is
+            // undrained: another resize, or a `size`, waits through its `io`.
+            var accepted = try geometry.size.acquire(io);
+            defer accepted.deinit(io);
             const slave = pty.slave orelse return error.Unexpected;
             if (win32.ResizePseudoConsole(slave, new_size.toCoord()) != win32.ok) {
                 return error.Unexpected;
             }
-            geometry.size = new_size;
+            accepted.value().* = new_size;
             return;
         }
         const read = pty.read orelse return error.Unexpected;
@@ -280,9 +282,9 @@ pub const Pty = struct {
         }
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
-            geometry.lock();
-            defer geometry.mutex.unlock();
-            return geometry.size;
+            var accepted = try geometry.size.acquire(io);
+            defer accepted.deinit(io);
+            return accepted.value().*;
         }
         const read = pty.read orelse return error.Unexpected;
         return tty.winSize(read);
@@ -471,22 +473,13 @@ pub const Pty = struct {
         }
     }
 
-    /// One owner for the Windows resize operation and the size it accepted.
-    ///
-    /// Not an `aegis.Guarded`: the lock is held across `ResizePseudoConsole`, an
-    /// operating-system call that can block while the output pipe is undrained,
-    /// and a guard's sections are bounded. `resize` and `size` take no `std.Io`
-    /// to wait with, so a blocking guard would be a public change of its own
-    /// (an OS boundary).
+    /// One owner for the Windows resize operation and the size it accepted: a
+    /// blocking guard, held across `ResizePseudoConsole`, which can block while
+    /// the output pipe is undrained. A task waiting for it (another resize, or
+    /// `size`) waits through its `std.Io`, and a cancel ends the wait.
     const Geometry = struct {
-        // aegis: design: held across ResizePseudoConsole, which can block, by callers with no Io to wait with (above)
-        mutex: std.atomic.Mutex = .unlocked,
-        size: Size,
+        size: aegis.BlockingGuarded(Size),
         gpa: std.mem.Allocator,
-
-        fn lock(geometry: *Geometry) void {
-            spin.lock(&geometry.mutex);
-        }
     };
 
     fn geometryState(pty: *const Pty) ?*Geometry {
@@ -630,7 +623,7 @@ pub const Pty = struct {
     fn openWindows(gpa: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
         const remembered = try gpa.create(Geometry);
         errdefer gpa.destroy(remembered);
-        remembered.* = .{ .size = options.size(), .gpa = gpa };
+        remembered.* = .{ .size = .init(options.size()), .gpa = gpa };
         // Two pipes. Each has an end for the console and an end for this program,
         // and neither end is inheritable -- `null` security attributes is what
         // says so -- which is the Windows counterpart of the close-on-exec the
