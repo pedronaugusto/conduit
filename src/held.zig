@@ -1,19 +1,17 @@
-//! The two ways this package holds a file: owned, closed once by its one
-//! owner, or lent by the owner that closes it.
+//! How this package holds a file: owned, closed once by its one owner, and
+//! lent by value to everyone else.
 //!
-//! A raw handle becomes one or the other here, and nowhere else, so the type
-//! a file is held in says who closes it.
+//! A raw handle becomes an owner here, and nowhere else. A lent file is a plain
+//! `std.Io.File`, aegis's one way to lend a handle released by value
+//! (`borrow().*`): who closes it is the owner's, and glint's lending rule holds
+//! a holder to never closing a file it did not open or take out of an owner.
 
 const std = @import("std");
 const aegis = @import("aegis");
 
 /// A file its owner closes, once: `deinit(io)` closes it, `move` hands it on
-/// to a new owner, and `borrow` or `lend` reach the file to read or write.
+/// to a new owner, and `borrow` lends the file to read or write.
 pub const OwnedFile = aegis.own.OwnedIo(std.Io.File, closeFile);
-
-/// A file another owner closes, lent out: `get` is the file to read or write,
-/// never to close. It ends when its owner closes the file or hands it on.
-pub const LentFile = aegis.own.Lent(std.Io.File);
 
 fn closeFile(file: *std.Io.File, io: std.Io) void {
     file.close(io);
@@ -24,9 +22,9 @@ pub fn own(handle: std.Io.File.Handle) OwnedFile {
     return .init(.{ .handle = handle, .flags = .{ .nonblocking = false } });
 }
 
-/// A raw handle its holder keeps, lent: the holder still closes it.
-pub fn lend(handle: std.Io.File.Handle) LentFile {
-    return .{ .data = .{ .handle = handle, .flags = .{ .nonblocking = false } } };
+/// A raw handle its holder keeps, lent as a file: the holder still closes it.
+pub fn lend(handle: std.Io.File.Handle) std.Io.File {
+    return .{ .handle = handle, .flags = .{ .nonblocking = false } };
 }
 
 /// Closes a raw handle its holder lets go of.

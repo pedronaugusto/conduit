@@ -70,8 +70,6 @@ pub const console = @import("console.zig");
 pub const held = @import("held.zig");
 /// A file its owner closes, once, with `deinit(io)`.
 pub const OwnedFile = held.OwnedFile;
-/// A file another owner closes, lent to read or write: `get`.
-pub const LentFile = held.LentFile;
 
 /// A pipe, both ends close-on-exec, for a wake a program writes itself.
 /// POSIX only.
@@ -390,14 +388,14 @@ pub const Controlling = struct {
 
     /// Where keys arrive. On POSIX the same file as `output`; on Windows the
     /// console's input buffer.
-    pub fn input(c: *Controlling) LentFile {
-        return if (is_windows) c.input_file.lend() else c.output_file.lend();
+    pub fn input(c: *Controlling) std.Io.File {
+        return if (is_windows) c.input_file.borrow().* else c.output_file.borrow().*;
     }
 
     /// Where output goes, and the handle `winSize` wants. On Windows the
     /// console's screen buffer.
-    pub fn output(c: *Controlling) LentFile {
-        return c.output_file.lend();
+    pub fn output(c: *Controlling) std.Io.File {
+        return c.output_file.borrow().*;
     }
 
     /// Closes it: the one file on POSIX, both on Windows.

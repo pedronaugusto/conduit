@@ -54,7 +54,6 @@ const reactor = @import("reactor");
 const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
 const OwnedFile = @import("conduit.tty").OwnedFile;
-const LentFile = @import("conduit.tty").LentFile;
 const Duration = @import("conduit.tty").Duration;
 const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
 const input_writer = @import("input_writer.zig");
@@ -1290,9 +1289,9 @@ pub const Child = struct {
     ///
     /// Lent either way. The pipe is closed by `deinit` and the master by the
     /// `Pty`.
-    pub fn stdinFile(child: Child) ?LentFile {
+    pub fn stdinFile(child: Child) ?std.Io.File {
         const state = child.state;
-        if (state.stdin) |*f| return f.lend();
+        if (state.stdin) |*f| return f.borrow().*;
         if (child.state.pty) |m| return m.write;
         return null;
     }
@@ -1304,17 +1303,17 @@ pub const Child = struct {
     /// A child on a pseudo-terminal has one stream for output and error together,
     /// because a terminal is one stream. That is the terminal's doing, not this
     /// package's.
-    pub fn stdoutFile(child: Child) ?LentFile {
+    pub fn stdoutFile(child: Child) ?std.Io.File {
         const state = child.state;
-        if (state.stdout) |*f| return f.lend();
+        if (state.stdout) |*f| return f.borrow().*;
         if (child.state.pty) |m| return m.read;
         return null;
     }
 
     /// The separate standard-error pipe, lent until taken or deinit.
-    pub fn stderrFile(child: Child) ?LentFile {
+    pub fn stderrFile(child: Child) ?std.Io.File {
         const state = child.state;
-        return if (state.stderr) |*f| f.lend() else null;
+        return if (state.stderr) |*f| f.borrow().* else null;
     }
 
     /// The terminal streams, lent by the `Pty`, when spawned on a pair.

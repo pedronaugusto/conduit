@@ -4369,7 +4369,7 @@ test "a child talks both ways over its channel, named after its extra files" {
         .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
         .stdio = .ignore,
         .extra_fds = &.{f},
-        .channel = .{ .file = channel.child.lend().get(), .variable = "CONDUIT_TEST_CHANNEL" },
+        .channel = .{ .file = channel.child.borrow().*, .variable = "CONDUIT_TEST_CHANNEL" },
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
@@ -4397,7 +4397,7 @@ test "a child on a terminal has its channel beside it" {
         .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
-        .channel = .{ .file = channel.child.lend().get(), .variable = "CONDUIT_TEST_CHANNEL" },
+        .channel = .{ .file = channel.child.borrow().*, .variable = "CONDUIT_TEST_CHANNEL" },
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
@@ -4424,7 +4424,7 @@ test "a channel's variable must be one an environment can hold" {
         try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "exit" },
             .stdio = .ignore,
-            .channel = .{ .file = channel.child.lend().get(), .variable = variable },
+            .channel = .{ .file = channel.child.borrow().*, .variable = variable },
         }));
     }
 }

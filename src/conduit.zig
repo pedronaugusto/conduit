@@ -161,10 +161,7 @@ pub const Handle = tty.Handle;
 /// A file its owner closes, once, with `deinit(io)`: what a spawn hands over
 /// (`Child.takeStdout`), and a channel's ends.
 pub const OwnedFile = tty.OwnedFile;
-/// A file another owner closes, lent to read or write: `get`. What
-/// `Child.stdoutFile` and `Pty.readFile` give.
-pub const LentFile = tty.LentFile;
-/// A raw handle made an owned or a lent file, or closed.
+/// A raw handle made an owned file, lent as a plain `std.Io.File`, or closed.
 pub const held = tty.held;
 
 /// The user's shell on a new pseudo-terminal, with a terminal program's

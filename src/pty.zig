@@ -45,7 +45,6 @@ const seam = @import("seam");
 
 const Size = tty.Size;
 const held = tty.held;
-const LentFile = tty.LentFile;
 
 pub const Pty = struct {
     /// Private: the master's reading handle, or null once closed.
@@ -94,9 +93,9 @@ pub const Pty = struct {
     /// The master end as two `std.Io.File`s.
     pub const Master = struct {
         /// What the child wrote to its terminal.
-        read: LentFile,
+        read: std.Io.File,
         /// What the child will see as typed at its terminal.
-        write: LentFile,
+        write: std.Io.File,
     };
 
     /// The initial terminal geometry of a new pair, and what the console on the
@@ -211,7 +210,7 @@ pub const Pty = struct {
     }
 
     /// The terminal end a child spawned on a simulated pair is given.
-    pub fn simulatedSlave(pty: Pty) ?LentFile {
+    pub fn simulatedSlave(pty: Pty) ?std.Io.File {
         return if (pty.simulated_slave) |h| held.lend(h) else null;
     }
 
@@ -240,7 +239,7 @@ pub const Pty = struct {
         if (pty.simulated) {
             const route = seam.routeOf(io) orelse return error.Unexpected;
             const read = pty.read orelse return error.Unexpected;
-            return route.setWindowSize(held.lend(read).get(), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
+            return route.setWindowSize(held.lend(read), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
                 error.NotTerminalDevice => error.NotATerminal,
                 error.BadHandle => error.Unexpected,
             };
@@ -274,7 +273,7 @@ pub const Pty = struct {
         if (pty.simulated) {
             const route = seam.routeOf(io) orelse return error.Unexpected;
             const read = pty.read orelse return error.Unexpected;
-            const got = route.windowSize(held.lend(read).get()) catch |err| return switch (err) {
+            const got = route.windowSize(held.lend(read)) catch |err| return switch (err) {
                 error.NotTerminalDevice => error.NotATerminal,
                 error.BadHandle => error.Unexpected,
             };
@@ -300,12 +299,12 @@ pub const Pty = struct {
     }
 
     /// The end to read, lent. Asserts it is still open.
-    pub fn readFile(pty: Pty) LentFile {
+    pub fn readFile(pty: Pty) std.Io.File {
         return held.lend(pty.read.?);
     }
 
     /// The end to write, lent. Asserts it is still open.
-    pub fn writeFile(pty: Pty) LentFile {
+    pub fn writeFile(pty: Pty) std.Io.File {
         return held.lend(pty.write.?);
     }
 
@@ -317,7 +316,7 @@ pub const Pty = struct {
     /// Calling this on Windows is a compile error: a
     /// pseudoconsole is an object a process is attached to, not a stream anything
     /// reads or writes.
-    pub fn slaveFile(pty: Pty) LentFile {
+    pub fn slaveFile(pty: Pty) std.Io.File {
         if (is_windows) @compileError("Pty.slaveFile is POSIX-only: a pseudoconsole is not a stream");
         return held.lend(if (pty.simulated) pty.simulated_slave.? else pty.slave.?);
     }
@@ -384,7 +383,7 @@ pub const Pty = struct {
     /// Reads the master and throws it away, so the console host has somewhere to
     /// put what it flushes on its way out.
     fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
-        const f = held.lend(handle).get();
+        const f = held.lend(handle);
         var buffer: [4096]u8 = undefined;
         while (true) {
             _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
