@@ -46,6 +46,7 @@
 //! safe to call while the master is being read and written.
 
 const std = @import("std");
+const aegis = @import("aegis");
 
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
@@ -180,7 +181,7 @@ pub fn run(io: std.Io, options: Options) RunError!void {
 const Direction = enum(u8) { none, input, output };
 
 const Completion = struct {
-    winner: std.atomic.Value(Direction) = .init(.none),
+    winner: aegis.Atomic(Direction) = .init(.none),
     arrived: std.Io.Event = .unset,
     input_error: ?RunError = null,
     output_error: ?RunError = null,

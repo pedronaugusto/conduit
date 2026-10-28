@@ -40,7 +40,7 @@ test "a canceled reading task publishes that it finished" {
     var buffer: [32]u8 = undefined;
     var expect: Expect = .init(undefined, &buffer);
     try testing.expectError(error.Canceled, access.read(&expect, canceled.io()));
-    try testing.expect(expect.finished.load(.acquire));
+    try testing.expect(expect.finished.load(.acquire) == .finished);
 }
 
 test "start refuses to put a second reader over the buffer" {
@@ -176,7 +176,7 @@ test "deinit stops the reader while the terminal is still open" {
         defer join_watchdog.deinit(io);
         expect.stop(io);
     }
-    try testing.expect(expect.finished.load(.acquire));
+    try testing.expect(expect.finished.load(.acquire) == .finished);
     try testing.expectError(error.AlreadyStarted, expect.start(io));
     {
         // Nothing more will arrive once reading has stopped, and a wait says

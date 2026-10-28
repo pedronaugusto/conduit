@@ -110,7 +110,7 @@ pub const Reaper = struct {
     group: std.Io.Group,
     /// Private: `running`, a term encoded by `encode`, or an error encoded by
     /// `encodeError`. Written once by the task and read by anyone.
-    state: std.atomic.Value(u64),
+    state: aegis.Atomic(Answer),
     /// Private: set once `state` holds the answer, whatever it is.
     answered: std.Io.Event,
     /// Private: the first kill deadline; force requests replace it with immediate expiry.
@@ -129,12 +129,15 @@ pub const Reaper = struct {
     /// Private: the explicit process-wide adoption scope, owned until stop.
     orphans: ?*Orphans,
     /// Private: a look at the adoption scope failed while the task waited.
-    observation_failed: std.atomic.Value(bool),
+    observation_failed: aegis.Atomic(Observation),
 
     /// Private: one claim for start and stop.
-    lifetime: std.atomic.Value(enum(u8) { ready, started, closed }),
+    lifetime: aegis.Atomic(Lifetime),
     /// Private: in safe builds, where this was when `start` began to hold a pointer to it.
     pin: Pin = .{},
+
+    const Observation = enum(u8) { watching, failed };
+    const Lifetime = enum(u8) { ready, started, closed };
 
     pub const Options = struct {
         /// End what the child leaves running when it ends, and reap the child only
@@ -185,7 +188,7 @@ pub const Reaper = struct {
             .wake = if (is_windows) {} else null,
             .rekill = if (is_windows) {} else null,
             .orphans = null,
-            .observation_failed = .init(false),
+            .observation_failed = .init(.watching),
             .lifetime = .init(.ready),
         };
     }
@@ -250,7 +253,7 @@ pub const Reaper = struct {
         errdefer reaper.lifetime.store(.ready, .release);
         reaper.child = reaper.source.*;
         reaper.pin.set(reaper);
-        reaper.observation_failed.store(false, .release);
+        reaper.observation_failed.store(.watching, .release);
         // Without a wake the wait ends at the cancel, which is only later: it
         // is how a wait is ended early, not a condition of waiting at all.
         if (!is_windows and reaper.child.state.simulated == null) {
@@ -435,7 +438,7 @@ pub const Reaper = struct {
         if (builtin.target.os.tag != .linux) return;
         while (reaper.state.load(.acquire) == running) {
             reaper.lookOrphans(io) catch {
-                reaper.observation_failed.store(true, .release);
+                reaper.observation_failed.store(.failed, .release);
                 return;
             };
             io.sleep(adoption_interval, .awake) catch return;
@@ -460,7 +463,7 @@ pub const Reaper = struct {
                     else => return error.Unexpected,
                 };
         }
-        if (reaper.observation_failed.load(.acquire)) return error.Unexpected;
+        if (reaper.observation_failed.load(.acquire) == .failed) return error.Unexpected;
         return term;
     }
 
@@ -615,24 +618,31 @@ pub const Reaper = struct {
     /// Only a group with something left in it is looked at at all.
     const tree_slice_ms: u32 = 20;
 
-    /// No term can encode to this: the tag byte is out of range.
-    const running: u64 = std.math.maxInt(u64);
+    /// A term, an error or `running`, in one word: the tag in the high
+    /// half, the payload in the low.
+    const Answer = enum(u64) {
+        /// No term can encode to this: the tag is out of range.
+        running = std.math.maxInt(u64),
+        _,
+    };
+    const running: Answer = .running;
 
-    fn encode(term: Term) u64 {
+    fn encode(term: Term) Answer {
         const tag: u64, const payload: u32 = switch (term) {
             .exited => |code| .{ 0, code },
             .signal => |signal| .{ 1, @intCast(@backingInt(signal)) },
             .stopped => |signal| .{ 2, @intCast(@backingInt(signal)) },
             .unknown => |value| .{ 3, value },
         };
-        return (tag << 32) | payload;
+        return @fromBackingInt((tag << 32) | payload);
     }
 
-    fn encodeError(err: ExitError) u64 {
-        return (@as(u64, 4) << 32) | @intFromError(err);
+    fn encodeError(err: ExitError) Answer {
+        return @fromBackingInt((@as(u64, 4) << 32) | @intFromError(err));
     }
 
-    fn decode(state: u64) ExitError!Term {
+    fn decode(answer: Answer) ExitError!Term {
+        const state = @backingInt(answer);
         const payload: u32 = @truncate(state);
         return switch (state >> 32) {
             0 => .{ .exited = @intCast(payload) },

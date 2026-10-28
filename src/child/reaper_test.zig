@@ -22,7 +22,7 @@ const Observer = struct {
         // alone until delivery resumes.
         // glint-ignore: Z026 -- only a pause for the Reaper; the assertion is what it did meanwhile, read below
         _ = probe.reaper.waitTimeout(std.testing.io, Deadline.within(.fromMilliseconds(20))) catch {};
-        probe.retired = child.state.reaped.load(.acquire) or if (is_windows) retired: {
+        probe.retired = child.state.reaped.load(.acquire) == .reaped or if (is_windows) retired: {
             var code: windows.DWORD = undefined;
             break :retired win32.GetExitCodeProcess(child.state.id, &code) == .FALSE;
         } else c.kill(child.state.id, @fromBackingInt(@intCast(0))) != 0 and c.errno(@as(c_int, -1)) == .SRCH;
@@ -101,7 +101,7 @@ test "output leaves the reap to the task that holds it" {
 
     // The child has long ended; output must still not have reaped it.
     try io.sleep(.fromMilliseconds(300), .awake);
-    try testing.expect(!child.state.reaped.load(.acquire));
+    try testing.expect(child.state.reaped.load(.acquire) != .reaped);
     try testing.expect(output.result == null);
 
     const term = try held.wait(io);

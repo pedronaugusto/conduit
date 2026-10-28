@@ -403,7 +403,7 @@ pub const Child = struct {
         const state = child.state;
         spin.lock(&state.identity);
         defer state.identity.unlock();
-        if (state.reaped.load(.acquire) or state.identity_retired) return null;
+        if (state.reaped.load(.acquire) == .reaped or state.identity_retired) return null;
         return state.process_id;
     }
 
@@ -422,7 +422,7 @@ pub const Child = struct {
         if (state.simulated != null) return error.Unsupported;
         spin.lock(&state.identity);
         defer state.identity.unlock();
-        if (state.reaped.load(.acquire) or state.identity_retired) return error.ProcessEnded;
+        if (state.reaped.load(.acquire) == .reaped or state.identity_retired) return error.ProcessEnded;
         return memory_impl.of(if (is_windows) state.id else state.process_id);
     }
 
@@ -522,7 +522,7 @@ pub const Child = struct {
     /// The acquire load pairs with the release store in `publish`, so a caller
     /// that sees a term sees every field the reaper wrote before it.
     fn settled(child: *const Child) ?Term {
-        if (!child.state.reaped.load(.acquire)) return null;
+        if (child.state.reaped.load(.acquire) != .reaped) return null;
         // Published only after it was written.
         std.debug.assert(child.state.term != null);
         return child.state.term;
@@ -532,10 +532,10 @@ pub const Child = struct {
     fn publish(child: *Child, term: Term) void {
         // One reap, so one term: whoever publishes holds the identity, and a
         // second reap would be of a process this child no longer names.
-        std.debug.assert(!child.state.reaped.load(.monotonic));
+        std.debug.assert(child.state.reaped.load(.monotonic) != .reaped);
         std.debug.assert(child.state.term == null);
         child.state.term = term;
-        child.state.reaped.store(true, .release);
+        child.state.reaped.store(.reaped, .release);
     }
 
     /// Takes the right to be inside the operating system's wait for this child.
