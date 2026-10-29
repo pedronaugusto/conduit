@@ -8,19 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
-- On aegis 0.3.0, which lends one way (`borrow`): `LentFile` is gone (`conduit.LentFile`, `tty.LentFile`), and a lent file is the `std.Io.File` itself. `Pty.readFile`, `writeFile`, `slaveFile`, `master`, `simulatedSlave`, `Child.stdinFile`, `stdoutFile`, `stderrFile` and `tty.Controlling.input`/`output` return it, and `held.lend(handle)` makes one. The owner still closes it, and glint's lending rule keeps a holder from closing it. Migration: drop `.get()`; an `OwnedFile`'s `lend().get()` is `borrow().*`.
 - `Pty.ResizeError` (and `SizeError`) carries `Canceled`: on Windows a resize holds the pair's geometry across `ResizePseudoConsole`, which blocks while the output pipe is undrained, and a task waiting for it (another resize, or `size`) now waits through its `Io` behind an `aegis.BlockingGuarded`, which a cancel ends, where it spun on a lock with no way out. `Proxy`'s size forwarder ends on that cancel, where it passed every refusal over.
-- A file's type says who closes it. `conduit.OwnedFile` (aegis `own.OwnedIo` over `std.Io.File`) is a file its one owner closes with `deinit(io)`; `conduit.LentFile` (aegis `own.Lent`) is one another owner closes, lent to read or write through `get()`. Both are in `conduit.tty` too, with `held`, which makes a raw handle one or the other.
-  - Lent: `Child.stdinFile`, `stdoutFile` and `stderrFile`; `Pty.readFile`, `writeFile`, `slaveFile` and `simulatedSlave`; `Pty.Master`'s `read` and `write`. Add `.get()` where a `std.Io.File` was used: `child.stdoutFile().?.get().reader(io, &buffer)`.
+- A file's type says who closes it. `conduit.OwnedFile` (aegis `own.OwnedIo` over `std.Io.File`) is a file its one owner closes with `deinit(io)`; a file its owner lends is the `std.Io.File` itself, which the owner still closes and glint's lending rule keeps a holder from closing (aegis 0.3.0 lends one way, by `borrow`). `OwnedFile` is in `conduit.tty` too, with `held`: `held.own(handle)` makes an owner, `held.lend(handle)` a lent file.
+  - Lent, still a `std.Io.File`: `Child.stdinFile`, `stdoutFile` and `stderrFile`; `Pty.readFile`, `writeFile`, `slaveFile` and `simulatedSlave`; `Pty.Master`'s `read` and `write`. Nothing to change where they are read or written.
   - Owned: `Child.takeStdin`, `takeStdout` and `takeStderr` return `?OwnedFile`. Close a taken pipe with `deinit(io)` where `close(io)` was, and reach it with `borrow()`. A taken pipe is no longer the `Child`'s: its `deinit` closes only what was not taken.
-  - Owned: `Channel.open`'s `parent` and `child`, and the end `Channel.inherited` and `Channel.fromValue` give. Close them with `deinit(io)`; read and write through `borrow()`; give a spawn `.channel = .{ .file = channel.child.lend().get(), .variable = ... }`.
-  - `tty.Controlling`'s `input` and `output` are methods that lend its files (`own.input().get().handle`), and `close` takes `*Controlling`.
+  - Owned: `Channel.open`'s `parent` and `child`, and the end `Channel.inherited` and `Channel.fromValue` give. Close them with `deinit(io)`; read and write through `borrow()`; give a spawn `.channel = .{ .file = channel.child.borrow().*, .variable = ... }`.
+  - `tty.Controlling`'s `input` and `output` are methods that lend its files (`own.input().handle`), and `close` takes `*Controlling`.
 - `Cgroup.prepare` takes the `std.Io` it waits with.
 - `conduit.tty.T` is `conduit.tty.ioctl_request`, its numbers named in snake case: `get_window_size`, `set_window_size`, `set_controlling_terminal`.
 
 ### Changed
 
 - On the aegis 0.2 pack: aegis 0.2.3 and reactor 0.9.0, developed on shakedown 0.6.0 and preflight 0.18.5. Every extern declaration and pointer conversion at conduit's seam says why it is sound there, and the whole-file reads of the bench and the containment check are aegis's.
+
+### Fixed
+
+- `readAvailable` reads again past a read of nothing from a pipe poll says is readable, an interrupted read (std's `readStreaming` may return 0 without the end, which is `EndOfStream`), where it returned that 0 as nothing to read now and a caller draining a child's last output stopped short.
 
 ## [0.10.6] - 2026-10-25
 

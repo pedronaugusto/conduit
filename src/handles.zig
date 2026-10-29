@@ -90,13 +90,18 @@ pub const ReadAvailableError = std.Io.File.ReadStreamingError || error{
 /// hands out; on Windows one opened for synchronous reads, as `Child`'s are.
 pub fn readAvailable(io: std.Io, f: std.Io.File, buffer: []u8) handles.ReadAvailableError!usize {
     if (buffer.len == 0) return error.EmptyBuffer;
-    const ready = if (is_windows) windowsPipeAvailable(f) else posixReadable(f.handle);
-    if (ready == 0) return 0;
-    const n = f.readStreaming(io, &.{buffer[0..@min(buffer.len, ready)]}) catch |err| switch (err) {
-        error.EndOfStream => return 0,
-        else => |e| return e,
-    };
-    return n;
+    while (true) {
+        const ready = if (is_windows) windowsPipeAvailable(f) else posixReadable(f.handle);
+        if (ready == 0) return 0;
+        const n = f.readStreaming(io, &.{buffer[0..@min(buffer.len, ready)]}) catch |err| switch (err) {
+            error.EndOfStream => return 0,
+            else => |e| return e,
+        };
+        if (n != 0) return n;
+        // A read of nothing from a readable pipe was interrupted, not its
+        // end, which is `EndOfStream`: asked again, where the 0 would read
+        // as nothing more to come. Each read is a cancelation point.
+    }
 }
 
 /// Bytes a read of `fd` returns now without waiting: `maxInt` when it is

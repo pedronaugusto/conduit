@@ -36,6 +36,23 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     try testing.expectError(error.Unexpected, writeStreamingAll(failed.io(), f, "unchanged"));
 }
 
+test "readAvailable reads on past an interrupted read of nothing, which is not the pipe's end" {
+    if (is_windows) return error.SkipZigTest; // the readable pipe is asked by poll
+    const testing = std.testing;
+    const io = testing.io;
+    const readAvailable = @import("handles.zig").readAvailable;
+    const fds = try pipe(.{});
+    var ends: [2]held.OwnedFile = .{ held.own(fds[0]), held.own(fds[1]) };
+    defer ends[0].deinit(io);
+    defer ends[1].deinit(io);
+    try writeStreamingAll(io, ends[1].borrow().*, "said");
+    const faults = try FaultIo.init(testing.allocator, io, .{ .plan = &.{.{ .at = .{ .nth = .{ .call = .file_read_streaming, .n = 1 } }, .fault = .{ .short = 0 } }} });
+    defer faults.deinit();
+    var buffer: [16]u8 = undefined;
+    const n = try readAvailable(faults.io(), ends[0].borrow().*, &buffer);
+    try testing.expectEqualStrings("said", buffer[0..n]);
+}
+
 test "readAvailable reads what a pipe holds and returns rather than wait for the rest" {
     const testing = std.testing;
     const io = testing.io;
