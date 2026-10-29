@@ -268,20 +268,23 @@ const shakedown = @import("shakedown");
 test "InputWriter isOpen takes a contended mutex without cancellation" {
     const Held = @FieldType(State, "queue").Guard;
     const Release = struct {
+        held: *Held,
+        hook: shakedown.Hook = .{ .run = unlock },
         /// The holder lets go as the waiter enters its wait, so the wait
         /// finds the word changed and returns.
-        fn unlock(io: std.Io, context: *anyopaque) void {
-            const held: *Held = @ptrCast(@alignCast(context)); // safe: the plan hands this test's guard as the context
-            held.deinit(io);
+        fn unlock(hook: *shakedown.Hook, io: std.Io) void {
+            const release: *@This() = @fieldParentPtr("hook", hook);
+            release.held.deinit(io);
         }
     };
     var state: State = .init(std.testing.allocator, undefined, .fromRaw(0));
     var writer: TestWriter = .{ .state = &state };
     // The test holds the queue, so isOpen finds it contended.
     var held = state.queue.tryAcquire().?;
+    var release: Release = .{ .held = &held };
     // A cancelable wait would fail the test, through any cancel.
     const observed = try shakedown.FaultIo.init(std.testing.allocator, std.testing.io, .{ .plan = &.{
-        .{ .at = .{ .nth = .{ .call = .futexWaitUncancelable, .n = 1 } }, .fault = .{ .call = .{ .ctx = &held, .f = Release.unlock } } },
+        .{ .at = .{ .nth = .{ .call = .futexWaitUncancelable, .n = 1 } }, .fault = .{ .call = .{ .hook = &release.hook } } },
         .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .cancel, .times = 0 },
     } });
     defer observed.deinit();

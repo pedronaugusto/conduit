@@ -746,17 +746,20 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     defer reaper.deinit(io);
     // Every futex wait wakes spuriously ten milliseconds of the clock later.
     const Advance = struct {
-        fn spend(_: std.Io, context: *anyopaque) void {
-            const clock: *shakedown.Clock = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Clock as the context
-            clock.advance(.fromMilliseconds(10));
+        clock: *shakedown.Clock,
+        hook: shakedown.Hook = .{ .run = spend },
+        fn spend(hook: *shakedown.Hook, _: std.Io) void {
+            const advance: *@This() = @fieldParentPtr("hook", hook);
+            advance.clock.advance(.fromMilliseconds(10));
         }
     };
     var clock: shakedown.Clock = .init(io, .{});
+    var advance: Advance = .{ .clock = &clock };
     const counted = try shakedown.FaultIo.init(testing.allocator, clock.io(), .{
         .plan = &.{
             .{
                 .at = .{ .nth = .{ .call = .futexWait, .n = 1 } },
-                .fault = .{ .call = .{ .ctx = &clock, .f = Advance.spend, .then = &.spurious_wake } },
+                .fault = .{ .call = .{ .hook = &advance.hook, .then = &.spurious_wake } },
                 .times = 0,
             },
             // No interval sleeps: any one would fail the wait.

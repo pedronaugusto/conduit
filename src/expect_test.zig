@@ -512,12 +512,13 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         const Self = @This();
         expect: *Expect,
         consume: bool,
+        hook: shakedown.Hook = .{ .run = make },
 
         /// The reader has checked that it is full and is entering its
         /// wait. Make room here: this notification must not be lost, or
         /// the wait that follows never returns.
-        fn make(base: std.Io, context: *anyopaque) void {
-            const room: *Self = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Room as the context
+        fn make(hook: *shakedown.Hook, base: std.Io) void {
+            const room: *Self = @fieldParentPtr("hook", hook);
             if (room.consume) {
                 var held = room.expect.intake.acquireUncancelable(base);
                 held.value().consumed = 1;
@@ -538,7 +539,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         fill(&expect, buffer.len);
         var room: Room = .{ .expect = &expect, .consume = consume };
         const observed = try FaultIo.init(testing.allocator, io, .{ .plan = &.{
-            .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .{ .call = .{ .ctx = &room, .f = Room.make } } },
+            .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .{ .call = .{ .hook = &room.hook } } },
             .{ .at = .{ .nth = .{ .call = .futexWait, .n = 2 } }, .fault = .cancel },
         } });
         defer observed.deinit();

@@ -137,15 +137,17 @@ test "InputWriter refuses a backlog without waiting for a child that stops readi
     defer reap(&child);
     // Told when the write starts, which then blocks on the full pipe.
     const Started = struct {
-        fn set(base: std.Io, context: *anyopaque) void {
-            const started: *std.Io.Event = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Event as the context
-            started.set(base);
+        event: std.Io.Event = .unset,
+        hook: shakedown.Hook = .{ .run = set },
+        fn set(hook: *shakedown.Hook, base: std.Io) void {
+            const started: *@This() = @fieldParentPtr("hook", hook);
+            started.event.set(base);
         }
     };
-    var started: std.Io.Event = .unset;
+    var started: Started = .{};
     const observed = try shakedown.FaultIo.init(gpa, io, .{ .plan = &.{.{
         .at = .{ .nth = .{ .call = .file_write_streaming, .n = 1 } },
-        .fault = .{ .call = .{ .ctx = &started, .f = Started.set } },
+        .fault = .{ .call = .{ .hook = &started.hook } },
     }} });
     defer observed.deinit();
     const observed_io = observed.io();
@@ -155,7 +157,7 @@ test "InputWriter refuses a backlog without waiting for a child that stops readi
     var writer = try child.inputWriter(gpa, observed_io, .{ .max_backlog = .fromRaw(bytes.len) });
     defer writer.deinit(observed_io);
     try writer.queue(observed_io, bytes);
-    try started.waitTimeout(io, within_budget);
+    try started.event.waitTimeout(io, within_budget);
     try testing.expectError(error.BacklogFull, writer.queue(observed_io, "x"));
     writer.cancel(observed_io);
     try testing.expectError(error.Canceled, writer.wait(observed_io));
