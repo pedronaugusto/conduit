@@ -22,7 +22,7 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
         child.deinit(io);
     }
     try testing.expect((try child.waitTimeout(io, Deadline.within(.fromMilliseconds(5000)))) != null);
-    try testing.expectError(error.BrokenPipe, writeStreamingAll(io, child.stdinFile().?.get(), "closed"));
+    try testing.expectError(error.BrokenPipe, writeStreamingAll(io, child.stdinFile().?, "closed"));
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

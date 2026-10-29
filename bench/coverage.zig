@@ -320,7 +320,7 @@ fn shellSpawn(x: *Context, units: u64) !void {
         errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         var said: [shell_says.len]u8 = undefined;
         var got: usize = 0;
-        const master = shell.pty().readFile().get();
+        const master = shell.pty().readFile();
         while (got < said.len) {
             const n = try master.readStreaming(io, &.{said[got..]});
             if (n == 0) return error.EarlyEof;
@@ -505,7 +505,7 @@ fn signalSetup(x: *Context) !void {
         .detach = true,
     });
     errdefer x.release();
-    x.signal_out = x.child.stdoutFile().?.get().handle;
+    x.signal_out = x.child.stdoutFile().?.handle;
     try readExact(x.signal_out, "r\n");
 }
 

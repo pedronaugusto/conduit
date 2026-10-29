@@ -751,7 +751,7 @@ pub const Pty = struct {
         // reads the master itself on Windows while the console host goes.
         var drain: Drain = .{};
         defer drain.deinit(io);
-        try drain.start(io, pty.readFile().get());
+        try drain.start(io, pty.readFile());
 
         const opened = try pty.size(std.testing.io);
         try testing.expectEqual(@as(u16, 30), opened.rows);
@@ -938,7 +938,7 @@ pub const Pty = struct {
         var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = a.rows, .cols = a.cols, .x_pixel = a.x_pixel, .y_pixel = a.y_pixel });
         defer pty.close(io);
         var drain: Drain = .{};
-        try drain.start(io, pty.readFile().get());
+        try drain.start(io, pty.readFile());
         defer drain.deinit(io);
         const Resize = struct {
             fn run(pair: *Pty, first: Size, second: Size) !void {
@@ -953,7 +953,7 @@ pub const Pty = struct {
         defer resizing.cancel(io) catch {};
         for (0..1024) |_| {
             const borrowed = pty.master();
-            try testing.expectEqual(pty.read.?, borrowed.read.get().handle);
+            try testing.expectEqual(pty.read.?, borrowed.read.handle);
             const got = try pty.size(std.testing.io);
             try testing.expect(std.meta.eql(got, a) or std.meta.eql(got, b));
             try std.Io.sleep(io, .fromNanoseconds(1), .awake);

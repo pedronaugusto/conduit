@@ -191,7 +191,7 @@ test "a taken stream is the taker's: deinit closes what was not taken, each once
     // Taken once: the Child no longer lends it, nor hands it on again.
     try testing.expect(child.stdoutFile() == null);
     try testing.expect(child.takeStdout() == null);
-    try child.stdinFile().?.get().writeStreamingAll(io, "said ");
+    try child.stdinFile().?.writeStreamingAll(io, "said ");
     child.closeStdin(io);
     try testing.expectEqual(Child.Term{ .exited = 0 }, try child.wait(io));
     // Standard error is closed here and standard input not again: a second

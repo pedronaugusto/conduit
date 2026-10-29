@@ -31,7 +31,7 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
         .pty => |pty| {
             // A simulated child is on a simulated pair or on none.
             const slave = pty.simulatedSlave() orelse return error.Unsupported;
-            streams = @splat(.{ .file = slave.get() });
+            streams = @splat(.{ .file = slave });
         },
         else => for (options.stdio.perStream(), 0..) |stream, i| {
             streams[i] = switch (stream) {

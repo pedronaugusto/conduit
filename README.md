@@ -326,7 +326,7 @@ is a `std.Io.Duration`. Each function that allocates takes the allocator as
 |---|---|
 | `Pty.open(gpa, io, options)` | A new pair; a simulated one over `conduit.testing`'s `Io`. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
 | `pty.readHandle()`, `pty.writeHandle()` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
-| `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, lent (`LentFile`, its `get()` the `std.Io.File`) and sharing the handle rather than duplicating it. The `Pty` closes them. |
+| `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, lent as the `std.Io.File`, sharing the handle rather than duplicating it. The `Pty` closes them. |
 | `pty.slaveHandle()` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
 | `pty.resize(io, size)`, `pty.size(io)` | The window size. `size` borrows the pair; it and `resize` share the Windows geometry owner and are safe while another task reads or writes. |
 | `pty.consoleOptions()` | Windows only: which of `OpenOptions.console` the system granted. `win32_input` for keys a terminal encoding cannot spell, `passthrough` for the child's own bytes rather than the console host's redraw of them, `resize_quirk` for a resize that does not reflow. A Windows too old for one of them refuses the whole call, so `open` asks again without it. |
@@ -344,7 +344,7 @@ to read while a wait or Reaper runs.
 |---|---|
 | `Child.spawn(gpa, io, options)` | Start it. `gpa` owns the lifecycle until `deinit` and must outlive the child. |
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
-| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Lent files (`LentFile`, its `get()` the `std.Io.File`): the pipes, or for input and output the master of a child on a pair. The `Child` keeps owning its pipes, and the `Pty` its master. |
+| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Lent `std.Io.File`s: the pipes, or for input and output the master of a child on a pair. The `Child` keeps owning its pipes, and the `Pty` its master. |
 | `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller as an `OwnedFile`, closed with `deinit(io)`; the `Child` no longer closes it. A pair has no pipe to transfer. |
 | `conduit.readAvailable(io, file, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
@@ -523,7 +523,7 @@ survivors as though the child had completed on its own.
 `stdio` is `.{ .pty = &pty }`, `.{ .pipes = .{ .stdin, .stdout, .stderr } }`,
 `.inherit`, `.ignore`, or `.{ .streams = .{ .stdin, .stdout, .stderr } }` —
 each of those three being `.inherit`, `.{ .file = f }`, `.ignore`, `.pipe` or
-`.close`. `.{ .file = pty.slaveFile().get() }` gives a child the terminal end of a
+`.close`. `.{ .file = pty.slaveFile() }` gives a child the terminal end of a
 pair for one stream and something else for the others, on POSIX.
 
 `detach` puts the child out of reach of signals aimed at the parent's process
@@ -570,7 +570,7 @@ child inherits its end by handle, beside the pseudoconsole when there is
 one, and the variable holds the handle's value. Both ends are asynchronous
 there, so a read waiting on one does not hold back a write. Both ends, and
 the end `inherited` gives, are `OwnedFile`s, closed with `deinit(io)`; the
-spawn is lent the `child` end (`channel.child.lend().get()`). Close it once
+spawn is lent the `child` end (`channel.child.borrow().*`). Close it once
 `spawn` returns: a copy left in the parent keeps the channel open after the
 child has gone. The child's half is in `conduit.tty`
 too, for a program that runs no child and links no C library on Linux.

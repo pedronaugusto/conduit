@@ -199,7 +199,7 @@ const State = struct {
         var held = try state.queue.acquire(io);
         defer held.deinit(io);
         while (held.value().head == null and !held.value().ending and held.value().failed == null) {
-            state.more.wait(io, &held, .none) catch |err| switch (err) {
+            held.wait(&state.more, io, .none) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 // unreachable: the wait has no timeout, and the writing task is the one waiter.
                 error.Timeout, error.WaiterLimit => unreachable,

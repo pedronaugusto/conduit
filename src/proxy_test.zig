@@ -114,17 +114,17 @@ test "bytes written to one terminal reach the program on the other, and back" {
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
-        .input = user.slaveFile().get(),
-        .output = user.slaveFile().get(),
+        .input = user.slaveFile(),
+        .output = user.slaveFile(),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     } });
     defer group.cancel(io);
 
-    try user.writeFile().get().writeStreamingAll(io, "round trip\n");
+    try user.writeFile().writeStreamingAll(io, "round trip\n");
 
     var seen: [64]u8 = undefined;
-    try expectWithin(io, user.readFile().get(), &seen, "round trip\n");
+    try expectWithin(io, user.readFile(), &seen, "round trip\n");
 
     // Ending the child closes the last descriptor for its terminal, which is
     // what makes `run` return.
@@ -160,8 +160,8 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
-        .input = user.slaveFile().get(),
-        .output = user.slaveFile().get(),
+        .input = user.slaveFile(),
+        .output = user.slaveFile(),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     } });
@@ -169,7 +169,7 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
 
     // Not written to the child's terminal: written to the *user's*, which the
     // proxy is reading, exactly as if it had been typed.
-    try user.writeFile().get().writeStreamingAll(io, "\x03");
+    try user.writeFile().writeStreamingAll(io, "\x03");
 
     const deadline: Deadline = .in(io, .fromMilliseconds(5000));
     const term = while (deadline.remainingMs(io) > 0) {
@@ -199,8 +199,8 @@ test "the window size is forwarded onto the pair" {
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
-        .input = user.slaveFile().get(),
-        .output = user.slaveFile().get(),
+        .input = user.slaveFile(),
+        .output = user.slaveFile(),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
         .resize = .{

@@ -1355,7 +1355,7 @@ pub const Child = struct {
     /// for this.
     pub fn stdinWriter(child: Child, io: std.Io, buffer: []u8) ?std.Io.File.Writer {
         const f = child.stdinFile() orelse return null;
-        return f.get().writerStreaming(io, buffer);
+        return f.writerStreaming(io, buffer);
     }
 
     /// `stdoutFile` as a buffered `std.Io.Reader`, whose reader is the `.interface`
@@ -1364,7 +1364,7 @@ pub const Child = struct {
     /// `buffer` must outlive the reader.
     pub fn stdoutReader(child: Child, io: std.Io, buffer: []u8) ?std.Io.File.Reader {
         const f = child.stdoutFile() orelse return null;
-        return f.get().readerStreaming(io, buffer);
+        return f.readerStreaming(io, buffer);
     }
 
     /// An `Expect` over the child's streams, for a conversation: wait for what it
@@ -1662,10 +1662,10 @@ pub const Child = struct {
         // before it starts. Saying so here is what keeps the drain below from
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
-            try select.concurrent(.out, collect, .{ io, f.get(), options.max_bytes, &out });
+            try select.concurrent(.out, collect, .{ io, f, options.max_bytes, &out });
         } else out.done.store(.done, .release);
         if (child.stderrFile()) |f| {
-            try select.concurrent(.err, collect, .{ io, f.get(), options.max_bytes, &err });
+            try select.concurrent(.err, collect, .{ io, f, options.max_bytes, &err });
         } else err.done.store(.done, .release);
         try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
 
@@ -1939,8 +1939,8 @@ pub const Child = struct {
         var err = Collector.init(sinks.stderr);
 
         const streams = [2]?std.Io.File{
-            if (child.stdoutFile()) |f| f.get() else null,
-            if (child.stderrFile()) |f| f.get() else null,
+            if (child.stdoutFile()) |f| f else null,
+            if (child.stderrFile()) |f| f else null,
         };
         const collectors = [2]*Collector{ &out, &err };
         // A stream this process does not hold is finished before it starts.

@@ -62,7 +62,7 @@ test "a group member held before KILL is accounted for while still visible" {
     defer child.deinit(testing.io);
     defer reap(&child, testing.io);
     var buffer: [32]u8 = undefined;
-    var output = child.stdoutFile().?.get().reader(testing.io, &buffer);
+    var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(child.state.id)).?;
     const descendant_start = (try startTime(descendant)).?;
@@ -258,7 +258,7 @@ test "killRecorded waits for a recorded root and a descendant it captured" {
     defer child.deinit(testing.io);
     defer reap(&child, testing.io);
     var buffer: [32]u8 = undefined;
-    var output = child.stdoutFile().?.get().reader(testing.io, &buffer);
+    var output = child.stdoutFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(child.state.id)).?;
     var stage: []const u8 = "rejecting a mismatched start time";
@@ -296,13 +296,13 @@ test "a failed tree fixture releases the descendant it still owns" {
     defer child.deinit(testing.io);
     defer reap(&child, testing.io);
     var buffer: [64]u8 = undefined;
-    var output = child.stderrFile().?.get().reader(testing.io, &buffer);
+    var output = child.stderrFile().?.reader(testing.io, &buffer);
     const descendant = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     const since = (try startTime(descendant)) orelse return error.TestFixtureDescendantMissing;
     var held = (try captureStarted(descendant, since)) orelse return error.TestFixtureDescendantMissing;
     defer held.deinit();
     defer _ = held.signal(.KILL);
-    try child.stdinFile().?.get().writeStreamingAll(testing.io, "x");
+    try child.stdinFile().?.writeStreamingAll(testing.io, "x");
     try testing.expectEqual(Child.Term{ .exited = 1 }, try child.wait(testing.io));
     if (!try held.wait(testing.io, .none)) return error.TestFixtureLeftDescendant;
 }
@@ -325,7 +325,7 @@ test "a leaderless Linux group keeps the child its leader started" {
     var captured = (try captureStarted(leader.state.id, since)).?;
     defer captured.deinit();
     var buffer: [32]u8 = undefined;
-    var output = leader.stdoutFile().?.get().reader(testing.io, &buffer);
+    var output = leader.stdoutFile().?.reader(testing.io, &buffer);
     const member = try std.fmt.parseInt(posix.pid_t, (try output.interface.takeDelimiter('\n')).?, 10);
     try testing.expectEqual(@as(usize, 1), try captured.signalGroupSince(group, since, .CONT));
     errdefer {
@@ -354,13 +354,13 @@ test "a captured process keeps its identity across exec" {
     defer child.deinit(io);
     defer reap(&child, io);
     var buffer: [64]u8 = undefined;
-    var reader = child.stdoutFile().?.get().reader(io, &buffer);
+    var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
     const pid = child.processId().?;
     const since = (try startTime(pid)).?;
     var captured = (try captureStarted(pid, since)).?;
     defer captured.deinit();
-    try child.stdinFile().?.get().writeStreamingAll(io, "exec\n");
+    try child.stdinFile().?.writeStreamingAll(io, "exec\n");
     try testing.expectEqualStrings("after", (try reader.interface.takeDelimiter('\n')).?);
     try testing.expect(captured.alive());
     try testing.expect(!try captured.wait(io, Deadline.within(.zero)));
@@ -383,7 +383,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
     defer child.deinit(io);
     defer reap(&child, io);
     var buffer: [64]u8 = undefined;
-    var reader = child.stdoutFile().?.get().reader(io, &buffer);
+    var reader = child.stdoutFile().?.reader(io, &buffer);
     try testing.expectEqualStrings("before", (try reader.interface.takeDelimiter('\n')).?);
     var process = DarwinProcess.capture(child.processId().?).?;
     const version = access.current(&process).?.unique.id_version;
@@ -394,7 +394,7 @@ test "Darwin token delivery refreshes after a concurrent exec and refuses a diff
         fn exec() void {
             access.delivery(null);
             calls += 1;
-            child_ptr.stdinFile().?.get().writeStreamingAll(std.testing.io, "exec\n") catch @panic("fixture input failed");
+            child_ptr.stdinFile().?.writeStreamingAll(std.testing.io, "exec\n") catch @panic("fixture input failed");
             const line = reader_ptr.takeDelimiter('\n') catch @panic("fixture output failed");
             std.testing.expectEqualStrings("after", line.?) catch @panic("fixture did not exec");
         }

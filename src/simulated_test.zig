@@ -79,7 +79,7 @@ const Cases = struct {
     fn pipes(io: Io) !void {
         var child = try Child.spawn(testing.allocator, io, .{ .argv = &.{"shout"}, .stdio = .{ .pipes = .{} } });
         defer child.deinit(io);
-        try child.stdinFile().?.get().writeStreamingAll(io, "quiet words");
+        try child.stdinFile().?.writeStreamingAll(io, "quiet words");
         child.closeStdin(io);
         var out = try child.output(testing.allocator, io, .{});
         defer out.deinit();
@@ -96,9 +96,9 @@ const Cases = struct {
         pty.closeSlave(io);
         try pty.resize(io, .{ .rows = 50, .cols = 132 });
         try testing.expectEqual(@as(u16, 132), (try pty.size(io)).cols);
-        try pty.master().write.get().writeStreamingAll(io, "hello\n");
+        try pty.master().write.writeStreamingAll(io, "hello\n");
         var buffer: [64]u8 = undefined;
-        var r = pty.master().read.get().reader(io, &buffer);
+        var r = pty.master().read.reader(io, &buffer);
         const all = try r.interface.allocRemaining(testing.allocator, .unlimited);
         defer testing.allocator.free(all);
         try testing.expectEqualStrings("tty> you said hello\n", all);

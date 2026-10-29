@@ -18,8 +18,8 @@
         },
 
         .reactor = .{
-            .url = "git+https://github.com/pedronaugusto/reactor?ref=v0.9.0#fed128aa929ea334064d31ee32a29ac0182702a0",
-            .hash = "reactor-0.9.0-MjQ-WFGeFgBm-kVNIYO0RLp2mgyFp5g3hPoBTgJXgUUJ",
+            .url = "git+https://github.com/pedronaugusto/reactor#e85c7400f4bc9d98867d30560fd5964306fa3348",
+            .hash = "reactor-0.9.0-MjQ-WP6bFgCPkstH6ztSUBx96DI-4LOTKQArpGxlRSd_",
         },
     },
     .dev_dependencies = .{

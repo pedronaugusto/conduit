@@ -76,9 +76,9 @@ test "the process's own terminal opens as a terminal, or says there is none" {
         else => return err,
     };
     defer own.close(io);
-    try std.testing.expect(tty.isTty(own.input().get().handle));
-    try std.testing.expect(tty.isTty(own.output().get().handle));
-    if (!is_windows) try std.testing.expectEqual(own.input().get().handle, own.output().get().handle);
+    try std.testing.expect(tty.isTty(own.input().handle));
+    try std.testing.expect(tty.isTty(own.output().handle));
+    if (!is_windows) try std.testing.expectEqual(own.input().handle, own.output().handle);
 }
 
 test {

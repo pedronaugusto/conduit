@@ -51,11 +51,11 @@ fn wait(io: Io, gpa: std.mem.Allocator, row: Row, total: usize) !u64 {
     defer write.deinit(io);
     const buffer = try gpa.alloc(u8, total + 64);
     defer gpa.free(buffer);
-    var expect = Expect.init(.{ .read = read.lend(), .write = write.lend() }, buffer);
+    var expect = Expect.init(.{ .read = read.borrow().*, .write = write.borrow().* }, buffer);
     try expect.start(io);
     defer expect.deinit(io);
     const t0 = Io.Clock.awake.now(io);
-    var writer = try io.concurrent(feed, .{ io, write.lend().get(), total });
+    var writer = try io.concurrent(feed, .{ io, write.borrow().*, total });
     const timeout: Io.Timeout = .{ .duration = .{ .raw = .fromSeconds(60), .clock = .awake } };
     switch (row) {
         .literal => _ = try expect.until(io, "END", timeout),
