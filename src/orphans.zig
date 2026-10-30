@@ -262,9 +262,9 @@ pub const Orphans = struct {
         // A `children` file read while a child is being reaped elsewhere may pass
         // over another child, so "nothing left" is believed after two looks.
         var empty_looks: u8 = 0;
+        var ending: [reactor.wait_max]reactor.Waitable = undefined;
         while (true) {
-            // Past `wait_max`, the rest are watched at a later look.
-            var ending: aegis.bounded.Array(reactor.Waitable, reactor.wait_max) = .init;
+            var watched: usize = 0;
             const left = left: {
                 gate.lock();
                 orphans.lock.lock();
@@ -277,8 +277,9 @@ pub const Orphans = struct {
                 const insisting = grace.eql(.fromRaw(0)) or deadline.remainingMs(io) == 0;
                 for (orphans.adopted.items) |*held| {
                     held.ask(if (insisting) .kill else .terminate);
-                    var waitable: reactor.Waitable = .{ .readable = held.pidfd };
-                    ending.append(&waitable) catch continue;
+                    if (watched == ending.len) continue;
+                    ending[watched] = .{ .readable = held.pidfd };
+                    watched += 1;
                 }
                 break :left orphans.adopted.items.len;
             };
@@ -291,7 +292,7 @@ pub const Orphans = struct {
             // A pidfd turns readable when its process ends. One reaped and
             // closed meanwhile reads as ready, and the next look says why.
             const next: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(interval_ms), .clock = .awake } };
-            _ = reactor.waitAny(io, ending.items(), next) catch |err| switch (err) {
+            _ = reactor.waitAny(io, ending[0..watched], next) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 error.Timeout => {},
                 error.Unsupported => unreachable, // unreachable: a pidfd's readability is waited on everywhere
@@ -855,7 +856,7 @@ pub const Orphans = struct {
         };
         defer _ = c.close(dir);
 
-        var entries: [1024]u8 align(@alignOf(linux.dirent64)) = @splat(0);
+        var entries: [1024]u8 align(@alignOf(linux.dirent64)) = undefined;
         while (true) {
             const rc = linux.getdents64(dir, &entries, entries.len);
             switch (linux.errno(rc)) {
@@ -883,7 +884,7 @@ pub const Orphans = struct {
         comptime each: fn (*Orphans, posix.pid_t) LookError!void,
         fd: posix.fd_t,
     ) LookError!void {
-        var buffer: [4096]u8 = @splat(0);
+        var buffer: [4096]u8 = undefined;
         var number: posix.pid_t = 0;
         var digits: usize = 0;
         while (true) {

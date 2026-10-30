@@ -149,7 +149,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     if (outcome.failure) |record| {
         // The child is about to exit, if it has not already; reap it so it does
         // not linger as a zombie nobody is going to wait for.
-        var status: c_int = 0;
+        var status: c_int = undefined;
         while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
         watched.forks.close();
         if (watched.exit_watch) |*watch| watch.close(io);
@@ -430,7 +430,7 @@ fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
     // of file comes when the last writer has exec'd or exited; a supervisor
     // closes its copy before it begins supervising.
     while (true) {
-        var record: Failure = std.mem.zeroes(Failure);
+        var record: Failure = undefined;
         const n = readAll(fd, std.mem.asBytes(&record));
         if (n == 0) break;
         std.debug.assert(n == @sizeOf(Failure));
@@ -450,7 +450,7 @@ fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
 /// back.
 fn discard(pid: posix.pid_t) void {
     _ = c.kill(pid, .KILL);
-    var status: c_int = 0;
+    var status: c_int = undefined;
     while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
 }
 
@@ -596,7 +596,7 @@ fn childMain(
     // byte is usually there by now. End of file is a parent that is gone,
     // and the child goes on as it would have without a watch.
     if (go) |ends| {
-        var byte: [1]u8 = @splat(0);
+        var byte: [1]u8 = undefined;
         while (c.read(ends[0], &byte, 1) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
         _ = c.close(ends[0]);
     }
@@ -723,14 +723,13 @@ fn clearSignals() void {
 }
 
 /// What `clearDispositions` asks of the system: the signal type, the
-/// action ignoring one and the default action, `sigaction` and the action it
-/// fills in, and how many signals there are.
+/// action ignoring one and the default action, `sigaction`, and how many
+/// signals there are.
 const SpawnSignals = struct {
     const Signal = posix.SIG;
     const ignored = posix.SIG.IGN;
     const default_action = posix.SIG.DFL;
     const Sigaction = posix.Sigaction;
-    const unread: Sigaction = .{ .handler = .{ .handler = default_action }, .mask = std.mem.zeroes(posix.sigset_t), .flags = 0 };
     const sigaction = c.sigaction;
     const limit = if (@hasDecl(c.SIG, "RTMAX")) @max(c.NSIG, c.SIG.RTMAX + 1) else c.NSIG;
 };
@@ -741,7 +740,7 @@ fn clearDispositions(comptime system: type) void {
         const signal: system.Signal = @fromBackingInt(@intCast(number));
         // The two that cannot be caught cannot be reset either.
         if (signal == .KILL or signal == .STOP) continue;
-        var current: system.Sigaction = system.unread;
+        var current: system.Sigaction = undefined;
         // Reserved numbers cannot carry a caller's disposition. In
         // particular, libc refuses its threading signals on Linux.
         if (system.sigaction(signal, null, &current) != 0) continue;
@@ -830,7 +829,7 @@ fn closeFromExcept(first: posix.fd_t, kept: posix.fd_t) void {
         });
         if (std.os.linux.errno(before) == .SUCCESS and std.os.linux.errno(after) == .SUCCESS) return;
     }
-    var limit: posix.rlimit = std.mem.zeroes(posix.rlimit);
+    var limit: posix.rlimit = undefined;
     const ceiling: posix.fd_t = if (c.getrlimit(.NOFILE, &limit) == 0)
         std.math.lossyCast(posix.fd_t, limit.cur)
     else
@@ -1046,7 +1045,6 @@ test "fork signal defaults include ignored real-time signals and leave reserved 
             handler: union(enum) { handler: Handler },
             flags: u32 = 0,
         };
-        const unread: Sigaction = .{ .handler = .{ .handler = default_action } };
         const limit = 65;
         var actions: [limit]Sigaction = undefined;
         var reserved_writes: usize = 0;

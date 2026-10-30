@@ -311,7 +311,7 @@ pub const WinSizeError = error{
 /// draw in, and that is what the POSIX number means.
 pub fn winSize(handle: Handle) WinSizeError!Size {
     if (is_windows) {
-        var info: win32.ConsoleScreenBufferInfo = std.mem.zeroes(win32.ConsoleScreenBufferInfo);
+        var info: win32.ConsoleScreenBufferInfo = undefined;
         if (win32.GetConsoleScreenBufferInfo(handle, &info) == .FALSE) {
             return consoleError(WinSizeError);
         }
@@ -320,7 +320,7 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
             .cols = @intCast(@max(0, info.srWindow.Right - info.srWindow.Left + 1)),
         };
     }
-    var ws: posix.winsize = std.mem.zeroes(posix.winsize);
+    var ws: posix.winsize = undefined;
     switch (posix.errno(system.ioctl(handle, request(ioctl_request.get_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return .fromWinsize(ws),
         .NOTTY => return error.NotATerminal,
@@ -371,7 +371,7 @@ fn setWinSizePosix(handle: Handle, size: Size) SetWinSizeError!void {
 /// console mode can be read from it.
 pub fn isTty(handle: Handle) bool {
     if (is_windows) {
-        var mode: windows.DWORD = 0;
+        var mode: windows.DWORD = undefined;
         return win32.GetConsoleMode(handle, &mode) != .FALSE;
     }
     _ = getTermios(handle) catch return false;
@@ -437,7 +437,7 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
     }
     var file = held.own((try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write })).handle);
     if (builtin.target.os.tag == .macos) {
-        var path: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+        var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
         if (deviceOf(file.borrow().handle, &path)) |device| {
             if (std.Io.Dir.openFileAbsolute(io, device, .{ .mode = .read_write })) |pollable| {
                 file.deinit(io);
@@ -611,13 +611,13 @@ fn foregroundGroupPosix(handle: Handle) ForegroundGroupError!posix.pid_t {
 //======================================================================
 
 fn rawModeWindows(handle: Handle) RawModeError!Saved {
-    var mode: windows.DWORD = 0;
+    var mode: windows.DWORD = undefined;
     if (win32.GetConsoleMode(handle, &mode) == .FALSE) return consoleError(RawModeError);
 
     // Which half of the console this is. Only a screen buffer answers this
     // call, and the two sets of mode flags share bit values, so guessing would
     // mean silently writing an input mode onto an output handle.
-    var info: win32.ConsoleScreenBufferInfo = std.mem.zeroes(win32.ConsoleScreenBufferInfo);
+    var info: win32.ConsoleScreenBufferInfo = undefined;
     const is_screen_buffer = win32.GetConsoleScreenBufferInfo(handle, &info) != .FALSE;
 
     const raw: windows.DWORD = if (is_screen_buffer)

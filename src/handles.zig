@@ -122,8 +122,8 @@ fn windowsPipeAvailable(f: std.Io.File) usize {
     // status block. Only the synchronous handles conduit creates are asked.
     if (f.flags.nonblocking) return 0;
     const windows = std.os.windows;
-    var status: windows.IO_STATUS_BLOCK = std.mem.zeroes(windows.IO_STATUS_BLOCK);
-    var info: windows.FILE.PIPE.LOCAL_INFORMATION = std.mem.zeroes(windows.FILE.PIPE.LOCAL_INFORMATION);
+    var status: windows.IO_STATUS_BLOCK = undefined;
+    var info: windows.FILE.PIPE.LOCAL_INFORMATION = undefined;
     return switch (windows.ntdll.NtQueryInformationFile(
         f.handle,
         &status,

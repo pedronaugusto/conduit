@@ -804,7 +804,7 @@ pub const Child = struct {
                 .unknown => {},
             }
         }
-        var status: c_int = 0;
+        var status: c_int = undefined;
         // aegis: no-danger(A020): a nonblocking waitpid, repeated only when a signal interrupts it
         while (true) {
             const rc = c.waitpid(child.state.id, &status, c.W.NOHANG);
@@ -1426,8 +1426,8 @@ pub const Child = struct {
         io: std.Io,
         options: OutputOptions,
     ) OutputError!Output {
-        var serial: SerialAllocator = .init(gpa, io);
-        var collecting: Collecting = .init(&serial);
+        var collecting: Collecting = undefined;
+        collecting.init(gpa, io);
         defer collecting.deinit();
         const ended = child.collectInto(io, collecting.sinks(), options, null) catch |failure| switch (failure) {
             // An allocating writer fails only for want of memory.
@@ -1437,20 +1437,19 @@ pub const Child = struct {
         return collecting.output(gpa, ended);
     }
 
-    /// The writers `output` and `exchange` collect into: growing on the
-    /// caller's `serial` over `gpa`, because where the streams are read on
-    /// tasks both grow at once, so their allocations are made one at a time
-    /// and the caller's allocator need not be safe to share.
+    /// The writers `output` and `exchange` collect into: growing on `gpa`, and
+    /// where the streams are read on tasks both grow at once, so their
+    /// allocations are made one at a time and the caller's allocator need not
+    /// be safe to share. Stays where it is while it is used.
     const Collecting = struct {
+        serial: SerialAllocator,
         out: std.Io.Writer.Allocating,
         err: std.Io.Writer.Allocating,
 
-        /// Writers growing on `serial`, which stays where it is while they are used.
-        fn init(serial: *SerialAllocator) Collecting {
-            return .{
-                .out = std.Io.Writer.Allocating.init(serial.allocator()),
-                .err = std.Io.Writer.Allocating.init(serial.allocator()),
-            };
+        fn init(collecting: *Collecting, gpa: Allocator, io: std.Io) void {
+            collecting.serial = SerialAllocator.init(gpa, io);
+            collecting.out = std.Io.Writer.Allocating.init(collecting.serial.allocator());
+            collecting.err = std.Io.Writer.Allocating.init(collecting.serial.allocator());
         }
 
         fn sinks(collecting: *Collecting) Sinks {
@@ -1521,8 +1520,8 @@ pub const Child = struct {
         input: []const u8,
         options: ExchangeOptions,
     ) ExchangeError!Output {
-        var serial: SerialAllocator = .init(gpa, io);
-        var collecting: Collecting = .init(&serial);
+        var collecting: Collecting = undefined;
+        collecting.init(gpa, io);
         defer collecting.deinit();
         const ended = child.exchangeInto(io, input, collecting.sinks(), options) catch |failure| switch (failure) {
             // An allocating writer fails only for want of memory.
@@ -1735,8 +1734,7 @@ pub const Child = struct {
         truncated: bool,
         failure: aegis.Atomic(Failure),
         done: aegis.Atomic(Progress),
-        /// Where a read lands that its writer's buffer does not take: copied
-        /// on to a writer that has none, or dropped past the cap.
+
         const Failure = enum(u8) { none, read_failed, write_failed };
         const Progress = enum(u8) { reading, done };
 
@@ -1859,7 +1857,7 @@ pub const Child = struct {
     }
 
     /// Where one read of a stream lands: in its writer's buffer, in a buffer
-    /// of its own (`collectSpare`) copied to a writer that has none, or nowhere, past
+    /// of the reader's copied to a writer that has none, or nowhere, past
     /// `max_bytes` or once the writer has failed.
     const Landing = enum { direct, copied, dropped };
 
@@ -1871,62 +1869,51 @@ pub const Child = struct {
         max_bytes: aegis.units.Bytes(usize),
         into: *Collector,
     ) std.Io.Cancelable!bool {
+        var spare: [64 * 1024]u8 = undefined;
         // Both counts are bytes, so this arithmetic cannot mix kinds of value;
         // the cap is a `Bytes` at the public boundary and raw only here.
         const room = max_bytes.raw() -| into.kept;
         var landing: Landing = if (room == 0 or into.failure.load(.acquire) == .write_failed)
             .dropped
         else if (into.sink.buffer.len == 0) .copied else .direct;
+        var buffer: []u8 = &spare;
         if (landing == .direct) {
             // The read lands in the writer's buffer itself: no copy follows it,
             // and a writer that grows its buffer grows it geometrically.
             if (into.sink.writableSliceGreedy(1)) |slice| {
-                const n = (try readFor(io, f, into, slice[0..@min(room, slice.len)])) orelse return true;
-                into.sink.advance(n);
-                into.kept += n;
-                return false;
+                buffer = slice;
             } else |_| {
                 into.failure.store(.write_failed, .release);
                 landing = .dropped;
             }
         }
-        return collectSpare(io, f, room, into, landing == .copied);
-    }
+        if (landing != .dropped) buffer = buffer[0..@min(room, buffer.len)];
 
-    /// One read of a stream that lands in a buffer of its own: copied on to a
-    /// writer that has none when `copy`, else dropped. Only this path has the
-    /// buffer, so a read into the writer's own does not carry it.
-    fn collectSpare(io: std.Io, f: std.Io.File, room: usize, into: *Collector, copy: bool) std.Io.Cancelable!bool {
-        var spare: [64 * 1024]u8 = @splat(0);
-        const buffer: []u8 = if (copy) spare[0..@min(room, spare.len)] else &spare;
-        const n = (try readFor(io, f, into, buffer)) orelse return true;
-        if (!copy) {
-            // Past the cap, or the writer failed; either way reading goes
-            // on until the child exits, or it can fill this pipe and make
-            // the wait deadlock.
-            into.truncated = true;
-            return false;
-        }
-        into.sink.writeAll(buffer[0..n]) catch {
-            into.failure.store(.write_failed, .release);
-            into.truncated = true;
-            return false;
-        };
-        into.kept += n;
-        return false;
-    }
-
-    /// One read of a stream for `into`; null once the stream is finished, by
-    /// its end or by a failure `into` now records, and `done` is set then.
-    fn readFor(io: std.Io, f: std.Io.File, into: *Collector, buffer: []u8) std.Io.Cancelable!?usize {
-        return handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
+        const n = handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
             error.Canceled => return error.Canceled,
             else => {
                 if (!handles.finished(e)) into.failure.store(.read_failed, .release);
                 into.done.store(.done, .release);
-                return null;
+                return true;
             },
         };
+        switch (landing) {
+            .direct => into.sink.advance(n),
+            .copied => into.sink.writeAll(buffer[0..n]) catch {
+                into.failure.store(.write_failed, .release);
+                into.truncated = true;
+                return false;
+            },
+            .dropped => {
+                // Past the cap, or the writer failed; either way reading goes
+                // on until the child exits, or it can fill this pipe and make
+                // the wait deadlock.
+                into.truncated = true;
+                return false;
+            },
+        }
+        into.kept += n;
+        return false;
     }
 
     /// `output` on one task: the pipes and the child's end are waited on together.
@@ -2063,7 +2050,7 @@ pub const Child = struct {
             win32.wait_timeout => return null,
             else => return win32.unexpected(windows.GetLastError()),
         }
-        var code: windows.DWORD = 0;
+        var code: windows.DWORD = undefined;
         const term: Term = if (win32.GetExitCodeProcess(child.state.id, &code) != .FALSE)
             .{ .exited = code }
         else
@@ -2080,7 +2067,7 @@ pub const Child = struct {
     /// Whether the job holds no process now, by its own accounting.
     fn jobEmpty(child: *Child) std.Io.UnexpectedError!bool {
         const job = child.state.job orelse return error.Unexpected;
-        var counts: win32.JobObjectBasicAccountingInformation = std.mem.zeroes(win32.JobObjectBasicAccountingInformation);
+        var counts: win32.JobObjectBasicAccountingInformation = undefined;
         if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
             return win32.unexpected(windows.GetLastError());
         return counts.ActiveProcesses == 0;
@@ -2130,7 +2117,7 @@ pub const Child = struct {
     /// chose. Failure leaves the process handles and status available to retry.
     fn releaseJobSurvivors(child: *Child) TryWaitError!void {
         const job = child.state.job orelse return;
-        var limits: win32.JobObjectExtendedLimitInformation = std.mem.zeroes(win32.JobObjectExtendedLimitInformation);
+        var limits: win32.JobObjectExtendedLimitInformation = undefined;
         if (win32.QueryInformationJobObject(job, win32.job_object_extended_limit_information, &limits, @sizeOf(@TypeOf(limits)), null) == .FALSE)
             return win32.unexpected(windows.GetLastError());
         limits.BasicLimitInformation.LimitFlags &= ~win32.job_object_limit_kill_on_job_close;
@@ -2302,8 +2289,8 @@ pub const Child = struct {
         defer @import("testing/support.zig").reap(&child, io);
         @import("testing/support.zig").unreadableStdout(&child, io);
         defer _ = child.takeStdout();
-        var serial: SerialAllocator = .init(testing.allocator, io);
-        var collecting: Collecting = .init(&serial);
+        var collecting: Collecting = undefined;
+        collecting.init(testing.allocator, io);
         defer collecting.deinit();
         try testing.expectError(error.ReadFailed, child.outputOnTasks(io, collecting.sinks(), .{}, null));
         try testing.expect((try child.tryWait(io)) != null);
@@ -2338,8 +2325,8 @@ pub const Child = struct {
         // wait takes the cancel that ends it (one aimed at a read blocked in the
         // kernel was lost now and then, and the run never ended).
         const start = std.Io.Clock.awake.now(io);
-        var serial: SerialAllocator = .init(testing.allocator, io);
-        var collecting: Collecting = .init(&serial);
+        var collecting: Collecting = undefined;
+        collecting.init(testing.allocator, io);
         defer collecting.deinit();
         const ended = try child.outputOnTasks(io, collecting.sinks(), .{ .drain = .literal("20ms") }, null);
         const took = start.durationTo(std.Io.Clock.awake.now(io));

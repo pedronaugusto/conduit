@@ -115,7 +115,7 @@ comptime {
 }
 
 fn openPosix() Channel.OpenError!Channel {
-    var ends: [2]posix.fd_t = .{ -1, -1 };
+    var ends: [2]posix.fd_t = undefined;
     if (socket_flag) {
         try opened(system.socketpair(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0, &ends));
     } else {
@@ -177,8 +177,8 @@ fn openWindows() Channel.OpenError!Channel {
     const device = try namedPipeDevice();
     defer windows.CloseHandle(device);
 
-    var server: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
-    var status_block: windows.IO_STATUS_BLOCK = std.mem.zeroes(windows.IO_STATUS_BLOCK);
+    var server: windows.HANDLE = undefined;
+    var status_block: windows.IO_STATUS_BLOCK = undefined;
     // 120 s in NT's 100 ns units, negative for a time relative to now.
     const timeout: windows.LARGE_INTEGER = -1_200_000_000;
     switch (windows.ntdll.NtCreateNamedPipeFile(
@@ -206,7 +206,7 @@ fn openWindows() Channel.OpenError!Channel {
     }
     errdefer windows.CloseHandle(server);
 
-    var client: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
+    var client: windows.HANDLE = undefined;
     switch (windows.ntdll.NtOpenFile(
         &client,
         .{
@@ -231,8 +231,8 @@ fn openWindows() Channel.OpenError!Channel {
 /// The named-pipe device, `\Device\NamedPipe\`, which a pipe with no name is
 /// made relative to.
 fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
-    var device: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
-    var status_block: windows.IO_STATUS_BLOCK = std.mem.zeroes(windows.IO_STATUS_BLOCK);
+    var device: windows.HANDLE = undefined;
+    var status_block: windows.IO_STATUS_BLOCK = undefined;
     const name = std.unicode.wtf8ToWtf16LeStringLiteral("\\Device\\NamedPipe\\");
     switch (windows.ntdll.NtOpenFile(
         &device,
@@ -256,8 +256,8 @@ fn fromValueWindows(value: []const u8) Channel.InheritedError!held.OwnedFile {
 
     // How the handle was opened decides how a read on it is made: a parent
     // that made the end synchronous gets a synchronous file.
-    var mode: windows.FILE.MODE = std.mem.zeroes(windows.FILE.MODE);
-    var status_block: windows.IO_STATUS_BLOCK = std.mem.zeroes(windows.IO_STATUS_BLOCK);
+    var mode: windows.FILE.MODE = undefined;
+    var status_block: windows.IO_STATUS_BLOCK = undefined;
     switch (windows.ntdll.NtQueryInformationFile(handle, &status_block, &mode, @sizeOf(windows.FILE.MODE), .Mode)) {
         .SUCCESS => {},
         .INVALID_HANDLE, .OBJECT_TYPE_MISMATCH => return error.NotAChannel,

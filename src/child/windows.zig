@@ -85,7 +85,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     var job = try createJob(io, options.job_limits);
     errdefer job.close(io);
 
-    var information: windows.PROCESS.INFORMATION = std.mem.zeroes(windows.PROCESS.INFORMATION);
+    var information: windows.PROCESS.INFORMATION = undefined;
     if (windows.kernel32.CreateProcessW(
         application,
         line.ptr,
@@ -353,7 +353,7 @@ pub fn findBare(
     program: []const u8,
     environment: *const std.process.Environ.Map,
 ) Allocator.Error!?[]const u8 {
-    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+    var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     const executable_dir: ?[]const u8 = if (std.process.executableDirPath(io, &path_buffer)) |len|
         try arena.dupe(u8, path_buffer[0..len])
     else |_|
@@ -703,7 +703,7 @@ const runtime_device: u8 = 0x40;
 /// it was.
 fn inheritableCopy(original: windows.HANDLE) SpawnError!windows.HANDLE {
     const process = windows.GetCurrentProcess();
-    var made: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
+    var made: windows.HANDLE = undefined;
     if (win32.DuplicateHandle(process, original, process, &made, 0, .TRUE, win32.duplicate_same_access) == .FALSE)
         return createError();
     return made;
@@ -715,7 +715,7 @@ fn inheritableCopy(original: windows.HANDLE) SpawnError!windows.HANDLE {
 /// process that shares this one's console has its console handles already, and
 /// naming one in a handle list makes `CreateProcessW` fail.
 fn isConsole(handle: windows.HANDLE) bool {
-    var mode: windows.DWORD = 0;
+    var mode: windows.DWORD = undefined;
     return win32.GetConsoleMode(handle, &mode) != .FALSE;
 }
 
@@ -750,8 +750,8 @@ fn makePipe(direction: PipeDirection) SpawnError!stdio_plan.Pipe {
         .lpSecurityDescriptor = null,
         .bInheritHandle = .TRUE,
     };
-    var read_end: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
-    var write_end: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
+    var read_end: windows.HANDLE = undefined;
+    var write_end: windows.HANDLE = undefined;
     if (win32.CreatePipe(&read_end, &write_end, &security, 0) == .FALSE) return createError();
 
     const ends: stdio_plan.Pipe = switch (direction) {

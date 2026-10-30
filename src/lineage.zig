@@ -88,7 +88,7 @@ const Darwin = struct {
 
     fn register(tracker: *Darwin, id: posix.pid_t, filter: i16, flags: u32, identity: u64) bool {
         var change = [_]c.kevent64_s{.{ .ident = @intCast(id), .filter = filter, .flags = c.EV.ADD | c.EV.ENABLE | c.EV.CLEAR, .fflags = flags, .data = 0, .udata = identity, .ext = .{ 0, 0 } }};
-        var nothing: [0]c.kevent64_s = .{};
+        var nothing: [0]c.kevent64_s = undefined;
         return c.kevent64(tracker.queue, &change, 1, &nothing, 0, .{ .IMMEDIATE = true }, null) == 0;
     }
 
@@ -148,8 +148,8 @@ const Darwin = struct {
             tracker.done.store(.done, .release);
             tracker.finished.signal();
         }
-        var events: [64]c.kevent64_s = std.mem.zeroes([64]c.kevent64_s);
-        var nothing: [0]c.kevent64_s = .{};
+        var events: [64]c.kevent64_s = undefined;
+        var nothing: [0]c.kevent64_s = undefined;
         while (true) {
             const ending = tracker.ending.load(.acquire) == .ending;
             if (ending) {

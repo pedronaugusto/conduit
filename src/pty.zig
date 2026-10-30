@@ -384,7 +384,7 @@ pub const Pty = struct {
     /// put what it flushes on its way out.
     fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
         const f = held.lend(handle);
-        var buffer: [4096]u8 = @splat(0);
+        var buffer: [4096]u8 = undefined;
         while (true) {
             _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
         }
@@ -509,7 +509,7 @@ pub const Pty = struct {
         if (grantpt(master_fd) != 0) return openErrno();
         if (unlockpt(master_fd) != 0) return openErrno();
 
-        var name_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+        var name_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const name = switch (slaveName(master_fd, &name_buffer)) {
             .name => |name| name,
             .failed => |err| return openError(err),
@@ -630,20 +630,20 @@ pub const Pty = struct {
         // child is started is not handed to it. The console duplicates what it is
         // given, and a child reaches the console through the attribute list rather
         // than through an inherited handle.
-        var input_read: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
-        var input_write: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
+        var input_read: windows.HANDLE = undefined;
+        var input_write: windows.HANDLE = undefined;
         if (win32.CreatePipe(&input_read, &input_write, null, pipe_bytes) == .FALSE) return lastError();
         errdefer windows.CloseHandle(input_write);
         errdefer windows.CloseHandle(input_read);
 
-        var output_read: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
-        var output_write: windows.HANDLE = windows.INVALID_HANDLE_VALUE;
+        var output_read: windows.HANDLE = undefined;
+        var output_write: windows.HANDLE = undefined;
         if (win32.CreatePipe(&output_read, &output_write, null, pipe_bytes) == .FALSE) return lastError();
         errdefer windows.CloseHandle(output_write);
         errdefer windows.CloseHandle(output_read);
 
         const geometry = options.size();
-        var console: ?win32.Hpcon = null;
+        var console: win32.Hpcon = undefined;
         // Each of the three console options arrived in a different Windows, and a
         // version that does not know one refuses the whole call with
         // `E_INVALIDARG` rather than ignoring the flag. So the ask is narrowed
@@ -679,12 +679,10 @@ pub const Pty = struct {
                 else => return error.Unexpected,
             }
         }
-        // Success with no console would be the system's bug, not this call's.
-        const made = console orelse return error.Unexpected;
 
         if (trace.enabled()) {
             trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}, flags=0x{x}", .{
-                @intFromPtr(made), // safe: printed, never dereferenced
+                @intFromPtr(console), // safe: printed, never dereferenced
                 geometry.rows,
                 geometry.cols,
                 consoleFlags(granted),
@@ -700,7 +698,7 @@ pub const Pty = struct {
         return .{
             .read = output_read,
             .write = input_write,
-            .slave = made,
+            .slave = console,
             .geometry = remembered,
             .console = granted,
         };
@@ -1013,7 +1011,7 @@ const Drain = struct {
     }
 
     fn run(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {
-        var buffer: [4096]u8 = @splat(0);
+        var buffer: [4096]u8 = undefined;
         while (true) {
             _ = handles.readStreaming(io, f, &.{&buffer}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,

@@ -169,10 +169,10 @@ fn defaultShell(gpa: Allocator) Allocator.Error![]u8 {
 /// loader's lock with an assertion about every entry it passes.
 fn fromEnvironment(gpa: Allocator, name: []const u8) Allocator.Error!?[]u8 {
     if (is_windows) {
-        var value: [max_program_units]u16 = @splat(0);
+        var value: [max_program_units]u16 = undefined;
         // Three bytes of WTF-8 for every WTF-16 unit is the worst case.
-        var buffer: [max_program_units * 3]u8 = @splat(0);
-        var name_w: [64]u16 = @splat(0);
+        var buffer: [max_program_units * 3]u8 = undefined;
+        var name_w: [64]u16 = undefined;
         if (name.len + 1 > name_w.len) return null;
         const name_len = std.unicode.wtf8ToWtf16Le(&name_w, name) catch return null;
         name_w[name_len] = 0;
