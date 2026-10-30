@@ -520,7 +520,7 @@ pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
             const written = proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo));
             if (written != @sizeOf(ProcBsdInfo)) return null;
             if (info.status == proc_status_zombie) return null;
-            return info.start_tvsec *% std.time.us_per_s +% info.start_tvusec;
+            return darwinStart(info.start_tvsec, info.start_tvusec);
         },
         else => return error.Unsupported,
     }
@@ -874,6 +874,15 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
     return reached;
 }
 
+/// A Darwin process's start, `proc_bsdinfo`'s `start_tvsec` and
+/// `start_tvusec`, as the microseconds since the epoch `startTime` gives;
+/// null past what a `u64` of microseconds holds, which no process started at.
+fn darwinStart(seconds: u64, microseconds: u64) ?u64 {
+    const whole = aegis.units.Duration(.second, u64).fromRaw(seconds).convert(.microsecond, u64, .exact) catch return null;
+    const started = whole.add(.fromRaw(microseconds)) catch return null;
+    return started.raw();
+}
+
 /// `struct proc_bsdinfo` from `<sys/proc_info.h>`, as far as the start time.
 const ProcBsdInfo = extern struct {
     flags: u32,
@@ -994,7 +1003,7 @@ pub const DarwinProcess = struct {
         const written = proc_pidinfo(pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
         if (info.bsd.status == proc_status_zombie) return null;
-        if (info.bsd.start_tvsec *% std.time.us_per_s +% info.bsd.start_tvusec != since) return null;
+        if (darwinStart(info.bsd.start_tvsec, info.bsd.start_tvusec) != since) return null;
         return .{ .pid = pid, .unique_id = info.unique.unique_id };
     }
 
@@ -1064,9 +1073,9 @@ pub const DarwinProcess = struct {
             if (pid <= 1 or pid == process.pid or pid == c.getpid()) continue;
             const member = DarwinProcess.capture(pid) orelse continue;
             var info: ProcBsdInfo = undefined;
-            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo) or
-                info.pgid != @as(u32, @intCast(group)) or
-                info.start_tvsec *% std.time.us_per_s +% info.start_tvusec < since or
+            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) continue;
+            const started = darwinStart(info.start_tvsec, info.start_tvusec) orelse continue;
+            if (info.pgid != @as(u32, @intCast(group)) or started < since or
                 getsid(pid) != process.pid or !member.alive()) continue;
             try held.append(gpa, member);
         }
