@@ -117,7 +117,7 @@ const Darwin = struct {
             if (testing_hook.enumeration.load(.acquire) == .fail) return error.SystemResources;
             const hold = testing_hook.delay.load(.acquire);
             if (hold.compare(.fromRaw(0)) == .gt) {
-                const delay: c.timespec = .{ .sec = 0, .nsec = @intCast(hold.convert(.nanosecond, u64, .exact).raw()) }; // aegis: boundary: nanosleep takes the nanoseconds as a C integer
+                const delay: c.timespec = .{ .sec = 0, .nsec = @intCast(hold.convert(.nanosecond, u64, .exact).raw()) }; // aegis: boundary(A004): nanosleep takes the nanoseconds as a C integer
                 _ = c.nanosleep(&delay, null);
             }
         }

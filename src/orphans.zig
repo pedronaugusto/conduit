@@ -419,11 +419,11 @@ pub const Orphans = struct {
     /// `Orphans`' list of conduit's own, and alone by whatever looks at this
     /// process's children or turns adoption on or off. A lock of atomics and
     /// nothing else, because a reap has no `std.Io` to wait with.
-    // aegis: design: a writer-first gate of atomics, many spawns or one look, which also orders `own`'s two-lock protocol; a reap has no Io to wait with (Orphans' locks)
+    // aegis: design(A007): a writer-first gate of atomics, many spawns or one look, which also orders `own`'s two-lock protocol; a reap has no Io to wait with (Orphans' locks)
     var gate: GateLock = .{};
     /// The `Orphans` running in this process, if one is. Read and written
     /// holding `gate`.
-    // aegis: design: read and written holding `gate`, whose protocol it is part of
+    // aegis: design(A007): read and written holding `gate`, whose protocol it is part of
     var current: ?*Orphans = null;
     /// Whether one is running: the one load a reap pays when none is.
     var active: aegis.Atomic(Activity) = .init(.idle);
@@ -529,7 +529,7 @@ pub const Orphans = struct {
     /// A mutex that spins, yielding. Every section it guards is a handful of
     /// system calls, but for `killAll`'s, which is the end of a program.
     const SpinLock = struct {
-        // aegis: design: a spin mutex held across a whole look that reads procfs, past a spin guard's bounded sections (Orphans' locks)
+        // aegis: design(A007): a spin mutex held across a whole look that reads procfs, past a spin guard's bounded sections (Orphans' locks)
         held: std.atomic.Value(bool) = .init(false),
 
         fn lock(spin_lock: *SpinLock) void {
@@ -548,7 +548,7 @@ pub const Orphans = struct {
     /// a stream of spawns cannot hold a look off forever; the spawns in flight
     /// are each a `fork` long.
     const GateLock = struct {
-        // aegis: design: the gate's word: readers, a waiting look and a writing look in one, set by compare-and-swap (Orphans' locks)
+        // aegis: design(A007): the gate's word: readers, a waiting look and a writing look in one, set by compare-and-swap (Orphans' locks)
         state: std.atomic.Value(u32) = .init(0),
 
         const writing: u32 = 1 << 31;

@@ -151,7 +151,7 @@ const waitid_flags: ?c_int = switch (builtin.target.os.tag) {
     else => null,
 };
 
-// aegis: boundary: libc's waitid, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's waitid, declared as its POSIX manual page gives it
 extern "c" fn waitid(idtype: c_uint, id: WaitId, info: *c.siginfo_t, options: c_int) c_int;
 
 fn infoPid(info: *const c.siginfo_t) posix.pid_t {

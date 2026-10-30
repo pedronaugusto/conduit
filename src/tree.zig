@@ -1175,9 +1175,9 @@ const NoProcess = struct {
 };
 
 const proc_pid_unique_info = 17;
-// aegis: boundary: Darwin's proc_pidinfo, declared as libproc's header gives it
+// aegis: boundary(A019): Darwin's proc_pidinfo, declared as libproc's header gives it
 extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *anyopaque, size: c_int) c_int;
-// aegis: boundary: Darwin's proc_signal_with_audittoken, declared as libproc's header gives it
+// aegis: boundary(A019): Darwin's proc_signal_with_audittoken, declared as libproc's header gives it
 extern "c" fn proc_signal_with_audittoken(token: *AuditToken, sig: c_int) c_int;
 
 /// The immediate children of `pid`.
@@ -1206,7 +1206,7 @@ fn childrenOfNobody(
 /// From `<libproc.h>`, which is part of the system library rather than a
 /// library of its own. Returns the number of children it wrote, or a negative
 /// number.
-// aegis: boundary: Darwin's proc_listchildpids, declared as libproc's header gives it
+// aegis: boundary(A019): Darwin's proc_listchildpids, declared as libproc's header gives it
 extern "c" fn proc_listchildpids(ppid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
 fn childrenOfDarwin(gpa: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
@@ -1467,8 +1467,8 @@ pub const testing_hook = struct {
             const seconds = held.convert(.second, u32, .down);
             const rest = held.sub(seconds.convert(.millisecond, u32, .exact) catch unreachable) catch unreachable; // unreachable: whole seconds of a span are no more than it
             const pause_for: c.timespec = .{
-                .sec = @intCast(seconds.raw()), // aegis: boundary: nanosleep takes whole seconds as a C integer
-                .nsec = @intCast(rest.convert(.nanosecond, u64, .exact).raw()), // aegis: boundary: and the nanoseconds past them
+                .sec = @intCast(seconds.raw()), // aegis: boundary(A004): nanosleep takes whole seconds as a C integer
+                .nsec = @intCast(rest.convert(.nanosecond, u64, .exact).raw()), // aegis: boundary(A004): and the nanoseconds past them
             };
             _ = c.nanosleep(&pause_for, null);
         }
@@ -1491,7 +1491,7 @@ pub const testing_hook = struct {
 
     /// `SSTOP` from `<sys/proc.h>`.
     const proc_status_stopped = 4;
-    // aegis: boundary: Darwin's proc_pidpath, declared as libproc's header gives it
+    // aegis: boundary(A019): Darwin's proc_pidpath, declared as libproc's header gives it
     extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, size: u32) c_int;
 };
 
@@ -1571,7 +1571,7 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
 /// From `<libproc.h>`, like `proc_listchildpids`. Returns the number of
 /// processes it wrote, or a negative number.
-// aegis: boundary: Darwin's proc_listpgrppids, declared as libproc's header gives it
+// aegis: boundary(A019): Darwin's proc_listpgrppids, declared as libproc's header gives it
 extern "c" fn proc_listpgrppids(pgrpid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
 fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
@@ -1595,11 +1595,11 @@ fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
 /// Not declared in `std.c`, and the one question that tells a descendant which
 /// `Child.kill` is about to reach anyway from one that has left the group.
-// aegis: boundary: libc's getpgid, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's getpgid, declared as its POSIX manual page gives it
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
-// aegis: boundary: libc's getsid, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's getsid, declared as its POSIX manual page gives it
 extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
-// aegis: boundary: libc's pause, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's pause, declared as its POSIX manual page gives it
 extern "c" fn pause() c_int;
 
 test "a descendant that escaped the process group is still killed" {

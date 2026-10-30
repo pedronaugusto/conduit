@@ -41,9 +41,9 @@ comptime {
     std.debug.assert(@offsetOf(InputRecord, "event") == 4);
 }
 
-// aegis: boundary: kernel32's PeekConsoleInputW, declared as Microsoft's documentation gives it
+// aegis: boundary(A019): kernel32's PeekConsoleInputW, declared as Microsoft's documentation gives it
 extern "kernel32" fn PeekConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;
-// aegis: boundary: kernel32's ReadConsoleInputW, declared as Microsoft's documentation gives it
+// aegis: boundary(A019): kernel32's ReadConsoleInputW, declared as Microsoft's documentation gives it
 extern "kernel32" fn ReadConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;
 
 pub const WaitResult = enum { ready, timed_out };

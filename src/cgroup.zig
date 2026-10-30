@@ -1234,7 +1234,7 @@ const NoRecorded = struct {
     }
 };
 
-// aegis: boundary: libc's getpgid, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's getpgid, declared as its POSIX manual page gives it
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 
 test "a cgroup2 line of mountinfo names its mount point and root, and nothing else does" {

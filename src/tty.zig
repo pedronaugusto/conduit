@@ -678,12 +678,12 @@ fn termiosError(err: TermiosError) RawModeError {
 /// Not declared in `std.c`. Returns the error number directly on the systems
 /// that follow POSIX here, and -1 with `errno` set on the ones that do not.
 /// Reached only off Linux, where the C library is the system interface.
-// aegis: boundary: libc's ttyname_r, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's ttyname_r, declared as its POSIX manual page gives it
 extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 
 /// `TIOCGPGRP` by its POSIX name, for the systems whose request number is
 /// not spelled here. Reached only off Linux and Darwin.
-// aegis: boundary: libc's tcgetpgrp, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's tcgetpgrp, declared as its POSIX manual page gives it
 extern "c" fn tcgetpgrp(fd: posix.fd_t) posix.pid_t;
 
 /// An ioctl request as this system's `ioctl` spells its type: a `c_int`

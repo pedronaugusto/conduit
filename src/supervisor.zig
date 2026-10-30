@@ -224,7 +224,7 @@ fn visitChildren(fd: posix.fd_t, root: posix.pid_t, signal: ?posix.SIG, signalle
     return left;
 }
 
-// aegis: boundary: libc's getpgid, declared as its POSIX manual page gives it
+// aegis: boundary(A019): libc's getpgid, declared as its POSIX manual page gives it
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
 
 fn visit(pid: posix.pid_t, signal: ?posix.SIG, signalled_group: ?posix.pid_t) error{Unexpected}!usize {

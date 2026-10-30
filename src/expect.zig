@@ -342,7 +342,7 @@ pub const Expect = struct {
                 const shown = if (matcher.window) |w| intake.filled -| w else 0;
                 const said = expect.buffer[shown..intake.filled];
                 if (matcher.findFn(matcher.context, said, intake.ended or intake.failed or finished)) |found| {
-                    std.debug.assert(found.at + found.len <= said.len);
+                    aegis.assert.invariant(found.at + found.len <= said.len, "found.at + found.len <= said.len");
                     const at = shown + found.at;
                     winner = .{
                         .index = found.index,
@@ -376,7 +376,7 @@ pub const Expect = struct {
 
         fn find(context: ?*anyopaque, said: []const u8, ended: bool) ?Found {
             _ = ended;
-            const l: *Literal = @ptrCast(@alignCast(context.?)); // aegis: internal: `matcher` gives its own `*Literal`
+            const l: *Literal = @ptrCast(@alignCast(context.?)); // aegis: internal(A019): `matcher` gives its own `*Literal`
             const found = l.search.find(said, l.patterns) orelse return null;
             return .{ .index = found.index, .at = found.at, .len = l.patterns[found.index].len };
         }
@@ -559,7 +559,7 @@ pub const Expect = struct {
                 const intake = held.value();
                 // Only this reader grows `filled`, and the room it saw can
                 // only have grown since: a consumer frees space, never takes it.
-                std.debug.assert(n <= expect.buffer.len - intake.filled);
+                aegis.assert.invariant(n <= expect.buffer.len - intake.filled, "n <= expect.buffer.len - intake.filled");
                 @memcpy(expect.buffer[intake.filled..][0..n], chunk[0..n]);
                 intake.filled += n;
             }
@@ -617,8 +617,8 @@ pub const Expect = struct {
         defer held.deinit(io);
         const intake = held.value();
         if (intake.consumed == 0) return;
-        std.debug.assert(intake.consumed <= intake.filled);
-        std.debug.assert(intake.filled <= expect.buffer.len);
+        aegis.assert.invariant(intake.consumed <= intake.filled, "intake.consumed <= intake.filled");
+        aegis.assert.invariant(intake.filled <= expect.buffer.len, "intake.filled <= expect.buffer.len");
         const rest = intake.filled - intake.consumed;
         @memmove(expect.buffer[0..rest], expect.buffer[intake.consumed..intake.filled]);
         intake.filled = rest;

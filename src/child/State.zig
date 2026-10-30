@@ -105,7 +105,7 @@ reaped: aegis.Atomic(Reaped) = .init(.running),
 /// child is still running, `wait` by waiting for the answer to appear. One
 /// while it is held, zero otherwise: a word a waiter's futex waits on, woken
 /// when it is given back.
-// aegis: boundary: std's futex waits on a std.atomic.Value(u32) word
+// aegis: boundary(A007): std's futex waits on a std.atomic.Value(u32) word
 reaping: std.atomic.Value(u32) = .init(0),
 /// The right to use or retire the OS identity. Signalling holds it for the
 /// whole tree walk and delivery; reaping holds it only for the final,
@@ -117,7 +117,7 @@ reaping: std.atomic.Value(u32) = .init(0),
 /// across a descendant walk and signal delivery, which a spin guard's bounded
 /// sections do not allow; `tryWaitClaimed` must take it without waiting, which
 /// `Guarded` cannot; and its waiters yield rather than burn the walk's time.
-// aegis: design: an OS name's lock, held across a descendant walk and signal delivery, taken without waiting by tryWaitClaimed, its waiters yielding (above)
+// aegis: design(A007): an OS name's lock, held across a descendant walk and signal delivery, taken without waiting by tryWaitClaimed, its waiters yielding (above)
 identity: std.atomic.Mutex = .unlocked,
 /// A child the simulated route started: `std.process`'s, on the route's
 /// `Io`, whose signals and waits go to the route. Null for the system's.
