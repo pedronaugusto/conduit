@@ -55,7 +55,7 @@ fn linuxMemory(pid: posix.pid_t) Error!Memory {
     };
     defer _ = c.close(fd);
     // The status file is about 1.5 KiB; the two lines come early in it.
-    var text: [8192]u8 = undefined;
+    var text: [8192]u8 = @splat(0);
     var filled: usize = 0;
     while (filled < text.len) {
         const n = c.read(fd, text[filled..].ptr, text.len - filled);
@@ -131,7 +131,7 @@ const rusage_info_v4 = 4;
 extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *RusageInfoV4) c_int;
 
 fn darwinMemory(pid: posix.pid_t) Error!Memory {
-    var info: RusageInfoV4 = undefined;
+    var info: RusageInfoV4 = std.mem.zeroes(RusageInfoV4);
     if (proc_pid_rusage(pid, rusage_info_v4, &info) != 0) return switch (c.errno(@as(c_int, -1))) {
         .SRCH => error.ProcessEnded,
         else => error.Unexpected,
@@ -142,7 +142,7 @@ fn darwinMemory(pid: posix.pid_t) Error!Memory {
 }
 
 fn windowsMemory(process: windows.HANDLE) Error!Memory {
-    var counters: win32.ProcessMemoryCounters = undefined;
+    var counters: win32.ProcessMemoryCounters = std.mem.zeroes(win32.ProcessMemoryCounters);
     counters.cb = @sizeOf(win32.ProcessMemoryCounters);
     if (win32.K32GetProcessMemoryInfo(process, &counters, @sizeOf(win32.ProcessMemoryCounters)) == .FALSE) return error.Unexpected;
     return .{ .current = counters.working_set_size, .peak = counters.peak_working_set_size };

@@ -76,7 +76,7 @@ pub extern "kernel32" fn CreatePseudoConsole(
     hInput: windows.HANDLE,
     hOutput: windows.HANDLE,
     dwFlags: windows.DWORD,
-    phPC: *Hpcon,
+    phPC: *?Hpcon,
 ) callconv(.winapi) Hresult;
 
 /// `PSEUDOCONSOLE_RESIZE_QUIRK`: a resize does not reflow what the client has

@@ -78,7 +78,7 @@ else
     pipePosix;
 
 fn pipePosix(options: PipeOptions) PipeError![2]posix.fd_t {
-    var ends: [2]posix.fd_t = undefined;
+    var ends: [2]posix.fd_t = .{ -1, -1 };
     if (opening_is_two_calls) {
         // No `pipe2` here, so the flag is a second call and there is a gap
         // between the two. `ForkGap` is what keeps this package's own spawns

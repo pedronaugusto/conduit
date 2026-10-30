@@ -265,7 +265,7 @@ fn provenBelow(gpa: std.mem.Allocator, root: *const Process, candidate: *const P
 fn parentOf(pid: posix.pid_t) ?posix.pid_t {
     if (comptime builtin.target.os.tag == .linux) return (processRelationLinux(pid) orelse return null).ppid;
     if (comptime builtin.target.os.tag == .macos) {
-        var info: ProcBsdInfo = undefined;
+        var info: ProcBsdInfo = std.mem.zeroes(ProcBsdInfo);
         if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) return null;
         return @intCast(info.ppid);
     }
@@ -458,7 +458,7 @@ fn processRelationLinux(pid: posix.pid_t) ?LinuxRelation {
     if (fd < 0) return null;
     defer _ = c.close(fd);
 
-    var text: [4096]u8 = undefined;
+    var text: [4096]u8 = @splat(0);
     const n = c.read(fd, &text, text.len);
     if (n <= 0) return null;
     return parseLinuxStat(text[0..@intCast(n)]);
@@ -516,11 +516,11 @@ pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
             return relation.start;
         },
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => {
-            var info: ProcBsdInfo = undefined;
+            var info: ProcBsdInfo = std.mem.zeroes(ProcBsdInfo);
             const written = proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo));
             if (written != @sizeOf(ProcBsdInfo)) return null;
             if (info.status == proc_status_zombie) return null;
-            return info.start_tvsec *% std.time.us_per_s +% info.start_tvusec;
+            return darwinStart(info.start_tvsec, info.start_tvusec);
         },
         else => return error.Unsupported,
     }
@@ -842,7 +842,7 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
     defer _ = c.close(dir);
 
     var reached: usize = 0;
-    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
+    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = @splat(0);
     while (true) {
         const rc = std.os.linux.getdents64(dir, &entries, entries.len);
         if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
@@ -872,6 +872,15 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
         }
     }
     return reached;
+}
+
+/// A Darwin process's start, `proc_bsdinfo`'s `start_tvsec` and
+/// `start_tvusec`, as the microseconds since the epoch `startTime` gives;
+/// null past what a `u64` of microseconds holds, which no process started at.
+fn darwinStart(seconds: u64, microseconds: u64) ?u64 {
+    const whole = aegis.units.Duration(.second, u64).fromRaw(seconds).convert(.microsecond, u64, .exact) catch return null;
+    const started = whole.add(.fromRaw(microseconds)) catch return null;
+    return started.raw();
 }
 
 /// `struct proc_bsdinfo` from `<sys/proc_info.h>`, as far as the start time.
@@ -981,7 +990,7 @@ pub const DarwinProcess = struct {
     unique_id: u64,
 
     pub fn capture(pid: posix.pid_t) ?DarwinProcess {
-        var info: ProcUniqueInfo = undefined;
+        var info: ProcUniqueInfo = std.mem.zeroes(ProcUniqueInfo);
         const written = proc_pidinfo(pid, proc_pid_unique_info, 0, &info, @sizeOf(ProcUniqueInfo));
         if (written != @sizeOf(ProcUniqueInfo)) return null;
         return .{ .pid = pid, .unique_id = info.unique_id };
@@ -990,18 +999,18 @@ pub const DarwinProcess = struct {
     /// The process at `pid` if it started at `since`, from one lookup that
     /// answers the start time and stable unique process id together.
     fn captureStarted(pid: posix.pid_t, since: u64) ?DarwinProcess {
-        var info: BsdInfoWithUniqueId = undefined;
+        var info: BsdInfoWithUniqueId = std.mem.zeroes(BsdInfoWithUniqueId);
         const written = proc_pidinfo(pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
         if (info.bsd.status == proc_status_zombie) return null;
-        if (info.bsd.start_tvsec *% std.time.us_per_s +% info.bsd.start_tvusec != since) return null;
+        if (darwinStart(info.bsd.start_tvsec, info.bsd.start_tvusec) != since) return null;
         return .{ .pid = pid, .unique_id = info.unique.unique_id };
     }
 
     /// A lineage edge proved by kernel unique ids, even after reparenting.
     /// Used only for candidates enumerated below the retained parent.
     pub fn childOf(process: *const DarwinProcess, parent: *const DarwinProcess) bool {
-        var child: ProcUniqueInfo = undefined;
+        var child: ProcUniqueInfo = std.mem.zeroes(ProcUniqueInfo);
         return proc_pidinfo(process.pid, proc_pid_unique_info, 0, &child, @sizeOf(ProcUniqueInfo)) == @sizeOf(ProcUniqueInfo) and
             child.unique_id == process.unique_id and child.parent_unique_id == parent.unique_id;
     }
@@ -1063,10 +1072,10 @@ pub const DarwinProcess = struct {
         for (pids.items) |pid| {
             if (pid <= 1 or pid == process.pid or pid == c.getpid()) continue;
             const member = DarwinProcess.capture(pid) orelse continue;
-            var info: ProcBsdInfo = undefined;
-            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo) or
-                info.pgid != @as(u32, @intCast(group)) or
-                info.start_tvsec *% std.time.us_per_s +% info.start_tvusec < since or
+            var info: ProcBsdInfo = std.mem.zeroes(ProcBsdInfo);
+            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) continue;
+            const started = darwinStart(info.start_tvsec, info.start_tvusec) orelse continue;
+            if (info.pgid != @as(u32, @intCast(group)) or started < since or
                 getsid(pid) != process.pid or !member.alive()) continue;
             try held.append(gpa, member);
         }
@@ -1088,7 +1097,7 @@ pub const DarwinProcess = struct {
     /// Look up the current executable only while the stable process identity
     /// still matches. A reused pid can never supply a new delivery token.
     fn current(process: *const DarwinProcess) ?BsdInfoWithUniqueId {
-        var info: BsdInfoWithUniqueId = undefined;
+        var info: BsdInfoWithUniqueId = std.mem.zeroes(BsdInfoWithUniqueId);
         const written = proc_pidinfo(process.pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId) or
             info.unique.unique_id != process.unique_id or info.bsd.status == proc_status_zombie) return null;
@@ -1225,7 +1234,7 @@ pub fn observedChildrenOfDarwin(
     // One call for the ordinary case. Asking for an estimate first doubles
     // the system calls for every leaf in the tree; only a full buffer needs
     // the sizing call and retry.
-    var local: [32]posix.pid_t = undefined;
+    var local: [32]posix.pid_t = @splat(0);
     const written = proc_listchildpids(pid, &local, @sizeOf(@TypeOf(local)));
     if (written < 0) return error.SystemResources;
     if (written == 0) return;
@@ -1294,7 +1303,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
     const main_path = std.mem.printSentinel(&main_buffer, "/proc/{d}/task/{d}/children", .{ pid, pid }, 0) catch return true;
     const main_fd = c.open(main_path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (main_fd < 0) return true;
-    var first: [1]u8 = undefined;
+    var first: [1]u8 = @splat(0);
     const main_n = c.read(main_fd, &first, 1);
     _ = c.close(main_fd);
     if (main_n != 0) return true;
@@ -1306,7 +1315,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
     defer _ = c.close(dir);
 
     var threads: usize = 0;
-    var entries: [1024]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
+    var entries: [1024]u8 align(@alignOf(std.os.linux.dirent64)) = @splat(0);
     while (true) {
         const rc = std.os.linux.getdents64(dir, &entries, entries.len);
         if (std.os.linux.errno(rc) != .SUCCESS) return true;
@@ -1321,7 +1330,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
             const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch return true;
             const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
             if (fd < 0) return true;
-            var byte: [1]u8 = undefined;
+            var byte: [1]u8 = @splat(0);
             const n = c.read(fd, &byte, 1);
             _ = c.close(fd);
             // A child's number, or a read that failed: either way, the walk.
@@ -1401,7 +1410,7 @@ pub const DarwinForks = struct {
             .udata = 0,
             .ext = .{ 0, 0 },
         }};
-        var nothing: [0]c.kevent64_s = undefined;
+        var nothing: [0]c.kevent64_s = .{};
         if (c.kevent64(queue, &change, 1, &nothing, 0, .{ .IMMEDIATE = true }, null) < 0) {
             _ = c.close(queue);
             return none;
@@ -1422,8 +1431,8 @@ pub const DarwinForks = struct {
         defer forks.reading.store(.idle, .release);
         // `KEVENT_FLAG_IMMEDIATE` rather than a timeout of zero, which only
         // `kevent64` takes, without entering a timed wait.
-        var events: [2]c.kevent64_s = undefined;
-        var nothing: [0]c.kevent64_s = undefined;
+        var events: [2]c.kevent64_s = std.mem.zeroes([2]c.kevent64_s);
+        var nothing: [0]c.kevent64_s = .{};
         const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{ .IMMEDIATE = true }, null);
         if (ready < 0) return true;
         for (events[0..@intCast(ready)]) |event| {
@@ -1478,11 +1487,11 @@ pub const testing_hook = struct {
     /// A child held by `posix_spawn` is stopped (`SSTOP`), and one held by
     /// the fork path has not executed yet, so it is still this program.
     fn ranProgram(pid: posix.pid_t) bool {
-        var info: ProcBsdInfo = undefined;
+        var info: ProcBsdInfo = std.mem.zeroes(ProcBsdInfo);
         if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) return true;
         if (info.status == proc_status_stopped) return false;
-        var own: [4096]u8 = undefined;
-        var its: [4096]u8 = undefined;
+        var own: [4096]u8 = @splat(0);
+        var its: [4096]u8 = @splat(0);
         const own_len = proc_pidpath(c.getpid(), &own, own.len);
         const its_len = proc_pidpath(pid, &its, its.len);
         if (own_len <= 0 or its_len <= 0) return true;
@@ -1552,7 +1561,7 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
     if (dir < 0) return .unknown;
     defer _ = c.close(dir);
 
-    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = undefined;
+    var entries: [4096]u8 align(@alignOf(std.os.linux.dirent64)) = @splat(0);
     while (true) {
         const rc = std.os.linux.getdents64(dir, &entries, entries.len);
         if (std.os.linux.errno(rc) != .SUCCESS) return .unknown;
@@ -1578,7 +1587,7 @@ fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
     // A leader and one more is the whole of the question, but the list comes
     // in no promised order, so it is asked for with room for a crowd and
     // asked again, larger, only when it came back full.
-    var local: [64]posix.pid_t = undefined;
+    var local: [64]posix.pid_t = @splat(0);
     const written = proc_listpgrppids(pgid, &local, @sizeOf(@TypeOf(local)));
     if (written < 0) return .unknown;
     const count: usize = @intCast(written);

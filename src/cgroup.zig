@@ -74,7 +74,7 @@ pub fn bootIdentity() ?[36]u8 {
     const fd = c.open("/proc/sys/kernel/random/boot_id", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return null;
     defer _ = c.close(fd);
-    var boot: [36]u8 = undefined;
+    var boot: [36]u8 = @splat(0);
     var filled: usize = 0;
     while (filled < boot.len) {
         const n = c.read(fd, boot[filled..].ptr, boot.len - filled);
@@ -170,10 +170,10 @@ const Place = struct {
     }
 
     fn find(place: *Found) bool {
-        var own_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        var own_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
         const own = ownCgroup(&own_buffer) orelse return false;
-        var mount_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        var mount_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+        var root_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
         const mount = cgroup2Mount(&mount_buffer, &root_buffer) orelse return false;
 
         // The hierarchy may be mounted from below its root (a bind mount of a
@@ -256,7 +256,7 @@ const mountinfo_window = 8192;
 
 /// `cgroup2Mount`, over the `mountinfo` open at `fd`.
 fn cgroup2MountIn(fd: c.fd_t, point_buffer: []u8, root_buffer: []u8) ?Mount {
-    var window: [mountinfo_window]u8 = undefined;
+    var window: [mountinfo_window]u8 = @splat(0);
     var held: usize = 0;
     var at_end = false;
     // Inside a line longer than the window: an overlay mount with many
@@ -369,15 +369,15 @@ fn Fuzz(comptime shakedown: type) type {
             const gpa = std.testing.allocator;
             var line: std.ArrayList(u8) = .empty;
             defer line.deinit(gpa);
-            var root_storage: [64]u8 = undefined;
-            var point_storage: [64]u8 = undefined;
+            var root_storage: [64]u8 = @splat(0);
+            var point_storage: [64]u8 = @splat(0);
             const root = generateMountPath(s, &root_storage);
             const point = generateMountPath(s, &point_storage);
             const cgroup2 = s.chance(750_000);
             try mountLine(gpa, s, &line, root, point, if (cgroup2) "cgroup2" else "tmpfs");
 
-            var point_buffer: [128]u8 = undefined;
-            var root_buffer: [128]u8 = undefined;
+            var point_buffer: [128]u8 = @splat(0);
+            var root_buffer: [128]u8 = @splat(0);
             const found = parseMountLine(line.items, &point_buffer, &root_buffer);
             if (!cgroup2) return std.testing.expect(found == null);
             // The paths the kernel escaped, back as they were.
@@ -386,10 +386,10 @@ fn Fuzz(comptime shakedown: type) type {
 
             // And a line of arbitrary bytes is a mount or not, and never more than
             // its buffers hold.
-            var junk: [96]u8 = undefined;
+            var junk: [96]u8 = @splat(0);
             const bytes = gen.bytesInto(s, &junk);
-            var small_point: [8]u8 = undefined;
-            var small_root: [8]u8 = undefined;
+            var small_point: [8]u8 = @splat(0);
+            var small_root: [8]u8 = @splat(0);
             if (parseMountLine(bytes, &small_point, &small_root)) |mount| {
                 try std.testing.expect(mount.point.len <= small_point.len and mount.root.len <= small_root.len);
             }
@@ -405,8 +405,8 @@ fn Fuzz(comptime shakedown: type) type {
             var file: std.ArrayList(u8) = .empty;
             defer file.deinit(gpa);
             var expected: ?struct { root: []const u8, point: []const u8 } = null;
-            var roots: [6][64]u8 = undefined;
-            var points: [6][64]u8 = undefined;
+            var roots: [6][64]u8 = @splat(@splat(0));
+            var points: [6][64]u8 = @splat(@splat(0));
             var lines: usize = 0;
             while (lines < roots.len and s.more(3)) : (lines += 1) {
                 const start = file.items.len;
@@ -438,8 +438,8 @@ fn Fuzz(comptime shakedown: type) type {
             try tmp.dir.writeFile(io, .{ .sub_path = "mountinfo", .data = file.items });
             const handle = try tmp.dir.openFile(io, "mountinfo", .{});
             defer handle.close(io);
-            var point_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-            var root_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+            var point_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
+            var root_buffer: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
             const found = cgroup2MountIn(handle.handle, &point_buffer, &root_buffer);
             if (expected) |want| {
                 try std.testing.expectEqualStrings(want.root, found.?.root);
@@ -450,7 +450,7 @@ fn Fuzz(comptime shakedown: type) type {
         /// `/proc/self/cgroup` with lines in any order, cut anywhere.
         fn ownCgroupLines(_: void, case: *shakedown.Case) anyerror!void {
             const s = case.source;
-            var text: [256]u8 = undefined;
+            var text: [256]u8 = @splat(0);
             var end: usize = 0;
             const pieces = [_][]const u8{ "0::/user.slice/a", "0::", "1:cpu,cpuacct:/x", "0::/a (deleted)", "0:/b", "\n", "0::/c\n", "::/d\n" };
             while (s.more(4)) {
@@ -494,7 +494,7 @@ fn Fuzz(comptime shakedown: type) type {
                         ok = false;
                         break;
                     };
-                    var decoded: [6]u8 = undefined;
+                    var decoded: [6]u8 = @splat(0);
                     if (group.len != want or (std.fmt.hexToBytes(decoded[0 .. want / 2], group) catch null) == null) ok = false;
                 }
                 if (groups.next() != null) ok = false;
@@ -621,7 +621,7 @@ const LinuxCgroup = struct {
     /// The directory inode that identifies this cgroup for this boot.
     pub fn id(cgroup: *const LinuxCgroup) ?u64 {
         if (!cgroup.active()) return null;
-        var st: std.os.linux.Statx = undefined;
+        var st: std.os.linux.Statx = std.mem.zeroes(std.os.linux.Statx);
         const rc = std.os.linux.statx(cgroup.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
         if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
         return st.ino;
@@ -786,7 +786,7 @@ const LinuxRecorded = struct {
         if (base.len == 0 or base.len > std.Io.Dir.max_name_bytes or
             std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) return null;
 
-        var parent_name: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        var parent_name: [std.Io.Dir.max_path_bytes]u8 = @splat(0);
         const parent_len = if (slash == 0) 1 else slash;
         @memcpy(parent_name[0..parent_len], path_name[0..parent_len]);
         parent_name[parent_len] = 0;
@@ -819,7 +819,7 @@ const LinuxRecorded = struct {
 
     pub fn id(recorded: *const LinuxRecorded) ?u64 {
         if (!recorded.active()) return null;
-        var st: std.os.linux.Statx = undefined;
+        var st: std.os.linux.Statx = std.mem.zeroes(std.os.linux.Statx);
         const rc = std.os.linux.statx(recorded.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
         if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
         return st.ino;
@@ -828,7 +828,7 @@ const LinuxRecorded = struct {
     /// Whether the name in the held parent is still the recorded
     /// directory: `statx` on the name, not following a link.
     fn namedIdentityMatches(recorded: *const LinuxRecorded) bool {
-        var st: std.os.linux.Statx = undefined;
+        var st: std.os.linux.Statx = std.mem.zeroes(std.os.linux.Statx);
         const rc = std.os.linux.statx(recorded.parent, recorded.name[0..recorded.name_len :0], std.os.linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &st);
         return std.os.linux.errno(rc) == .SUCCESS and st.ino == recorded.recorded_id;
     }
@@ -956,7 +956,7 @@ const MemberOps = struct {
         const fd = c.openat(cgroup.dir, "cgroup.procs", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (fd < 0) return false;
         defer _ = c.close(fd);
-        var window: [4096]u8 = undefined;
+        var window: [4096]u8 = @splat(0);
         var held: usize = 0;
         while (true) {
             const n = c.read(fd, window[held..].ptr, window.len - held);
@@ -986,7 +986,7 @@ const MemberOps = struct {
         const fd = c.openat(cgroup.dir, "cgroup.events", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
         if (fd < 0) return .unknown;
         defer _ = c.close(fd);
-        var text: [256]u8 = undefined;
+        var text: [256]u8 = @splat(0);
         const n = c.read(fd, &text, text.len);
         if (n <= 0) return .unknown;
         return parsePopulated(text[0..@intCast(n)]);
@@ -1050,7 +1050,7 @@ const MemberOps = struct {
 /// start.
 fn populatedAt(fd: posix.fd_t) Populated {
     if (std.os.linux.errno(std.os.linux.lseek(fd, 0, std.os.linux.SEEK.SET)) != .SUCCESS) return .unknown;
-    var text: [256]u8 = undefined;
+    var text: [256]u8 = @splat(0);
     const n = c.read(fd, &text, text.len);
     if (n <= 0) return .unknown;
     return parsePopulated(text[0..@intCast(n)]);

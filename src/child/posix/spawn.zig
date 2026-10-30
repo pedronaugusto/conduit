@@ -157,7 +157,7 @@ pub fn spawn(
     into: ?posix.fd_t,
 ) SpawnError!?Started {
     std.debug.assert(into == null or into_cgroup);
-    var actions: FileActions = undefined;
+    var actions: FileActions = std.mem.zeroes(FileActions);
     if (posix_spawn_file_actions_init(&actions) != 0) return error.SystemResources;
     defer _ = posix_spawn_file_actions_destroy(&actions);
 
@@ -165,7 +165,7 @@ pub fn spawn(
     // for it, so that the terminal is its controlling one; the other
     // standard streams that are the terminal are copies of that one.
     const session = options.stdio == .pty and options.detach;
-    var terminal_name: [std.Io.Dir.max_path_bytes:0]u8 = undefined;
+    var terminal_name: [std.Io.Dir.max_path_bytes:0]u8 = @splat(0);
     var terminal_slot: ?posix.fd_t = null;
     if (session) {
         const slave = options.stdio.pty.slaveHandle().?;
@@ -206,7 +206,7 @@ pub fn spawn(
         if (posix_spawn_file_actions_adddup2(&actions, fd, @intCast(slot)) != 0) return error.SystemResources;
     }
 
-    var attr: Attr = undefined;
+    var attr: Attr = std.mem.zeroes(Attr);
     if (posix_spawnattr_init(&attr) != 0) return error.SystemResources;
     defer _ = posix_spawnattr_destroy(&attr);
 
@@ -249,7 +249,7 @@ pub fn spawn(
     var best: posix.E = .NOENT;
     for (candidates) |candidate| {
         if (absent(candidate)) continue;
-        var pid: posix.pid_t = undefined;
+        var pid: posix.pid_t = 0;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) {
             const spawned = try started(io, pid);
@@ -290,7 +290,7 @@ fn started(io: std.Io, pid: posix.pid_t) SpawnError!Started {
         forks.close();
         if (exit_watch) |*watch| watch.close(io);
         _ = c.kill(pid, .KILL);
-        var status: c_int = undefined;
+        var status: c_int = 0;
         while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
         return posix.unexpectedErrno(err);
     }

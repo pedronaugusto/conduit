@@ -532,7 +532,7 @@ pub const Expect = struct {
     /// fails, or the task is cancelled.
     fn read(expect: *Expect, io: std.Io) std.Io.Cancelable!void {
         defer expect.markFinished(io);
-        var chunk: [512]u8 = undefined;
+        var chunk: [512]u8 = @splat(0);
         while (true) {
             if (expect.lifetime.load(.acquire) == .stopped) return expect.finish(io, .ended);
             // Reset before checking the buffer under the consumer mutex. A

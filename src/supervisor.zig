@@ -33,7 +33,7 @@ pub const Supervisor = struct {
     }
 
     pub fn result(self: Supervisor) Child.TryWaitError!u32 {
-        var result_record: Result = undefined;
+        var result_record: Result = .{ .status = 0, .failed = 0 };
         const bytes = std.mem.asBytes(&result_record);
         var filled: usize = 0;
         while (filled < bytes.len) {
@@ -55,7 +55,7 @@ pub const Supervisor = struct {
 pub const Result = extern struct { status: u32, failed: u32 };
 
 pub fn channel() Child.SpawnError![2]posix.fd_t {
-    var ends: [2]posix.fd_t = undefined;
+    var ends: [2]posix.fd_t = .{ -1, -1 };
     const rc = linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &ends);
     return switch (linux.errno(rc)) {
         .SUCCESS => ends,
@@ -116,7 +116,7 @@ pub fn isolate(commands: posix.fd_t, prepared: Prepared, scope_kill: ?posix.fd_t
     }
     if (linux.errno(linux.close_range(first, std.math.maxInt(i32), .{ .UNSHARE = false, .CLOEXEC = false })) != .SUCCESS) closed = false;
     if (closed) return;
-    var limit: posix.rlimit = undefined;
+    var limit: posix.rlimit = std.mem.zeroes(posix.rlimit);
     const ceiling: posix.fd_t = if (c.getrlimit(.NOFILE, &limit) == 0) std.math.lossyCast(posix.fd_t, limit.cur) else 4096;
     var fd: posix.fd_t = 0;
     while (fd < ceiling) : (fd += 1) if (fd != commands and fd != prepared.signals and fd != prepared.children and fd != (scope_kill orelse -1)) {
@@ -139,7 +139,7 @@ pub fn run(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Pr
         };
         const ready = linux.poll(&pollfds, pollfds.len, if (ending) 5 else -1);
         if (pollfds[1].revents & linux.POLL.IN != 0) {
-            var notices: [8]linux.signalfd_siginfo = undefined;
+            var notices: [8]linux.signalfd_siginfo = std.mem.zeroes([8]linux.signalfd_siginfo);
             const n = c.read(prepared.signals, std.mem.asBytes(&notices).ptr, @sizeOf(@TypeOf(notices)));
             if (n > 0) for (notices[0 .. @as(usize, @intCast(n)) / @sizeOf(linux.signalfd_siginfo)]) |notice| {
                 if (notice.signo != @backingInt(posix.SIG.CHLD)) ending = true;
@@ -200,7 +200,7 @@ pub fn run(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Pr
 /// between the signal and wait. Streaming parsing places no limit on tree size.
 fn visitChildren(fd: posix.fd_t, root: posix.pid_t, signal: ?posix.SIG, signalled_group: ?posix.pid_t) error{Unexpected}!usize {
     if (c.lseek(fd, 0, c.SEEK.SET) < 0) return error.Unexpected;
-    var buffer: [4096]u8 = undefined;
+    var buffer: [4096]u8 = @splat(0);
     var number: posix.pid_t = 0;
     var left: usize = 0;
     while (true) {
