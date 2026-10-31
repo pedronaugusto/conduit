@@ -258,6 +258,7 @@ fn fromValueWindows(value: []const u8) Channel.InheritedError!held.OwnedFile {
     // that made the end synchronous gets a synchronous file.
     var mode: windows.FILE.MODE = undefined;
     var status_block: windows.IO_STATUS_BLOCK = undefined;
+    // aegis: boundary(A019): NtQueryInformationFile writes the status block and the mode where it answers SUCCESS
     switch (windows.ntdll.NtQueryInformationFile(handle, &status_block, &mode, @sizeOf(windows.FILE.MODE), .Mode)) {
         .SUCCESS => {},
         .INVALID_HANDLE, .OBJECT_TYPE_MISMATCH => return error.NotAChannel,

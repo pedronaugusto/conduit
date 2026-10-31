@@ -321,6 +321,7 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
         };
     }
     var ws: posix.winsize = undefined;
+    // aegis: boundary(A019): TIOCGWINSZ writes the winsize where the ioctl succeeds; the request takes its address as an integer
     switch (posix.errno(system.ioctl(handle, request(ioctl_request.get_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return .fromWinsize(ws),
         .NOTTY => return error.NotATerminal,

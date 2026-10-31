@@ -144,6 +144,7 @@ fn darwinMemory(pid: posix.pid_t) Error!Memory {
 fn windowsMemory(process: windows.HANDLE) Error!Memory {
     var counters: win32.ProcessMemoryCounters = undefined;
     counters.cb = @sizeOf(win32.ProcessMemoryCounters);
+    // aegis: boundary(A019): K32GetProcessMemoryInfo writes the counters `cb` sizes where it answers TRUE
     if (win32.K32GetProcessMemoryInfo(process, &counters, @sizeOf(win32.ProcessMemoryCounters)) == .FALSE) return error.Unexpected;
     return .{ .current = counters.working_set_size, .peak = counters.peak_working_set_size };
 }

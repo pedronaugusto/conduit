@@ -169,6 +169,7 @@ pub fn spawn(
     var terminal_slot: ?posix.fd_t = null;
     if (session) {
         const slave = options.stdio.pty.slaveHandle().?;
+        // aegis: boundary(A019): ttyname_r(3) writes the terminal's name, NUL-terminated, where it answers 0
         if (ttyname_r(slave, &terminal_name, terminal_name.len) != 0) return null;
     }
 

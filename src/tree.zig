@@ -1249,6 +1249,8 @@ pub fn observedChildrenOfDarwin(
     if (estimate == 0) return;
     var capacity: usize = @max(@as(usize, @intCast(estimate)), local.len * 2);
     while (true) {
+        // The call takes the buffer's size as a c_int.
+        if (capacity > @as(usize, std.math.maxInt(c_int)) / @sizeOf(posix.pid_t)) return error.SystemResources;
         const first = into.items.len;
         try into.resize(gpa, first + capacity);
         const bytes: c_int = @intCast(capacity * @sizeOf(posix.pid_t));

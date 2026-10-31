@@ -126,7 +126,9 @@ fn windowsPipeAvailable(f: std.Io.File) usize {
     var info: windows.FILE.PIPE.LOCAL_INFORMATION = undefined;
     return switch (windows.ntdll.NtQueryInformationFile(
         f.handle,
+        // aegis: boundary(A019): NtQueryInformationFile writes the status block where it answers SUCCESS
         &status,
+        // aegis: boundary(A019): and the pipe's local information beside it
         &info,
         @sizeOf(@TypeOf(info)),
         .PipeLocal,

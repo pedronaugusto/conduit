@@ -23,6 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- On macOS, a process's children are listed into a buffer whose size `proc_listchildpids` takes as a `c_int`: a count past what that holds is `SystemResources`, as the group's listing already refused it, where the cast trapped.
 - `readAvailable` reads again past a read of nothing from a pipe poll says is readable, an interrupted read (std's `readStreaming` may return 0 without the end, which is `EndOfStream`), where it returned that 0 as nothing to read now and a caller draining a child's last output stopped short.
 
 ## [0.10.6] - 2026-10-25
