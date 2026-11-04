@@ -1,4 +1,5 @@
-//! The three one-line things the rest of this package does to a handle.
+//! The small things the rest of this package does to a handle; making a raw
+//! handle an owned or a lent file is `conduit.tty`'s `held`.
 //!
 //! Each of them was written out in two or three files, which is two or three
 //! places for one idea to drift. They are here instead, named once.
@@ -11,14 +12,6 @@ const posix = std.posix;
 const c = std.c;
 
 const is_windows = builtin.target.os.tag == .windows;
-
-/// A raw handle as a `std.Io.File`.
-///
-/// The file shares the handle rather than duplicating it: closing the file
-/// closes the handle, and whoever owns the handle owns the file.
-pub fn file(handle: std.Io.File.Handle) std.Io.File {
-    return .{ .handle = handle, .flags = .{ .nonblocking = false } };
-}
 
 /// Marks a descriptor close-on-exec, so an unrelated child started while this
 /// process holds it is not handed it. POSIX only.
@@ -97,13 +90,18 @@ pub const ReadAvailableError = std.Io.File.ReadStreamingError || error{
 /// hands out; on Windows one opened for synchronous reads, as `Child`'s are.
 pub fn readAvailable(io: std.Io, f: std.Io.File, buffer: []u8) handles.ReadAvailableError!usize {
     if (buffer.len == 0) return error.EmptyBuffer;
-    const ready = if (is_windows) windowsPipeAvailable(f) else posixReadable(f.handle);
-    if (ready == 0) return 0;
-    const n = f.readStreaming(io, &.{buffer[0..@min(buffer.len, ready)]}) catch |err| switch (err) {
-        error.EndOfStream => return 0,
-        else => |e| return e,
-    };
-    return n;
+    while (true) {
+        const ready = if (is_windows) windowsPipeAvailable(f) else posixReadable(f.handle);
+        if (ready == 0) return 0;
+        const n = f.readStreaming(io, &.{buffer[0..@min(buffer.len, ready)]}) catch |err| switch (err) {
+            error.EndOfStream => return 0,
+            else => |e| return e,
+        };
+        if (n != 0) return n;
+        // A read of nothing from a readable pipe was interrupted, not its
+        // end, which is `EndOfStream`: asked again, where the 0 would read
+        // as nothing more to come. Each read is a cancelation point.
+    }
 }
 
 /// Bytes a read of `fd` returns now without waiting: `maxInt` when it is
@@ -128,7 +126,9 @@ fn windowsPipeAvailable(f: std.Io.File) usize {
     var info: windows.FILE.PIPE.LOCAL_INFORMATION = undefined;
     return switch (windows.ntdll.NtQueryInformationFile(
         f.handle,
+        // aegis: boundary(A019): NtQueryInformationFile writes the status block where it answers SUCCESS
         &status,
+        // aegis: boundary(A019): and the pipe's local information beside it
         &info,
         @sizeOf(@TypeOf(info)),
         .PipeLocal,

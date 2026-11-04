@@ -30,6 +30,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const close_on_exec = @import("close_on_exec.zig");
+const held = @import("held.zig");
 const win32 = @import("win32");
 const posix = std.posix;
 const system = posix.system;
@@ -39,16 +40,16 @@ const is_windows = builtin.target.os.tag == .windows;
 
 /// The two ends of a channel, each a stream both ways.
 ///
-/// Both belong to the caller. `child` is handed to a spawn
-/// (`SpawnOptions.channel`), which borrows it as it borrows `extra_fds`, and
-/// is closed here once the spawn returns: a copy left open in this process
-/// keeps the channel open after the child has gone, and `parent`'s reads
-/// never see its end.
+/// Both belong to the caller, who closes each with `deinit(io)`. `child` is
+/// lent to a spawn (`SpawnOptions.channel`), which borrows it as it borrows
+/// `extra_fds`, and is closed here once the spawn returns: a copy left open
+/// in this process keeps the channel open after the child has gone, and
+/// `parent`'s reads never see its end.
 pub const Channel = struct {
     /// This process's end.
-    parent: std.Io.File,
+    parent: held.OwnedFile,
     /// The child's end, until a spawn has given the child its own.
-    child: std.Io.File,
+    child: held.OwnedFile,
 
     pub const OpenError = error{
         ProcessFdQuotaExceeded,
@@ -75,14 +76,15 @@ pub const Channel = struct {
     ///
     /// The end is made private to this process here: close-on-exec on POSIX,
     /// not inheritable on Windows, so a program this one starts does not keep
-    /// the channel open behind it. The variable is left in place.
-    pub fn inherited(environ: *const std.process.Environ.Map, variable: []const u8) InheritedError!?std.Io.File {
+    /// the channel open behind it. The variable is left in place. The end is
+    /// the caller's, closed with `deinit(io)`.
+    pub fn inherited(environ: *const std.process.Environ.Map, variable: []const u8) InheritedError!?held.OwnedFile {
         const value = environ.get(variable) orelse return null;
         return try fromValue(value);
     }
 
     /// The end a variable's value names: `inherited` without the lookup.
-    pub fn fromValue(value: []const u8) InheritedError!std.Io.File {
+    pub fn fromValue(value: []const u8) InheritedError!held.OwnedFile {
         return if (is_windows) fromValueWindows(value) else fromValuePosix(value);
     }
 
@@ -119,7 +121,7 @@ fn openPosix() Channel.OpenError!Channel {
     } else {
         try close_on_exec.ForkGap.hold(pairMarked, .{&ends});
     }
-    return .{ .parent = fileOf(ends[0]), .child = fileOf(ends[1]) };
+    return .{ .parent = held.own(ends[0]), .child = held.own(ends[1]) };
 }
 
 fn pairMarked(ends: *[2]posix.fd_t) Channel.OpenError!void {
@@ -147,25 +149,21 @@ fn markPrivate(fd: posix.fd_t) std.Io.UnexpectedError!void {
     }
 }
 
-fn fileOf(fd: posix.fd_t) std.Io.File {
-    return .{ .handle = fd, .flags = .{ .nonblocking = false } };
-}
-
-fn fromValuePosix(value: []const u8) Channel.InheritedError!std.Io.File {
+fn fromValuePosix(value: []const u8) Channel.InheritedError!held.OwnedFile {
     const fd = std.fmt.parseInt(posix.fd_t, value, 10) catch return error.NotAChannel;
     if (fd < 0) return error.NotAChannel;
     // A stream socket is what `open` makes; anything else at that number --
     // nothing, a file, a pipe -- is not the channel the variable promises.
     var kind: i32 = undefined;
     var len: posix.socklen_t = @sizeOf(i32);
-    switch (posix.errno(system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.TYPE, @ptrCast(&kind), &len))) { // safe: the option is an int, its size beside it
+    switch (posix.errno(system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.TYPE, @ptrCast(&kind), &len))) { // aegis: boundary(A019): the option is an int, its size beside it
         .SUCCESS => {},
         .BADF, .NOTSOCK => return error.NotAChannel,
         else => |err| return posix.unexpectedErrno(err),
     }
     if (kind != posix.SOCK.STREAM) return error.NotAChannel;
     try markPrivate(fd);
-    return fileOf(fd);
+    return held.own(fd);
 }
 
 //======================================================================
@@ -181,7 +179,8 @@ fn openWindows() Channel.OpenError!Channel {
 
     var server: windows.HANDLE = undefined;
     var status_block: windows.IO_STATUS_BLOCK = undefined;
-    const timeout: windows.LARGE_INTEGER = -120 * std.time.ns_per_s / 100;
+    // 120 s in NT's 100 ns units, negative for a time relative to now.
+    const timeout: windows.LARGE_INTEGER = -1_200_000_000;
     switch (windows.ntdll.NtCreateNamedPipeFile(
         &server,
         .{
@@ -224,8 +223,8 @@ fn openWindows() Channel.OpenError!Channel {
         else => |status| return windows.unexpectedStatus(status),
     }
     return .{
-        .parent = .{ .handle = server, .flags = .{ .nonblocking = true } },
-        .child = .{ .handle = client, .flags = .{ .nonblocking = true } },
+        .parent = .init(.{ .handle = server, .flags = .{ .nonblocking = true } }),
+        .child = .init(.{ .handle = client, .flags = .{ .nonblocking = true } }),
     };
 }
 
@@ -238,7 +237,7 @@ fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
     switch (windows.ntdll.NtOpenFile(
         &device,
         .{ .STANDARD = .{ .SYNCHRONIZE = true } },
-        &.{ .ObjectName = @constCast(&windows.UNICODE_STRING.init(name)) }, // safe: the call reads the name and never writes it
+        &.{ .ObjectName = @constCast(&windows.UNICODE_STRING.init(name)) }, // aegis: boundary(A019): the call reads the name and never writes it
         &status_block,
         .VALID_FLAGS,
         .{ .IO = .SYNCHRONOUS_NONALERT },
@@ -249,16 +248,17 @@ fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
     }
 }
 
-fn fromValueWindows(value: []const u8) Channel.InheritedError!std.Io.File {
+fn fromValueWindows(value: []const u8) Channel.InheritedError!held.OwnedFile {
     const number = std.fmt.parseInt(usize, value, 10) catch return error.NotAChannel;
     if (number == 0) return error.NotAChannel;
-    const handle: windows.HANDLE = @ptrFromInt(number); // safe: a handle value the parent wrote, checked below as a pipe before any use
+    const handle: windows.HANDLE = @ptrFromInt(number); // aegis: boundary(A019): a handle value the parent wrote, checked below as a pipe before any use
     if (win32.GetFileType(handle) != win32.file_type_pipe) return error.NotAChannel;
 
     // How the handle was opened decides how a read on it is made: a parent
     // that made the end synchronous gets a synchronous file.
     var mode: windows.FILE.MODE = undefined;
     var status_block: windows.IO_STATUS_BLOCK = undefined;
+    // aegis: boundary(A019): NtQueryInformationFile writes the status block and the mode where it answers SUCCESS
     switch (windows.ntdll.NtQueryInformationFile(handle, &status_block, &mode, @sizeOf(windows.FILE.MODE), .Mode)) {
         .SUCCESS => {},
         .INVALID_HANDLE, .OBJECT_TYPE_MISMATCH => return error.NotAChannel,
@@ -273,5 +273,5 @@ fn fromValueWindows(value: []const u8) Channel.InheritedError!std.Io.File {
         .SUCCESS => {},
         else => |status| return windows.unexpectedStatus(status),
     }
-    return .{ .handle = handle, .flags = .{ .nonblocking = mode.IO == .ASYNCHRONOUS } };
+    return .init(.{ .handle = handle, .flags = .{ .nonblocking = mode.IO == .ASYNCHRONOUS } });
 }

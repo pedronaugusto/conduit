@@ -65,6 +65,12 @@ const windows = std.os.windows;
 /// A Windows console's input records, and a bounded wait for the next.
 pub const console = @import("console.zig");
 
+/// How this package holds a file: owned and closed once, or lent by the
+/// owner that closes it; and a raw handle made one or the other.
+pub const held = @import("held.zig");
+/// A file its owner closes, once, with `deinit(io)`.
+pub const OwnedFile = held.OwnedFile;
+
 /// A pipe, both ends close-on-exec, for a wake a program writes itself.
 /// POSIX only.
 pub const pipe = close_on_exec.pipe;
@@ -315,7 +321,8 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
         };
     }
     var ws: posix.winsize = undefined;
-    switch (posix.errno(system.ioctl(handle, request(T.GWINSZ), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
+    // aegis: boundary(A019): TIOCGWINSZ writes the winsize where the ioctl succeeds; the request takes its address as an integer
+    switch (posix.errno(system.ioctl(handle, request(ioctl_request.get_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return .fromWinsize(ws),
         .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
@@ -346,7 +353,7 @@ pub fn setWinSize(handle: Handle, size: Size) SetWinSizeError!void {
 
 fn setWinSizePosix(handle: Handle, size: Size) SetWinSizeError!void {
     const ws = size.toWinsize();
-    switch (posix.errno(system.ioctl(handle, request(T.SWINSZ), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
+    switch (posix.errno(system.ioctl(handle, request(ioctl_request.set_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return,
         .NOTTY => return error.NotATerminal,
         .BADF => unreachable, // Invalid descriptor.
@@ -374,17 +381,28 @@ pub fn isTty(handle: Handle) bool {
 
 /// The process's own terminal, opened by `openControlling`.
 pub const Controlling = struct {
+    /// Private: the terminal, `output`; on POSIX `input` too.
+    output_file: OwnedFile,
+    /// Private: on Windows the console's input buffer, `input`. On POSIX the
+    /// terminal is one file, `output_file`.
+    input_file: if (is_windows) OwnedFile else void,
+
     /// Where keys arrive. On POSIX the same file as `output`; on Windows the
     /// console's input buffer.
-    input: std.Io.File,
+    pub fn input(c: *Controlling) std.Io.File {
+        return if (is_windows) c.input_file.borrow().* else c.output_file.borrow().*;
+    }
+
     /// Where output goes, and the handle `winSize` wants. On Windows the
     /// console's screen buffer.
-    output: std.Io.File,
+    pub fn output(c: *Controlling) std.Io.File {
+        return c.output_file.borrow().*;
+    }
 
     /// Closes it: the one file on POSIX, both on Windows.
-    pub fn close(c: Controlling, io: std.Io) void {
-        c.output.close(io);
-        if (c.input.handle != c.output.handle) c.input.close(io);
+    pub fn close(c: *Controlling, io: std.Io) void {
+        c.output_file.deinit(io);
+        if (is_windows) c.input_file.deinit(io);
     }
 };
 
@@ -416,22 +434,20 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
         const input = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONIN$"));
         errdefer windows.CloseHandle(input);
         const output = try openConsole(std.unicode.wtf8ToWtf16LeStringLiteral("CONOUT$"));
-        return .{
-            .input = .{ .handle = input, .flags = .{ .nonblocking = false } },
-            .output = .{ .handle = output, .flags = .{ .nonblocking = false } },
-        };
+        return .{ .input_file = held.own(input), .output_file = held.own(output) };
     }
-    const file = try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write });
+    var file = held.own((try std.Io.Dir.openFileAbsolute(io, "/dev/tty", .{ .mode = .read_write })).handle);
     if (builtin.target.os.tag == .macos) {
         var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        if (deviceOf(file.handle, &path)) |device| {
+        if (deviceOf(file.borrow().handle, &path)) |device| {
+            // glint-ignore: Z026 -- a device that will not open leaves /dev/tty, already open, as the terminal
             if (std.Io.Dir.openFileAbsolute(io, device, .{ .mode = .read_write })) |pollable| {
-                file.close(io);
-                return .{ .input = pollable, .output = pollable };
+                file.deinit(io);
+                return .{ .output_file = held.own(pollable.handle), .input_file = {} };
             } else |_| {}
         }
     }
-    return .{ .input = file, .output = file };
+    return .{ .output_file = file.move(), .input_file = {} };
 }
 
 /// The device behind `/dev/tty`: the one a standard stream is open on when
@@ -664,10 +680,12 @@ fn termiosError(err: TermiosError) RawModeError {
 /// Not declared in `std.c`. Returns the error number directly on the systems
 /// that follow POSIX here, and -1 with `errno` set on the ones that do not.
 /// Reached only off Linux, where the C library is the system interface.
+// aegis: boundary(A019): libc's ttyname_r, declared as its POSIX manual page gives it
 extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 
 /// `TIOCGPGRP` by its POSIX name, for the systems whose request number is
 /// not spelled here. Reached only off Linux and Darwin.
+// aegis: boundary(A019): libc's tcgetpgrp, declared as its POSIX manual page gives it
 extern "c" fn tcgetpgrp(fd: posix.fd_t) posix.pid_t;
 
 /// An ioctl request as this system's `ioctl` spells its type: a `c_int`
@@ -679,20 +697,21 @@ fn request(v: anytype) IoctlRequest {
     return if (@typeInfo(IoctlRequest).int.signedness == .signed) @bitCast(bits) else @intCast(bits);
 }
 
-/// The ioctl request numbers this package issues.
+/// The ioctl request numbers this package issues: `TIOCGWINSZ`,
+/// `TIOCSWINSZ` and `TIOCSCTTY`.
 ///
 /// The Darwin table in the standard library stops at `TIOCGWINSZ`, so the
 /// Darwin branch spells all three out from `<sys/ttycom.h>`.
-pub const T = switch (builtin.target.os.tag) {
+pub const ioctl_request = switch (builtin.target.os.tag) {
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => struct {
-        pub const GWINSZ: u32 = 0x40087468;
-        pub const SWINSZ: u32 = 0x80087467;
-        pub const SCTTY: u32 = 0x20007461;
+        pub const get_window_size: u32 = 0x40087468;
+        pub const set_window_size: u32 = 0x80087467;
+        pub const set_controlling_terminal: u32 = 0x20007461;
     },
     .windows => struct {},
     else => struct {
-        pub const GWINSZ: u32 = posix.T.IOCGWINSZ;
-        pub const SWINSZ: u32 = posix.T.IOCSWINSZ;
-        pub const SCTTY: u32 = posix.T.IOCSCTTY;
+        pub const get_window_size: u32 = posix.T.IOCGWINSZ;
+        pub const set_window_size: u32 = posix.T.IOCSWINSZ;
+        pub const set_controlling_terminal: u32 = posix.T.IOCSCTTY;
     },
 };

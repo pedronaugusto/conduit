@@ -19,6 +19,7 @@ const testing = std.testing;
 const Child = @import("child.zig").Child;
 const Watchdog = @import("testing/support.zig").Watchdog;
 const Deadline = @import("conduit.tty").Deadline;
+const tty_held = @import("conduit.tty").held;
 const shakedown = @import("shakedown");
 const FaultIo = shakedown.FaultIo;
 const gen = shakedown.gen;
@@ -40,7 +41,7 @@ test "a canceled reading task publishes that it finished" {
     var buffer: [32]u8 = undefined;
     var expect: Expect = .init(undefined, &buffer);
     try testing.expectError(error.Canceled, access.read(&expect, canceled.io()));
-    try testing.expect(expect.finished.load(.acquire));
+    try testing.expect(expect.finished.load(.acquire) == .finished);
 }
 
 test "start refuses to put a second reader over the buffer" {
@@ -176,7 +177,7 @@ test "deinit stops the reader while the terminal is still open" {
         defer join_watchdog.deinit(io);
         expect.stop(io);
     }
-    try testing.expect(expect.finished.load(.acquire));
+    try testing.expect(expect.finished.load(.acquire) == .finished);
     try testing.expectError(error.AlreadyStarted, expect.start(io));
     {
         // Nothing more will arrive once reading has stopped, and a wait says
@@ -511,12 +512,13 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         const Self = @This();
         expect: *Expect,
         consume: bool,
+        hook: shakedown.Hook = .{ .run = make },
 
         /// The reader has checked that it is full and is entering its
         /// wait. Make room here: this notification must not be lost, or
         /// the wait that follows never returns.
-        fn make(base: std.Io, context: *anyopaque) void {
-            const room: *Self = @ptrCast(@alignCast(context)); // safe: the plan hands this test's Room as the context
+        fn make(hook: *shakedown.Hook, base: std.Io) void {
+            const room: *Self = @fieldParentPtr("hook", hook);
             if (room.consume) {
                 var held = room.expect.intake.acquireUncancelable(base);
                 held.value().consumed = 1;
@@ -533,11 +535,11 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         const f = try tmp.dir.openFile(io, "said", .{});
         defer f.close(io);
         var buffer: [1]u8 = .{'a'};
-        var expect = Expect.init(.{ .read = f, .write = f }, &buffer);
+        var expect = Expect.init(.{ .read = tty_held.lend(f.handle), .write = tty_held.lend(f.handle) }, &buffer);
         fill(&expect, buffer.len);
         var room: Room = .{ .expect = &expect, .consume = consume };
         const observed = try FaultIo.init(testing.allocator, io, .{ .plan = &.{
-            .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .{ .call = .{ .ctx = &room, .f = Room.make } } },
+            .{ .at = .{ .nth = .{ .call = .futexWait, .n = 1 } }, .fault = .{ .call = .{ .hook = &room.hook } } },
             .{ .at = .{ .nth = .{ .call = .futexWait, .n = 2 } }, .fault = .cancel },
         } });
         defer observed.deinit();

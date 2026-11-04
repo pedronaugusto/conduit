@@ -264,7 +264,12 @@ pub fn dev(b: *std.Build, tools: type) void {
     // to the tests before addCi reads them.
     const containment_tests = b.addTest(.{
         .name = "containment-tests",
-        .root_module = b.createModule(.{ .root_source_file = p.path("ci/containment.zig"), .target = target, .optimize = optimize }),
+        .root_module = b.createModule(.{
+            .root_source_file = p.path("ci/containment.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "aegis", .module = aegis_package.module("aegis") }},
+        }),
     });
     unit_step.dependOn(&b.addRunArtifact(containment_tests).step);
 
@@ -292,7 +297,8 @@ pub fn dev(b: *std.Build, tools: type) void {
         // What `CONDUIT_TRACE` prints is at the info level.
         .test_log_level = .info,
     });
-    _ = preflight.addCheck(b, p, "check-containment", "ci/containment.zig");
+    const containment = preflight.addCheck(b, p, "check-containment", "ci/containment.zig");
+    containment.root_module.addImport("aegis", p.dependency("aegis", .{ .target = b.graph.host, .optimize = .debug }).module("aegis"));
     // The build a consumer gets: nothing conduit fetches for itself.
     preflight.addConsumerCheck(b, p, .{
         .package = "conduit",
@@ -319,7 +325,11 @@ fn conduitPackage(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
 /// Build each benchmark's imports in its own optimization mode.
 fn benchImports(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) []const std.Build.Module.Import {
     const package = conduitPackage(b, target, optimize);
-    return b.allocator.dupe(std.Build.Module.Import, &.{.{ .name = "conduit", .module = package.module("conduit") }}) catch @panic("OOM");
+    const aegis = b.dependency("aegis", .{ .target = target, .optimize = optimize });
+    return b.allocator.dupe(std.Build.Module.Import, &.{
+        .{ .name = "conduit", .module = package.module("conduit") },
+        .{ .name = "aegis", .module = aegis.module("aegis") },
+    }) catch @panic("OOM");
 }
 
 /// The simulated route for a project's tests: the module `conduit.testing`,

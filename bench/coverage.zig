@@ -136,7 +136,7 @@ fn readAvailableSetup(x: *Context) !void {
     });
     errdefer x.release();
     x.pipe = x.child.takeStdout() orelse return error.NoPipe;
-    errdefer x.pipe.close(io);
+    errdefer x.pipe.deinit(io);
     if (!conduit.succeeded(try x.wait())) return error.ChildFailed;
     x.drained = 0;
 }
@@ -146,14 +146,14 @@ fn readAvailable(x: *Context, units: u64) !void {
     try single(units);
     var buffer: [4096]u8 = undefined;
     while (true) {
-        const got = try conduit.readAvailable(x.io(), x.pipe, &buffer);
+        const got = try conduit.readAvailable(x.io(), x.pipe.borrow().*, &buffer);
         if (got == 0) break;
         x.drained += got;
     }
 }
 
 fn readAvailableTeardown(x: *Context) !void {
-    x.pipe.close(x.io());
+    x.pipe.deinit(x.io());
     x.release();
     if (x.drained != x.input.len + 1) return error.BadOutput;
 }

@@ -31,7 +31,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
-const spin = @import("spin.zig");
+const aegis = @import("aegis");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
@@ -44,7 +44,7 @@ const win32 = @import("win32");
 const seam = @import("seam");
 
 const Size = tty.Size;
-const file = handles.file;
+const held = tty.held;
 
 pub const Pty = struct {
     /// Private: the master's reading handle, or null once closed.
@@ -211,14 +211,14 @@ pub const Pty = struct {
 
     /// The terminal end a child spawned on a simulated pair is given.
     pub fn simulatedSlave(pty: Pty) ?std.Io.File {
-        return if (pty.simulated_slave) |h| file(h) else null;
+        return if (pty.simulated_slave) |h| held.lend(h) else null;
     }
 
     pub const ResizeError = error{
         /// POSIX: the master is not a terminal, which cannot happen for a `Pty`
         /// this package opened.
         NotATerminal,
-    } || tty.UnexpectedError;
+    } || tty.UnexpectedError || std.Io.Cancelable;
 
     /// Changes the geometry of the pair.
     ///
@@ -239,20 +239,22 @@ pub const Pty = struct {
         if (pty.simulated) {
             const route = seam.routeOf(io) orelse return error.Unexpected;
             const read = pty.read orelse return error.Unexpected;
-            return route.setWindowSize(file(read), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
+            return route.setWindowSize(held.lend(read), .{ .rows = new_size.rows, .cols = new_size.cols }) catch |err| switch (err) {
                 error.NotTerminalDevice => error.NotATerminal,
                 error.BadHandle => error.Unexpected,
             };
         }
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
-            geometry.lock();
-            defer geometry.mutex.unlock();
+            // Held across the resize, which can block while the output pipe is
+            // undrained: another resize, or a `size`, waits through its `io`.
+            var accepted = try geometry.size.acquire(io);
+            defer accepted.deinit(io);
             const slave = pty.slave orelse return error.Unexpected;
             if (win32.ResizePseudoConsole(slave, new_size.toCoord()) != win32.ok) {
                 return error.Unexpected;
             }
-            geometry.size = new_size;
+            accepted.value().* = new_size;
             return;
         }
         const read = pty.read orelse return error.Unexpected;
@@ -271,7 +273,7 @@ pub const Pty = struct {
         if (pty.simulated) {
             const route = seam.routeOf(io) orelse return error.Unexpected;
             const read = pty.read orelse return error.Unexpected;
-            const got = route.windowSize(file(read)) catch |err| return switch (err) {
+            const got = route.windowSize(held.lend(read)) catch |err| return switch (err) {
                 error.NotTerminalDevice => error.NotATerminal,
                 error.BadHandle => error.Unexpected,
             };
@@ -279,36 +281,34 @@ pub const Pty = struct {
         }
         if (is_windows) {
             const geometry = pty.geometryState() orelse return error.Unexpected;
-            geometry.lock();
-            defer geometry.mutex.unlock();
-            return geometry.size;
+            var accepted = try geometry.size.acquire(io);
+            defer accepted.deinit(io);
+            return accepted.value().*;
         }
         const read = pty.read orelse return error.Unexpected;
         return tty.winSize(read);
     }
 
-    /// Both master ends as `std.Io.File`s.
+    /// Both master ends, lent: the `Pty` closes them (`close`, `closeMaster`).
     ///
-    /// The files share the handles rather than duplicating them: closing one
-    /// closes that end of the pair, and so does `close`. Pick one.
+    /// The files share the handles rather than duplicating them.
     ///
     /// Asserts the master is still open.
     pub fn master(pty: Pty) Master {
         return .{ .read = pty.readFile(), .write = pty.writeFile() };
     }
 
-    /// The end to read, as a `std.Io.File`. Asserts it is still open.
+    /// The end to read, lent. Asserts it is still open.
     pub fn readFile(pty: Pty) std.Io.File {
-        return file(pty.read.?);
+        return held.lend(pty.read.?);
     }
 
-    /// The end to write, as a `std.Io.File`. Asserts it is still open.
+    /// The end to write, lent. Asserts it is still open.
     pub fn writeFile(pty: Pty) std.Io.File {
-        return file(pty.write.?);
+        return held.lend(pty.write.?);
     }
 
-    /// The terminal end as a `std.Io.File`. POSIX only, and asserts it is still
-    /// open.
+    /// The terminal end, lent. POSIX only, and asserts it is still open.
     ///
     /// The same sharing rule as `master` applies. A parent that has spawned a
     /// child on this pair rarely wants this file; it wants `closeSlave`.
@@ -318,12 +318,7 @@ pub const Pty = struct {
     /// reads or writes.
     pub fn slaveFile(pty: Pty) std.Io.File {
         if (is_windows) @compileError("Pty.slaveFile is POSIX-only: a pseudoconsole is not a stream");
-        if (pty.simulated) return file(pty.simulated_slave.?);
-        return slaveFilePosix(pty);
-    }
-
-    fn slaveFilePosix(pty: Pty) std.Io.File {
-        return file(pty.slave.?);
+        return held.lend(if (pty.simulated) pty.simulated_slave.? else pty.slave.?);
     }
 
     /// Closes whichever ends are still open.
@@ -388,7 +383,7 @@ pub const Pty = struct {
     /// Reads the master and throws it away, so the console host has somewhere to
     /// put what it flushes on its way out.
     fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
-        const f = file(handle);
+        const f = held.lend(handle);
         var buffer: [4096]u8 = undefined;
         while (true) {
             _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
@@ -421,7 +416,7 @@ pub const Pty = struct {
     pub fn closeSlave(pty: *Pty, io: std.Io) void {
         defer if (is_windows) pty.releaseGeometry();
         if (pty.simulated_slave) |handle| {
-            file(handle).close(io);
+            held.close(io, handle);
             pty.simulated_slave = null;
         }
         const slave = pty.slave orelse return;
@@ -434,7 +429,7 @@ pub const Pty = struct {
             trace.print("pty: ClosePseudoConsole returned", .{});
             return;
         }
-        file(slave).close(io);
+        held.close(io, slave);
     }
 
     /// Closes both master ends.
@@ -468,30 +463,22 @@ pub const Pty = struct {
         // The same handle twice on POSIX, so it is closed once.
         const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
         if (pty.read) |handle| {
-            file(handle).close(io);
+            held.close(io, handle);
             pty.read = null;
         }
         if (pty.write) |handle| {
-            if (!same) file(handle).close(io);
+            if (!same) held.close(io, handle);
             pty.write = null;
         }
     }
 
-    /// One owner for the Windows resize operation and the size it accepted.
-    ///
-    /// Not an `aegis.Guarded`: the lock is held across `ResizePseudoConsole`, an
-    /// operating-system call that can block while the output pipe is undrained,
-    /// and a guard's sections are bounded. `resize` and `size` take no `std.Io`
-    /// to wait with, so a blocking guard would be a public change of its own
-    /// (an OS boundary).
+    /// One owner for the Windows resize operation and the size it accepted: a
+    /// blocking guard, held across `ResizePseudoConsole`, which can block while
+    /// the output pipe is undrained. A task waiting for it (another resize, or
+    /// `size`) waits through its `std.Io`, and a cancel ends the wait.
     const Geometry = struct {
-        mutex: std.atomic.Mutex = .unlocked,
-        size: Size,
+        size: aegis.BlockingGuarded(Size),
         gpa: std.mem.Allocator,
-
-        fn lock(geometry: *Geometry) void {
-            spin.lock(&geometry.mutex);
-        }
     };
 
     fn geometryState(pty: *const Pty) ?*Geometry {
@@ -610,9 +597,13 @@ pub const Pty = struct {
 
     // These four are the POSIX 98 pseudo-terminal interface. None of them is
     // declared in `std.c`.
+    // aegis: boundary(A019): libc's posix_openpt, declared as its POSIX manual page gives it
     extern "c" fn posix_openpt(oflag: c.O) posix.fd_t;
+    // aegis: boundary(A019): libc's grantpt, declared as its POSIX manual page gives it
     extern "c" fn grantpt(fd: posix.fd_t) c_int;
+    // aegis: boundary(A019): libc's unlockpt, declared as its POSIX manual page gives it
     extern "c" fn unlockpt(fd: posix.fd_t) c_int;
+    // aegis: boundary(A019): libc's ptsname_r, declared as the glibc and Darwin manual pages give it
     extern "c" fn ptsname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 
     //======================================================================
@@ -631,7 +622,7 @@ pub const Pty = struct {
     fn openWindows(gpa: std.mem.Allocator, options: OpenOptions) OpenError!Pty {
         const remembered = try gpa.create(Geometry);
         errdefer gpa.destroy(remembered);
-        remembered.* = .{ .size = options.size(), .gpa = gpa };
+        remembered.* = .{ .size = .init(options.size()), .gpa = gpa };
         // Two pipes. Each has an end for the console and an end for this program,
         // and neither end is inheritable -- `null` security attributes is what
         // says so -- which is the Windows counterpart of the close-on-exec the

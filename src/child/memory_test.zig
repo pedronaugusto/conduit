@@ -46,7 +46,7 @@ fn statusReadsBack(_: void, case: *shakedown.Case) anyerror!void {
     while (placed != 3) {
         if (gen.boolean(s)) {
             try text.appendSlice(gpa, gen.oneOf(s, []const u8, &others));
-        } else if (placed == 0 and gen.boolean(s) or placed == 2) {
+        } else if ((placed == 0 and gen.boolean(s)) or placed == 2) {
             try text.print(gpa, "VmRSS:\t{d} kB\n", .{current});
             placed |= 1;
         } else {

@@ -179,6 +179,7 @@ fn fromEnvironment(gpa: Allocator, name: []const u8) Allocator.Error!?[]u8 {
 
         const written = win32.GetEnvironmentVariableW(
             name_w[0..name_len :0].ptr,
+            // aegis: boundary(A019): RegQueryValueExW writes `written` bytes of the value where it answers SUCCESS
             &value,
             value.len,
         );

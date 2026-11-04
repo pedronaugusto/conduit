@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Pty.ResizeError` (and `SizeError`) carries `Canceled`: on Windows a resize holds the pair's geometry across `ResizePseudoConsole`, which blocks while the output pipe is undrained, and a task waiting for it (another resize, or `size`) now waits through its `Io` behind an `aegis.BlockingGuarded`, which a cancel ends, where it spun on a lock with no way out. `Proxy`'s size forwarder ends on that cancel, where it passed every refusal over.
+- A file's type says who closes it. `conduit.OwnedFile` (aegis `own.OwnedIo` over `std.Io.File`) is a file its one owner closes with `deinit(io)`; a file its owner lends is the `std.Io.File` itself, which the owner still closes and glint's lending rule keeps a holder from closing (aegis 0.3.0 lends one way, by `borrow`). `OwnedFile` is in `conduit.tty` too, with `held`: `held.own(handle)` makes an owner, `held.lend(handle)` a lent file.
+  - Lent, still a `std.Io.File`: `Child.stdinFile`, `stdoutFile` and `stderrFile`; `Pty.readFile`, `writeFile`, `slaveFile` and `simulatedSlave`; `Pty.Master`'s `read` and `write`. Nothing to change where they are read or written.
+  - Owned: `Child.takeStdin`, `takeStdout` and `takeStderr` return `?OwnedFile`. Close a taken pipe with `deinit(io)` where `close(io)` was, and reach it with `borrow()`. A taken pipe is no longer the `Child`'s: its `deinit` closes only what was not taken.
+  - Owned: `Channel.open`'s `parent` and `child`, and the end `Channel.inherited` and `Channel.fromValue` give. Close them with `deinit(io)`; read and write through `borrow()`; give a spawn `.channel = .{ .file = channel.child.borrow().*, .variable = ... }`.
+  - `tty.Controlling`'s `input` and `output` are methods that lend its files (`own.input().handle`), and `close` takes `*Controlling`.
+- `Cgroup.prepare` takes the `std.Io` it waits with.
+- `conduit.tty.T` is `conduit.tty.ioctl_request`, its numbers named in snake case: `get_window_size`, `set_window_size`, `set_controlling_terminal`.
+
+### Changed
+
+- aegis 0.3: the input writer waits on its guard (`held.wait(&condition, io, .none)`). Pins aegis breaking-0.3 (7bdb587), reactor and shakedown on it.
+- On the aegis 0.2 pack: aegis 0.2.3 and reactor 0.9.0, developed on shakedown 0.6.0 and preflight 0.18.5. Every extern declaration and pointer conversion at conduit's seam says why it is sound there, and the whole-file reads of the bench and the containment check are aegis's.
+
+### Fixed
+
+- On macOS, a process's children are listed into a buffer whose size `proc_listchildpids` takes as a `c_int`: a count past what that holds is `SystemResources`, as the group's listing already refused it, where the cast trapped.
+- `readAvailable` reads again past a read of nothing from a pipe poll says is readable, an interrupted read (std's `readStreaming` may return 0 without the end, which is `EndOfStream`), where it returned that 0 as nothing to read now and a caller draining a child's last output stopped short.
+
 ## [0.10.6] - 2026-10-25
 
 ### Added

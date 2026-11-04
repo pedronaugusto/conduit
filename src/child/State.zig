@@ -1,6 +1,7 @@
 //! The child lifecycle, shared only by the process implementation and Reaper.
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const Child = @import("contract.zig");
 const windows = std.os.windows;
 const is_windows = builtin.target.os.tag == .windows;
@@ -9,14 +10,16 @@ const cgroups = @import("../cgroup.zig");
 const reactor = @import("reactor");
 const Id = std.process.Child.Id;
 const Pty = @import("../pty.zig").Pty;
+const OwnedFile = @import("conduit.tty").OwnedFile;
 const Supervisor = @import("../supervisor.zig").Supervisor;
 const Tracker = @import("../lineage.zig").Tracker;
 const ProcessGroupId = Child.ProcessGroupId;
 const Term = Child.Term;
 
-stdin: ?std.Io.File = null,
-stdout: ?std.Io.File = null,
-stderr: ?std.Io.File = null,
+/// The parent's ends of the pipes `.pipes` made, until taken or closed.
+stdin: ?OwnedFile = null,
+stdout: ?OwnedFile = null,
+stderr: ?OwnedFile = null,
 pty: ?Pty.Master = null,
 gpa: std.mem.Allocator,
 /// The spawn's one descendant lifecycle policy.
@@ -93,7 +96,7 @@ term: ?Term,
 /// ordering before every read of it, so that a task which sees a term sees
 /// the whole of it. The separate `identity` claim keeps signalling safe
 /// until this publication says the identity has been retired.
-reaped: std.atomic.Value(bool) = .init(false),
+reaped: aegis.Atomic(Reaped) = .init(.running),
 /// Whether some task is inside the operating system's wait for this child.
 ///
 /// Exactly one may be: two waits on one child are one status and one `ECHILD`,
@@ -102,6 +105,7 @@ reaped: std.atomic.Value(bool) = .init(false),
 /// child is still running, `wait` by waiting for the answer to appear. One
 /// while it is held, zero otherwise: a word a waiter's futex waits on, woken
 /// when it is given back.
+// aegis: boundary(A007): std's futex waits on a std.atomic.Value(u32) word
 reaping: std.atomic.Value(u32) = .init(0),
 /// The right to use or retire the OS identity. Signalling holds it for the
 /// whole tree walk and delivery; reaping holds it only for the final,
@@ -113,6 +117,7 @@ reaping: std.atomic.Value(u32) = .init(0),
 /// across a descendant walk and signal delivery, which a spin guard's bounded
 /// sections do not allow; `tryWaitClaimed` must take it without waiting, which
 /// `Guarded` cannot; and its waiters yield rather than burn the walk's time.
+// aegis: design(A007): an OS name's lock, held across a descendant walk and signal delivery, taken without waiting by tryWaitClaimed, its waiters yielding (above)
 identity: std.atomic.Mutex = .unlocked,
 /// A child the simulated route started: `std.process`'s, on the route's
 /// `Io`, whose signals and waits go to the route. Null for the system's.
@@ -124,3 +129,6 @@ force_tree: bool = false,
 /// An identity retired without a term, because something else reaped it.
 /// Guarded by `identity`; once set, no signal uses the child's name again.
 identity_retired: bool = false,
+
+/// Whether `term` has been written: `reaped` publishes it.
+pub const Reaped = enum(u8) { running, reaped };

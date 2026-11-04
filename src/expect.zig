@@ -77,7 +77,7 @@ pub const Expect = struct {
     /// Private: the reading task has stopped, for any reason, cancellation included.
     /// Atomic and not behind the guard, so it can be read without taking anything
     /// the task holds.
-    finished: std.atomic.Value(bool),
+    finished: aegis.Atomic(Reading),
     /// Private: set by the reading task whenever one of those fields changes, so a wait
     /// ends the moment the child speaks rather than at the end of a poll
     /// interval.
@@ -88,9 +88,13 @@ pub const Expect = struct {
     group: std.Io.Group,
     /// Private: one claim for initialization, task ownership and stopping. Stop ends
     /// even a lifetime whose task has never been started.
-    lifetime: std.atomic.Value(enum(u8) { ready, started, stopped }),
+    lifetime: aegis.Atomic(Lifetime),
     /// Private: in safe builds, where this was when `start` began to hold a pointer to it.
     pin: Pin = .{},
+
+    /// Whether the reading task has stopped.
+    const Reading = enum(u8) { reading, finished };
+    const Lifetime = enum(u8) { ready, started, stopped };
 
     /// What the reading task and the caller share, behind `intake`.
     const Intake = struct {
@@ -164,7 +168,7 @@ pub const Expect = struct {
             .space = .unset,
             .group = .init,
             .lifetime = .init(.ready),
-            .finished = .init(false),
+            .finished = .init(.reading),
         };
     }
 
@@ -324,7 +328,7 @@ pub const Expect = struct {
             expect.arrived.reset();
             // Read before the buffer: a reader seen finished here has appended
             // everything it ever will, so a search that fails now fails for good.
-            const finished = expect.finished.load(.acquire);
+            const finished = expect.finished.load(.acquire) == .finished;
 
             var winner: ?Match = null;
             var full = false;
@@ -338,7 +342,7 @@ pub const Expect = struct {
                 const shown = if (matcher.window) |w| intake.filled -| w else 0;
                 const said = expect.buffer[shown..intake.filled];
                 if (matcher.findFn(matcher.context, said, intake.ended or intake.failed or finished)) |found| {
-                    std.debug.assert(found.at + found.len <= said.len);
+                    aegis.assert.invariant(found.at + found.len <= said.len, "found.at + found.len <= said.len");
                     const at = shown + found.at;
                     winner = .{
                         .index = found.index,
@@ -372,7 +376,7 @@ pub const Expect = struct {
 
         fn find(context: ?*anyopaque, said: []const u8, ended: bool) ?Found {
             _ = ended;
-            const l: *Literal = @ptrCast(@alignCast(context.?)); // safe: `matcher` gives its own `*Literal`
+            const l: *Literal = @ptrCast(@alignCast(context.?)); // aegis: internal(A019): `matcher` gives its own `*Literal`
             const found = l.search.find(said, l.patterns) orelse return null;
             return .{ .index = found.index, .at = found.at, .len = l.patterns[found.index].len };
         }
@@ -443,7 +447,7 @@ pub const Expect = struct {
         while (true) {
             expect.arrived.reset();
             // As in `untilAny`: before the buffer.
-            const finished = expect.finished.load(.acquire);
+            const finished = expect.finished.load(.acquire) == .finished;
 
             var enough = false;
             var ended = false;
@@ -555,7 +559,7 @@ pub const Expect = struct {
                 const intake = held.value();
                 // Only this reader grows `filled`, and the room it saw can
                 // only have grown since: a consumer frees space, never takes it.
-                std.debug.assert(n <= expect.buffer.len - intake.filled);
+                aegis.assert.invariant(n <= expect.buffer.len - intake.filled, "n <= expect.buffer.len - intake.filled");
                 @memcpy(expect.buffer[intake.filled..][0..n], chunk[0..n]);
                 intake.filled += n;
             }
@@ -580,7 +584,7 @@ pub const Expect = struct {
     /// Published on every exit from the reading task. Stored outside the mutex so
     /// it can be observed without taking anything the task might hold.
     fn markFinished(expect: *Expect, io: std.Io) void {
-        expect.finished.store(true, .release);
+        expect.finished.store(.finished, .release);
         expect.arrived.set(io);
     }
 
@@ -613,8 +617,8 @@ pub const Expect = struct {
         defer held.deinit(io);
         const intake = held.value();
         if (intake.consumed == 0) return;
-        std.debug.assert(intake.consumed <= intake.filled);
-        std.debug.assert(intake.filled <= expect.buffer.len);
+        aegis.assert.invariant(intake.consumed <= intake.filled, "intake.consumed <= intake.filled");
+        aegis.assert.invariant(intake.filled <= expect.buffer.len, "intake.filled <= expect.buffer.len");
         const rest = intake.filled - intake.consumed;
         @memmove(expect.buffer[0..rest], expect.buffer[intake.consumed..intake.filled]);
         intake.filled = rest;

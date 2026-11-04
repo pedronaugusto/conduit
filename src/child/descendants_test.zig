@@ -193,9 +193,8 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
             } else if (comptime std.mem.eql(u8, operation, "killWait")) {
                 _ = try fixture.child.killWait(io, .literal("50ms"));
             } else {
-                fixture.child.stdoutFile().?.close(io);
-                fixture.child.state.stdout.?.handle = if (windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
-                defer _ = fixture.child.takeStdout();
+                @import("../testing/support.zig").unreadableStdout(&fixture.child, io);
+                defer @import("../testing/support.zig").dropUnreadableStdout(&fixture.child);
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }
             fixture.finish() catch unreachable;
@@ -207,10 +206,10 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
 test "a walk too large to hold still kills and reaps the child itself" {
     if (windows) return error.SkipZigTest;
     // The walk is what is under test: a child in a cgroup is ended without one.
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
-    tree.testing_hook.walk_full = true;
-    defer tree.testing_hook.walk_full = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
+    tree.testing_hook.walk.store(.full, .monotonic);
+    defer tree.testing_hook.walk.store(.normal, .monotonic);
     {
         var fixture = try Fixture.start(.survive, "--escape");
         defer fixture.deinit();
@@ -244,9 +243,9 @@ test "containment ends a double-forked session after normal exit" {
         if (builtin.target.os.tag == .macos) {
             const tracker = fixture.child.state.lineage.?;
             const deadline: Deadline = .in(io, budget);
-            while (tracker.observed.load(.acquire) < 3 and deadline.remainingMs(io) > 0)
+            while (tracker.observed.load(.acquire).raw() < 3 and deadline.remainingMs(io) > 0)
                 try io.sleep(.fromMilliseconds(2), .awake);
-            try std.testing.expect(tracker.observed.load(.acquire) >= 3);
+            try std.testing.expect(tracker.observed.load(.acquire).raw() >= 3);
         }
         fixture.child.closeStdin(io);
         if (comptime std.mem.eql(u8, method, "tryWait")) {
@@ -277,10 +276,10 @@ test "containment ends a double-forked session after normal exit" {
 test "Darwin measures the fork then exit registration race" {
     if (builtin.target.os.tag != .macos or !test_options.measure) return error.SkipZigTest;
     const attempts = 100;
-    const hook = &lineage.testing_hook.delay_ms;
+    const hook = &lineage.testing_hook.delay;
     defer hook.store(0, .release);
     for ([_]u32{ 0, 20 }) |delay_ms| {
-        hook.store(delay_ms, .release);
+        hook.store(.fromRaw(delay_ms), .release);
         var escapes: usize = 0;
         for (0..attempts) |_| {
             var fixture = try Fixture.start(.contain, "--race");
@@ -297,8 +296,8 @@ test "Darwin measures the fork then exit registration race" {
 
 test "a Reaper subreaper ends and reaps a detached orphan without stealing another child" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
     // Activation precedes spawn: an intermediate can exit before start runs.
@@ -336,8 +335,8 @@ test "a Reaper subreaper ends and reaps a detached orphan without stealing anoth
 test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
     const linux = std.os.linux;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var fixture: Fixture = undefined;
     var reaper: Reaper = .init(&fixture.child, .{});
     try reaper.enableSubreaper(gpa);
@@ -384,8 +383,8 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
 
 test "independent contained Linux children end only their own detached orphans" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var first = try Fixture.start(.contain, "--race");
     defer first.deinit();
     var second = try Fixture.start(.contain, "--race");
@@ -412,8 +411,8 @@ test "a private supervisor preserves the root exit code and signal" {
 
 test "a saved private supervisor ends only its recorded scope" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     var first = try Fixture.start(.contain, "--race");
     defer first.deinit();
     var second = try Fixture.start(.contain, "--race");
@@ -475,8 +474,8 @@ test "a private supervisor has its own session and process group" {
 
 test "every catchable supervisor stop ends and reaps its detached adoptee" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroups.testing_hook.off = true;
-    defer cgroups.testing_hook.off = false;
+    cgroups.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroups.testing_hook.cgroups.store(.on, .monotonic);
     inline for (.{ std.posix.SIG.HUP, std.posix.SIG.INT, std.posix.SIG.QUIT, std.posix.SIG.TERM, std.posix.SIG.TSTP }) |signal| {
         var fixture = try Fixture.start(.contain, "--race");
         defer fixture.deinit();
@@ -493,12 +492,12 @@ test "a failed private scope finish keeps ownership for retry" {
     var fixture = try Fixture.start(.contain, "--race");
     defer fixture.deinit();
     const scope = fixture.child.state.id;
-    supervisor.testing_hook.fail_request = true;
-    defer supervisor.testing_hook.fail_request = false;
+    supervisor.testing_hook.request.store(.fail, .monotonic);
+    defer supervisor.testing_hook.request.store(.normal, .monotonic);
     try std.testing.expectError(error.Unexpected, fixture.finish());
     try std.testing.expectEqual(scope, fixture.child.state.id);
     try std.testing.expect(fixture.daemon.alive());
-    supervisor.testing_hook.fail_request = false;
+    supervisor.testing_hook.request.store(.normal, .monotonic);
     try fixture.finish();
     try std.testing.expect(!fixture.daemon.alive());
 }

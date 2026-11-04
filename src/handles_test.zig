@@ -3,7 +3,7 @@ const reap = @import("testing/support.zig").reap;
 const Deadline = @import("conduit.tty").Deadline;
 const builtin = @import("builtin");
 const is_windows = builtin.target.os.tag == .windows;
-const file = @import("handles.zig").file;
+const held = @import("conduit.tty").held;
 const writeStreamingAll = @import("handles.zig").writeStreamingAll;
 const pipe = @import("conduit.tty").pipe;
 const Child = @import("child.zig").Child;
@@ -36,48 +36,65 @@ test "Windows a closed pipe is a broken write and a file keeps its unexpected er
     try testing.expectError(error.Unexpected, writeStreamingAll(failed.io(), f, "unchanged"));
 }
 
+test "readAvailable reads on past an interrupted read of nothing, which is not the pipe's end" {
+    if (is_windows) return error.SkipZigTest; // the readable pipe is asked by poll
+    const testing = std.testing;
+    const io = testing.io;
+    const readAvailable = @import("handles.zig").readAvailable;
+    const fds = try pipe(.{});
+    var ends: [2]held.OwnedFile = .{ held.own(fds[0]), held.own(fds[1]) };
+    defer ends[0].deinit(io);
+    defer ends[1].deinit(io);
+    try writeStreamingAll(io, ends[1].borrow().*, "said");
+    const faults = try FaultIo.init(testing.allocator, io, .{ .plan = &.{.{ .at = .{ .nth = .{ .call = .file_read_streaming, .n = 1 } }, .fault = .{ .short = 0 } }} });
+    defer faults.deinit();
+    var buffer: [16]u8 = undefined;
+    const n = try readAvailable(faults.io(), ends[0].borrow().*, &buffer);
+    try testing.expectEqualStrings("said", buffer[0..n]);
+}
+
 test "readAvailable reads what a pipe holds and returns rather than wait for the rest" {
     const testing = std.testing;
     const io = testing.io;
     const readAvailable = @import("handles.zig").readAvailable;
-    const ends: [2]std.Io.File = if (is_windows) ends: {
+    var ends: [2]held.OwnedFile = if (is_windows) ends: {
         const win32 = @import("win32");
         var read_end: std.os.windows.HANDLE = undefined;
         var write_end: std.os.windows.HANDLE = undefined;
         if (win32.CreatePipe(&read_end, &write_end, null, 0) == .FALSE) return error.PipeFailed;
-        break :ends .{ file(read_end), file(write_end) };
+        break :ends .{ held.own(read_end), held.own(write_end) };
     } else ends: {
         const fds = try pipe(.{});
-        break :ends .{ file(fds[0]), file(fds[1]) };
+        break :ends .{ held.own(fds[0]), held.own(fds[1]) };
     };
-    defer ends[0].close(io);
+    defer ends[0].deinit(io);
     var writer_open = true;
-    defer if (writer_open) ends[1].close(io);
+    defer if (writer_open) ends[1].deinit(io);
 
     var buffer: [64]u8 = undefined;
     // Empty, with its writer open: nothing, at once.
-    try testing.expectEqual(@as(usize, 0), try readAvailable(io, ends[0], &buffer));
+    try testing.expectEqual(@as(usize, 0), try readAvailable(io, ends[0].borrow().*, &buffer));
     // What was written, and then nothing, while the writer is still open,
     // as when something a child started still holds it.
-    try writeStreamingAll(io, ends[1], "said before ending\n");
+    try writeStreamingAll(io, ends[1].borrow().*, "said before ending\n");
     var got: usize = 0;
     while (true) {
-        const n = try readAvailable(io, ends[0], buffer[got..]);
+        const n = try readAvailable(io, ends[0].borrow().*, buffer[got..]);
         if (n == 0) break;
         got += n;
     }
     try testing.expectEqualStrings("said before ending\n", buffer[0..got]);
     // The rest after the writer is gone, then the end, as nothing.
-    try writeStreamingAll(io, ends[1], "last");
-    ends[1].close(io);
+    try writeStreamingAll(io, ends[1].borrow().*, "last");
+    ends[1].deinit(io);
     writer_open = false;
     got = 0;
     while (true) {
-        const n = try readAvailable(io, ends[0], buffer[got..]);
+        const n = try readAvailable(io, ends[0].borrow().*, buffer[got..]);
         if (n == 0) break;
         got += n;
     }
     try testing.expectEqualStrings("last", buffer[0..got]);
-    try testing.expectEqual(@as(usize, 0), try readAvailable(io, ends[0], &buffer));
-    try testing.expectError(error.EmptyBuffer, readAvailable(io, ends[0], buffer[0..0]));
+    try testing.expectEqual(@as(usize, 0), try readAvailable(io, ends[0].borrow().*, &buffer));
+    try testing.expectError(error.EmptyBuffer, readAvailable(io, ends[0].borrow().*, buffer[0..0]));
 }

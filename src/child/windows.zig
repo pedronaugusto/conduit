@@ -124,7 +124,7 @@ fn started(
     options: SpawnOptions,
     information: windows.PROCESS.INFORMATION,
     job: Job,
-    plan: *const Plan,
+    plan: *Plan,
 ) *State {
     state.* = .{
         .gpa = state.gpa,
@@ -143,9 +143,9 @@ fn started(
         .exit_watch = {},
         .cgroup = {},
         .term = null,
-        .stdin = plan.parent[0],
-        .stdout = plan.parent[1],
-        .stderr = plan.parent[2],
+        .stdin = plan.takeParent(0),
+        .stdout = plan.takeParent(1),
+        .stderr = plan.takeParent(2),
         .pty = switch (options.stdio) {
             .pty => |pty| pty.master(),
             else => null,
@@ -804,7 +804,7 @@ const AttributeList = struct {
 
         // Over-aligned rather than guessed at: the list holds pointers.
         const buffer = try arena.alignedAlloc(u8, .of(usize), size);
-        const raw: *win32.ProcThreadAttributeList = @ptrCast(buffer.ptr); // safe: an opaque list in a buffer of the size Windows asked for, pointer-aligned
+        const raw: *win32.ProcThreadAttributeList = @ptrCast(buffer.ptr); // aegis: boundary(A019): an opaque list in a buffer of the size Windows asked for, pointer-aligned
         if (win32.InitializeProcThreadAttributeList(raw, count, 0, &size) == .FALSE) {
             return createError();
         }
@@ -838,7 +838,7 @@ const AttributeList = struct {
             list.raw,
             0,
             win32.proc_thread_attribute_handle_list,
-            @ptrCast(handles.ptr), // safe: the handle array Windows reads, its size in bytes beside it
+            @ptrCast(handles.ptr), // aegis: boundary(A019): the handle array Windows reads, its size in bytes beside it
             handles.len * @sizeOf(windows.HANDLE),
             null,
             null,

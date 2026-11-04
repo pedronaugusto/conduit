@@ -184,8 +184,7 @@ test "a process's start time is its own: the same while it runs, gone once it is
     try std.testing.expectEqual(started, (try startTime(pid)).?);
     // a process started after this one did not start before it
     try std.testing.expect(started >= own);
-    child.stdinFile().?.close(testing.io);
-    _ = child.takeStdin();
+    child.closeStdin(testing.io);
     _ = try child.wait(testing.io);
     try std.testing.expectEqual(@as(?u64, null), try startTime(pid));
 }
@@ -215,8 +214,7 @@ test "a captured pid stays bound to the recorded process, and a start time that 
     }
     // A signal the shell's default action ignores, sent through the capture.
     try testing.expect(captured.signal(.CONT));
-    child.stdinFile().?.close(testing.io);
-    _ = child.takeStdin();
+    child.closeStdin(testing.io);
     _ = try child.wait(testing.io);
     // Ended and reaped: the capture reaches nothing, whoever has the number.
     try testing.expect(!captured.alive());

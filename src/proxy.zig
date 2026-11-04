@@ -46,6 +46,7 @@
 //! safe to call while the master is being read and written.
 
 const std = @import("std");
+const aegis = @import("aegis");
 
 const Pty = @import("pty.zig").Pty;
 const handles = @import("handles.zig");
@@ -180,7 +181,7 @@ pub fn run(io: std.Io, options: Options) RunError!void {
 const Direction = enum(u8) { none, input, output };
 
 const Completion = struct {
-    winner: std.atomic.Value(Direction) = .init(.none),
+    winner: aegis.Atomic(Direction) = .init(.none),
     arrived: std.Io.Event = .unset,
     input_error: ?RunError = null,
     output_error: ?RunError = null,
@@ -242,16 +243,17 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     var last: ?tty.Size = null;
 
     while (true) {
+        // glint-ignore: Z026 -- a source that is not a terminal, or is gone, has no size to forward, and no caller of `run` could act on it
         if (tty.winSize(resize.source)) |now| {
             if (last == null or !std.meta.eql(last.?, now)) {
-                // glint-ignore: Z026 -- a pair that refuses a size keeps its old one, and this task has no caller to tell
-                resize.pty.resize(io, now) catch {};
+                resize.pty.resize(io, now) catch |err| switch (err) {
+                    error.Canceled => return error.Canceled,
+                    // A pair that refuses a size keeps its old one, and this task has no caller to tell.
+                    error.NotATerminal, error.Unexpected => {},
+                };
                 last = now;
             }
-        } else |_| {
-            // A source that is not a terminal, or is gone. Nothing to forward,
-            // and nothing a caller of `run` could do about it.
-        }
+        } else |_| {}
 
         try waitResize(io, resize);
     }

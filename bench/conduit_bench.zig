@@ -7,6 +7,7 @@
 //! line is made in the working directory. The other rows are in `coverage.zig`
 //! and the shared fixture in `fixture.zig`.
 const std = @import("std");
+const aegis = @import("aegis");
 const conduit = @import("conduit");
 const bench = @import("shakedown").bench;
 const coverage = @import("coverage.zig");
@@ -77,7 +78,7 @@ pub fn main(init: std.process.Init) !void {
     }
     const path = try std.Io.Dir.cwd().realPathFileAlloc(init.io, input_path orelse "line.txt", init.gpa);
     defer init.gpa.free(path);
-    const input = try std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .unlimited);
+    const input = try aegis.own.readFile(init.io, .cwd(), path, init.gpa, .literal("64MiB"));
     defer init.gpa.free(input);
 
     var context: Context = .{

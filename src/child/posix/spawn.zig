@@ -169,6 +169,7 @@ pub fn spawn(
     var terminal_slot: ?posix.fd_t = null;
     if (session) {
         const slave = options.stdio.pty.slaveHandle().?;
+        // aegis: boundary(A019): ttyname_r(3) writes the terminal's name, NUL-terminated, where it answers 0
         if (ttyname_r(slave, &terminal_name, terminal_name.len) != 0) return null;
     }
 
@@ -353,18 +354,28 @@ const Flags = packed struct(c_short) {
     }
 };
 
+// aegis: boundary(A019): libc's posix_spawnattr_init, declared as its POSIX manual page gives it
 extern "c" fn posix_spawnattr_init(attr: *Attr) c_int;
+// aegis: boundary(A019): libc's posix_spawnattr_destroy, declared as its POSIX manual page gives it
 extern "c" fn posix_spawnattr_destroy(attr: *Attr) c_int;
+// aegis: boundary(A019): libc's posix_spawnattr_setflags, declared as its POSIX manual page gives it
 extern "c" fn posix_spawnattr_setflags(attr: *Attr, flags: Flags) c_int;
+// aegis: boundary(A019): libc's posix_spawnattr_setpgroup, declared as its POSIX manual page gives it
 extern "c" fn posix_spawnattr_setpgroup(attr: *Attr, pgroup: posix.pid_t) c_int;
+// aegis: boundary(A019): libc's posix_spawnattr_setsigdefault, declared as its POSIX manual page gives it
 extern "c" fn posix_spawnattr_setsigdefault(attr: *Attr, sigdefault: *const posix.sigset_t) c_int;
+// aegis: boundary(A019): libc's posix_spawnattr_setsigmask, declared as its POSIX manual page gives it
 extern "c" fn posix_spawnattr_setsigmask(attr: *Attr, sigmask: *const posix.sigset_t) c_int;
 /// glibc 2.39; referenced only where `into_cgroup` holds, so a program built
 /// for an older glibc never links it.
+// aegis: boundary(A019): glibc's posix_spawnattr_setcgroup_np, declared as glibc 2.39's spawn.h gives it
 extern "c" fn posix_spawnattr_setcgroup_np(attr: *Attr, cgroup: c_int) c_int;
 
+// aegis: boundary(A019): libc's posix_spawn_file_actions_init, declared as its POSIX manual page gives it
 extern "c" fn posix_spawn_file_actions_init(actions: *FileActions) c_int;
+// aegis: boundary(A019): libc's posix_spawn_file_actions_destroy, declared as its POSIX manual page gives it
 extern "c" fn posix_spawn_file_actions_destroy(actions: *FileActions) c_int;
+// aegis: boundary(A019): libc's posix_spawn_file_actions_addopen, declared as its POSIX manual page gives it
 extern "c" fn posix_spawn_file_actions_addopen(
     actions: *FileActions,
     filedes: posix.fd_t,
@@ -372,13 +383,16 @@ extern "c" fn posix_spawn_file_actions_addopen(
     oflag: posix.O,
     mode: posix.mode_t,
 ) c_int;
+// aegis: boundary(A019): libc's ttyname_r, declared as its POSIX manual page gives it
 extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, len: usize) c_int;
+// aegis: boundary(A019): libc's posix_spawn_file_actions_adddup2, declared as its POSIX manual page gives it
 extern "c" fn posix_spawn_file_actions_adddup2(
     actions: *FileActions,
     filedes: posix.fd_t,
     newfiledes: posix.fd_t,
 ) c_int;
 
+// aegis: boundary(A019): libc's posix_spawn, declared as its POSIX manual page gives it
 extern "c" fn posix_spawn(
     pid: *posix.pid_t,
     path: [*:0]const u8,

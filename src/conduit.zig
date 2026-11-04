@@ -158,6 +158,11 @@ pub const Size = tty.Size;
 pub const Saved = tty.Saved;
 /// A stream handle: `std.posix.fd_t` on POSIX, `HANDLE` on Windows.
 pub const Handle = tty.Handle;
+/// A file its owner closes, once, with `deinit(io)`: what a spawn hands over
+/// (`Child.takeStdout`), and a channel's ends.
+pub const OwnedFile = tty.OwnedFile;
+/// A raw handle made an owned file, lent as a plain `std.Io.File`, or closed.
+pub const held = tty.held;
 
 /// The user's shell on a new pseudo-terminal, with a terminal program's
 /// defaults.

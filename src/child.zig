@@ -53,6 +53,7 @@ const child_exit = @import("exit.zig");
 const reactor = @import("reactor");
 const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
+const OwnedFile = @import("conduit.tty").OwnedFile;
 const Duration = @import("conduit.tty").Duration;
 const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
 const input_writer = @import("input_writer.zig");
@@ -345,9 +346,9 @@ pub const Child = struct {
     pub fn deinit(child: *Child, io: std.Io) void {
         if (child.state.descendants == .contain and !child.state.scope_complete) child.abandon(io);
         const state = child.state;
-        if (state.stdin) |f| f.close(io);
-        if (state.stdout) |f| f.close(io);
-        if (state.stderr) |f| f.close(io);
+        if (state.stdin) |*f| f.deinit(io);
+        if (state.stdout) |*f| f.deinit(io);
+        if (state.stderr) |*f| f.deinit(io);
         if (state.simulated != null) {
             // The simulation holds nothing of this process's for it.
         } else if (is_windows) {
@@ -382,9 +383,8 @@ pub const Child = struct {
     /// Idempotent, and safe after the child has been reaped.
     pub fn closeStdin(child: *Child, io: std.Io) void {
         const state = child.state;
-        const f = state.stdin orelse return;
+        if (state.stdin) |*f| f.deinit(io);
         state.stdin = null;
-        f.close(io);
     }
 
     /// Takes the stdin pipe and starts a bounded writer on its own task. Bytes
@@ -403,7 +403,7 @@ pub const Child = struct {
         const state = child.state;
         spin.lock(&state.identity);
         defer state.identity.unlock();
-        if (state.reaped.load(.acquire) or state.identity_retired) return null;
+        if (state.reaped.load(.acquire) == .reaped or state.identity_retired) return null;
         return state.process_id;
     }
 
@@ -422,7 +422,7 @@ pub const Child = struct {
         if (state.simulated != null) return error.Unsupported;
         spin.lock(&state.identity);
         defer state.identity.unlock();
-        if (state.reaped.load(.acquire) or state.identity_retired) return error.ProcessEnded;
+        if (state.reaped.load(.acquire) == .reaped or state.identity_retired) return error.ProcessEnded;
         return memory_impl.of(if (is_windows) state.id else state.process_id);
     }
 
@@ -522,7 +522,7 @@ pub const Child = struct {
     /// The acquire load pairs with the release store in `publish`, so a caller
     /// that sees a term sees every field the reaper wrote before it.
     fn settled(child: *const Child) ?Term {
-        if (!child.state.reaped.load(.acquire)) return null;
+        if (child.state.reaped.load(.acquire) != .reaped) return null;
         // Published only after it was written.
         std.debug.assert(child.state.term != null);
         return child.state.term;
@@ -532,10 +532,10 @@ pub const Child = struct {
     fn publish(child: *Child, term: Term) void {
         // One reap, so one term: whoever publishes holds the identity, and a
         // second reap would be of a process this child no longer names.
-        std.debug.assert(!child.state.reaped.load(.monotonic));
+        std.debug.assert(child.state.reaped.load(.monotonic) != .reaped);
         std.debug.assert(child.state.term == null);
         child.state.term = term;
-        child.state.reaped.store(true, .release);
+        child.state.reaped.store(.reaped, .release);
     }
 
     /// Takes the right to be inside the operating system's wait for this child.
@@ -619,7 +619,7 @@ pub const Child = struct {
     fn reapWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         if (child.state.simulated != null) return child.reapSimulated(io, deadline.toTimeout());
         if (try child.tryWaitClaimed(io)) |term| return term;
-        if (builtin.is_test and !is_windows) if (before_exit_watch) |hook| hook(child);
+        if (builtin.is_test and !is_windows) if (before_exit_watch.load(.acquire)) |hook| hook(child);
 
         switch (try child_exit.wait(io, child.state.id, child.exitWatch(), null, deadline.toTimeout())) {
             .ended => {},
@@ -656,7 +656,7 @@ pub const Child = struct {
         return if (child.state.exit_watch) |*watch| watch else null;
     }
 
-    var before_exit_watch: if (builtin.is_test) ?*const fn (*Child) void else void = if (builtin.is_test) null else {};
+    var before_exit_watch: if (builtin.is_test) aegis.Atomic(?*const fn (*Child) void) else void = if (builtin.is_test) .init(null) else {};
 
     test "an exit before the wait begins is reaped without a fallback sleep" {
         if (is_windows) return error.SkipZigTest;
@@ -684,8 +684,8 @@ pub const Child = struct {
         };
         const counted = try shakedown.FaultIo.init(testing.allocator, io, .{});
         defer counted.deinit();
-        before_exit_watch = Exit.beforeWatch;
-        defer before_exit_watch = null;
+        before_exit_watch.store(Exit.beforeWatch, .release);
+        defer before_exit_watch.store(null, .release);
         // A termination request still owns the final group force before reap.
         child.state.end_descendants = true;
         _ = try child.wait(counted.io());
@@ -805,6 +805,7 @@ pub const Child = struct {
             }
         }
         var status: c_int = undefined;
+        // aegis: no-danger(A020): a nonblocking waitpid, repeated only when a signal interrupts it
         while (true) {
             const rc = c.waitpid(child.state.id, &status, c.W.NOHANG);
             if (rc == 0) return null;
@@ -965,7 +966,7 @@ pub const Child = struct {
         if (child.settled() != null or child.state.identity_retired) return;
         if (!signal.valid()) return error.Unsupported;
         if (signal.ends()) child.state.end_descendants = true;
-        if (builtin.is_test) if (signal_probe) |probe| probe.beforeSignal(child);
+        if (builtin.is_test) if (signal_probe.load(.acquire)) |probe| probe.beforeSignal(child);
         if (is_windows) return child.killWindows(signal);
         const sig = signal.toPosix();
 
@@ -1286,11 +1287,11 @@ pub const Child = struct {
     /// `.pipes` made one, the pseudo-terminal master when the child is on a pair,
     /// and `null` when the child's input is something this process does not hold.
     ///
-    /// Borrowed either way. The pipe is closed by `deinit` and the master by the
+    /// Lent either way. The pipe is closed by `deinit` and the master by the
     /// `Pty`.
     pub fn stdinFile(child: Child) ?std.Io.File {
         const state = child.state;
-        if (state.stdin) |f| return f;
+        if (state.stdin) |*f| return f.borrow().*;
         if (child.state.pty) |m| return m.write;
         return null;
     }
@@ -1304,44 +1305,45 @@ pub const Child = struct {
     /// package's.
     pub fn stdoutFile(child: Child) ?std.Io.File {
         const state = child.state;
-        if (state.stdout) |f| return f;
+        if (state.stdout) |*f| return f.borrow().*;
         if (child.state.pty) |m| return m.read;
         return null;
     }
 
-    /// The separate standard-error pipe, borrowed until closure or deinit.
+    /// The separate standard-error pipe, lent until taken or deinit.
     pub fn stderrFile(child: Child) ?std.Io.File {
         const state = child.state;
-        return state.stderr;
+        return if (state.stderr) |*f| f.borrow().* else null;
     }
 
-    /// The borrowed terminal streams, when spawned on a pair.
+    /// The terminal streams, lent by the `Pty`, when spawned on a pair.
     pub fn terminalMaster(child: Child) ?Pty.Master {
         const state = child.state;
         return state.pty;
     }
 
-    /// Transfers the stdin pipe to the caller, who must close it. Terminal streams stay borrowed.
-    pub fn takeStdin(child: *Child) ?std.Io.File {
-        const state = child.state;
-        const taken = state.stdin;
-        state.stdin = null;
-        return taken;
+    /// Transfers the stdin pipe to the caller, who closes it with `deinit(io)`;
+    /// `deinit` here no longer does. Terminal streams stay lent.
+    pub fn takeStdin(child: *Child) ?OwnedFile {
+        return take(&child.state.stdin);
     }
 
-    /// Transfers the stdout pipe to the caller, who must close it. Terminal streams stay borrowed.
-    pub fn takeStdout(child: *Child) ?std.Io.File {
-        const state = child.state;
-        const taken = state.stdout;
-        state.stdout = null;
-        return taken;
+    /// Transfers the stdout pipe to the caller, who closes it with `deinit(io)`;
+    /// `deinit` here no longer does. Terminal streams stay lent.
+    pub fn takeStdout(child: *Child) ?OwnedFile {
+        return take(&child.state.stdout);
     }
 
-    /// Transfers the stderr pipe to the caller, who must close it. Terminal streams stay borrowed.
-    pub fn takeStderr(child: *Child) ?std.Io.File {
-        const state = child.state;
-        const taken = state.stderr;
-        state.stderr = null;
+    /// Transfers the stderr pipe to the caller, who closes it with `deinit(io)`;
+    /// `deinit` here no longer does.
+    pub fn takeStderr(child: *Child) ?OwnedFile {
+        return take(&child.state.stderr);
+    }
+
+    /// The pipe in `slot`, moved out of it, the slot left empty.
+    fn take(slot: *?OwnedFile) ?OwnedFile {
+        const taken = if (slot.*) |*f| f.move() else null;
+        slot.* = null;
         return taken;
     }
 
@@ -1578,10 +1580,12 @@ pub const Child = struct {
         if (input.len == 0) {
             child.closeStdin(io);
         } else {
-            const stdin = state.stdin.?;
-            try group.concurrent(io, Feed.run, .{ io, &feed, stdin, input });
-            // The task closes it once written.
-            state.stdin = null;
+            // The feed holds it from here, and its task closes it once written.
+            feed.input = child.takeStdin();
+            group.concurrent(io, Feed.run, .{ io, &feed, input }) catch |err| {
+                state.stdin = feed.input.?.move();
+                return err;
+            };
         }
         const ended = try child.collectInto(io, sinks, .{
             .max_bytes = options.max_bytes,
@@ -1598,11 +1602,14 @@ pub const Child = struct {
     /// The input of an `exchange`, written on a task of its own.
     const Feed = struct {
         failure: ?std.Io.File.Writer.Error = null,
+        /// The child's input pipe, taken from it for this task.
+        input: ?OwnedFile = null,
 
-        fn run(io: std.Io, feed: *Feed, file: std.Io.File, bytes: []const u8) std.Io.Cancelable!void {
+        fn run(io: std.Io, feed: *Feed, bytes: []const u8) std.Io.Cancelable!void {
             // Only this task uses or closes the pipe once it has started.
-            defer file.close(io);
-            handles.writeStreamingAll(io, file, bytes) catch |err| switch (err) {
+            const input = &feed.input.?;
+            defer input.deinit(io);
+            handles.writeStreamingAll(io, input.borrow().*, bytes) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 // The child ended, or closed its input, before taking all of it.
                 error.BrokenPipe => {},
@@ -1656,10 +1663,10 @@ pub const Child = struct {
         // waiting out its budget and then calling an empty stream truncated.
         if (child.stdoutFile()) |f| {
             try select.concurrent(.out, collect, .{ io, f, options.max_bytes, &out });
-        } else out.done.store(true, .release);
-        if (child.state.stderr) |f| {
+        } else out.done.store(.done, .release);
+        if (child.stderrFile()) |f| {
             try select.concurrent(.err, collect, .{ io, f, options.max_bytes, &err });
-        } else err.done.store(true, .release);
+        } else err.done.store(.done, .release);
         try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
 
         var timed_out = false;
@@ -1690,9 +1697,9 @@ pub const Child = struct {
         // The child is gone, so its ends of the pipes are closed and the readers
         // are finishing. Anything still holding a stream open is not the child,
         // and is not what this call promised to wait for.
-        if (!(out.done.load(.acquire) and err.done.load(.acquire))) {
+        if (!((out.done.load(.acquire) == .done) and (err.done.load(.acquire) == .done))) {
             try select.concurrent(.drained, Deadline.sleep, .{ drainDeadline(io, options, until), io });
-            while (!(out.done.load(.acquire) and err.done.load(.acquire))) switch (try select.await()) {
+            while (!((out.done.load(.acquire) == .done) and (err.done.load(.acquire) == .done))) switch (try select.await()) {
                 .out, .err => |read| try read,
                 .drained => |slept| {
                     try slept;
@@ -1725,10 +1732,11 @@ pub const Child = struct {
         /// What the writer has been given, which `max_bytes` bounds.
         kept: usize,
         truncated: bool,
-        failure: std.atomic.Value(Failure),
-        done: std.atomic.Value(bool),
+        failure: aegis.Atomic(Failure),
+        done: aegis.Atomic(Progress),
 
         const Failure = enum(u8) { none, read_failed, write_failed };
+        const Progress = enum(u8) { reading, done };
 
         fn init(sink: *std.Io.Writer) Collector {
             return .{
@@ -1736,7 +1744,7 @@ pub const Child = struct {
                 .kept = 0,
                 .truncated = false,
                 .failure = .init(.none),
-                .done = .init(false),
+                .done = .init(.reading),
             };
         }
 
@@ -1756,8 +1764,8 @@ pub const Child = struct {
             return .{
                 .term = term,
                 .timed_out = timed_out,
-                .stdout_truncated = out.truncated or !out.done.load(.acquire),
-                .stderr_truncated = err.truncated or !err.done.load(.acquire),
+                .stdout_truncated = out.truncated or out.done.load(.acquire) != .done,
+                .stderr_truncated = err.truncated or err.done.load(.acquire) != .done,
             };
         }
     };
@@ -1788,7 +1796,7 @@ pub const Child = struct {
             var set: PollSet = .{ .members = undefined, .which = undefined, .count = 0 };
             for (0..2) |turn| {
                 const i = turn ^ first;
-                if (collectors[i].done.load(.acquire)) continue;
+                if (collectors[i].done.load(.acquire) == .done) continue;
                 if (streams[i].?.handle < 0) {
                     _ = try collectOnce(io, streams[i].?, max_bytes, collectors[i]);
                     continue;
@@ -1885,7 +1893,7 @@ pub const Child = struct {
             error.Canceled => return error.Canceled,
             else => {
                 if (!handles.finished(e)) into.failure.store(.read_failed, .release);
-                into.done.store(true, .release);
+                into.done.store(.done, .release);
                 return true;
             },
         };
@@ -1930,11 +1938,14 @@ pub const Child = struct {
         var out = Collector.init(sinks.stdout);
         var err = Collector.init(sinks.stderr);
 
-        const streams = [2]?std.Io.File{ child.stdoutFile(), child.state.stderr };
+        const streams = [2]?std.Io.File{
+            if (child.stdoutFile()) |f| f else null,
+            if (child.stderrFile()) |f| f else null,
+        };
         const collectors = [2]*Collector{ &out, &err };
         // A stream this process does not hold is finished before it starts.
         for (streams, collectors) |stream, collector| {
-            if (stream == null) collector.done.store(true, .release);
+            if (stream == null) collector.done.store(.done, .release);
         }
 
         var timed_out = false;
@@ -1946,8 +1957,8 @@ pub const Child = struct {
         var lag_ms: u32 = 1;
         while (true) {
             try std.Io.checkCancel(io);
-            const out_done = out.done.load(.acquire);
-            const err_done = err.done.load(.acquire);
+            const out_done = out.done.load(.acquire) == .done;
+            const err_done = err.done.load(.acquire) == .done;
             if (term == null) {
                 // A reader that cannot continue leaves a pipe the child may fill
                 // and block on: end the child now and report the failure once
@@ -1964,7 +1975,7 @@ pub const Child = struct {
                 }
                 if (term != null) drain = drainDeadline(io, options, until);
             }
-            if (term != null and (out_done and err_done or drain.?.remainingMs(io) == 0)) break;
+            if (term != null and ((out_done and err_done) or drain.?.remainingMs(io) == 0)) break;
 
             var set = try PollSet.init(io, streams, collectors, options.max_bytes, first, if (term == null and !ended) process.? else null);
             const members = set.members[0..set.count];
@@ -2226,7 +2237,7 @@ pub const Child = struct {
 
     // A test can stop delivery at the boundary between taking the child's name
     // and using it. No hook or storage reaches a consumer build.
-    var signal_probe: if (builtin.is_test) ?*SignalProbe else void = if (builtin.is_test) null else {};
+    var signal_probe: if (builtin.is_test) aegis.Atomic(?*SignalProbe) else void = if (builtin.is_test) .init(null) else {};
 
     const SignalProbe = if (builtin.is_test) struct {
         context: *anyopaque,
@@ -2276,9 +2287,8 @@ pub const Child = struct {
         });
         defer child.deinit(io);
         defer @import("testing/support.zig").reap(&child, io);
-        child.stdoutFile().?.close(io);
-        child.state.stdout.?.handle = -1;
-        defer _ = child.takeStdout();
+        @import("testing/support.zig").unreadableStdout(&child, io);
+        defer @import("testing/support.zig").dropUnreadableStdout(&child);
         var collecting: Collecting = undefined;
         collecting.init(testing.allocator, io);
         defer collecting.deinit();
@@ -2416,6 +2426,6 @@ pub const ReapHold = struct {
 pub const test_access = if (builtin.is_test) struct {
     pub const SignalProbe = Child.SignalProbe;
     pub fn probe(value: ?*Child.SignalProbe) void {
-        Child.signal_probe = value;
+        Child.signal_probe.store(value, .release);
     }
 } else struct {};

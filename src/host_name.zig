@@ -32,6 +32,7 @@ fn windowsName(buf: *[max_len]u8) Error![]const u8 {
     // Every unit takes at most three bytes as WTF-8: these fit `buf`.
     var wide: [max_len / 3]u16 = undefined;
     var len: windows.DWORD = wide.len;
+    // aegis: boundary(A019): GetComputerNameExW writes the name and its length where it answers TRUE
     if (win32.GetComputerNameExW(win32.computer_name_dns_hostname, &wide, &len) == .FALSE) return switch (windows.GetLastError()) {
         .MORE_DATA => error.NameTooLong,
         else => |err| win32.unexpected(err),

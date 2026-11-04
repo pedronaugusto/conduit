@@ -15,24 +15,26 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 
 const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32");
 const log = std.log.scoped(.conduit);
 
-/// `0` not looked up yet, `1` off, `2` on.
-var state: std.atomic.Value(u8) = .init(0);
+/// Whether `CONDUIT_TRACE` is set, once looked up.
+var state: aegis.Atomic(State) = .init(.unknown);
+const State = enum(u8) { unknown, off, on };
 
 /// Whether `CONDUIT_TRACE` is set. Looked up once; a race on the first call
 /// reaches the same answer twice.
 pub fn enabled() bool {
     switch (state.load(.acquire)) {
-        1 => return false,
-        2 => return true,
-        else => {},
+        .off => return false,
+        .on => return true,
+        .unknown => {},
     }
     const on = look();
-    state.store(if (on) 2 else 1, .release);
+    state.store(if (on) .on else .off, .release);
     return on;
 }
 

@@ -47,9 +47,11 @@ const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
 const cgroups = @import("cgroup.zig");
 
 // A recycled entry in a process-table snapshot, before it is signalled.
-var snapshot_witness: if (builtin.is_test) ?posix.pid_t else void = if (builtin.is_test) null else {};
+var snapshot_witness: if (builtin.is_test) aegis.Atomic(Witness) else void = if (builtin.is_test) .init(.none) else {};
 // A controlled exec between identity lookup and token delivery.
-var before_token_delivery: if (builtin.is_test) ?*const fn () void else void = if (builtin.is_test) null else {};
+var before_token_delivery: if (builtin.is_test) aegis.Atomic(?*const fn () void) else void = if (builtin.is_test) .init(null) else {};
+/// The process a test slips into a snapshot; no process has id 0.
+const Witness = enum(posix.pid_t) { none = 0, _ };
 
 /// The names in what `getdents64` wrote, read from its bytes rather than cast
 /// out of them: a record that would run past them, or that does not hold a
@@ -116,7 +118,7 @@ pub fn signalDescendants(root: posix.pid_t, sig: posix.SIG, in_group: ?posix.pid
 /// Forks of that leader have completed by now; repeated passes cover forks
 /// of surviving members. The caller must retain reap ownership throughout.
 pub fn forceHeldGroup(pgid: posix.pid_t, leader: posix.pid_t) void {
-    if (builtin.is_test) _ = testing_hook.group_forces.fetchAdd(1, .monotonic);
+    if (builtin.is_test) _ = testing_hook.group_forces.fetchAddWrapping(.fromRaw(1), .monotonic);
     for (0..3) |_| {
         _ = c.kill(-pgid, .KILL);
         if (members(pgid, leader) == .none) break;
@@ -132,8 +134,8 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
     defer if (captured_root) |*held| held.deinit();
     const anchor = guard orelse if (captured_root) |*held| held else return 0;
     if (!anchor.alive()) return 0;
-    if (builtin.is_test) _ = walks.fetchAdd(1, .monotonic);
-    if (builtin.is_test and testing_hook.walk_full) return error.OutOfMemory;
+    if (builtin.is_test) _ = walks.fetchAddWrapping(.fromRaw(1), .monotonic);
+    if (builtin.is_test and testing_hook.walk.load(.monotonic) == .full) return error.OutOfMemory;
     // Exhausting this bounded workspace reports OutOfMemory before sending
     // a partial pass.
     var storage: [64 * 1024]u8 = undefined;
@@ -146,12 +148,15 @@ fn signalDescendantsGuarded(root: posix.pid_t, guard: ?*const Process, sig: posi
         found.deinit(gpa);
     }
     try collect(gpa, root, in_group, &found);
-    if (builtin.is_test) if (snapshot_witness) |pid| {
-        var process = Process.capture(pid) orelse unreachable;
-        found.append(gpa, process) catch |err| {
-            process.deinit();
-            return err;
-        };
+    if (builtin.is_test) switch (snapshot_witness.load(.acquire)) {
+        .none => {},
+        else => |witness| {
+            var process = Process.capture(@backingInt(witness)) orelse unreachable;
+            found.append(gpa, process) catch |err| {
+                process.deinit();
+                return err;
+            };
+        },
     };
 
     // A read of the process table may have outlived the root. In that case
@@ -515,7 +520,7 @@ pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
             const written = proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo));
             if (written != @sizeOf(ProcBsdInfo)) return null;
             if (info.status == proc_status_zombie) return null;
-            return info.start_tvsec *% std.time.us_per_s +% info.start_tvusec;
+            return darwinStart(info.start_tvsec, info.start_tvusec);
         },
         else => return error.Unsupported,
     }
@@ -869,6 +874,15 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
     return reached;
 }
 
+/// A Darwin process's start, `proc_bsdinfo`'s `start_tvsec` and
+/// `start_tvusec`, as the microseconds since the epoch `startTime` gives;
+/// null past what a `u64` of microseconds holds, which no process started at.
+fn darwinStart(seconds: u64, microseconds: u64) ?u64 {
+    const whole = aegis.units.Duration(.second, u64).fromRaw(seconds).convert(.microsecond, u64, .exact) catch return null;
+    const started = whole.add(.fromRaw(microseconds)) catch return null;
+    return started.raw();
+}
+
 /// `struct proc_bsdinfo` from `<sys/proc_info.h>`, as far as the start time.
 const ProcBsdInfo = extern struct {
     flags: u32,
@@ -989,7 +1003,7 @@ pub const DarwinProcess = struct {
         const written = proc_pidinfo(pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
         if (info.bsd.status == proc_status_zombie) return null;
-        if (info.bsd.start_tvsec *% std.time.us_per_s +% info.bsd.start_tvusec != since) return null;
+        if (darwinStart(info.bsd.start_tvsec, info.bsd.start_tvusec) != since) return null;
         return .{ .pid = pid, .unique_id = info.unique.unique_id };
     }
 
@@ -1015,7 +1029,7 @@ pub const DarwinProcess = struct {
             var token: AuditToken = .{ .val = @splat(0) };
             token.val[5] = @bitCast(process.pid);
             token.val[7] = @bitCast(info.unique.id_version);
-            if (builtin.is_test) if (before_token_delivery) |exec| exec();
+            if (builtin.is_test) if (before_token_delivery.load(.acquire)) |exec| exec();
             if (proc_signal_with_audittoken(&token, @intCast(@backingInt(sig))) == 0) return true;
             previous = info.unique.id_version;
         }
@@ -1059,9 +1073,9 @@ pub const DarwinProcess = struct {
             if (pid <= 1 or pid == process.pid or pid == c.getpid()) continue;
             const member = DarwinProcess.capture(pid) orelse continue;
             var info: ProcBsdInfo = undefined;
-            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo) or
-                info.pgid != @as(u32, @intCast(group)) or
-                info.start_tvsec *% std.time.us_per_s +% info.start_tvusec < since or
+            if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) continue;
+            const started = darwinStart(info.start_tvsec, info.start_tvusec) orelse continue;
+            if (info.pgid != @as(u32, @intCast(group)) or started < since or
                 getsid(pid) != process.pid or !member.alive()) continue;
             try held.append(gpa, member);
         }
@@ -1113,8 +1127,10 @@ comptime {
     std.debug.assert(@sizeOf(BsdInfoWithUniqueId) == 192);
 }
 
+/// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`.
 const ProcUniqueInfo = extern struct {
     executable_uuid: [16]u8,
+    // aegis: boundary(A016): the process's and its parent's unique ids as `<sys/proc_info.h>` lays them out
     unique_id: u64,
     parent_unique_id: u64,
     id_version: i32,
@@ -1170,7 +1186,9 @@ const NoProcess = struct {
 };
 
 const proc_pid_unique_info = 17;
+// aegis: boundary(A019): Darwin's proc_pidinfo, declared as libproc's header gives it
 extern "c" fn proc_pidinfo(pid: c_int, flavor: c_int, arg: u64, buffer: *anyopaque, size: c_int) c_int;
+// aegis: boundary(A019): Darwin's proc_signal_with_audittoken, declared as libproc's header gives it
 extern "c" fn proc_signal_with_audittoken(token: *AuditToken, sig: c_int) c_int;
 
 /// The immediate children of `pid`.
@@ -1199,6 +1217,7 @@ fn childrenOfNobody(
 /// From `<libproc.h>`, which is part of the system library rather than a
 /// library of its own. Returns the number of children it wrote, or a negative
 /// number.
+// aegis: boundary(A019): Darwin's proc_listchildpids, declared as libproc's header gives it
 extern "c" fn proc_listchildpids(ppid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
 fn childrenOfDarwin(gpa: std.mem.Allocator, pid: posix.pid_t, into: *std.ArrayList(posix.pid_t)) std.mem.Allocator.Error!void {
@@ -1232,6 +1251,8 @@ pub fn observedChildrenOfDarwin(
     if (estimate == 0) return;
     var capacity: usize = @max(@as(usize, @intCast(estimate)), local.len * 2);
     while (true) {
+        // The call takes the buffer's size as a c_int.
+        if (capacity > @as(usize, std.math.maxInt(c_int)) / @sizeOf(posix.pid_t)) return error.SystemResources;
         const first = into.items.len;
         try into.resize(gpa, first + capacity);
         const bytes: c_int = @intCast(capacity * @sizeOf(posix.pid_t));
@@ -1257,7 +1278,8 @@ pub fn observedChildrenOfDarwin(
 
 /// How many walks `signalDescendants` has started, in a test build: what
 /// lets a test say a stop took the plain path.
-pub var walks: std.atomic.Value(usize) = .init(0);
+pub var walks: aegis.Atomic(Walks) = .init(.fromRaw(0));
+pub const Walks = aegis.units.Count(Forks, usize);
 
 /// Whether this system can say that a child has nothing below it without a
 /// walk: Darwin by the watch on its forks (`Forks`), Linux by `hasChildren`.
@@ -1363,11 +1385,14 @@ pub const DarwinForks = struct {
     /// A note once taken off the queue. The registration clears on reading
     /// (the kernel makes every `EVFILT_PROC` one `EV_CLEAR`), so what one
     /// question learned is kept here for the next.
-    seen: std.atomic.Value(bool) = .init(false),
+    seen: aegis.Atomic(Seen) = .init(.nothing),
     /// Held by the task reading the queue. A second task that asks meanwhile
     /// could otherwise find the queue emptied by the first and the note not
     /// yet kept, so it answers `true` instead, which is the walk.
-    reading: std.atomic.Value(bool) = .init(false),
+    reading: aegis.Atomic(Reading) = .init(.idle),
+
+    const Seen = enum(u8) { nothing, fork };
+    const Reading = enum(u8) { idle, reading };
 
     pub const supported = true;
     pub const none: DarwinForks = .{ .queue = null };
@@ -1404,10 +1429,10 @@ pub const DarwinForks = struct {
     /// made was noted before that: a `fork` posts its note before it returns
     /// to the process that called it.
     pub fn any(forks: *DarwinForks) bool {
-        if (forks.seen.load(.acquire)) return true;
+        if (forks.seen.load(.acquire) == .fork) return true;
         const queue = forks.queue orelse return true;
-        if (forks.reading.swap(true, .acquire)) return true;
-        defer forks.reading.store(false, .release);
+        if (forks.reading.swap(.reading, .acquire) == .reading) return true;
+        defer forks.reading.store(.idle, .release);
         // `KEVENT_FLAG_IMMEDIATE` rather than a timeout of zero, which only
         // `kevent64` takes, without entering a timed wait.
         var events: [2]c.kevent64_s = undefined;
@@ -1415,9 +1440,9 @@ pub const DarwinForks = struct {
         const ready = c.kevent64(queue, &nothing, 0, &events, events.len, .{ .IMMEDIATE = true }, null);
         if (ready < 0) return true;
         for (events[0..@intCast(ready)]) |event| {
-            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(true, .release);
+            if (event.fflags & c.NOTE.FORK != 0) forks.seen.store(.fork, .release);
         }
-        return forks.seen.load(.acquire);
+        return forks.seen.load(.acquire) == .fork;
     }
 
     pub fn close(forks: *DarwinForks) void {
@@ -1428,25 +1453,39 @@ pub const DarwinForks = struct {
 
 /// Test builds only: what a test needs to show the watch has no window.
 pub const testing_hook = struct {
-    pub var group_forces: std.atomic.Value(usize) = .init(0);
-    /// Makes every descendant walk fail as one too large to hold would.
-    pub var walk_full: bool = false;
+    pub var group_forces: aegis.Atomic(aegis.units.Count(Forks, usize)) = .init(.fromRaw(0));
+    /// `.full` makes every descendant walk fail as one too large to hold would.
+    pub var walk: aegis.Atomic(Walk) = .init(.normal);
+    pub const Walk = enum(u8) { normal, full };
     /// How long `Forks.watch` waits before it registers: time in which a
     /// child that was not being held would run its program, and fork.
-    pub var hold_ms: u32 = 0;
+    pub var hold: aegis.Atomic(aegis.units.Duration(.millisecond, u32)) = .init(.fromRaw(0));
     /// Whether the child had run its program by the time `Forks.watch`
     /// registered, for the last watch made: `null` before the first.
-    pub var ran_before_watch: ?bool = null;
+    pub var ran_before_watch: aegis.Atomic(Ran) = .init(.unknown);
+    pub const Ran = enum(u8) { unknown, ran, not_yet };
+
+    /// `ran_before_watch` as the test reads it.
+    pub fn ranBeforeWatch() ?bool {
+        return switch (ran_before_watch.load(.acquire)) {
+            .unknown => null,
+            .ran => true,
+            .not_yet => false,
+        };
+    }
 
     fn atWatch(pid: posix.pid_t) void {
-        if (hold_ms > 0) {
+        const held = hold.load(.acquire);
+        if (held.compare(.fromRaw(0)) == .gt) {
+            const seconds = held.convert(.second, u32, .down);
+            const rest = held.sub(seconds.convert(.millisecond, u32, .exact) catch unreachable) catch unreachable; // unreachable: whole seconds of a span are no more than it
             const pause_for: c.timespec = .{
-                .sec = @intCast(hold_ms / 1000),
-                .nsec = @intCast(@as(u64, hold_ms % 1000) * std.time.ns_per_ms),
+                .sec = @intCast(seconds.raw()), // aegis: boundary(A004): nanosleep takes whole seconds as a C integer
+                .nsec = @intCast(rest.convert(.nanosecond, u64, .exact).raw()), // aegis: boundary(A004): and the nanoseconds past them
             };
             _ = c.nanosleep(&pause_for, null);
         }
-        ran_before_watch = ranProgram(pid);
+        ran_before_watch.store(if (ranProgram(pid)) .ran else .not_yet, .release);
     }
 
     /// A child held by `posix_spawn` is stopped (`SSTOP`), and one held by
@@ -1465,6 +1504,7 @@ pub const testing_hook = struct {
 
     /// `SSTOP` from `<sys/proc.h>`.
     const proc_status_stopped = 4;
+    // aegis: boundary(A019): Darwin's proc_pidpath, declared as libproc's header gives it
     extern "c" fn proc_pidpath(pid: c_int, buffer: [*]u8, size: u32) c_int;
 };
 
@@ -1544,6 +1584,7 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
 /// From `<libproc.h>`, like `proc_listchildpids`. Returns the number of
 /// processes it wrote, or a negative number.
+// aegis: boundary(A019): Darwin's proc_listpgrppids, declared as libproc's header gives it
 extern "c" fn proc_listpgrppids(pgrpid: posix.pid_t, buffer: ?*anyopaque, buffersize: c_int) c_int;
 
 fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
@@ -1567,8 +1608,11 @@ fn membersDarwin(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
 /// Not declared in `std.c`, and the one question that tells a descendant which
 /// `Child.kill` is about to reach anyway from one that has left the group.
+// aegis: boundary(A019): libc's getpgid, declared as its POSIX manual page gives it
 extern "c" fn getpgid(pid: posix.pid_t) posix.pid_t;
+// aegis: boundary(A019): libc's getsid, declared as its POSIX manual page gives it
 extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
+// aegis: boundary(A019): libc's pause, declared as its POSIX manual page gives it
 extern "c" fn pause() c_int;
 
 test "a descendant that escaped the process group is still killed" {
@@ -1736,10 +1780,10 @@ pub const test_access = if (builtin.is_test) struct {
     pub const membersDarwin = fixtureMembersDarwin;
 
     pub fn snapshot(pid: ?posix.pid_t) void {
-        snapshot_witness = pid;
+        snapshot_witness.store(if (pid) |p| @fromBackingInt(p) else .none, .release);
     }
     pub fn delivery(callback: ?*const fn () void) void {
-        before_token_delivery = callback;
+        before_token_delivery.store(callback, .release);
     }
 } else struct {};
 const FixtureDeadline = Deadline;

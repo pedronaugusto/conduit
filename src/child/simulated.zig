@@ -12,6 +12,7 @@
 //! child alone: a signal reaches it and not what it started.
 const builtin = @import("builtin");
 const std = @import("std");
+const OwnedFile = @import("conduit.tty").OwnedFile;
 const seam = @import("seam");
 const contract = @import("contract.zig");
 const State = @import("State.zig");
@@ -24,7 +25,8 @@ const StdIo = std.process.SpawnOptions.StdIo;
 pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract.SpawnError!*State {
     if (options.credentials.any() or options.resource_limits.len != 0 or options.job_limits.any() or
         options.parent_death_signal != null or options.extra_fds.len != 0) return error.Unsupported;
-    var streams: [3]StdIo = undefined;
+    // Every stream is set below; standard error may read standard output's first.
+    var streams: [3]StdIo = @splat(.inherit);
     switch (options.stdio) {
         .pty => |pty| {
             // A simulated child is on a simulated pair or on none.
@@ -92,9 +94,9 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
         .exit_watch = if (is_windows) {} else null,
         .cgroup = if (is_windows) {} else cgroups.Cgroup.none,
         .term = null,
-        .stdin = stdin,
-        .stdout = stdout,
-        .stderr = stderr,
+        .stdin = if (stdin) |f| OwnedFile.init(f) else null,
+        .stdout = if (stdout) |f| OwnedFile.init(f) else null,
+        .stderr = if (stderr) |f| OwnedFile.init(f) else null,
         .pty = switch (options.stdio) {
             .pty => |pty| pty.master(),
             else => null,

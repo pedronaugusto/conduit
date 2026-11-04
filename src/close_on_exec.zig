@@ -85,6 +85,7 @@ fn pipePosix(options: PipeOptions) PipeError![2]posix.fd_t {
         // out of it.
         try ForkGap.hold(pipeMarked, .{ &ends, options });
     } else {
+        // aegis: boundary(A019): pipe2(2) writes both descriptors where it succeeds, which `opened` checks
         try opened(system.pipe2(&ends, .{ .CLOEXEC = true, .NONBLOCK = options.nonblocking }));
     }
     return ends;

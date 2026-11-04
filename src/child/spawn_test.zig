@@ -399,9 +399,8 @@ test "output ends a silent child when its stream cannot be read" {
     defer child.deinit(io);
     errdefer reap(&child, io);
 
-    child.stdoutFile().?.close(io);
-    child.state.stdout.?.handle = -1;
-    defer _ = child.takeStdout();
+    @import("../testing/support.zig").unreadableStdout(&child, io);
+    defer @import("../testing/support.zig").dropUnreadableStdout(&child);
     try testing.expectError(error.ReadFailed, child.output(gpa, io, .{}));
     try testing.expect((try child.tryWait(io)) != null);
 }
@@ -933,7 +932,7 @@ test "stdinWriter and stdoutReader find the child's streams wherever they are" {
     child.closeStdin(io);
 
     // The same file the reader would come from, so the two agree.
-    try testing.expectEqual(child.state.stdout.?.handle, child.stdoutFile().?.handle);
+    try testing.expectEqual(child.state.stdout.?.borrow().handle, child.stdoutFile().?.handle);
 
     var result = try child.output(gpa, io, .{ .timeout = within_budget });
     defer result.deinit();
@@ -954,7 +953,7 @@ test "closeStdin is the half-close a child reading to end of file waits for" {
     try testing.expectEqual(@as(?Child.Term, null), try child.waitTimeout(io, Deadline.within(.fromMilliseconds(50))));
 
     child.closeStdin(io);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stdinFile());
+    try testing.expect(child.stdinFile() == null);
     // Idempotent, which is what makes it safe to pair with `deinit`.
     child.closeStdin(io);
 
@@ -1281,13 +1280,13 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
     //
     // About the walk, so not in a cgroup, which would reach the grandchild
     // with no walk at all.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
     for ([_]bool{ false, true }) |on_pty| {
         var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
         defer pty.close(io);
-        if (tree.Forks.supported) tree.testing_hook.hold_ms = 200;
-        defer tree.testing_hook.hold_ms = 0;
+        if (tree.Forks.supported) tree.testing_hook.hold.store(.fromRaw(200), .release);
+        defer tree.testing_hook.hold.store(.fromRaw(0), .release);
         var child = try Child.spawn(gpa, io, .{
             .argv = if (on_pty)
                 &.{ "/bin/sh", "-c", "set -m; sleep 100 & printf 'pid %d.' \"$!\"; wait" }
@@ -1296,10 +1295,10 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
             .stdio = if (on_pty) .{ .pty = &pty } else .{ .pipes = .{ .stdin = false, .stderr = false } },
             .detach = on_pty,
         });
-        tree.testing_hook.hold_ms = 0;
+        tree.testing_hook.hold.store(.fromRaw(0), .release);
         defer child.deinit(io);
         defer reap(&child, io);
-        const ran_before_watch = tree.testing_hook.ran_before_watch;
+        const ran_before_watch = tree.testing_hook.ranBeforeWatch();
         if (on_pty) pty.closeSlave(io);
 
         var sink: Sink = .{};
@@ -1320,7 +1319,7 @@ test "a grandchild started at once, out of reach of the signal, still ends with 
             if (deadline.remainingMs(io) == 0) return error.TestGrandchildOutlivedTheKill;
             try std.Io.sleep(io, .fromMilliseconds(10), .awake);
         }
-        try testing.expect(tree.walks.load(.monotonic) > before);
+        try testing.expect(tree.walks.load(.monotonic).compare(before) == .gt);
         // Held until the watch was in: the child had run nothing when it was
         // registered, the shell was the one waiting and not the watch.
         if (tree.Forks.supported) try testing.expectEqual(@as(?bool, false), ran_before_watch);
@@ -2191,13 +2190,13 @@ fn raceOrphans(task: u8, failures: *std.atomic.Value(u32)) std.Io.Cancelable!voi
         };
         defer child.deinit(io);
         if (i % 2 == 1) try std.Io.sleep(io, .fromMilliseconds(3), .awake);
-        const term = child.waitTimeout(io, within_budget) catch |err| switch (err) {
+        const term = (child.waitTimeout(io, within_budget) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             else => {
                 _ = failures.fetchAdd(1, .monotonic);
                 continue;
             },
-        } orelse {
+        }) orelse {
             _ = failures.fetchAdd(1, .monotonic);
             reap(&child, io);
             continue;
@@ -2438,8 +2437,8 @@ test "waitTree on Linux says the child's cgroup has emptied, and does not say it
 
 test "waitTree on Linux refuses a child with no cgroup of its own" {
     if (builtin.target.os.tag != .linux) return error.SkipZigTest;
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.deinit(io);
@@ -2851,7 +2850,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     defer reap(&child, io);
 
     // The stderr pipe was not created, because the file replaced it.
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
+    try testing.expect(child.stderrFile() == null);
 
     var sink: Sink = .{};
     defer sink.deinit();
@@ -2882,9 +2881,9 @@ test "each stream is chosen on its own" {
     errdefer reap(&child, io);
 
     // Only the stream that asked for a pipe has one.
-    try testing.expectEqual(@as(?std.Io.File, null), child.stdinFile());
+    try testing.expect(child.stdinFile() == null);
     try testing.expect(child.stdoutFile() != null);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
+    try testing.expect(child.stderrFile() == null);
 
     var result = try child.output(gpa, io, .{ .timeout = within_budget });
     defer result.deinit();
@@ -2904,7 +2903,7 @@ test "standard error can share standard output's pipe" {
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
-    try testing.expectEqual(@as(?std.Io.File, null), child.stderrFile());
+    try testing.expect(child.stderrFile() == null);
 
     var result = try child.output(gpa, io, .{ .timeout = within_budget });
     defer result.deinit();
@@ -3582,8 +3581,8 @@ test "both spawn paths start the same child" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
     // spawns that take `posix_spawn`: those where no cgroup is made.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     // The same spawn twice, once down each path. `cwd` is what sends the
     // second one back to the fork -- there is no file action for a working
@@ -3615,8 +3614,8 @@ test "a child on the posix_spawn path starts with the same clean slate" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
     // spawns that take `posix_spawn`: those where no cgroup is made.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     // The claim the fork child makes by hand, made here by an attribute: an
     // ignored signal is back at its default action.
@@ -3644,8 +3643,8 @@ test "a child on the posix_spawn path starts with the same clean slate" {
 
 test "a spawn expressible by file actions makes no fork call" {
     if (is_windows or !fast_path) return error.SkipZigTest;
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
     try Forks.start();
     var child = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .stdio = .ignore });
     defer child.deinit(io);
@@ -4174,9 +4173,9 @@ test "extra files arrive at descriptor 3 and up, in order" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     // About the spawn path, so not in a cgroup, which always forks.
-    if (comptime !is_windows) cgroup.testing_hook.off = true;
+    if (comptime !is_windows) cgroup.testing_hook.cgroups.store(.off, .monotonic);
     defer if (comptime !is_windows) {
-        cgroup.testing_hook.off = false;
+        cgroup.testing_hook.cgroups.store(.on, .monotonic);
     };
 
     // The default policy, which takes posix_spawn where it can, and
@@ -4362,25 +4361,25 @@ test "a child talks both ways over its channel, named after its extra files" {
     var f = try tmp.dir.createFile(io, "out", .{});
     defer f.close(io);
 
-    const channel = try conduit.Channel.open();
-    defer channel.parent.close(io);
+    var channel = try conduit.Channel.open();
+    defer channel.parent.deinit(io);
     var given = true;
-    defer if (given) channel.child.close(io);
+    defer if (given) channel.child.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
         .stdio = .ignore,
         .extra_fds = &.{f},
-        .channel = .{ .file = channel.child, .variable = "CONDUIT_TEST_CHANNEL" },
+        .channel = .{ .file = channel.child.borrow().*, .variable = "CONDUIT_TEST_CHANNEL" },
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
     // This process's copy goes, so the end the child closes is the last.
-    channel.child.close(io);
+    channel.child.deinit(io);
     given = false;
 
     var answer: std.ArrayList(u8) = .empty;
     defer answer.deinit(gpa);
-    try converse(channel.parent, &answer);
+    try converse(channel.parent.borrow().*, &answer);
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
     // The descriptor after the one extra file; on Windows the handle's value.
     if (!is_windows) try testing.expectEqualStrings("4 ping\n", answer.items);
@@ -4390,19 +4389,19 @@ test "a child talks both ways over its channel, named after its extra files" {
 test "a child on a terminal has its channel beside it" {
     var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
-    const channel = try conduit.Channel.open();
-    defer channel.parent.close(io);
+    var channel = try conduit.Channel.open();
+    defer channel.parent.deinit(io);
     var given = true;
-    defer if (given) channel.child.close(io);
+    defer if (given) channel.child.deinit(io);
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
-        .channel = .{ .file = channel.child, .variable = "CONDUIT_TEST_CHANNEL" },
+        .channel = .{ .file = channel.child.borrow().*, .variable = "CONDUIT_TEST_CHANNEL" },
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
-    channel.child.close(io);
+    channel.child.deinit(io);
     given = false;
     if (!is_windows) pty.closeSlave(io);
     var sink: Sink = .{};
@@ -4411,21 +4410,21 @@ test "a child on a terminal has its channel beside it" {
 
     var answer: std.ArrayList(u8) = .empty;
     defer answer.deinit(gpa);
-    try converse(channel.parent, &answer);
+    try converse(channel.parent.borrow().*, &answer);
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
     if (!is_windows) try testing.expectEqualStrings("3 ping\n", answer.items);
     try testing.expect(std.mem.endsWith(u8, answer.items, " ping\n"));
 }
 
 test "a channel's variable must be one an environment can hold" {
-    const channel = try conduit.Channel.open();
-    defer channel.parent.close(io);
-    defer channel.child.close(io);
+    var channel = try conduit.Channel.open();
+    defer channel.parent.deinit(io);
+    defer channel.child.deinit(io);
     for ([_][]const u8{ "", "A=B", "A\x00B" }) |variable| {
         try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "exit" },
             .stdio = .ignore,
-            .channel = .{ .file = channel.child, .variable = variable },
+            .channel = .{ .file = channel.child.borrow().*, .variable = variable },
         }));
     }
 }
@@ -4552,8 +4551,8 @@ test "a detached child on a pty takes posix_spawn where the platform can give it
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A cgroup of the child's own sends any spawn to the fork: this is about
     // the ones that take `posix_spawn`.
-    cgroup.testing_hook.off = true;
-    defer cgroup.testing_hook.off = false;
+    cgroup.testing_hook.cgroups.store(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
     var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 20, .cols = 70 });
     defer pty.close(io);
