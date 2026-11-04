@@ -1130,8 +1130,8 @@ comptime {
 /// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`.
 const ProcUniqueInfo = extern struct {
     executable_uuid: [16]u8,
-    // aegis: boundary(A016): the process's and its parent's unique ids as `<sys/proc_info.h>` lays them out
     unique_id: u64,
+    // aegis: boundary(A016): the process's and its parent's unique ids as `<sys/proc_info.h>` lays them out
     parent_unique_id: u64,
     id_version: i32,
     reserved2: u32,

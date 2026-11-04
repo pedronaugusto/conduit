@@ -1046,7 +1046,6 @@ fn inodeAt(dir: posix.fd_t, name: [:0]const u8, flags: u32) ?u64 {
     var st: std.os.linux.Statx = undefined;
     const rc = std.os.linux.statx(dir, name, flags, .{ .INO = true }, &st);
     if (std.os.linux.errno(rc) != .SUCCESS) return null;
-    // aegis: boundary(A019): statx(2) writes the whole struct where it succeeds, the inode among what was asked
     return if (st.ino == 0) null else st.ino;
 }
 
