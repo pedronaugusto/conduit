@@ -345,7 +345,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
         reaper.deinit(io);
         return err;
     };
-    const held = fixture.child.holdReap().?;
+    const held = fixture.child.holdReap(io).?;
     var holding = true;
     defer {
         if (holding) held.release(io);

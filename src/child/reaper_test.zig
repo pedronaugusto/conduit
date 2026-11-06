@@ -86,7 +86,7 @@ test "output leaves the reap to the task that holds it" {
     });
     defer child.deinit(io);
     defer reap(&child, io);
-    const held = child.holdReap().?;
+    const held = child.holdReap(io).?;
     var released = false;
     defer if (!released) held.release(io);
 

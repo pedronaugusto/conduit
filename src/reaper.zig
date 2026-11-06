@@ -480,7 +480,7 @@ pub const Reaper = struct {
         }
         // Held from here to the reap, as any wait in flight holds it: so the child
         // ended is still the child's, unreaped, while its group is ended below.
-        const held = reaper.child.holdReap() orelse return reaper.child.wait(io);
+        const held = reaper.child.holdReap(io) orelse return reaper.child.wait(io);
         defer held.release(io);
         // Read the published answer, including status loss, before watching an
         // identity that has been retired. Holding the reap does not conceal the
@@ -603,7 +603,7 @@ pub const Reaper = struct {
             // the request's wake ends the pass early.
             const left = (reaper.killing.current() orelse deadline).remainingMs(io);
             if (left == 0) return .elapsed;
-            const pass: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(@min(left, slice_ms)), .clock = .awake } };
+            const pass: std.Io.Timeout = .{ .duration = .{ .raw = aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, slice_ms)).toIoDuration(), .clock = .awake } };
             const rekill: ?*reactor.Wake = if (is_windows) null else if (reaper.rekill) |*w| w else null;
             if (rekill) |w| w.wait(io, pass) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,

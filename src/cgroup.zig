@@ -1026,13 +1026,13 @@ const MemberOps = struct {
             if (cgroup.populated() == .none) return .empty;
             const left = deadline.remainingMs(io);
             if (left == 0) return .timeout;
-            const slice: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(@min(left, interval_ms)), .clock = .awake } };
+            const slice: std.Io.Timeout = .{ .duration = .{ .raw = aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, interval_ms)).toIoDuration(), .clock = .awake } };
             if (wake) |w| {
                 if (w.wait(io, slice)) |_| return .woken else |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     error.Timeout => {},
                 }
-            } else try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+            } else try std.Io.sleep(io, aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, interval_ms)).toIoDuration(), .awake);
             interval_ms = @min(interval_ms * 2, 4);
         }
     }

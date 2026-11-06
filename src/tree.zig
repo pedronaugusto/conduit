@@ -226,7 +226,7 @@ fn lookCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.
     while (process.alive()) {
         const left = deadline.remainingMs(io);
         if (left == 0) return false;
-        try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+        try std.Io.sleep(io, aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, interval_ms)).toIoDuration(), .awake);
         interval_ms = @min(interval_ms * 2, 4);
     }
     return true;

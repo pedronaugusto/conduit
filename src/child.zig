@@ -494,7 +494,7 @@ pub const Child = struct {
         // had it may have been cancelled before it reaped anything.
         while (true) {
             if (child.settled()) |term| return term;
-            if (child.claimReap()) break;
+            if (child.claimReap(io)) break;
             try child.awaitReap(io, .none);
         }
         defer child.releaseReap(io);
@@ -539,23 +539,39 @@ pub const Child = struct {
     }
 
     /// Takes the right to be inside the operating system's wait for this child.
-    fn claimReap(child: *Child) bool {
-        return child.state.reaping.cmpxchgStrong(0, 1, .acquire, .monotonic) == null;
+    fn claimReap(child: *Child, io: std.Io) bool {
+        var held = child.state.reaping.acquireUncancelable(io);
+        defer held.deinit(io);
+        if (held.value().*) return false;
+        held.value().* = true;
+        return true;
     }
 
     /// Gives the reap back, and wakes the tasks waiting to take it or to
     /// read what its holder published.
     fn releaseReap(child: *Child, io: std.Io) void {
-        // Only the task that claimed the reap gives it back.
-        std.debug.assert(child.state.reaping.load(.monotonic) == 1);
-        child.state.reaping.store(0, .release);
-        io.futexWake(u32, &child.state.reaping.raw, std.math.maxInt(u32));
+        {
+            var held = child.state.reaping.acquireUncancelable(io);
+            defer held.deinit(io);
+            // Only the task that claimed the reap gives it back.
+            std.debug.assert(held.value().*);
+            held.value().* = false;
+        }
+        child.state.reap_returned.broadcast(io);
     }
 
     /// Waits while another task holds the reap, until it gives it back or
-    /// `timeout` passes. It may return early, as a futex may.
+    /// `timeout` passes. It may return early: the caller asks again.
     fn awaitReap(child: *Child, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!void {
-        try io.futexWaitTimeout(u32, &child.state.reaping.raw, 1, timeout);
+        const until = timeout.toDeadline(io);
+        var held = try child.state.reaping.acquire(io);
+        defer held.deinit(io);
+        while (held.value().*) held.wait(&child.state.reap_returned, io, until) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            // The time is up, or the condition has no room for another waiter: the caller
+            // looks at the child again, and asks for the reap or waits once more.
+            error.Timeout, error.WaiterLimit => return,
+        };
     }
 
     /// Takes the right to reap the child, for a caller that waits for the child's
@@ -566,8 +582,8 @@ pub const Child = struct {
     /// While it is held the rest of the handshake behaves as it does for any wait
     /// in flight: `tryWait` says the child is still running, and `wait` waits for
     /// the term the holder publishes.
-    pub fn holdReap(child: *Child) ?HeldReap {
-        if (!child.claimReap()) return null;
+    pub fn holdReap(child: *Child, io: std.Io) ?HeldReap {
+        if (!child.claimReap(io)) return null;
         return .{ .child = child.* };
     }
 
@@ -606,7 +622,7 @@ pub const Child = struct {
     /// `waitTimeout` to a deadline.
     fn waitWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         if (child.settled()) |term| return term;
-        if (!child.claimReap()) return child.settledWithin(io, deadline);
+        if (!child.claimReap(io)) return child.settledWithin(io, deadline);
         defer child.releaseReap(io);
         return child.reapWithin(io, deadline);
     }
@@ -720,7 +736,7 @@ pub const Child = struct {
     fn settledWithin(child: *Child, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         while (true) {
             if (child.settled()) |term| return term;
-            if (child.claimReap()) {
+            if (child.claimReap(io)) {
                 defer child.releaseReap(io);
                 return child.reapWithin(io, deadline);
             }
@@ -749,7 +765,7 @@ pub const Child = struct {
         // anything that has not been told otherwise is concerned, and taking the
         // status out from under the wait in flight is the one thing that must not
         // happen here.
-        if (!child.claimReap()) return null;
+        if (!child.claimReap(io)) return null;
         defer child.releaseReap(io);
         return child.tryWaitClaimed(io);
     }
@@ -1996,7 +2012,7 @@ pub const Child = struct {
             // another task holds its reap: the reap is asked for again soon,
             // while the streams go on being read.
             if (ended and term == null) {
-                limit = earlier(limit, Deadline.in(io, .fromMilliseconds(lag_ms)));
+                limit = earlier(limit, Deadline.in(io, aegis.units.Duration(.millisecond, u32).fromRaw(lag_ms).toIoDuration()));
                 lag_ms = @min(lag_ms * 2, output_wait_slice_ms);
             }
             const ready = reactor.waitAny(io, members, if (limit) |at| at.toTimeout() else .none) catch |failure| switch (failure) {

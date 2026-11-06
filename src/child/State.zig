@@ -102,11 +102,13 @@ reaped: aegis.Atomic(Reaped) = .init(.running),
 /// Exactly one may be: two waits on one child are one status and one `ECHILD`,
 /// and the second is a child nobody can account for. Whoever does not take
 /// this reads the answer the one who did publishes — `tryWait` by saying the
-/// child is still running, `wait` by waiting for the answer to appear. One
-/// while it is held, zero otherwise: a word a waiter's futex waits on, woken
-/// when it is given back.
-// aegis: boundary(A007): std's futex waits on a std.atomic.Value(u32) word
-reaping: std.atomic.Value(u32) = .init(0),
+/// child is still running, `wait` by waiting for the answer to appear. True
+/// while it is held: taken by checking and setting it under the lock, given
+/// back by clearing it, which signals `reap_returned`.
+reaping: aegis.BlockingGuarded(bool) = .init(false),
+/// Signalled when the reap is given back, for the tasks waiting to take it or
+/// to read what its holder published.
+reap_returned: aegis.Condition = .init(),
 /// The right to use or retire the OS identity. Signalling holds it for the
 /// whole tree walk and delivery; reaping holds it only for the final,
 /// nonblocking wait, handle closure and publication. Waiting for an exit

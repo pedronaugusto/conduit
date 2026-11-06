@@ -291,7 +291,7 @@ pub const Orphans = struct {
             empty_looks = 0;
             // A pidfd turns readable when its process ends. One reaped and
             // closed meanwhile reads as ready, and the next look says why.
-            const next: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(interval_ms), .clock = .awake } };
+            const next: std.Io.Timeout = .{ .duration = .{ .raw = aegis.units.Duration(.millisecond, u32).fromRaw(interval_ms).toIoDuration(), .clock = .awake } };
             _ = reactor.waitAny(io, ending[0..watched], next) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 error.Timeout => {},
