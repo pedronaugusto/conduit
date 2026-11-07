@@ -1477,12 +1477,7 @@ pub const testing_hook = struct {
     fn atWatch(pid: posix.pid_t) void {
         const held = hold.load(.acquire);
         if (held.compare(.fromRaw(0)) == .gt) {
-            const seconds = held.convert(.second, u32, .down);
-            const rest = held.sub(seconds.convert(.millisecond, u32, .exact) catch unreachable) catch unreachable; // unreachable: whole seconds of a span are no more than it
-            const pause_for: c.timespec = .{
-                .sec = @intCast(seconds.raw()), // aegis: boundary(A004): nanosleep takes whole seconds as a C integer
-                .nsec = @intCast(rest.convert(.nanosecond, u64, .exact).raw()), // aegis: boundary(A004): and the nanoseconds past them
-            };
+            const pause_for = held.toTimespec(c.timespec);
             _ = c.nanosleep(&pause_for, null);
         }
         ran_before_watch.store(if (ranProgram(pid)) .ran else .not_yet, .release);
