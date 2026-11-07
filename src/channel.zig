@@ -156,7 +156,7 @@ fn fromValuePosix(value: []const u8) Channel.InheritedError!held.OwnedFile {
     // nothing, a file, a pipe -- is not the channel the variable promises.
     var kind: i32 = undefined;
     var len: posix.socklen_t = @sizeOf(i32);
-    switch (posix.errno(system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.TYPE, @ptrCast(&kind), &len))) { // aegis: boundary(A019): the option is an int, its size beside it
+    switch (posix.errno(system.getsockopt(fd, posix.SOL.SOCKET, posix.SO.TYPE, std.mem.asBytes(&kind), &len))) {
         .SUCCESS => {},
         .BADF, .NOTSOCK => return error.NotAChannel,
         else => |err| return posix.unexpectedErrno(err),
@@ -234,10 +234,11 @@ fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
     var device: windows.HANDLE = undefined;
     var status_block: windows.IO_STATUS_BLOCK = undefined;
     const name = std.unicode.wtf8ToWtf16LeStringLiteral("\\Device\\NamedPipe\\");
+    var object_name = windows.UNICODE_STRING.init(name);
     switch (windows.ntdll.NtOpenFile(
         &device,
         .{ .STANDARD = .{ .SYNCHRONIZE = true } },
-        &.{ .ObjectName = @constCast(&windows.UNICODE_STRING.init(name)) }, // aegis: boundary(A019): the call reads the name and never writes it
+        &.{ .ObjectName = &object_name },
         &status_block,
         .VALID_FLAGS,
         .{ .IO = .SYNCHRONOUS_NONALERT },
@@ -258,7 +259,7 @@ fn fromValueWindows(value: []const u8) Channel.InheritedError!held.OwnedFile {
     // that made the end synchronous gets a synchronous file.
     var mode: windows.FILE.MODE = undefined;
     var status_block: windows.IO_STATUS_BLOCK = undefined;
-    // aegis: boundary(A019): NtQueryInformationFile writes the status block and the mode where it answers SUCCESS
+    // NtQueryInformationFile writes the status block and the mode where it answers SUCCESS
     switch (windows.ntdll.NtQueryInformationFile(handle, &status_block, &mode, @sizeOf(windows.FILE.MODE), .Mode)) {
         .SUCCESS => {},
         .INVALID_HANDLE, .OBJECT_TYPE_MISMATCH => return error.NotAChannel,

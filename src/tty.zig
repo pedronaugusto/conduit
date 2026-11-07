@@ -440,11 +440,17 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
     if (builtin.target.os.tag == .macos) {
         var path: [std.Io.Dir.max_path_bytes]u8 = undefined;
         if (deviceOf(file.borrow().handle, &path)) |device| {
-            // glint-ignore: Z026 -- a device that will not open leaves /dev/tty, already open, as the terminal
             if (std.Io.Dir.openFileAbsolute(io, device, .{ .mode = .read_write })) |pollable| {
                 file.deinit(io);
                 return .{ .output_file = held.own(pollable.handle), .input_file = {} };
-            } else |_| {}
+            } else |err| switch (err) {
+                error.Canceled => {
+                    file.deinit(io);
+                    return error.Canceled;
+                },
+                // A device that will not open leaves /dev/tty, already open, as the terminal.
+                else => {},
+            }
         }
     }
     return .{ .output_file = file.move(), .input_file = {} };
