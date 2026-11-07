@@ -400,7 +400,7 @@ test "output ends a silent child when its stream cannot be read" {
     errdefer reap(&child, io);
 
     @import("../testing/support.zig").unreadableStdout(&child, io);
-    defer _ = child.takeStdout();
+    defer @import("../testing/support.zig").dropUnreadableStdout(&child);
     try testing.expectError(error.ReadFailed, child.output(gpa, io, .{}));
     try testing.expect((try child.tryWait(io)) != null);
 }

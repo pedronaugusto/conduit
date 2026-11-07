@@ -226,7 +226,7 @@ fn lookCaptured(io: std.Io, process: *const Process, deadline: Deadline) std.Io.
     while (process.alive()) {
         const left = deadline.remainingMs(io);
         if (left == 0) return false;
-        try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+        try std.Io.sleep(io, aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, interval_ms)).toIoDuration(), .awake);
         interval_ms = @min(interval_ms * 2, 4);
     }
     return true;
@@ -1127,9 +1127,11 @@ comptime {
     std.debug.assert(@sizeOf(BsdInfoWithUniqueId) == 192);
 }
 
+/// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`.
 const ProcUniqueInfo = extern struct {
     executable_uuid: [16]u8,
     unique_id: u64,
+    // aegis: boundary(A016): the process's and its parent's unique ids as `<sys/proc_info.h>` lays them out
     parent_unique_id: u64,
     id_version: i32,
     reserved2: u32,

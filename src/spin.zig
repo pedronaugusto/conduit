@@ -8,6 +8,7 @@ const std = @import("std");
 /// only brings the next try sooner: the wait costs processor time, not
 /// correctness.
 pub fn yield() void {
+    // glint-ignore: Z026 -- a system that cannot yield only brings the caller's next try sooner (above)
     std.Thread.yield() catch |err| switch (err) {
         error.SystemCannotYield => {},
     };

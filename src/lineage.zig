@@ -65,7 +65,7 @@ const Darwin = struct {
     finished: reactor.Wake,
     failed: aegis.Atomic(Outcome) = .init(.ok),
     /// Test handshake: registrations completed by this task, never a borrowed list.
-    observed: if (builtin.is_test) std.atomic.Value(usize) else void = if (builtin.is_test) .init(0) else {},
+    observed: if (builtin.is_test) aegis.Atomic(aegis.units.Count(@This(), usize)) else void = if (builtin.is_test) .init(.fromRaw(0)) else {},
 
     pub fn start(gpa: std.mem.Allocator, io: std.Io, root: posix.pid_t) error{ OutOfMemory, SystemResources }!*Darwin {
         const tracker = try gpa.create(Darwin);
@@ -81,7 +81,7 @@ const Darwin = struct {
         errdefer tracker.known.deinit(gpa);
         try tracker.known.append(gpa, tree.DarwinProcess.capture(root) orelse return error.SystemResources);
         if (!tracker.register(root, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, tracker.known.items[0].unique_id)) return error.SystemResources;
-        if (builtin.is_test) tracker.observed.store(1, .release);
+        if (builtin.is_test) tracker.observed.store(.fromRaw(1), .release);
         tracker.task = io.concurrent(run, .{ tracker, io }) catch return error.SystemResources;
         return tracker;
     }
@@ -138,7 +138,7 @@ const Darwin = struct {
             // No delay between discovering an edge and watching the next fork.
             const watching = tracker.register(pid, c.EVFILT.PROC, c.NOTE.FORK | c.NOTE.EXEC | c.NOTE.EXIT, child.unique_id);
             if (!watching and child.alive()) return error.SystemResources;
-            if (builtin.is_test and watching) _ = tracker.observed.fetchAdd(1, .release);
+            if (builtin.is_test and watching) _ = tracker.observed.fetchAddWrapping(.fromRaw(1), .release);
             try tracker.discover(child);
         }
     }

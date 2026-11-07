@@ -86,11 +86,12 @@ test "output leaves the reap to the task that holds it" {
     });
     defer child.deinit(io);
     defer reap(&child, io);
-    const held = child.holdReap().?;
+    const held = child.holdReap(io).?;
     var released = false;
     defer if (!released) held.release(io);
 
     var output: HeldOutput = .{ .child = &child };
+    // glint-ignore: Z026 -- a collection that failed holds nothing to free; the test judges the output elsewhere
     defer if (output.result) |result| if (result) |collected| {
         var owned = collected;
         owned.deinit();

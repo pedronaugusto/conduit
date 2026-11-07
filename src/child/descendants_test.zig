@@ -194,7 +194,7 @@ test "timeout kill killWait and output errors end a daemon in either policy" {
                 _ = try fixture.child.killWait(io, .literal("50ms"));
             } else {
                 @import("../testing/support.zig").unreadableStdout(&fixture.child, io);
-                defer _ = fixture.child.takeStdout();
+                defer @import("../testing/support.zig").dropUnreadableStdout(&fixture.child);
                 try std.testing.expectError(error.ReadFailed, fixture.child.output(gpa, io, .{}));
             }
             fixture.finish() catch unreachable;
@@ -243,9 +243,9 @@ test "containment ends a double-forked session after normal exit" {
         if (builtin.target.os.tag == .macos) {
             const tracker = fixture.child.state.lineage.?;
             const deadline: Deadline = .in(io, budget);
-            while (tracker.observed.load(.acquire) < 3 and deadline.remainingMs(io) > 0)
+            while (tracker.observed.load(.acquire).raw() < 3 and deadline.remainingMs(io) > 0)
                 try io.sleep(.fromMilliseconds(2), .awake);
-            try std.testing.expect(tracker.observed.load(.acquire) >= 3);
+            try std.testing.expect(tracker.observed.load(.acquire).raw() >= 3);
         }
         fixture.child.closeStdin(io);
         if (comptime std.mem.eql(u8, method, "tryWait")) {
@@ -345,7 +345,7 @@ test "a Reaper subreaper reaps an adopted exit while its root stays idle" {
         reaper.deinit(io);
         return err;
     };
-    const held = fixture.child.holdReap().?;
+    const held = fixture.child.holdReap(io).?;
     var holding = true;
     defer {
         if (holding) held.release(io);

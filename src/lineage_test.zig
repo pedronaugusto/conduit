@@ -15,10 +15,10 @@ test "a contained wait reports lost observation after reaping its held root" {
         .descendants = .contain,
         .stdio = .{ .streams = .{ .stdin = .pipe, .stdout = .ignore, .stderr = .ignore } },
     });
-    defer child.deinit(std.testing.io);
+    defer child.deinit(testing.io);
     const pid = child.processId().?;
-    try std.testing.expectError(error.Unexpected, child.waitTimeout(std.testing.io, Deadline.within(.fromMilliseconds(5000))));
+    try testing.expectError(error.Unexpected, child.waitTimeout(testing.io, Deadline.within(.fromMilliseconds(5000))));
     var status: c_int = 0;
-    try std.testing.expectEqual(@as(c_int, -1), c.waitpid(pid, &status, posix.W.NOHANG));
-    try std.testing.expectEqual(posix.E.CHILD, posix.errno(-1));
+    try testing.expectEqual(@as(c_int, -1), c.waitpid(pid, &status, posix.W.NOHANG));
+    try testing.expectEqual(posix.E.CHILD, posix.errno(-1));
 }

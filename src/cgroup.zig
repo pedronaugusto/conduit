@@ -621,10 +621,7 @@ const LinuxCgroup = struct {
     /// The directory inode that identifies this cgroup for this boot.
     pub fn id(cgroup: *const LinuxCgroup) ?u64 {
         if (!cgroup.active()) return null;
-        var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(cgroup.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
-        if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
-        return st.ino;
+        return inodeAt(cgroup.dir, "", std.os.linux.AT.EMPTY_PATH);
     }
 
     /// Open a cgroup recorded by an earlier run only while `path` still
@@ -819,18 +816,13 @@ const LinuxRecorded = struct {
 
     pub fn id(recorded: *const LinuxRecorded) ?u64 {
         if (!recorded.active()) return null;
-        var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(recorded.dir, "", std.os.linux.AT.EMPTY_PATH, .{ .INO = true }, &st);
-        if (std.os.linux.errno(rc) != .SUCCESS or st.ino == 0) return null;
-        return st.ino;
+        return inodeAt(recorded.dir, "", std.os.linux.AT.EMPTY_PATH);
     }
 
     /// Whether the name in the held parent is still the recorded
     /// directory: `statx` on the name, not following a link.
     fn namedIdentityMatches(recorded: *const LinuxRecorded) bool {
-        var st: std.os.linux.Statx = undefined;
-        const rc = std.os.linux.statx(recorded.parent, recorded.name[0..recorded.name_len :0], std.os.linux.AT.SYMLINK_NOFOLLOW, .{ .INO = true }, &st);
-        return std.os.linux.errno(rc) == .SUCCESS and st.ino == recorded.recorded_id;
+        return inodeAt(recorded.parent, recorded.name[0..recorded.name_len :0], std.os.linux.AT.SYMLINK_NOFOLLOW) == recorded.recorded_id;
     }
 
     /// Remove the empty directory through the held parent only if its name
@@ -1034,13 +1026,13 @@ const MemberOps = struct {
             if (cgroup.populated() == .none) return .empty;
             const left = deadline.remainingMs(io);
             if (left == 0) return .timeout;
-            const slice: std.Io.Timeout = .{ .duration = .{ .raw = .fromMilliseconds(@min(left, interval_ms)), .clock = .awake } };
+            const slice: std.Io.Timeout = .{ .duration = .{ .raw = aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, interval_ms)).toIoDuration(), .clock = .awake } };
             if (wake) |w| {
                 if (w.wait(io, slice)) |_| return .woken else |err| switch (err) {
                     error.Canceled => return error.Canceled,
                     error.Timeout => {},
                 }
-            } else try std.Io.sleep(io, .fromMilliseconds(@min(left, interval_ms)), .awake);
+            } else try std.Io.sleep(io, aegis.units.Duration(.millisecond, u32).fromRaw(@min(left, interval_ms)).toIoDuration(), .awake);
             interval_ms = @min(interval_ms * 2, 4);
         }
     }
@@ -1048,6 +1040,15 @@ const MemberOps = struct {
 
 /// The `populated` line of the `cgroup.events` open at `fd`, read from its
 /// start.
+/// The inode of `name` in `dir` (`""` with `AT.EMPTY_PATH`: `dir` itself), by
+/// `statx`; null where it fails or names no inode.
+fn inodeAt(dir: posix.fd_t, name: [:0]const u8, flags: u32) ?u64 {
+    var st: std.os.linux.Statx = undefined;
+    const rc = std.os.linux.statx(dir, name, flags, .{ .INO = true }, &st);
+    if (std.os.linux.errno(rc) != .SUCCESS) return null;
+    return if (st.ino == 0) null else st.ino;
+}
+
 fn populatedAt(fd: posix.fd_t) Populated {
     if (std.os.linux.errno(std.os.linux.lseek(fd, 0, std.os.linux.SEEK.SET)) != .SUCCESS) return .unknown;
     var text: [256]u8 = undefined;

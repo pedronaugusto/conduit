@@ -834,12 +834,14 @@ const AttributeList = struct {
     /// copying it, so `handles` must outlive the `CreateProcessW` call. The
     /// arena it comes from does.
     fn setHandleList(list: *AttributeList, handles: []windows.HANDLE) SpawnError!void {
+        // The handle array Windows reads, its size in bytes beside it.
+        const bytes = std.mem.sliceAsBytes(handles);
         if (win32.UpdateProcThreadAttribute(
             list.raw,
             0,
             win32.proc_thread_attribute_handle_list,
-            @ptrCast(handles.ptr), // aegis: boundary(A019): the handle array Windows reads, its size in bytes beside it
-            handles.len * @sizeOf(windows.HANDLE),
+            bytes.ptr,
+            bytes.len,
             null,
             null,
         ) == .FALSE) return createError();

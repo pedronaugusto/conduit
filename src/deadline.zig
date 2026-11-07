@@ -19,7 +19,7 @@ pub const Deadline = struct {
     at: std.Io.Clock.Timestamp,
 
     /// A deadline that never comes: what `std.Io.Timeout.none` names.
-    pub const never: Deadline = .{ .at = .{ .raw = .{ .nanoseconds = std.math.maxInt(i96) }, .clock = .awake } };
+    pub const never: Deadline = .{ .at = Awake.fromRaw(std.math.maxInt(i96)).toIoTimestamp() };
 
     /// `span` from now, on the awake clock. A span too long to add to the
     /// clock is `never`; a negative one has already passed.

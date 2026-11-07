@@ -71,11 +71,18 @@ pub fn reap(child: *Child, io: std.Io) void {
 
 /// Makes a child's standard-output pipe one no read can use: the pipe is taken
 /// and closed, and a handle that names nothing is put in its place. The test
-/// takes it back out (`_ = child.takeStdout()`) before `deinit`, which would
+/// takes it back out with `dropUnreadableStdout` before `deinit`, which would
 /// otherwise close it.
 pub fn unreadableStdout(child: *Child, io: std.Io) void {
     var pipe = child.takeStdout().?;
     pipe.deinit(io);
     const nothing: std.Io.File.Handle = if (@import("builtin").target.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
     child.state.stdout = .init(.{ .handle = nothing, .flags = .{ .nonblocking = false } });
+}
+
+/// Takes back the handle `unreadableStdout` put in place, so `deinit` does not
+/// close a handle that names nothing.
+pub fn dropUnreadableStdout(child: *Child) void {
+    // aegis: no-danger(A003): the handle names nothing (-1, or INVALID_HANDLE_VALUE on Windows): there is nothing to release
+    _ = child.takeStdout();
 }
