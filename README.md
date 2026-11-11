@@ -29,6 +29,12 @@ libc on POSIX and not on Windows, and decides that from the target: the POSIX
 pseudo-terminal interface is a libc interface everywhere, and Darwin has no
 stable ABI to reach past it. Every Windows call is a `kernel32` import.
 
+## Stability
+
+conduit is 0.x and tracks Zig 0.17.x. A breaking change comes only in a minor release
+(0.10 to 0.11), with a CHANGELOG entry saying what changed and what to write instead; a
+patch release never breaks.
+
 ## Usage
 
 The block below is a region of [`examples/usage.zig`](examples/usage.zig),
