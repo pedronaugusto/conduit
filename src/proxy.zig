@@ -168,7 +168,7 @@ pub fn run(io: std.Io, options: Options) RunError!void {
         try group.concurrent(io, forwardSize, .{ io, resize });
     }
 
-    try completion.arrived.wait(io);
+    _ = try completion.arrived.wait(io);
     group.cancel(io);
 
     switch (completion.winner.load(.acquire)) {
@@ -182,7 +182,7 @@ const Direction = enum(u8) { none, input, output };
 
 const Completion = struct {
     winner: aegis.Atomic(Direction) = .init(.none),
-    arrived: std.Io.Event = .unset,
+    arrived: aegis.Signal(void) = .init(),
     input_error: ?RunError = null,
     output_error: ?RunError = null,
 };
@@ -216,7 +216,7 @@ fn pumpTask(
         .output => completion.output_error = pump_error,
     }
     if (completion.winner.cmpxchgStrong(.none, direction, .release, .monotonic) == null) {
-        completion.arrived.set(io);
+        completion.arrived.set(io, {}) catch aegis.assert.never("a completion arrives once");
     }
 }
 

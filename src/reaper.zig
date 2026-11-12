@@ -112,7 +112,7 @@ pub const Reaper = struct {
     /// `encodeError`. Written once by the task and read by anyone.
     state: aegis.Atomic(Answer),
     /// Private: set once `state` holds the answer, whatever it is.
-    answered: std.Io.Event,
+    answered: aegis.Signal(void),
     /// Private: the first kill deadline; force requests replace it with immediate expiry.
     killing: Kill,
     /// Private: on POSIX, what `stop` and `deinit` signal to end the wait on the child at
@@ -183,7 +183,7 @@ pub const Reaper = struct {
             .options = options,
             .group = .init,
             .state = .init(running),
-            .answered = .unset,
+            .answered = .init(),
             .killing = .{},
             .wake = if (is_windows) {} else null,
             .rekill = if (is_windows) {} else null,
@@ -289,7 +289,7 @@ pub const Reaper = struct {
     /// answers.
     pub fn wait(reaper: *Reaper, io: std.Io) ExitError!Term {
         reaper.pin.check(reaper);
-        try reaper.answered.wait(io);
+        _ = try reaper.answered.wait(io);
         return (try reaper.exit()).?;
     }
 
@@ -305,7 +305,7 @@ pub const Reaper = struct {
     /// `waitTimeout` to a deadline.
     fn waitWithin(reaper: *Reaper, io: std.Io, deadline: Deadline) WaitTimeoutError!?Term {
         while (true) {
-            reaper.answered.waitTimeout(io, deadline.toTimeout()) catch |err| switch (err) {
+            _ = reaper.answered.waitTimeout(io, deadline.toTimeout()) catch |err| switch (err) {
                 // A wakeup before the deadline is spurious; one after it is the
                 // answer that there is none yet.
                 error.Timeout => if (deadline.remainingMs(io) > 0) continue else return reaper.exit(),
@@ -448,7 +448,7 @@ pub const Reaper = struct {
     fn run(reaper: *Reaper, io: std.Io) void {
         const result = reaper.reapOwned(io);
         reaper.state.store(if (result) |term| encode(term) else |err| encodeError(err), .release);
-        reaper.answered.set(io);
+        reaper.answered.set(io, {}) catch aegis.assert.never("a child is answered once");
     }
 
     /// Adoption is process-wide, so its one owner cleans it after every reap

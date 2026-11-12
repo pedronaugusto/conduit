@@ -107,7 +107,7 @@ pub fn Writer(comptime Child: type) type {
             /// Canceling a waiting caller leaves delivery running for the other callers.
             pub fn wait(writer: *InputWriter, io: std.Io) WriteError!void {
                 const state = writer.state;
-                try state.closed.wait(io);
+                _ = try state.closed.wait(io);
                 var held = state.queue.acquireUncancelable(io);
                 defer held.deinit(io);
                 if (held.value().failed) |err| return err;
@@ -181,7 +181,7 @@ const State = struct {
     queue: aegis.BlockingGuarded(Queue),
     /// The one waiter is the writing task, waiting for a batch or an end.
     more: aegis.Condition = .initLimit(1),
-    closed: std.Io.Event = .unset,
+    closed: aegis.Signal(void) = .init(),
     group: std.Io.Group = .init,
 
     fn init(gpa: std.mem.Allocator, file: OwnedFile, max_backlog: aegis.units.Bytes(usize)) State {
@@ -235,7 +235,7 @@ const State = struct {
             queue.tail = null;
             queue.ending = true;
             queue.finished = true;
-            state.closed.set(io);
+            state.closed.set(io, {}) catch aegis.assert.never("the writer closes once");
         }
         while (true) {
             const node = (state.next(io) catch |err| {
