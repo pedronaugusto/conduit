@@ -20,6 +20,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Pins aegis c8982a8, still 0.2.4: six additive commits after 3c0b13e (the role declarations a linter reads, `lint_rules`), the aegis the development build's preflight selects. Nothing conduit calls changed.
 - aegis 0.3: the input writer waits on its guard (`held.wait(&condition, io, .none)`). Pins aegis breaking-0.3 (7bdb587), reactor and shakedown on it.
 - On the aegis 0.2 pack: aegis 0.2.3 and reactor 0.9.0, developed on shakedown 0.6.0 and preflight 0.18.5. Every extern declaration and pointer conversion at conduit's seam says why it is sound there, and the whole-file reads of the bench and the containment check are aegis's.
 

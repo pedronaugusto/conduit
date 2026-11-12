@@ -289,7 +289,7 @@ pub fn dev(b: *std.Build, tools: type) void {
         .hardened = .{ .fuzz_step = "unit", .tsan_step = "unit" },
         .bench = .{
             .programs = programs,
-            .imports = benchImports,
+            .imports = tools.preflight.Bench.importsFrom(benchImports),
             .target = target,
             .optimize = optimize,
             .link_libc = link_libc,
