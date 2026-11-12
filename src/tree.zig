@@ -687,7 +687,7 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
             const had_members = contained.populated() != .none;
             if (had_members) {
                 if (!contained.kill()) return error.UnableToEnd;
-                if (!try contained.waitEmpty(io, Deadline.within(.fromSeconds(1)))) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, Deadline.within(Duration.literal("1s").toIoDuration()))) return error.UnableToEnd;
             }
             _ = contained.remove();
             ended = ended or had_members;
@@ -702,7 +702,7 @@ pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool
             _ = try contained.signalMembers(.TERM, 0, null);
             if (!try contained.waitEmpty(io, Deadline.within(options.grace.toIoDuration()))) {
                 if (!contained.kill()) return error.UnableToEnd;
-                if (!try contained.waitEmpty(io, Deadline.within(.fromSeconds(1)))) return error.UnableToEnd;
+                if (!try contained.waitEmpty(io, Deadline.within(Duration.literal("1s").toIoDuration()))) return error.UnableToEnd;
             }
         }
         _ = contained.remove();

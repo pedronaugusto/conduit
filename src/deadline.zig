@@ -51,13 +51,13 @@ pub const Deadline = struct {
 
     /// Whichever of two deadlines comes first.
     pub fn min(a: Deadline, b: Deadline) Deadline {
-        return if (b.at.raw.nanoseconds < a.at.raw.nanoseconds) b else a;
+        return if (b.moment().compare(a.moment()) == .lt) b else a;
     }
 
     /// What is left of the wait; zero once it has passed.
     pub fn remaining(deadline: Deadline, io: std.Io) std.Io.Duration {
-        const left = deadline.at.durationFromNow(io).raw;
-        return if (left.nanoseconds <= 0) .zero else left;
+        const left = Span.fromIoDuration(deadline.at.durationFromNow(io).raw, .exact);
+        return if (left.compare(.fromRaw(0)) != .gt) .zero else left.toIoDuration();
     }
 
     /// Sleeps until the deadline by the awake clock. A system's sleep can end
@@ -66,7 +66,7 @@ pub const Deadline = struct {
     pub fn sleep(deadline: Deadline, io: std.Io) std.Io.Cancelable!void {
         while (true) {
             const left = deadline.remaining(io);
-            if (left.nanoseconds == 0) return;
+            if (Span.fromIoDuration(left, .exact).compare(.fromRaw(0)) == .eq) return;
             try std.Io.sleep(io, left, .awake);
         }
     }
@@ -97,7 +97,12 @@ pub const Deadline = struct {
     /// This deadline as a `std.Io.Timeout`: `.none` for `never`, which no
     /// clock reaches.
     pub fn toTimeout(deadline: Deadline) std.Io.Timeout {
-        return if (deadline.at.raw.nanoseconds == never.at.raw.nanoseconds) .none else .{ .deadline = deadline.at };
+        return if (deadline.moment().eql(never.moment())) .none else .{ .deadline = deadline.at };
+    }
+
+    /// The deadline's moment, in the awake clock's own terms.
+    fn moment(deadline: Deadline) Awake {
+        return Awake.fromTimestamp(deadline.at.raw, .exact);
     }
 
     /// A timeout of `span` on the awake clock, the one conduit's own waits

@@ -99,7 +99,7 @@ pub const Resize = struct {
     wake: ?*reactor.Wake = null,
     /// How often the size is re-read when nothing has signaled `wake`.
     /// Less than a millisecond uses one, so an idle forwarder still yields.
-    interval: std.Io.Duration = .fromMilliseconds(50),
+    interval: std.Io.Duration = aegis.units.Duration(.nanosecond, u64).literal("50ms").toIoDuration(),
 };
 
 pub const RunError = error{
@@ -261,8 +261,9 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
 
 /// A span of at least one millisecond, so an idle forwarder still yields.
 fn atLeastOneMs(span: std.Io.Duration) std.Io.Duration {
-    const one: std.Io.Duration = .fromMilliseconds(1);
-    return if (span.nanoseconds < one.nanoseconds) one else span;
+    const Span = aegis.units.Duration(.nanosecond, i96);
+    const one = Span.literal("1ms");
+    return if (Span.fromIoDuration(span, .exact).compare(one) == .lt) one.toIoDuration() else span;
 }
 
 /// One cancelable interval, ended early by a signal on `resize.wake`.

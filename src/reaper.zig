@@ -513,7 +513,7 @@ pub const Reaper = struct {
 
     /// How often the adoption scope is looked at while the root runs, on
     /// Linux, which provides no descriptor that says an orphan was adopted.
-    const adoption_interval: std.Io.Duration = .fromMilliseconds(5);
+    const adoption_interval: std.Io.Duration = Duration.literal("5ms").toIoDuration();
 
     /// Only an explicitly enabled scope pays this look. Linux provides no
     /// adoption fd; bounded waits also collect and reap adoptees while the root
