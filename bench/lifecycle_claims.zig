@@ -54,7 +54,6 @@ const Context = struct {
     }
 
     fn release(x: *Context) void {
-        // glint-ignore: Z026 -- a teardown has no error to return and the measurement was taken before it; the child is released next
         if (!x.reaped) _ = x.child.killWait(x.io(), .fromRaw(0)) catch {};
         x.child.deinit(x.io());
         x.reaped = true;
@@ -285,7 +284,6 @@ fn wait(x: *Context, units: u64, deadlined: bool) !void {
             .stdio = .ignore,
         });
         defer child.deinit(io);
-        // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
         errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         const term = if (deadlined)
             (try child.waitTimeout(io, budget)) orelse return error.ChildDidNotExit
@@ -303,7 +301,6 @@ fn forkAlone(x: *Context) !bool {
     if (builtin.target.os.tag != .linux) return true;
     var child = try conduit.Child.spawn(x.gpa(), x.io(), .{ .argv = &.{x.true_program}, .stdio = .ignore });
     defer child.deinit(x.io());
-    // glint-ignore: Z026 -- the probe's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
     errdefer _ = child.killWait(x.io(), .fromRaw(0)) catch {};
     var buffer: [std.Io.Dir.max_path_bytes + 64]u8 = undefined;
     const contained = (try child.containment(&buffer)).cgroup != null;
@@ -328,7 +325,6 @@ fn spawnWait(x: *Context, units: u64, cwd: ?[]const u8) !void {
             .stdio = .ignore,
         });
         defer child.deinit(io);
-        // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
         errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
         if (!conduit.succeeded(try child.wait(io))) return error.ChildFailed;
     }

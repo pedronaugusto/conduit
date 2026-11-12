@@ -179,7 +179,6 @@ fn ptyRoundTrip(x: *Context, end: PtyEnd) !u64 {
         .detach = true,
     });
     defer child.deinit(io);
-    // glint-ignore: Z026 -- the row's own error is the one returned; a child that cannot be ended here is released next and has nowhere else to report
     errdefer _ = child.killWait(io, .fromRaw(0)) catch {};
     pty.closeSlave(io);
     try pty.writeFile().writeStreamingAll(io, x.input);

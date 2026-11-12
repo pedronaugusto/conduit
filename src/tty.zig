@@ -321,7 +321,6 @@ pub fn winSize(handle: Handle) WinSizeError!Size {
         };
     }
     var ws: posix.winsize = undefined;
-    // aegis: boundary(A019): TIOCGWINSZ writes the winsize where the ioctl succeeds; the request takes its address as an integer
     switch (posix.errno(system.ioctl(handle, request(ioctl_request.get_window_size), @intFromPtr(&ws)))) { // safe: the address of a local winsize the ioctl reads or writes, alive across it
         .SUCCESS => return .fromWinsize(ws),
         .NOTTY => return error.NotATerminal,
@@ -517,7 +516,7 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
         // The kernel names the device a descriptor is open on in /proc,
         // which is what the C library's ttyname reads too.
         var path_buf: [32]u8 = undefined;
-        // unreachable: 14 bytes of prefix, at most 11 for an i32 and the NUL fit in 32
+        // glint-ignore: Z026 -- 14 bytes of prefix, at most 11 for an i32 and the NUL fit in 32
         const path = std.mem.printSentinel(&path_buf, "/proc/self/fd/{d}", .{handle}, 0) catch unreachable;
         const rc = system.readlink(path.ptr, buffer.ptr, buffer.len);
         switch (posix.errno(rc)) {
@@ -688,12 +687,10 @@ fn termiosError(err: TermiosError) RawModeError {
 /// Not declared in `std.c`. Returns the error number directly on the systems
 /// that follow POSIX here, and -1 with `errno` set on the ones that do not.
 /// Reached only off Linux, where the C library is the system interface.
-// aegis: boundary(A019): libc's ttyname_r, declared as its POSIX manual page gives it
 extern "c" fn ttyname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 
 /// `TIOCGPGRP` by its POSIX name, for the systems whose request number is
 /// not spelled here. Reached only off Linux and Darwin.
-// aegis: boundary(A019): libc's tcgetpgrp, declared as its POSIX manual page gives it
 extern "c" fn tcgetpgrp(fd: posix.fd_t) posix.pid_t;
 
 /// An ioctl request as this system's `ioctl` spells its type: a `c_int`

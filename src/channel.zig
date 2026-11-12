@@ -92,7 +92,7 @@ pub const Channel = struct {
     /// number, the descriptor on POSIX and the handle's value on Windows.
     pub fn valueOf(buffer: *[value_max]u8, handle: std.Io.File.Handle) []const u8 {
         const number: u64 = if (is_windows) @intFromPtr(handle) else @intCast(handle); // safe: the handle's value, written for the child to read, never dereferenced
-        // unreachable: `value_max` is the length of the longest number
+        // glint-ignore: Z026 -- `value_max` is the length of the longest number
         return std.mem.print(buffer, "{d}", .{number}) catch unreachable;
     }
 
@@ -252,7 +252,7 @@ fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
 fn fromValueWindows(value: []const u8) Channel.InheritedError!held.OwnedFile {
     const number = std.fmt.parseInt(usize, value, 10) catch return error.NotAChannel;
     if (number == 0) return error.NotAChannel;
-    const handle: windows.HANDLE = @ptrFromInt(number); // aegis: boundary(A019): a handle value the parent wrote, checked below as a pipe before any use
+    const handle: windows.HANDLE = @ptrFromInt(number);
     if (win32.GetFileType(handle) != win32.file_type_pipe) return error.NotAChannel;
 
     // How the handle was opened decides how a read on it is made: a parent

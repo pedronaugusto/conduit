@@ -42,7 +42,6 @@ const Process = if (windows) struct {
     }
     fn end(process: *Process) void {
         _ = process.held.signal(.KILL);
-        // glint-ignore: Z026 -- cleanup after SIGKILL; what the test asserts was asserted before it
         _ = process.held.wait(io, within_budget) catch {};
         process.held.deinit();
     }

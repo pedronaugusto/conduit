@@ -20,7 +20,6 @@ const Observer = struct {
         // Give the Reaper the chance to finish the reap while delivery is
         // paused. With a held identity it must leave the status and handles
         // alone until delivery resumes.
-        // glint-ignore: Z026 -- only a pause for the Reaper; the assertion is what it did meanwhile, read below
         _ = probe.reaper.waitTimeout(std.testing.io, Deadline.within(.fromMilliseconds(20))) catch {};
         probe.retired = child.state.reaped.load(.acquire) == .reaped or if (is_windows) retired: {
             var code: windows.DWORD = undefined;
@@ -91,7 +90,6 @@ test "output leaves the reap to the task that holds it" {
     defer if (!released) held.release(io);
 
     var output: HeldOutput = .{ .child = &child };
-    // glint-ignore: Z026 -- a collection that failed holds nothing to free; the test judges the output elsewhere
     defer if (output.result) |result| if (result) |collected| {
         var owned = collected;
         owned.deinit();

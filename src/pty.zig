@@ -600,13 +600,9 @@ pub const Pty = struct {
 
     // These four are the POSIX 98 pseudo-terminal interface. None of them is
     // declared in `std.c`.
-    // aegis: boundary(A019): libc's posix_openpt, declared as its POSIX manual page gives it
     extern "c" fn posix_openpt(oflag: c.O) posix.fd_t;
-    // aegis: boundary(A019): libc's grantpt, declared as its POSIX manual page gives it
     extern "c" fn grantpt(fd: posix.fd_t) c_int;
-    // aegis: boundary(A019): libc's unlockpt, declared as its POSIX manual page gives it
     extern "c" fn unlockpt(fd: posix.fd_t) c_int;
-    // aegis: boundary(A019): libc's ptsname_r, declared as the glibc and Darwin manual pages give it
     extern "c" fn ptsname_r(fd: posix.fd_t, buf: [*]u8, buflen: usize) c_int;
 
     //======================================================================
@@ -952,7 +948,6 @@ pub const Pty = struct {
             }
         };
         var resizing = try std.Io.concurrent(io, Resize.run, .{ &pty, a, b });
-        // glint-ignore: Z026 -- this runs for a test that has already failed; the passing path awaits the task and takes its error
         defer resizing.cancel(io) catch {};
         for (0..1024) |_| {
             const borrowed = pty.master();

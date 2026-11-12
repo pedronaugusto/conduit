@@ -804,7 +804,7 @@ const AttributeList = struct {
 
         // Over-aligned rather than guessed at: the list holds pointers.
         const buffer = try arena.alignedAlloc(u8, .of(usize), size);
-        const raw: *win32.ProcThreadAttributeList = @ptrCast(buffer.ptr); // aegis: boundary(A019): an opaque list in a buffer of the size Windows asked for, pointer-aligned
+        const raw: *win32.ProcThreadAttributeList = @ptrCast(buffer.ptr);
         if (win32.InitializeProcThreadAttributeList(raw, count, 0, &size) == .FALSE) {
             return createError();
         }

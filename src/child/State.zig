@@ -120,7 +120,7 @@ reap_returned: aegis.Condition = .init(),
 /// across a descendant walk and signal delivery, which a spin guard's bounded
 /// sections do not allow; `tryWaitClaimed` must take it without waiting, which
 /// `Guarded` cannot; and its waiters yield rather than burn the walk's time.
-// aegis: design(A007): an OS name's lock, held across a descendant walk and signal delivery, taken without waiting by tryWaitClaimed, its waiters yielding (above)
+// glint-ignore: A007 -- design: an OS name's lock, held across a descendant walk and signal delivery, taken without waiting by tryWaitClaimed, its waiters yielding (above)
 identity: std.atomic.Mutex = .unlocked,
 /// A child the simulated route started: `std.process`'s, on the route's
 /// `Io`, whose signals and waits go to the route. Null for the system's.

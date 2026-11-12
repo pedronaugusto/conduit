@@ -47,7 +47,7 @@ pub fn of(identity: if (builtin.target.os.tag == .windows) windows.HANDLE else p
 
 fn linuxMemory(pid: posix.pid_t) Error!Memory {
     var path_buffer: [64]u8 = undefined;
-    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/status", .{pid}, 0) catch unreachable; // unreachable: a pid prints in 64 bytes
+    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/status", .{pid}, 0) catch unreachable; // glint-ignore: Z026 -- a pid prints in 64 bytes
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return switch (c.errno(fd)) {
         .NOENT, .SRCH => error.ProcessEnded,
@@ -127,7 +127,6 @@ const RusageInfoV4 = extern struct {
     runnable_time: u64,
 };
 const rusage_info_v4 = 4;
-// aegis: boundary(A019): Darwin's proc_pid_rusage, declared as libproc's header gives it
 extern "c" fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *RusageInfoV4) c_int;
 
 fn darwinMemory(pid: posix.pid_t) Error!Memory {

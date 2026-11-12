@@ -83,6 +83,5 @@ pub fn unreadableStdout(child: *Child, io: std.Io) void {
 /// Takes back the handle `unreadableStdout` put in place, so `deinit` does not
 /// close a handle that names nothing.
 pub fn dropUnreadableStdout(child: *Child) void {
-    // aegis: no-danger(A003): the handle names nothing (-1, or INVALID_HANDLE_VALUE on Windows): there is nothing to release
     _ = child.takeStdout();
 }
