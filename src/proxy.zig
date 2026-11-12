@@ -66,9 +66,11 @@ pub const Options = struct {
     master: Pty.Master,
     /// Where the child's input comes from, usually the program's own standard
     /// input in raw mode.
+    // glint-ignore: A015 -- lent by the caller, its own standard input; the proxy never closes it
     input: std.Io.File,
     /// Where the child's output goes, usually the program's own standard
     /// output.
+    // glint-ignore: A015 -- lent by the caller, its own standard output; the proxy never closes it
     output: std.Io.File,
     /// Carries `input` to the master.
     input_buffer: []u8,

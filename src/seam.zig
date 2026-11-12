@@ -19,7 +19,12 @@ pub const Size = struct { rows: u16, cols: u16 };
 
 /// A terminal pair, one file each side: what the master writes the slave
 /// reads, and the other way.
-pub const Terminal = struct { master: Io.File, slave: Io.File };
+pub const Terminal = struct {
+    // glint-ignore: A015 -- handed over by the route: the pty keeps its handle and closes it
+    master: Io.File,
+    // glint-ignore: A015 -- handed over by the route: the child's terminal end, closed with it
+    slave: Io.File,
+};
 
 /// How a child ended, as `std.process` reports it.
 pub const Term = std.process.Child.Term;

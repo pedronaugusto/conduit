@@ -56,6 +56,7 @@ pub const Stream = union(enum) {
     /// is how a child is given a terminal for one stream and a pipe or a file
     /// for the others. POSIX only for that particular file: a pseudoconsole is
     /// not a stream, and `Pty.slaveFile` is a compile error on Windows.
+    // glint-ignore: A015 -- lent by the caller for the spawn; conduit never closes it
     file: std.Io.File,
     /// The null device: `/dev/null`, or `NUL` on Windows. One handle serves
     /// every stream that asks for it.
@@ -206,6 +207,7 @@ pub const SpawnOptions = struct {
     /// list, and Windows documents that as incompatible with naming the
     /// child's standard handles. On POSIX the two compose, because there the
     /// terminal is a descriptor like any other.
+    // glint-ignore: A015 -- lent by the caller for the spawn; conduit never closes it
     stderr_to: ?std.Io.File = null,
     /// The user, group and file-creation mask the child runs with. POSIX
     /// only: anything set here is `error.Unsupported` on Windows.
@@ -357,6 +359,7 @@ pub const JobLimits = struct {
 /// `SpawnOptions.channel`.
 pub const ChannelEnd = struct {
     /// The child's end, `Channel.child`.
+    // glint-ignore: A015 -- lent by the caller for the spawn; conduit never closes it
     file: std.Io.File,
     /// The environment variable the child finds it named in. A name an
     /// environment can hold: not empty, and no `=` or NUL in it.

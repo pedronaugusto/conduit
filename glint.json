@@ -148,6 +148,13 @@
         "P007"
       ],
       "reason": "the diagnostic trace's switch, read from the process environment"
+    },
+    {
+      "file": "src/spin.zig",
+      "rules": [
+        "A007"
+      ],
+      "reason": "an async-signal-safe lock for the post-fork and signal paths; its sections are system calls, past a spin guard's bounded ones"
     }
   ],
   "test_inputs": [

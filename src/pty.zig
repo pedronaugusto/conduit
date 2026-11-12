@@ -93,8 +93,10 @@ pub const Pty = struct {
     /// The master end as two `std.Io.File`s.
     pub const Master = struct {
         /// What the child wrote to its terminal.
+        // glint-ignore: A015 -- a view of the pty's own handle, which the pty closes
         read: std.Io.File,
         /// What the child will see as typed at its terminal.
+        // glint-ignore: A015 -- a view of the pty's own handle, which the pty closes
         write: std.Io.File,
     };
 

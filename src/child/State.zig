@@ -124,6 +124,7 @@ reap_returned: aegis.Condition = .init(),
 identity: std.atomic.Mutex = .unlocked,
 /// A child the simulated route started: `std.process`'s, on the route's
 /// `Io`, whose signals and waits go to the route. Null for the system's.
+// glint-ignore: A015 -- the route's record of the child: the simulation holds nothing to release
 simulated: ?std.process.Child = null,
 /// A force request still owns group cleanup at the final, nonblocking reap.
 /// Protected by identity, so fork completion cannot be followed by retirement
