@@ -70,7 +70,7 @@ const Cgroup = @import("cgroup.zig").Cgroup;
 
 // Published before signalling, and retained until the held reap ends the tree.
 // Only the small deadline snapshot is behind the guard; no I/O is done under it.
-const Kill = struct {
+pub const Kill = struct {
     deadline: aegis.Guarded(?Deadline) = .init(null),
 
     fn request(kill: *Kill, io: std.Io, grace: Duration) bool {
@@ -355,6 +355,7 @@ pub const Reaper = struct {
     }
 
     fn insist(reaper: *Reaper, io: std.Io, grace: Duration) void {
+        // glint-ignore: Z026 -- canceled: the owner is done; any other error is an answer
         const term = reaper.waitWithin(io, reaper.killing.current() orelse .after(io, grace)) catch |err| switch (err) {
             // `stop` or `deinit`: the owner is done with this child.
             error.Canceled => return,
@@ -441,6 +442,7 @@ pub const Reaper = struct {
                 reaper.observation_failed.store(.failed, .release);
                 return;
             };
+            // glint-ignore: Z026 -- canceled: the observer ends with its task
             io.sleep(adoption_interval, .awake) catch return;
         }
     }

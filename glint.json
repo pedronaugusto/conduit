@@ -149,5 +149,10 @@
       ],
       "reason": "the diagnostic trace's switch, read from the process environment"
     }
+  ],
+  "test_inputs": [
+    {
+      "module": "bench/"
+    }
   ]
 }

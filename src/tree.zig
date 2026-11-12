@@ -350,6 +350,7 @@ const ProcTable = struct {
     fn next(table: *ProcTable) ?TableRecord {
         while (true) {
             while (table.names.next()) |name| {
+                // glint-ignore: Z026 -- an entry that is no process id is no process
                 const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
                 const relation = processRelationLinux(pid) orelse continue;
                 return .{ .pid = pid, .ppid = relation.ppid, .pgrp = relation.pgrp };
@@ -848,6 +849,7 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
         if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
+            // glint-ignore: Z026 -- an entry that is no process id is no process
             const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             if (pid <= 1 or pid == leader or pid == c.getpid()) continue;
             var process = LinuxProcess.capture(pid) orelse continue;
@@ -1326,6 +1328,7 @@ pub fn hasChildren(pid: posix.pid_t) bool {
         if (rc == 0) break;
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
+            // glint-ignore: Z026 -- an entry that is no thread id is no thread
             const tid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             threads += 1;
             // Read above.
@@ -1568,6 +1571,7 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
+            // glint-ignore: Z026 -- an entry that is no process id is no process
             const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
             if (pid == leader) continue;
             const relation = processRelationLinux(pid) orelse continue;

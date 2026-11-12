@@ -175,7 +175,7 @@ const Queue = struct {
 /// What an `InputWriter` and its writing task share. `queue` guards every
 /// field a caller and the task both touch; the file only the task uses once it
 /// has started.
-const State = struct {
+pub const State = struct {
     gpa: std.mem.Allocator,
     file: OwnedFile,
     queue: aegis.BlockingGuarded(Queue),

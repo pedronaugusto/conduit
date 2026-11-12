@@ -960,6 +960,7 @@ const MemberOps = struct {
             const complete = if (last) |at| at + 1 else if (n == 0) held else 0;
             var numbers = std.mem.tokenizeAny(u8, window[0..complete], "\n ");
             while (numbers.next()) |word| {
+                // glint-ignore: Z026 -- a word that is not a process id names no process
                 const pid = std.fmt.parseInt(posix.pid_t, word, 10) catch continue;
                 try into.append(gpa, pid);
             }

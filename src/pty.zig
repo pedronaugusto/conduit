@@ -386,6 +386,7 @@ pub const Pty = struct {
         const f = held.lend(handle);
         var buffer: [4096]u8 = undefined;
         while (true) {
+            // glint-ignore: Z026 -- the drain ends when the master can no longer be read
             _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
         }
     }

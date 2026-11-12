@@ -461,8 +461,10 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
 fn deviceOf(ctty: Handle, buf: []u8) ?[]const u8 {
     const group = foregroundGroupPosix(ctty) catch return null;
     for ([_]Handle{ 0, 1, 2 }) |fd| {
+        // glint-ignore: Z026 -- a stream with no foreground group is not on the terminal
         const theirs = foregroundGroupPosix(fd) catch continue;
         if (theirs != group) continue;
+        // glint-ignore: Z026 -- a stream with no terminal name is not the device
         const path = ttyNamePosix(fd, buf) catch continue;
         if (!std.mem.startsWith(u8, path, "/dev/") or std.mem.eql(u8, path, "/dev/tty")) continue;
         return path;
