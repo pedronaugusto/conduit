@@ -10,9 +10,10 @@
     {
       "file": "src/child.zig",
       "rules": [
-        "P007"
+        "P007",
+        "A009"
       ],
-      "reason": "a child process on a pseudo-terminal or on pipes: the OS's process and handle calls"
+      "reason": "a child process on a pseudo-terminal or on pipes: the OS's process and handle calls, and the child's output read back"
     },
     {
       "file": "src/win32.zig",

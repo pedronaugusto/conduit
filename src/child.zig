@@ -1886,9 +1886,8 @@ pub const Child = struct {
         into: *Collector,
     ) std.Io.Cancelable!bool {
         var spare: [64 * 1024]u8 = undefined;
-        // Both counts are bytes, so this arithmetic cannot mix kinds of value;
-        // the cap is a `Bytes` at the public boundary and raw only here.
-        const room = max_bytes.raw() -| into.kept;
+        // What the cap leaves once the kept bytes are taken from it: none past it.
+        const room = (max_bytes.sub(.fromRaw(into.kept)) catch aegis.units.Bytes(usize).fromRaw(0)).raw();
         var landing: Landing = if (room == 0 or into.failure.load(.acquire) == .write_failed)
             .dropped
         else if (into.sink.buffer.len == 0) .copied else .direct;
