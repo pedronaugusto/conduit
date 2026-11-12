@@ -1,0 +1,152 @@
+{
+  "seams": [
+    {
+      "module": "src/child/",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a child process on each system: its spawn, handles and state are the OS's"
+    },
+    {
+      "file": "src/child.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a child process on a pseudo-terminal or on pipes: the OS's process and handle calls"
+    },
+    {
+      "file": "src/win32.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the Windows calls conduit makes that std.os.windows does not declare"
+    },
+    {
+      "file": "src/supervisor.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "Linux's adoption owner: raw system calls after fork, nothing else"
+    },
+    {
+      "file": "src/cgroup.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "Linux cgroups: a container per child, through the kernel's files and calls"
+    },
+    {
+      "file": "src/tree.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a process's descendants and the signal that reaches them, per system"
+    },
+    {
+      "file": "src/orphans.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "Linux's subreaper: this process as the parent of every orphan below it"
+    },
+    {
+      "file": "src/channel.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a byte channel to a child: the system's pipes and handles"
+    },
+    {
+      "file": "src/pty.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a pseudo-terminal pair: the system's terminal devices"
+    },
+    {
+      "file": "src/lineage.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "Darwin's process lineage, observed through the kernel"
+    },
+    {
+      "file": "src/tty.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "terminal attributes, window size and identity: the system's terminal calls"
+    },
+    {
+      "file": "src/console.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a Windows console's input records"
+    },
+    {
+      "file": "src/memory.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a process's memory, asked of the operating system"
+    },
+    {
+      "file": "src/handles.zig",
+      "rules": [
+        "P007",
+        "A009"
+      ],
+      "reason": "the system calls conduit makes on a handle"
+    },
+    {
+      "file": "src/exit.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a child's end, learned from the system without reaping it"
+    },
+    {
+      "file": "src/environ.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a child's environment, built from the process's own as the system lays it out"
+    },
+    {
+      "file": "src/host_name.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the machine's host name, from each system's own call"
+    },
+    {
+      "file": "src/process_exists.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "whether a process id names a process, asked of each system"
+    },
+    {
+      "file": "src/shell.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the user's shell, found as each system records it"
+    },
+    {
+      "file": "src/reaper.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "waiting for a child: the system's wait calls"
+    },
+    {
+      "file": "src/trace.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the diagnostic trace's switch, read from the process environment"
+    }
+  ]
+}
