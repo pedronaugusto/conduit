@@ -88,7 +88,7 @@ pub fn Plan(comptime system: type) type {
                     for (options.stdio.perStream(), 0..) |stream, slot| switch (stream) {
                         .inherit => {},
                         .close => plan.child[slot] = .close,
-                        .file => |f| plan.child[slot] = .{ .place = f.handle },
+                        .file => |f| plan.child[slot] = .{ .place = f.get().handle },
                         .ignore => {
                             const handle = null_device orelse opened: {
                                 const device = try system.openNull();
@@ -125,7 +125,7 @@ pub fn Plan(comptime system: type) type {
                     end.deinit(io);
                     plan.parent[2] = null;
                 }
-                plan.child[2] = .{ .place = f.handle };
+                plan.child[2] = .{ .place = f.get().handle };
             }
 
             return plan;

@@ -271,8 +271,8 @@ fn proxy(x: *Context, units: u64) !void {
     p.pty.closeSlave(io);
     try conduit.Proxy.run(io, .{
         .master = p.pty.master(),
-        .input = .{ .handle = p.input[0], .flags = .{ .nonblocking = false } },
-        .output = .{ .handle = p.output[1], .flags = .{ .nonblocking = false } },
+        .input = .of(.{ .handle = p.input[0], .flags = .{ .nonblocking = false } }),
+        .output = .of(.{ .handle = p.output[1], .flags = .{ .nonblocking = false } }),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     });

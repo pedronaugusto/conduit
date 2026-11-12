@@ -303,7 +303,7 @@ pub const Child = struct {
             if (!contract.isVariableName(end.variable)) return error.Unsupported;
             extras_with_channel = try gpa.alloc(std.Io.File, options.extra_fds.len + 1);
             @memcpy(extras_with_channel[0..options.extra_fds.len], options.extra_fds);
-            extras_with_channel[options.extra_fds.len] = end.file;
+            extras_with_channel[options.extra_fds.len] = end.file.get();
             configured.extra_fds = extras_with_channel;
         }
         // A private POSIX group belongs to the held child until the reap. It
@@ -1308,7 +1308,7 @@ pub const Child = struct {
     pub fn stdinFile(child: Child) ?std.Io.File {
         const state = child.state;
         if (state.stdin) |*f| return f.borrow().*;
-        if (child.state.pty) |m| return m.write;
+        if (child.state.pty) |m| return m.write.get();
         return null;
     }
 
@@ -1322,7 +1322,7 @@ pub const Child = struct {
     pub fn stdoutFile(child: Child) ?std.Io.File {
         const state = child.state;
         if (state.stdout) |*f| return f.borrow().*;
-        if (child.state.pty) |m| return m.read;
+        if (child.state.pty) |m| return m.read.get();
         return null;
     }
 
@@ -1396,7 +1396,7 @@ pub const Child = struct {
     pub fn expect(child: Child, buffer: []u8) ?Expect {
         const read = child.stdoutFile() orelse return null;
         const write = child.stdinFile() orelse return null;
-        return .init(.{ .read = read, .write = write }, buffer);
+        return .init(.{ .read = .of(read), .write = .of(write) }, buffer);
     }
 
     //======================================================================

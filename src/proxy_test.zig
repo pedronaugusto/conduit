@@ -42,8 +42,8 @@ test "input at end of file leaves the child's output flowing" {
     var output_buffer: [64]u8 = undefined;
     try run(io, .{
         .master = terminal.master(),
-        .input = input,
-        .output = output,
+        .input = .of(input),
+        .output = .of(output),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     });
@@ -114,8 +114,8 @@ test "bytes written to one terminal reach the program on the other, and back" {
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
-        .input = user.slaveFile(),
-        .output = user.slaveFile(),
+        .input = .of(user.slaveFile()),
+        .output = .of(user.slaveFile()),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     } });
@@ -160,8 +160,8 @@ test "a Ctrl-C typed at the proxy's input becomes SIGINT for the child" {
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
-        .input = user.slaveFile(),
-        .output = user.slaveFile(),
+        .input = .of(user.slaveFile()),
+        .output = .of(user.slaveFile()),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     } });
@@ -199,8 +199,8 @@ test "the window size is forwarded onto the pair" {
     var group: std.Io.Group = .init;
     try group.concurrent(io, runQuietly, .{ io, Options{
         .master = terminal.master(),
-        .input = user.slaveFile(),
-        .output = user.slaveFile(),
+        .input = .of(user.slaveFile()),
+        .output = .of(user.slaveFile()),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
         .resize = .{
@@ -248,8 +248,8 @@ test "an input error interrupts a silent output pump" {
 
     try testing.expectError(error.ReadFailed, run(io, .{
         .master = terminal.master(),
-        .input = invalid,
-        .output = invalid,
+        .input = .of(invalid),
+        .output = .of(invalid),
         .input_buffer = &input_buffer,
         .output_buffer = &output_buffer,
     }));

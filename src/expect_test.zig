@@ -535,7 +535,7 @@ test "Expect discard and consumption wake a full reader at the wait boundary" {
         const f = try tmp.dir.openFile(io, "said", .{});
         defer f.close(io);
         var buffer: [1]u8 = .{'a'};
-        var expect = Expect.init(.{ .read = tty_held.lend(f.handle), .write = tty_held.lend(f.handle) }, &buffer);
+        var expect = Expect.init(.{ .read = .of(tty_held.lend(f.handle)), .write = .of(tty_held.lend(f.handle)) }, &buffer);
         fill(&expect, buffer.len);
         var room: Room = .{ .expect = &expect, .consume = consume };
         const observed = try FaultIo.init(testing.allocator, io, .{ .plan = &.{

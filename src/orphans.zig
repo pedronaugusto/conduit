@@ -135,12 +135,12 @@ pub const Orphans = struct {
     running: bool,
     /// Private: how many processes this has adopted. Adoption is announced
     /// without calling an owner's code while `lock` is held; an owner compares
-    /// this after resetting `adoption_event`, so a concurrent adoption is not
-    /// lost.
+    /// this after reading `adoption_pulse`'s generation, so a concurrent
+    /// adoption is not lost.
     adoptions: aegis.Atomic(Adoptions),
-    /// Private: set through the `std.Io` of whichever call's look adopted
+    /// Private: bumped through the `std.Io` of whichever call's look adopted
     /// something; this keeps no `std.Io` of its own.
-    adoption_event: std.Io.Event,
+    adoption_pulse: aegis.Pulse,
     /// Private: in safe builds, where this was when `start` made it the
     /// process's scope.
     pin: Pin = .{},
@@ -164,7 +164,7 @@ pub const Orphans = struct {
             .was_subreaper = false,
             .running = false,
             .adoptions = .init(.fromRaw(0)),
-            .adoption_event = .unset,
+            .adoption_pulse = .init(),
         };
     }
 
@@ -172,12 +172,12 @@ pub const Orphans = struct {
     /// only a notification; call `list` to take the actual snapshot. The look
     /// that adopts sets it through the `std.Io` its own call was given (a
     /// spawn, a reap, `count`, `list`, `killAll` or `stop`), so the owner
-    /// waits with whichever `std.Io` it likes and nothing is registered. Reset
-    /// it, compare `adoptionCount`, and list again if the count moved, so an
-    /// adoption between the list and the reset is not lost.
-    pub fn adoptionEvent(orphans: *Orphans) *std.Io.Event {
+    /// waits with whichever `std.Io` it likes and nothing is registered. Read
+    /// its generation, compare `adoptionCount`, list again if the count moved,
+    /// then wait past that generation: an adoption after the read is not lost.
+    pub fn adoptionPulse(orphans: *Orphans) *aegis.Pulse {
         orphans.pin.check(orphans);
-        return &orphans.adoption_event;
+        return &orphans.adoption_pulse;
     }
 
     pub fn adoptionCount(orphans: *const Orphans) u64 {
@@ -757,7 +757,7 @@ pub const Orphans = struct {
         }
         const before = orphans.adoptions.load(.monotonic);
         // An adoption made before an error is announced all the same.
-        defer if (!orphans.adoptions.load(.monotonic).eql(before)) orphans.adoption_event.set(io);
+        defer if (!orphans.adoptions.load(.monotonic).eql(before)) orphans.adoption_pulse.bump(io);
         try forEachChild(orphans, consider);
     }
 

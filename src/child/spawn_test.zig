@@ -2087,10 +2087,10 @@ test "an adoption sets the owner's event through the Io of the call whose look f
         error.Unsupported => return error.SkipZigTest,
         else => return err,
     };
-    const adopted = orphans.adoptionEvent();
+    const adopted = orphans.adoptionPulse();
 
     // The reap of the child that left it is the look that finds it.
-    adopted.reset();
+    var generation = adopted.current();
     var seen = orphans.adoptionCount();
     var leaver = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan },
@@ -2104,11 +2104,11 @@ test "an adoption sets the owner's event through the Io of the call whose look f
     };
     try expectAdopted(first);
     _ = (try leaver.waitTimeout(io, within_budget)) orelse return error.TestChildDidNotExit;
-    try testing.expect(adopted.isSet());
+    try testing.expect(!adopted.current().eql(generation));
     try testing.expect(orphans.adoptionCount() > seen);
 
     // With nothing of conduit's happening, `count` is the look.
-    adopted.reset();
+    generation = adopted.current();
     seen = orphans.adoptionCount();
     var keeper = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", leaves_an_orphan ++ "; read x" },
@@ -2121,9 +2121,9 @@ test "an adoption sets the owner's event through the Io of the call whose look f
         _ = c.kill(second, .KILL);
     };
     try expectAdopted(second);
-    try testing.expect(!adopted.isSet());
+    try testing.expect(adopted.current().eql(generation));
     try testing.expectEqual(@as(usize, 2), try orphans.count(io));
-    try testing.expect(adopted.isSet());
+    try testing.expect(!adopted.current().eql(generation));
     try testing.expect(orphans.adoptionCount() > seen);
 
     try orphans.killAll(io, .fromRaw(0));
@@ -2844,7 +2844,7 @@ test "stderr_to sends the child's standard error to a file of the caller's" {
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'to stderr' 1>&2" },
         .stdio = .{ .pipes = .{ .stdin = false } },
-        .stderr_to = sink_pty.slaveFile(),
+        .stderr_to = .of(sink_pty.slaveFile()),
     });
     defer child.deinit(io);
     defer reap(&child, io);
@@ -2944,7 +2944,7 @@ test "standard error follows standard output to a file" {
 
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "printf 'one '; printf 'two' 1>&2" },
-        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .{ .file = sink_pty.slaveFile() }, .stderr = .stdout } },
+        .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .{ .file = .of(sink_pty.slaveFile()) }, .stderr = .stdout } },
     });
     defer child.deinit(io);
     defer reap(&child, io);
@@ -2978,7 +2978,7 @@ test "stderr_to wins over standard error on standard output" {
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.out_and_err,
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .stdout } },
-        .stderr_to = sink_pty.slaveFile(),
+        .stderr_to = .of(sink_pty.slaveFile()),
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
@@ -3013,7 +3013,7 @@ test "the terminal end of a pair can be one stream and a pipe another" {
         },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
-            .stdout = .{ .file = pty.slaveFile() },
+            .stdout = .{ .file = .of(pty.slaveFile()) },
             .stderr = .pipe,
         } },
     });
@@ -3731,7 +3731,7 @@ test "a caller's handle is as inheritable after a spawn as it was before" {
         .argv = &.{ "cmd.exe", "/c", "echo to the caller's file" },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
-            .stdout = .{ .file = sink },
+            .stdout = .{ .file = .of(sink) },
             .stderr = .ignore,
         } },
     });
@@ -3781,7 +3781,7 @@ fn spawnWithSharedHandle(sink: std.Io.File, changed: *std.atomic.Value(bool)) st
             .argv = &.{ "cmd.exe", "/c", "exit 0" },
             .stdio = .{ .streams = .{
                 .stdin = .ignore,
-                .stdout = .{ .file = sink },
+                .stdout = .{ .file = .of(sink) },
                 .stderr = .ignore,
             } },
         }) catch {
@@ -4091,7 +4091,7 @@ test "a stream whose file is a descriptor an earlier stream overwrites still get
         .argv = &.{ "/bin/sh", "-c", "printf 'on the caller-supplied file'" },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
-            .stdout = .{ .file = .{ .handle = 0, .flags = .{ .nonblocking = false } } },
+            .stdout = .{ .file = .of(.{ .handle = 0, .flags = .{ .nonblocking = false } }) },
             .stderr = .ignore,
         } },
     });
@@ -4128,8 +4128,8 @@ test "two streams whose files are each other's descriptors are not crossed" {
         .argv = &.{ "/bin/sh", "-c", "printf 'out' >&1; printf 'err' >&2" },
         .stdio = .{ .streams = .{
             .stdin = .ignore,
-            .stdout = .{ .file = .{ .handle = 2, .flags = .{ .nonblocking = false } } },
-            .stderr = .{ .file = .{ .handle = 1, .flags = .{ .nonblocking = false } } },
+            .stdout = .{ .file = .of(.{ .handle = 2, .flags = .{ .nonblocking = false } }) },
+            .stderr = .{ .file = .of(.{ .handle = 1, .flags = .{ .nonblocking = false } }) },
         } },
     });
     defer child.deinit(io);
@@ -4369,7 +4369,7 @@ test "a child talks both ways over its channel, named after its extra files" {
         .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
         .stdio = .ignore,
         .extra_fds = &.{f},
-        .channel = .{ .file = channel.child.borrow().*, .variable = "CONDUIT_TEST_CHANNEL" },
+        .channel = .{ .file = .of(channel.child.borrow().*), .variable = "CONDUIT_TEST_CHANNEL" },
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
@@ -4397,7 +4397,7 @@ test "a child on a terminal has its channel beside it" {
         .argv = &.{ inherited_fixture, "channel", "CONDUIT_TEST_CHANNEL" },
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
-        .channel = .{ .file = channel.child.borrow().*, .variable = "CONDUIT_TEST_CHANNEL" },
+        .channel = .{ .file = .of(channel.child.borrow().*), .variable = "CONDUIT_TEST_CHANNEL" },
     });
     defer child.deinit(io);
     errdefer reap(&child, io);
@@ -4424,7 +4424,7 @@ test "a channel's variable must be one an environment can hold" {
         try testing.expectError(error.Unsupported, Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "exit" },
             .stdio = .ignore,
-            .channel = .{ .file = channel.child.borrow().*, .variable = variable },
+            .channel = .{ .file = .of(channel.child.borrow().*), .variable = variable },
         }));
     }
 }

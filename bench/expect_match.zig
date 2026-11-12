@@ -51,7 +51,7 @@ fn wait(io: Io, gpa: std.mem.Allocator, row: Row, total: usize) !u64 {
     defer write.deinit(io);
     const buffer = try gpa.alloc(u8, total + 64);
     defer gpa.free(buffer);
-    var expect = Expect.init(.{ .read = read.borrow().*, .write = write.borrow().* }, buffer);
+    var expect = Expect.init(.{ .read = .of(read.borrow().*), .write = .of(write.borrow().*) }, buffer);
     try expect.start(io);
     defer expect.deinit(io);
     const t0 = Io.Clock.awake.now(io);

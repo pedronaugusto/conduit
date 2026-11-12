@@ -224,12 +224,13 @@ pub const Reaper = struct {
         return owner.list(io, out);
     }
 
-    /// Notification of new scoped records. Reset the event, compare
-    /// adoptionCount, and take another snapshot if it changed.
-    pub fn adoptionEvent(reaper: *Reaper) ?*std.Io.Event {
+    /// Notification of new scoped records. Read the pulse's generation,
+    /// compare adoptionCount, take another snapshot if it changed, then wait
+    /// past that generation.
+    pub fn adoptionPulse(reaper: *Reaper) ?*aegis.Pulse {
         reaper.pin.check(reaper);
         const owner = reaper.orphans orelse return null;
-        return owner.adoptionEvent();
+        return owner.adoptionPulse();
     }
 
     pub fn adoptionCount(reaper: *const Reaper) u64 {

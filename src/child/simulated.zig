@@ -36,7 +36,7 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
         else => for (options.stdio.perStream(), 0..) |stream, i| {
             streams[i] = switch (stream) {
                 .inherit => .inherit,
-                .file => |f| .{ .file = f },
+                .file => |f| .{ .file = f.get() },
                 .ignore => .ignore,
                 .pipe => .pipe,
                 .close => .close,
@@ -52,7 +52,7 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
             };
         },
     }
-    if (options.stderr_to) |f| streams[2] = .{ .file = f };
+    if (options.stderr_to) |f| streams[2] = .{ .file = f.get() };
     var child = std.process.spawn(io, .{
         .argv = options.argv,
         .cwd = if (options.cwd) |path| .{ .path = path } else .inherit,

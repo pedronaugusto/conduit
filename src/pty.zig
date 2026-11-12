@@ -93,11 +93,11 @@ pub const Pty = struct {
     /// The master end as two `std.Io.File`s.
     pub const Master = struct {
         /// What the child wrote to its terminal.
-        // glint-ignore: A015 -- a view of the pty's own handle, which the pty closes
-        read: std.Io.File,
+        /// A view of the pty's own handle, which the pty closes.
+        read: aegis.own.Unowned(std.Io.File),
         /// What the child will see as typed at its terminal.
-        // glint-ignore: A015 -- a view of the pty's own handle, which the pty closes
-        write: std.Io.File,
+        /// A view of the pty's own handle, which the pty closes.
+        write: aegis.own.Unowned(std.Io.File),
     };
 
     /// The initial terminal geometry of a new pair, and what the console on the
@@ -297,7 +297,7 @@ pub const Pty = struct {
     ///
     /// Asserts the master is still open.
     pub fn master(pty: Pty) Master {
-        return .{ .read = pty.readFile(), .write = pty.writeFile() };
+        return .{ .read = .of(pty.readFile()), .write = .of(pty.writeFile()) };
     }
 
     /// The end to read, lent. Asserts it is still open.
@@ -956,7 +956,7 @@ pub const Pty = struct {
         defer resizing.cancel(io) catch {};
         for (0..1024) |_| {
             const borrowed = pty.master();
-            try testing.expectEqual(pty.read.?, borrowed.read.handle);
+            try testing.expectEqual(pty.read.?, borrowed.read.get().handle);
             const got = try pty.size(std.testing.io);
             try testing.expect(std.meta.eql(got, a) or std.meta.eql(got, b));
             try std.Io.sleep(io, .fromNanoseconds(1), .awake);

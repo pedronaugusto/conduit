@@ -66,12 +66,12 @@ pub const Options = struct {
     master: Pty.Master,
     /// Where the child's input comes from, usually the program's own standard
     /// input in raw mode.
-    // glint-ignore: A015 -- lent by the caller, its own standard input; the proxy never closes it
-    input: std.Io.File,
+    /// Lent by the caller; the proxy never closes it.
+    input: aegis.own.Unowned(std.Io.File),
     /// Where the child's output goes, usually the program's own standard
     /// output.
-    // glint-ignore: A015 -- lent by the caller, its own standard output; the proxy never closes it
-    output: std.Io.File,
+    /// Lent by the caller; the proxy never closes it.
+    output: aegis.own.Unowned(std.Io.File),
     /// Carries `input` to the master.
     input_buffer: []u8,
     /// Carries the master to `output`.
@@ -152,16 +152,16 @@ pub fn run(io: std.Io, options: Options) RunError!void {
     errdefer group.cancel(io);
     try group.concurrent(io, pumpTask, .{
         io,
-        options.input,
-        options.master.write,
+        options.input.get(),
+        options.master.write.get(),
         options.input_buffer,
         Direction.input,
         &completion,
     });
     try group.concurrent(io, pumpTask, .{
         io,
-        options.master.read,
-        options.output,
+        options.master.read.get(),
+        options.output.get(),
         options.output_buffer,
         Direction.output,
         &completion,

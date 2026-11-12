@@ -81,9 +81,9 @@ pub const Expect = struct {
     /// Private: set by the reading task whenever one of those fields changes, so a wait
     /// ends the moment the child speaks rather than at the end of a poll
     /// interval.
-    arrived: std.Io.Event,
+    arrived: aegis.Pulse,
     /// Private: set when consuming or discarding bytes makes buffer space available.
-    space: std.Io.Event,
+    space: aegis.Pulse,
     /// Private: the task doing the reading.
     group: std.Io.Group,
     /// Private: one claim for initialization, task ownership and stopping. Stop ends
@@ -164,8 +164,8 @@ pub const Expect = struct {
             .master = master,
             .buffer = buffer,
             .intake = .init(.{ .filled = 0, .consumed = 0, .ended = false, .failed = false }),
-            .arrived = .unset,
-            .space = .unset,
+            .arrived = .init(),
+            .space = .init(),
             .group = .init,
             .lifetime = .init(.ready),
             .finished = .init(.reading),
@@ -325,7 +325,7 @@ pub const Expect = struct {
 
         const deadline = Deadline.of(io, timeout);
         while (true) {
-            expect.arrived.reset();
+            const seen = expect.arrived.current();
             // Read before the buffer: a reader seen finished here has appended
             // everything it ever will, so a search that fails now fails for good.
             const finished = expect.finished.load(.acquire) == .finished;
@@ -361,7 +361,7 @@ pub const Expect = struct {
             if (failed) return error.ReadFailed;
             if (ended or finished) return error.EndOfStream;
             if (full) return error.BufferFull;
-            try expect.sleepUntil(io, deadline);
+            try expect.sleepUntil(io, deadline, seen);
         }
     }
 
@@ -445,7 +445,7 @@ pub const Expect = struct {
 
         const deadline = Deadline.of(io, timeout);
         while (true) {
-            expect.arrived.reset();
+            const seen = expect.arrived.current();
             // As in `untilAny`: before the buffer.
             const finished = expect.finished.load(.acquire) == .finished;
 
@@ -468,7 +468,7 @@ pub const Expect = struct {
             if (enough) return expect.buffer[0..count];
             if (failed) return error.ReadFailed;
             if (ended or finished) return error.EndOfStream;
-            try expect.sleepUntil(io, deadline);
+            try expect.sleepUntil(io, deadline, seen);
         }
     }
 
@@ -488,7 +488,7 @@ pub const Expect = struct {
     /// `"\x04"`.
     pub fn send(expect: *Expect, io: std.Io, reply: []const u8) SendError!void {
         expect.pin.check(expect);
-        handles.writeStreamingAll(io, expect.master.write, reply) catch |err| switch (err) {
+        handles.writeStreamingAll(io, expect.master.write.get(), reply) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             error.BrokenPipe => return error.BrokenPipe,
             else => return error.WriteFailed,
@@ -521,7 +521,7 @@ pub const Expect = struct {
         const intake = held.value();
         intake.filled = 0;
         intake.consumed = 0;
-        expect.space.set(io);
+        expect.space.bump(io);
     }
 
     //======================================================================
@@ -535,9 +535,9 @@ pub const Expect = struct {
         var chunk: [512]u8 = undefined;
         while (true) {
             if (expect.lifetime.load(.acquire) == .stopped) return expect.finish(io, .ended);
-            // Reset before checking the buffer under the consumer mutex. A
-            // consumer before this check leaves room; one after it sets space.
-            expect.space.reset();
+            // Read the generation before checking the buffer under the consumer
+            // mutex. A consumer before this check leaves room; one after it bumps space.
+            const space_seen = expect.space.current();
             const room = room: {
                 var held = expect.intake.acquireUncancelable(io);
                 defer held.deinit(io);
@@ -545,11 +545,11 @@ pub const Expect = struct {
             };
             if (room == 0) {
                 // Full means backpressure until the consumer makes room.
-                try expect.space.wait(io);
+                _ = try expect.space.waitPast(io, space_seen);
                 continue;
             }
 
-            const n = handles.readStreaming(io, expect.master.read, &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
+            const n = handles.readStreaming(io, expect.master.read.get(), &.{chunk[0..@min(room, chunk.len)]}) catch |err| switch (err) {
                 error.Canceled => return error.Canceled,
                 else => return expect.finish(io, if (handles.finished(err)) .ended else .failed),
             };
@@ -563,7 +563,7 @@ pub const Expect = struct {
                 @memcpy(expect.buffer[intake.filled..][0..n], chunk[0..n]);
                 intake.filled += n;
             }
-            expect.arrived.set(io);
+            expect.arrived.bump(io);
         }
     }
 
@@ -578,14 +578,14 @@ pub const Expect = struct {
                 .failed => held.value().failed = true,
             }
         }
-        expect.arrived.set(io);
+        expect.arrived.bump(io);
     }
 
     /// Published on every exit from the reading task. Stored outside the mutex so
     /// it can be observed without taking anything the task might hold.
     fn markFinished(expect: *Expect, io: std.Io) void {
         expect.finished.store(.finished, .release);
-        expect.arrived.set(io);
+        expect.arrived.bump(io);
     }
 
     //======================================================================
@@ -594,8 +594,8 @@ pub const Expect = struct {
 
     /// Waits for the reading task to say something has changed, or for the
     /// deadline.
-    fn sleepUntil(expect: *Expect, io: std.Io, deadline: Deadline) WaitError!void {
-        expect.arrived.waitTimeout(io, deadline.toTimeout()) catch |err| switch (err) {
+    fn sleepUntil(expect: *Expect, io: std.Io, deadline: Deadline, seen: aegis.Pulse.Generation) WaitError!void {
+        _ = expect.arrived.waitPastTimeout(io, seen, deadline.toTimeout()) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
             // A wakeup is allowed to be spurious and to report itself as a
             // timeout, so the clock decides whether there is time left rather
@@ -623,7 +623,7 @@ pub const Expect = struct {
         @memmove(expect.buffer[0..rest], expect.buffer[intake.consumed..intake.filled]);
         intake.filled = rest;
         intake.consumed = 0;
-        expect.space.set(io);
+        expect.space.bump(io);
     }
 
     //======================================================================
