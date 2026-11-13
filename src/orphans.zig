@@ -537,7 +537,7 @@ pub const Orphans = struct {
         }
 
         fn unlock(spin_lock: *SpinLock) void {
-            std.debug.assert(spin_lock.held.load(.monotonic));
+            aegis.assert.invariant(spin_lock.held.load(.monotonic), "spin_lock.held.load(.monotonic)");
             spin_lock.held.store(false, .release);
         }
     };
@@ -565,8 +565,8 @@ pub const Orphans = struct {
         fn unlockShared(gate_lock: *GateLock) void {
             const before = gate_lock.state.fetchSub(1, .release);
             // A spawn was counted in, and no look can hold the gate meanwhile.
-            std.debug.assert(before & readers != 0);
-            std.debug.assert(before & writing == 0);
+            aegis.assert.invariant(before & readers != 0, "before & readers != 0");
+            aegis.assert.invariant(before & writing == 0, "before & writing == 0");
         }
 
         fn lock(gate_lock: *GateLock) void {
@@ -590,8 +590,8 @@ pub const Orphans = struct {
         fn unlock(gate_lock: *GateLock) void {
             const before = gate_lock.state.fetchAnd(~writing, .release);
             // The look held the gate, and no spawn got in while it did.
-            std.debug.assert(before & writing != 0);
-            std.debug.assert(before & readers == 0);
+            aegis.assert.invariant(before & writing != 0, "before & writing != 0");
+            aegis.assert.invariant(before & readers == 0, "before & readers == 0");
         }
     };
 

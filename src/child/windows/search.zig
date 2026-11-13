@@ -10,6 +10,7 @@
 //! out here, and tested on every system this package builds on.
 
 const std = @import("std");
+const aegis = @import("aegis");
 const Allocator = std.mem.Allocator;
 
 /// Whether `program` names a program to search for rather than a path: no
@@ -49,7 +50,7 @@ pub const Places = struct {
 /// The paths a bare `program` is looked for at, in the order they are tried.
 /// Every slice is allocated with `arena`.
 pub fn candidates(arena: Allocator, places: Places, program: []const u8) Allocator.Error![]const []const u8 {
-    std.debug.assert(isBareProgram(program));
+    aegis.assert.invariant(isBareProgram(program), "isBareProgram(program)");
     var directories: std.ArrayList([]const u8) = .empty;
     if (places.executable_dir) |dir| try directories.append(arena, dir);
     if (places.current_dir) |dir| try directories.append(arena, dir);

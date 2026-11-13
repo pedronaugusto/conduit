@@ -208,12 +208,12 @@ pub const State = struct {
         const queue = held.value();
         if (queue.failed != null) return null;
         const node = queue.head orelse {
-            std.debug.assert(queue.tail == null);
+            aegis.assert.invariant(queue.tail == null, "queue.tail == null");
             return null;
         };
         queue.head = node.next;
         if (queue.head == null) queue.tail = null;
-        std.debug.assert(node.batch.borrow().bytes.len > 0);
+        aegis.assert.invariant(node.batch.borrow().bytes.len > 0, "node.batch.borrow().bytes.len > 0");
         return node;
     }
 

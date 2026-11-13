@@ -32,6 +32,7 @@ const std = @import("std");
 const close_on_exec = @import("close_on_exec.zig");
 const held = @import("held.zig");
 const win32 = @import("win32");
+const aegis = @import("aegis");
 const posix = std.posix;
 const system = posix.system;
 const windows = std.os.windows;
@@ -111,7 +112,7 @@ const socket_flag = !is_windows and !builtin.target.os.tag.isDarwin() and @hasDe
 comptime {
     // Where the flag is a second call, `ForkGap` is what keeps conduit's
     // spawns out of the gap, and it holds only where a pipe needs it too.
-    if (!is_windows and !socket_flag) std.debug.assert(close_on_exec.opening_is_two_calls);
+    if (!is_windows and !socket_flag) aegis.assert.invariant(close_on_exec.opening_is_two_calls, "close_on_exec.opening_is_two_calls");
 }
 
 fn openPosix() Channel.OpenError!Channel {

@@ -23,6 +23,7 @@ const cgroup = @import("../cgroup.zig");
 const Orphans = @import("../orphans.zig").Orphans;
 const supervisor = @import("../supervisor.zig");
 const lineage = @import("../lineage.zig");
+const aegis = @import("aegis");
 
 const held = tty.held;
 
@@ -54,8 +55,8 @@ const Plan = stdio_plan.Plan(struct {
 pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) SpawnError!*State {
     // `Child.spawn` has refused an empty `argv`, and made a contained child
     // a group of its own.
-    std.debug.assert(options.argv.len > 0);
-    std.debug.assert(options.descendants != .contain or options.detach);
+    aegis.assert.invariant(options.argv.len > 0, "options.argv.len > 0");
+    aegis.assert.invariant(options.descendants != .contain or options.detach, "options.descendants != .contain or options.detach");
     // Everything the fork child needs is built here, in the parent: between
     // `fork` and `execve` only async-signal-safe calls are allowed, which rules
     // out allocating.
@@ -193,7 +194,7 @@ const ForkEnds = struct {
 /// Forks, and runs `childMain` in the child. Returns the child's pid in the
 /// parent; the pipes are the caller's to close if this fails.
 fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) SpawnError!posix.pid_t {
-    std.debug.assert(ends.channel == null or builtin.target.os.tag == .linux);
+    aegis.assert.invariant(ends.channel == null or builtin.target.os.tag == .linux, "ends.channel == null or builtin.target.os.tag == .linux");
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -245,7 +246,7 @@ fn watchStarted(
     go: ?[2]posix.fd_t,
     supervised: bool,
 ) SpawnError!Watched {
-    std.debug.assert(pid > 0);
+    aegis.assert.invariant(pid > 0, "pid > 0");
     var tracker: ?*lineage.Tracker = null;
     if (comptime lineage.supported) if (options.descendants == .contain) {
         tracker = try lineage.Tracker.start(gpa, io, pid);
@@ -422,7 +423,7 @@ const Report = struct {
 fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
     // One record is one `write`, which a pipe keeps whole below `PIPE_BUF`,
     // whose floor is 512.
-    comptime std.debug.assert(@sizeOf(Failure) == 8);
+    comptime aegis.assert.invariant(@sizeOf(Failure) == 8, "@sizeOf(Failure) == 8");
     var outcome: Report = .{ .failure = null, .root_pid = pid, .joined = true };
     // Every record up to the end of file, in whatever order they came: the
     // supervisor writes the root's pid after its `fork` while the root is
@@ -433,7 +434,7 @@ fn readReport(fd: posix.fd_t, pid: posix.pid_t) Report {
         var record: Failure = undefined;
         const n = readAll(fd, std.mem.asBytes(&record));
         if (n == 0) break;
-        std.debug.assert(n == @sizeOf(Failure));
+        aegis.assert.invariant(n == @sizeOf(Failure), "n == @sizeOf(Failure)");
         switch (record.stage) {
             .supervisor_root => outcome.root_pid = @intCast(record.errno),
             // A child that could not join its cgroup says so and carries on.
@@ -575,7 +576,7 @@ fn childMain(
         report = c.fcntl(report_pipe, c.F.DUPFD_CLOEXEC, first_free);
         if (report < 0) bail(report_pipe, .descriptors);
     }
-    std.debug.assert(report >= first_free);
+    aegis.assert.invariant(report >= first_free, "report >= first_free");
 
     // Only the parent writes the word to go on. With this copy of the writing
     // end closed, a parent that has gone reads as end of file rather than as
@@ -648,7 +649,7 @@ fn armParentDeathSignal(options: SpawnOptions, report: posix.fd_t, parent: posix
 /// A session of the child's own with its terminal as the controlling one,
 /// or, off a terminal, a process group of its own.
 fn detachChild(options: SpawnOptions, report: posix.fd_t) void {
-    std.debug.assert(options.detach);
+    aegis.assert.invariant(options.detach, "options.detach");
     switch (options.stdio) {
         .pty => |pty| {
             if (c.setsid() < 0) bail(report, .detach);

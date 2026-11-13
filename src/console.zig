@@ -8,6 +8,7 @@
 const std = @import("std");
 const reactor = @import("reactor");
 const win32 = @import("win32");
+const aegis = @import("aegis");
 const windows = std.os.windows;
 
 /// A key event from a Windows console input buffer. Other input record
@@ -37,8 +38,8 @@ pub const InputRecord = extern struct {
 pub const key_event: u16 = 0x0001;
 
 comptime {
-    std.debug.assert(@sizeOf(InputRecord) == 20);
-    std.debug.assert(@offsetOf(InputRecord, "event") == 4);
+    aegis.assert.invariant(@sizeOf(InputRecord) == 20, "@sizeOf(InputRecord) == 20");
+    aegis.assert.invariant(@offsetOf(InputRecord, "event") == 4, "@offsetOf(InputRecord, \"event\") == 4");
 }
 
 extern "kernel32" fn PeekConsoleInputW(handle: windows.HANDLE, buffer: [*]InputRecord, capacity: windows.DWORD, read_count: *windows.DWORD) callconv(.winapi) windows.BOOL;

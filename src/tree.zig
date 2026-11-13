@@ -1124,9 +1124,9 @@ const proc_pidt_bsdinfowithuniqid = 18;
 
 comptime {
     // The sizes `proc_pidinfo` checks the buffer against.
-    std.debug.assert(@sizeOf(ProcBsdInfo) == 136);
-    std.debug.assert(@sizeOf(ProcUniqueInfo) == 56);
-    std.debug.assert(@sizeOf(BsdInfoWithUniqueId) == 192);
+    aegis.assert.invariant(@sizeOf(ProcBsdInfo) == 136, "@sizeOf(ProcBsdInfo) == 136");
+    aegis.assert.invariant(@sizeOf(ProcUniqueInfo) == 56, "@sizeOf(ProcUniqueInfo) == 56");
+    aegis.assert.invariant(@sizeOf(BsdInfoWithUniqueId) == 192, "@sizeOf(BsdInfoWithUniqueId) == 192");
 }
 
 /// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`.

@@ -66,6 +66,7 @@ const tree = @import("../../tree.zig");
 const exit = @import("../../exit.zig");
 const reactor = @import("reactor");
 const options_for_build = @import("conduit_options");
+const aegis = @import("aegis");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
@@ -156,7 +157,7 @@ pub fn spawn(
     options: SpawnOptions,
     into: ?posix.fd_t,
 ) SpawnError!?Started {
-    std.debug.assert(into == null or into_cgroup);
+    aegis.assert.invariant(into == null or into_cgroup, "into == null or into_cgroup");
     var actions: FileActions = undefined;
     if (posix_spawn_file_actions_init(&actions) != 0) return error.SystemResources;
     defer _ = posix_spawn_file_actions_destroy(&actions);
@@ -349,7 +350,7 @@ const Flags = packed struct(c_short) {
             .start_suspended => builtin.target.os.tag != .linux,
             .setsid => builtin.target.os.tag == .linux,
         };
-        if (on) std.debug.assert(here);
+        if (on) aegis.assert.invariant(here, "here");
         if (here and on) f.bit7 = true;
     }
 };

@@ -524,7 +524,7 @@ pub const Child = struct {
     fn settled(child: *const Child) ?Term {
         if (child.state.reaped.load(.acquire) != .reaped) return null;
         // Published only after it was written.
-        std.debug.assert(child.state.term != null);
+        aegis.assert.invariant(child.state.term != null, "child.state.term != null");
         return child.state.term;
     }
 
@@ -532,8 +532,8 @@ pub const Child = struct {
     fn publish(child: *Child, term: Term) void {
         // One reap, so one term: whoever publishes holds the identity, and a
         // second reap would be of a process this child no longer names.
-        std.debug.assert(child.state.reaped.load(.monotonic) != .reaped);
-        std.debug.assert(child.state.term == null);
+        aegis.assert.invariant(child.state.reaped.load(.monotonic) != .reaped, "child.state.reaped.load(.monotonic) != .reaped");
+        aegis.assert.invariant(child.state.term == null, "child.state.term == null");
         child.state.term = term;
         child.state.reaped.store(.reaped, .release);
     }
@@ -554,7 +554,7 @@ pub const Child = struct {
             var held = child.state.reaping.acquireUncancelable(io);
             defer held.deinit(io);
             // Only the task that claimed the reap gives it back.
-            std.debug.assert(held.value().*);
+            aegis.assert.invariant(held.value().*, "held.value().*");
             held.value().* = false;
         }
         child.state.reap_returned.broadcast(io);
@@ -1823,7 +1823,7 @@ pub const Child = struct {
         }
 
         fn add(set: *PollSet, member: reactor.Waitable, what: u8) void {
-            std.debug.assert(set.count < set.members.len);
+            aegis.assert.invariant(set.count < set.members.len, "set.count < set.members.len");
             set.members[set.count] = member;
             set.which[set.count] = what;
             set.count += 1;

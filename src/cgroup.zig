@@ -964,8 +964,8 @@ const MemberOps = struct {
                 const pid = std.fmt.parseInt(posix.pid_t, word, 10) catch continue;
                 try into.append(gpa, pid);
             }
-            std.debug.assert(complete <= held);
-            std.debug.assert(held <= window.len);
+            aegis.assert.invariant(complete <= held, "complete <= held");
+            aegis.assert.invariant(held <= window.len, "held <= window.len");
             @memmove(window[0 .. held - complete], window[complete..held]);
             held -= complete;
             if (n == 0) return true;

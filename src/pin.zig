@@ -4,7 +4,7 @@
 //! later does with the stale pointer.
 
 const builtin = @import("builtin");
-const std = @import("std");
+const aegis = @import("aegis");
 
 /// Safety follows this module's own optimization mode, not the standard
 /// library's.
@@ -20,7 +20,7 @@ pub const Pin = struct {
 
     /// Asserts that `owner` is where `set` found it, if it was set.
     pub fn check(pin: *const Pin, owner: *const anyopaque) void {
-        if (safe) if (pin.at) |at| std.debug.assert(at == @intFromPtr(owner)); // safe: compared only.
+        if (safe) if (pin.at) |at| aegis.assert.invariant(at == @intFromPtr(owner), "at == @intFromPtr(owner)"); // safe: compared only.
     }
 };
 

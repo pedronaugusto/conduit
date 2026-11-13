@@ -18,6 +18,7 @@ const trace = @import("../trace.zig");
 const tty = @import("conduit.tty");
 const win32 = @import("win32");
 const windows_search = @import("windows/search.zig");
+const aegis = @import("aegis");
 
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
@@ -175,13 +176,13 @@ const Extras = struct {
             }
             extras.handles = handles[0 .. extras.handles.len + 1];
         }
-        std.debug.assert(extras.handles.len == extra_fds.len);
+        aegis.assert.invariant(extras.handles.len == extra_fds.len, "extras.handles.len == extra_fds.len");
         return extras;
     }
 
     /// Closes the copies; the caller's own handles stay open.
     fn deinit(extras: *Extras, extra_fds: []const std.Io.File) void {
-        std.debug.assert(extras.handles.len <= extra_fds.len);
+        aegis.assert.invariant(extras.handles.len <= extra_fds.len, "extras.handles.len <= extra_fds.len");
         for (extra_fds[0..extras.handles.len], extras.handles) |extra, handle| {
             if (handle != extra.handle) windows.CloseHandle(handle);
         }
