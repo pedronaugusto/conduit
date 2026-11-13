@@ -58,6 +58,13 @@
       "reason": "a byte channel to a child: the system's pipes and handles"
     },
     {
+      "file": "src/close_on_exec.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a pipe no unrelated child inherits: the system's pipe, pipe2 and fcntl, where std makes no pipe close-on-exec in one call"
+    },
+    {
       "file": "src/pty.zig",
       "rules": [
         "P007"
