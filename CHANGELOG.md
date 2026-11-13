@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- A file conduit is lent and never closes is an `aegis.own.Unowned(std.Io.File)`, where it was the `std.Io.File`: `Child.ChannelEnd.file`, `Child.Stream.file` (the `.file` arm), `Child.SpawnOptions.stderr_to`, `Proxy.Options.input`, `Proxy.Options.output`, and the pty's own handles `Pty.Master.read` and `Pty.Master.write`. Migration: wrap a file with `.of(file)` and read it with `.get()`.
+- `Child.takeStdout` and `Child.takeStderr` return the stream's owner, `?tty.OwnedFile` (an `aegis.own.OwnedIo`, released once by `deinit(io)`), where each returned a `?std.Io.File` the caller closed by hand.
+- `Expect.arrived` and `Expect.space` are `aegis.Pulse`s, where each was a `std.Io.Event`; `Expect.finished` and `Expect.lifetime` are `aegis.Atomic` cells, where each was a `std.atomic.Value`.
+- `Orphans.adoption_event` is `Orphans.adoption_pulse`, an `aegis.Pulse` (also `Orphans.adoptionPulse()`), where it was a `std.Io.Event`, so an `Orphans` literal names it; `Orphans.adoptions` and `Orphans.looks` are `aegis.Atomic` counts, where each was a `std.atomic.Value`; `Orphans.lock` and `Orphans.own_lock` are `Orphans.SpinLock`s whose word is an aegis cell.
+- `Pty.SizeError` (`Pty.ResizeError`) includes `error.Canceled`, and so do `Pty.size` and `Pty.resize`: a call made under a cancelled task refuses it.
+- `Reaper.state`, `Reaper.observation_failed` and `Reaper.lifetime` are `aegis.Atomic` cells, where each was a `std.atomic.Value`; `Reaper.answered` is an `aegis.Signal(void)`, where it was a `std.Io.Event`.
+- In `conduit.tty`, `Channel.parent` and `Channel.child` are owned files (`OwnedFile`, an `aegis.own.OwnedIo`), where each was a `std.Io.File`.
+- In `conduit.tty`, `Controlling.input` and `Controlling.output` are functions, `input()` and `output()`, over the terminal's owned files, where each was a `std.Io.File` field, so a `Controlling` is no longer written as a literal of them; `Controlling.close` takes the terminal by pointer (`*Controlling`), where it took it by value.
 - A lent file held in a field is an `aegis.own.Unowned(std.Io.File)`, a handle its holder uses and never closes, where it was a bare `std.Io.File` (glint 0.8's A015): `Pty.Master`'s `read` and `write`, `Proxy.Options`' `input` and `output`, the spawn options' `stderr_to`, a stream's `.file` and `ChannelEnd.file`. Wrap a file you lend with `.of(file)` where you wrote the file; read one with `.get()`. You still close what you opened.
 - `Orphans.adoptionEvent()` and `Reaper.adoptionEvent()` are `adoptionPulse()`, an `*aegis.Pulse` where they gave a `*std.Io.Event`: read its generation (`current()`), compare `adoptionCount`, list again if it moved, then `waitPast` that generation. Nothing is reset, so an adoption between the look and the wait is not lost.
 

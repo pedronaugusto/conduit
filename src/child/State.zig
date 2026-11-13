@@ -37,7 +37,7 @@ process_id: Child.Id,
 /// the operating system may have handed the number to an unrelated process by
 /// then. On Windows it is a handle, and it is closed once the child is reaped
 /// — see `handles_open`.
-// glint-ignore: P008 -- std's id: process_id on POSIX, a handle on Windows; both are kept
+// std's id: process_id on POSIX, a handle on Windows; both are kept
 id: Id,
 /// Windows only: the handle to the child's initial thread, which
 /// `CreateProcessW` hands back and nothing else here uses. It is closed
