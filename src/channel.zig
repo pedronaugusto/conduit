@@ -99,6 +99,94 @@ pub const Channel = struct {
 
     /// The longest value `valueOf` writes.
     pub const value_max = std.fmt.count("{d}", .{std.math.maxInt(u64)});
+
+    /// An end of a channel, read and written as what it is: a connected
+    /// stream socket on POSIX, through std's socket reader and writer, and a
+    /// duplex pipe on Windows, through its file reader and writer. Each is
+    /// handed out as aegis's stream end (`Reader.ends` an
+    /// `aegis.io.ReadEnd`, `Writer.ends` an `aegis.io.WriteEnd`), so a
+    /// failure keeps its cause beside it. The other side closing is told,
+    /// however it closed: a reader ends (`error.EndOfStream`) where it
+    /// closed cleanly, and a read or write it cuts short fails with the
+    /// cause `Closed`, never the errno the system said it with. (On Linux a
+    /// write to a socket whose other side closed with bytes unread is
+    /// `ECONNRESET`, which std's file calls take for a descriptor that is
+    /// no socket and stop the program on.) One task may read while another
+    /// writes.
+    pub const End = struct {
+        file: held.OwnedFile,
+
+        /// The cause a read or a write fails with once the other side has
+        /// gone: what was not read is lost, what was not written is never
+        /// read.
+        pub const Closed = error.Closed;
+
+        /// The end `file` is: `Channel.parent`, or what `inherited` gives.
+        pub fn of(file: held.OwnedFile) End {
+            return .{ .file = file };
+        }
+
+        pub fn deinit(end: *End, io: std.Io) void {
+            end.file.deinit(io);
+            end.* = undefined;
+        }
+
+        /// A reader of the end, over `buffer`.
+        pub fn reader(end: *End, io: std.Io, buffer: []u8) Reader {
+            return .{ .inner = if (is_windows) .initStreaming(end.file.borrow().*, io, buffer) else .init(end.stream(), io, buffer) };
+        }
+
+        /// A writer to the end, over `buffer`.
+        pub fn writer(end: *End, io: std.Io, buffer: []u8) Writer {
+            return .{ .inner = if (is_windows) .initStreaming(end.file.borrow().*, io, buffer) else .init(end.stream(), io, buffer) };
+        }
+
+        /// The socket the end is, as std's stream: a pair's socket has no
+        /// address, so it is none of an internet socket's.
+        fn stream(end: *End) std.Io.net.Stream {
+            return .{ .socket = .{ .handle = end.file.borrow().handle, .address = .{ .ip4 = .unspecified(0) } } };
+        }
+
+        pub const Reader = struct {
+            inner: if (is_windows) std.Io.File.Reader else std.Io.net.Stream.Reader,
+
+            /// The reader's end: its interface, and why its last read
+            /// failed, `Closed` where the other side cut it short.
+            pub fn ends(r: *Reader) aegis.io.ReadEnd {
+                return .init(&r.inner.interface, r, cause);
+            }
+
+            fn cause(context: *const anyopaque) ?anyerror {
+                const r: *const Reader = @ptrCast(@alignCast(context)); // safe: `ends` passes a Reader
+                return closure(r.inner.err orelse return null);
+            }
+        };
+
+        pub const Writer = struct {
+            inner: if (is_windows) std.Io.File.Writer else std.Io.net.Stream.Writer,
+
+            /// The writer's end: its interface, and why its last write
+            /// failed, `Closed` where the other side has gone.
+            pub fn ends(w: *Writer) aegis.io.WriteEnd {
+                return .init(&w.inner.interface, w, cause);
+            }
+
+            fn cause(context: *const anyopaque) ?anyerror {
+                const w: *const Writer = @ptrCast(@alignCast(context)); // safe: `ends` passes a Writer
+                return closure(w.inner.err orelse return null);
+            }
+        };
+
+        /// A failure's cause, `Closed` for every way the system says the
+        /// other side has gone: a reset (`ECONNRESET`), a socket whose
+        /// reading side shut (`EPIPE`), a broken pipe on Windows.
+        fn closure(cause: anyerror) anyerror {
+            return switch (cause) {
+                error.ConnectionResetByPeer, error.SocketUnconnected, error.BrokenPipe => Closed,
+                else => cause,
+            };
+        }
+    };
 };
 
 //======================================================================

@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Channel.End`: an end of a channel read and written as what it is, a connected stream socket on POSIX through std's socket reader and writer, a duplex pipe on Windows through its file reader and writer, handed out as aegis's stream ends (`End.reader(io, buffer).ends()` an `aegis.io.ReadEnd`, `End.writer(io, buffer).ends()` an `aegis.io.WriteEnd`). The other side closing is told, however the system says it: a reader ends with `error.EndOfStream` where it closed cleanly, and a read or a write it cut short fails with the cause `End.Closed` (a reset, a socket whose reading side shut, a broken pipe on Windows), never an errno the caller must know. Read and written as a file, a channel's end stopped the program on Linux in a Debug build: a write after the other side closed with bytes unread is `ECONNRESET`, which std's file calls take for a descriptor that is no socket. aegis's ends fit a channel as they are; closure is a cause rather than an end of its own because a write has no end to give, only a failure, so `Closed` is the one cause both sides name.
+
 ### Breaking
 
 - A file conduit is lent and never closes is an `aegis.own.Unowned(std.Io.File)`, where it was the `std.Io.File`: `Child.ChannelEnd.file`, `Child.Stream.file` (the `.file` arm), `Child.SpawnOptions.stderr_to`, `Proxy.Options.input`, `Proxy.Options.output`, and the pty's own handles `Pty.Master.read` and `Pty.Master.write`. Migration: wrap a file with `.of(file)` and read it with `.get()`.
@@ -31,6 +35,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Pins aegis dc3ed602, still 0.2.4, and shakedown ed5a873; development on preflight's ci-standard e3f74a6, glint 0.8. The CI caller is generated again for that preflight.
 - Pins aegis c8982a8, still 0.2.4: six additive commits after 3c0b13e (the role declarations a linter reads, `lint_rules`), the aegis the development build's preflight selects. Nothing conduit calls changed.
 - aegis 0.3: the input writer waits on its guard (`held.wait(&condition, io, .none)`). Pins aegis breaking-0.3 (7bdb587), reactor and shakedown on it.
 - On the aegis 0.2 pack: aegis 0.2.3 and reactor 0.9.0, developed on shakedown 0.6.0 and preflight 0.18.5. Every extern declaration and pointer conversion at conduit's seam says why it is sound there, and the whole-file reads of the bench and the containment check are aegis's.
