@@ -1607,6 +1607,10 @@ extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
 extern "c" fn pause() c_int;
 
 test "a descendant that escaped the process group is still killed" {
+    // Reach past the process group is Linux's and Darwin's: elsewhere conduit
+    // has no cheap way to list a process's children, and the group is the
+    // whole of the reach (`childrenOf`).
+    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
     // A correctness test only: there is deliberately no clock or latency
     // assertion in it. The first child makes a group, its child leaves that
     // group and session, and the same two-part signal `Child.kill` uses must

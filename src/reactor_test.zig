@@ -160,8 +160,12 @@ fn collected(io: std.Io) !void {
     const before = reactor.fallbacks();
     var output = try child.output(std.testing.allocator, io, .{});
     defer output.deinit();
-    try std.testing.expect(!output.timedOut());
-    try std.testing.expect(conduit.succeeded(output.term()));
+    try std.testing.expectEqual(false, output.timedOut());
+    // The term itself on a failure, so a system's way of ending the script shows.
+    if (!conduit.succeeded(output.term())) {
+        std.debug.print("emit_both ended as {any}; stderr held {d} bytes\n", .{ output.term(), output.stderr().len });
+        return error.TestUnexpectedResult;
+    }
     if (!is_windows) {
         try std.testing.expectEqual(@as(usize, 300_000), output.stdout().len);
         try std.testing.expectEqual(@as(usize, 200_000), output.stderr().len);
@@ -283,7 +287,14 @@ fn captured(io: std.Io) !void {
     defer child.deinit(io);
     defer reap(&child, io);
     const pid = child.processId().?;
-    var held = (try conduit.captureStarted(pid, (try conduit.startTime(pid)) orelse return error.SkipZigTest)) orelse return error.SkipZigTest;
+    // Holding a process by its start is Linux's and Darwin's; elsewhere
+    // conduit answers `Unsupported`.
+    const since = (conduit.startTime(pid) catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+    }) orelse return error.SkipZigTest;
+    var held = (conduit.captureStarted(pid, since) catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+    }) orelse return error.SkipZigTest;
     defer held.deinit();
 
     const before = reactor.fallbacks();

@@ -19,7 +19,11 @@ test "a child's memory reads its peak above what it touched and gave back, until
     var buffer: [64]u8 = undefined;
     var stdout = child.stdoutReader(io, &buffer).?;
     try testing.expectEqualStrings("held", try stdout.interface.takeDelimiterExclusive('\n'));
-    const memory = try child.memory();
+    // Linux, Darwin and Windows say; elsewhere conduit answers `Unsupported`.
+    const memory = child.memory() catch |err| switch (err) {
+        error.Unsupported => return error.SkipZigTest,
+        else => |e| return e,
+    };
     try testing.expect(memory.current > 0);
     try testing.expect(memory.peak >= 64 << 20);
     try testing.expect(memory.current < memory.peak);

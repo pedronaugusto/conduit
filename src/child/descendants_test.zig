@@ -35,7 +35,15 @@ const Process = if (windows) struct {
 } else struct {
     held: tree.CapturedPid,
     fn capture(id: Child.Id) !Process {
-        return .{ .held = (try tree.captureStarted(id, (try tree.startTime(id)) orelse return error.TestDaemonNotFound)) orelse return error.TestDaemonNotFound };
+        // Holding a process by its start is Linux's and Darwin's; elsewhere
+        // conduit answers `Unsupported`, and there is nothing to test.
+        const since = (tree.startTime(id) catch |err| switch (err) {
+            error.Unsupported => return error.SkipZigTest,
+        }) orelse return error.TestDaemonNotFound;
+        const held = (tree.captureStarted(id, since) catch |err| switch (err) {
+            error.Unsupported => return error.SkipZigTest,
+        }) orelse return error.TestDaemonNotFound;
+        return .{ .held = held };
     }
     fn alive(process: *const Process) bool {
         return process.held.alive();

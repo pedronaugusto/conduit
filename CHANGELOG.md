@@ -42,6 +42,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The tests hold to what conduit says it does on each system, where on FreeBSD they asked for more: holding a process by its start, a process's memory and reach past the process group are Linux's and Darwin's (and Windows'), so those tests skip where conduit answers `Unsupported` or the group is the whole reach; FreeBSD lowers a soft limit above the hard one rather than refusing it; a system may have no host name; and the descriptor listing a child is judged by needs a `/dev/fd` that lists them (fdescfs on FreeBSD). Tests only.
 - On macOS, a process's children are listed into a buffer whose size `proc_listchildpids` takes as a `c_int`: a count past what that holds is `SystemResources`, as the group's listing already refused it, where the cast trapped.
 - `readAvailable` reads again past a read of nothing from a pipe poll says is readable, an interrupted read (std's `readStreaming` may return 0 without the end, which is `EndOfStream`), where it returned that 0 as nothing to read now and a caller draining a child's last output stopped short.
 

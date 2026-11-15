@@ -1157,6 +1157,10 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     // whatever it does with console groups, and the test above already asserts
     // that.
     if (is_windows) return error.SkipZigTest;
+    // Reach past the process group is Linux's and Darwin's: elsewhere conduit
+    // has no cheap way to list a process's children, and the group is the
+    // whole of the reach (`tree.childrenOf`).
+    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
 
     // `set -m` turns job control on, and a shell with job control puts each
     // background job in a process group of its own. So the grandchild here is
@@ -1266,6 +1270,10 @@ test "a child on a terminal opens it as one poll can wait on" {
 
 test "a grandchild started at once, out of reach of the signal, still ends with the child" {
     if (is_windows) return error.SkipZigTest;
+    // Reach past the process group is Linux's and Darwin's: elsewhere conduit
+    // has no cheap way to list a process's children, and the group is the
+    // whole of the reach (`tree.childrenOf`).
+    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
 
     // The watch on the child's forks is registered late on purpose: long
     // after a child that was not being held would have started its shell,
@@ -3215,7 +3223,9 @@ test "a resource limit set at spawn is the child's own" {
 
     // A limit the operating system refuses -- a soft limit above its hard one
     // is refused for anybody, privileged or not -- is an error from `spawn`
-    // rather than a child that started without it.
+    // rather than a child that started without it. FreeBSD and DragonFly
+    // refuse no such limit: their kernel lowers the soft limit to the hard one.
+    if (builtin.target.os.tag == .freebsd or builtin.target.os.tag == .dragonfly) return;
     try testing.expectError(error.ResourceLimitsFailed, Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "exit 0" },
         .stdio = .ignore,
@@ -3679,6 +3689,12 @@ test "fd_policy close_all leaves the child its three streams and nothing else" {
     const inheritable = c.fcntl(opened, c.F.DUPFD, @as(c_int, 16));
     try testing.expect(inheritable >= 16 and inheritable < 64);
     defer _ = c.close(inheritable);
+    // `ls /dev/fd` shows a process's descriptors past 2 only where /dev/fd is
+    // a file system of them. FreeBSD's is devfs's three unless fdescfs is
+    // mounted, as it is not by default; where the listing cannot show this
+    // process's own descriptor, it cannot judge a child's.
+    var seen_path: [32]u8 = undefined;
+    if (c.access(try std.mem.printSentinel(&seen_path, "/dev/fd/{d}", .{inheritable}, 0), 0) != 0) return error.SkipZigTest;
 
     const streams: Child.Stdio = .{ .streams = .{
         .stdin = .ignore,
