@@ -12,19 +12,28 @@
 //! (a signal, a wait with a deadline, a wait that does not wait) and every
 //! terminal it opens goes to the route instead of the system.
 const std = @import("std");
+const aegis = @import("aegis");
 const Io = std.Io;
 
 /// A terminal's window, in character cells.
 pub const Size = struct { rows: u16, cols: u16 };
 
 /// A terminal pair, one file each side: what the master writes the slave
-/// reads, and the other way.
+/// reads, and the other way. The route hands both over: whoever takes the
+/// pair owns them, and closes each once.
 pub const Terminal = struct {
-    // glint-ignore: A015 -- handed over by the route: the pty keeps its handle and closes it
-    master: Io.File,
-    // glint-ignore: A015 -- handed over by the route: the child's terminal end, closed with it
-    slave: Io.File,
+    /// The master end, which the pty keeps and closes.
+    master: OwnedFile,
+    /// The child's terminal end, closed with it.
+    slave: OwnedFile,
 };
+
+/// A file its one owner closes, with `deinit(io)`, or takes out with `take`.
+pub const OwnedFile = aegis.own.OwnedIo(Io.File, closeFile);
+
+fn closeFile(file: *Io.File, io: Io) void {
+    file.close(io);
+}
 
 /// How a child ended, as `std.process` reports it.
 pub const Term = std.process.Child.Term;

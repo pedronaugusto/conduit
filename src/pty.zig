@@ -196,17 +196,22 @@ pub const Pty = struct {
     /// A pair the route makes: the master one handle, read and written, and
     /// the terminal end one stream.
     fn openSimulated(route: *const seam.Route, options: OpenOptions) OpenError!Pty {
-        const t = route.terminal(.{ .rows = options.rows, .cols = options.cols }) catch |err| return switch (err) {
+        var t = route.terminal(.{ .rows = options.rows, .cols = options.cols }) catch |err| return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.SystemResources => error.SystemResources,
         };
+        // The pair is the pty's from here: it keeps the handles and closes them.
+        var master_file: std.Io.File = undefined;
+        t.master.take(&master_file);
+        var slave_file: std.Io.File = undefined;
+        t.slave.take(&slave_file);
         return .{
-            .read = t.master.handle,
-            .write = t.master.handle,
+            .read = master_file.handle,
+            .write = master_file.handle,
             .slave = null,
             .geometry = if (is_windows) null else {},
             .console = if (is_windows) options.console else {},
-            .simulated_slave = t.slave.handle,
+            .simulated_slave = slave_file.handle,
             .simulated = true,
         };
     }

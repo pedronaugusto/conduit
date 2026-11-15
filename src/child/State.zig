@@ -125,8 +125,9 @@ reap_returned: aegis.Condition = .init(),
 identity: spin.Lock = .{},
 /// A child the simulated route started: `std.process`'s, on the route's
 /// `Io`, whose signals and waits go to the route. Null for the system's.
-// glint-ignore: A015 -- the route's record of the child, which the route updates in place: nothing to release
-simulated: ?std.process.Child = null,
+/// The route keeps the process and reaps it when asked; this record only
+/// names it, as a pid names a process of the system's.
+simulated: ?aegis.own.Unowned(std.process.Child) = null,
 /// A force request still owns group cleanup at the final, nonblocking reap.
 /// Protected by identity, so fork completion cannot be followed by retirement
 /// before the group is addressed again.

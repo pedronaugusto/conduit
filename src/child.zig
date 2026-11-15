@@ -858,7 +858,8 @@ pub const Child = struct {
     fn reapSimulated(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTimeoutError!?Term {
         if (child.settled()) |term| return term;
         const route = seam.routeOf(io) orelse return error.Unexpected;
-        const ended = route.waitFor(&child.state.simulated.?, timeout) catch |err| return switch (err) {
+        var record = child.state.simulated.?.get();
+        const ended = route.waitFor(&record, timeout) catch |err| return switch (err) {
             error.Canceled => error.Canceled,
             else => error.Unexpected,
         };
@@ -869,7 +870,8 @@ pub const Child = struct {
     fn pollSimulated(child: *Child, io: std.Io) TryWaitError!?Term {
         if (child.settled()) |term| return term;
         const route = seam.routeOf(io) orelse return error.Unexpected;
-        const ended = route.poll(&child.state.simulated.?) catch return error.Unexpected;
+        var record = child.state.simulated.?.get();
+        const ended = route.poll(&record) catch return error.Unexpected;
         return child.publishSimulated(ended);
     }
 
@@ -967,11 +969,12 @@ pub const Child = struct {
     /// a signal whose default is to be ignored or to stop does nothing there,
     /// and what the child started is not reached.
     pub fn kill(child: *Child, io: std.Io, signal: Signal) KillError!void {
-        if (child.state.simulated) |*simulated| {
+        if (child.state.simulated) |simulated| {
             if (child.settled() != null) return;
             if (!signal.valid()) return error.Unsupported;
             const route = seam.routeOf(io) orelse return error.Unexpected;
-            if (child_simulated.termOf(signal)) |term| route.end(simulated, term);
+            const record = simulated.get();
+            if (child_simulated.termOf(signal)) |term| route.end(&record, term);
             return;
         }
         // Never wait for an exit here. Whoever holds identity is only delivering
