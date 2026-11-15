@@ -1019,7 +1019,7 @@ pub const DarwinProcess = struct {
         var info: ProcUniqueInfo = undefined;
         const written = proc_pidinfo(pid, proc_pid_unique_info, 0, &info, @sizeOf(ProcUniqueInfo));
         if (written != @sizeOf(ProcUniqueInfo)) return null;
-        return .{ .pid = pid, .unique_id = info.unique_id };
+        return .{ .pid = pid, .unique_id = info.unique_id.raw() };
     }
 
     /// The process at `pid` if it started at `since`, from one lookup that
@@ -1030,7 +1030,7 @@ pub const DarwinProcess = struct {
         if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
         if (info.bsd.status == proc_status_zombie) return null;
         if (darwinStart(info.bsd.start_tvsec, info.bsd.start_tvusec) != since) return null;
-        return .{ .pid = pid, .unique_id = info.unique.unique_id };
+        return .{ .pid = pid, .unique_id = info.unique.unique_id.raw() };
     }
 
     /// A lineage edge proved by kernel unique ids, even after reparenting.
@@ -1038,7 +1038,7 @@ pub const DarwinProcess = struct {
     pub fn childOf(process: *const DarwinProcess, parent: *const DarwinProcess) bool {
         var child: ProcUniqueInfo = undefined;
         return proc_pidinfo(process.pid, proc_pid_unique_info, 0, &child, @sizeOf(ProcUniqueInfo)) == @sizeOf(ProcUniqueInfo) and
-            child.unique_id == process.unique_id and child.parent_unique_id == parent.unique_id;
+            child.unique_id.raw() == process.unique_id and child.parent_unique_id.raw() == parent.unique_id;
     }
 
     /// The kernel refuses signal 0 through a token (`EINVAL`), so `alive`
@@ -1126,7 +1126,7 @@ pub const DarwinProcess = struct {
         var info: BsdInfoWithUniqueId = undefined;
         const written = proc_pidinfo(process.pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId) or
-            info.unique.unique_id != process.unique_id or info.bsd.status == proc_status_zombie) return null;
+            info.unique.unique_id.raw() != process.unique_id or info.bsd.status == proc_status_zombie) return null;
         return info;
     }
 
@@ -1153,12 +1153,17 @@ comptime {
     aegis.assert.invariant(@sizeOf(BsdInfoWithUniqueId) == 192, "@sizeOf(BsdInfoWithUniqueId) == 192");
 }
 
-/// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`.
+/// A process's unique id on Darwin: unlike its pid, never given to another
+/// process while the system runs.
+const UniqueId = aegis.id.Id(DarwinProcess, u64);
+
+/// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`: the process's
+/// unique id and its parent's, each an id of one domain, laid out as the
+/// `uint64_t` the header gives.
 const ProcUniqueInfo = extern struct {
     executable_uuid: [16]u8,
-    unique_id: u64,
-    // glint-ignore: P008 -- boundary: the process's and its parent's unique ids as `<sys/proc_info.h>` lays them out
-    parent_unique_id: u64,
+    unique_id: UniqueId,
+    parent_unique_id: UniqueId,
     id_version: i32,
     reserved2: u32,
     reserved3: u64,
