@@ -138,16 +138,14 @@ pub fn spawnShell(gpa: Allocator, io: std.Io, options: Options) SpawnShellError!
     });
     errdefer pty.close(io);
 
-    var child = try Child.spawn(gpa, io, .{
+    const child = try Child.spawn(gpa, io, .{
         .argv = argv.items,
         .cwd = options.cwd,
         .environ = environ_map,
         .stdio = .{ .pty = &pty },
         .detach = !is_windows,
     });
-    // glint-ignore: Z026 -- the spawn error is the one returned; a child that cannot be ended here has nowhere else to report
-    errdefer _ = child.killWait(io, .zero) catch {};
-
+    // Nothing past the spawn fails: the child is the Shell's from here.
     if (!is_windows) pty.closeSlave(io);
 
     return Shell.init(pty, child);

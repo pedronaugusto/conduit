@@ -100,6 +100,8 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const tree = @import("tree.zig");
+const trace = @import("trace.zig");
+const log = std.log.scoped(.conduit);
 const reactor = @import("reactor");
 const Deadline = @import("conduit.tty").Deadline;
 const Duration = @import("conduit.tty").Duration;
@@ -217,8 +219,11 @@ pub const Orphans = struct {
 
         orphans.was_subreaper = subreaper();
         if (!orphans.was_subreaper) try setSubreaper(true);
-        // glint-ignore: Z026 -- start reports its own error; a flag that cannot be put back only leaves orphans reparenting to this process, and the next start reads the flag again
-        errdefer if (!orphans.was_subreaper) setSubreaper(false) catch {};
+        // `start` returns its own error. A flag that cannot be put back leaves
+        // orphans reparenting to this process, with nothing to reap them, and
+        // goes to the program's log; the next start reads the flag again.
+        errdefer if (!orphans.was_subreaper) setSubreaper(false) catch |err|
+            log.warn("the subreaper flag could not be put back ({t}): orphans still come to this process", .{err});
 
         // Whatever this process has now was started before the contract: it is
         // somebody's, and not an orphan's.
@@ -395,8 +400,9 @@ pub const Orphans = struct {
     /// what keeps it from ending. One that was not, or whose `stop` failed,
     /// is ended here as far as it can be, so that `deinit` is safe under an
     /// `errdefer`: the process attribute is put back, the adoptees' pidfds
-    /// are closed and the lists are freed. Where orphans are unsupported,
-    /// none was ever started.
+    /// are closed and the lists are freed. An attribute the system will not
+    /// put back goes to the program's log (`std.log`, scope `conduit`, at
+    /// warn). Where orphans are unsupported, none was ever started.
     pub fn deinit(orphans: *Orphans) void {
         orphans.pin.check(orphans);
         if ((comptime supported) and orphans.running) {
@@ -404,8 +410,10 @@ pub const Orphans = struct {
             defer gate.unlock();
             orphans.lock.lock();
             defer orphans.lock.unlock();
-            // glint-ignore: Z026 -- deinit has no error to return; `stop` is the call that reports a scope that would not end
-            if (!orphans.was_subreaper) setSubreaper(false) catch {};
+            // `stop` is the call that reports a scope that would not end;
+            // `deinit` has no caller to tell, so the program's log is.
+            if (!orphans.was_subreaper) setSubreaper(false) catch |err|
+                log.warn("the subreaper flag could not be put back ({t}): orphans still come to this process", .{err});
             orphans.release();
         }
         orphans.* = undefined;
@@ -442,8 +450,9 @@ pub const Orphans = struct {
         const orphans = current orelse return;
         orphans.lock.lock();
         defer orphans.lock.unlock();
-        // glint-ignore: Z026 -- an event has no caller to tell; what this look missed the next one, or `count` or `killAll`, finds
-        orphans.look(io) catch {};
+        // An event has no caller to tell, and what this look missed the next
+        // one, or `count` or `killAll`, finds and reports: the trace says so.
+        orphans.look(io) catch |err| trace.print("orphans: a look after an event failed ({t}); the next one looks again", .{err});
         orphans.reapEnded();
     }
 

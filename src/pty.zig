@@ -393,8 +393,13 @@ pub const Pty = struct {
         const f = held.lend(handle);
         var buffer: [4096]u8 = undefined;
         while (true) {
-            // glint-ignore: Z026 -- the drain ends when the master can no longer be read
-            _ = handles.readStreaming(io, f, &.{&buffer}) catch return;
+            _ = handles.readStreaming(io, f, &.{&buffer}) catch |err| switch (err) {
+                // `close` joins the drain by cancelling it.
+                error.Canceled => return error.Canceled,
+                // The host has gone and its end with it: nothing is left to drain.
+                error.EndOfStream => return,
+                else => return trace.print("pty: the drain stopped at {t}", .{err}),
+            };
         }
     }
 

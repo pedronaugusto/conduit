@@ -67,6 +67,7 @@ const Term = Child.Term;
 const Deadline = tty.Deadline;
 const Duration = tty.Duration;
 const Cgroup = @import("cgroup.zig").Cgroup;
+const log = std.log.scoped(.conduit);
 
 // Published before signalling, and retained until the held reap ends the tree.
 // Only the small deadline snapshot is behind the guard; no I/O is done under it.
@@ -327,21 +328,28 @@ pub const Reaper = struct {
     ///
     /// Only the first request with a grace counts. A second one would either
     /// wait longer than the first, which it cannot, or less, which is a request
-    /// with a grace of zero — and that one is always sent. A signal that cannot
-    /// be delivered is not reported: the child has ended, or is ending, and the
-    /// term says how.
+    /// with a grace of zero — and that one is always sent. A `.terminate` the
+    /// system refuses asks nothing of the child, so it has no grace to use:
+    /// the `.kill` is sent at once. There is no caller to tell of a `.kill`
+    /// the system refuses, which leaves the child running and its wait
+    /// waiting: it goes to the program's log (`std.log`, scope `conduit`, at
+    /// warn).
     pub fn kill(reaper: *Reaper, io: std.Io, grace: Duration) void {
         reaper.pin.check(reaper);
         if (!reaper.killing.request(io, grace)) return;
         // A grace already waiting on the cgroup takes the new deadline now.
         if (!is_windows) if (reaper.rekill) |*wake| wake.signal();
         if (grace.eql(.fromRaw(0))) {
-            // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
-            reaper.target().kill(io, .kill) catch {};
+            reaper.target().kill(io, .kill) catch |err|
+                log.warn("the child's .kill was refused ({t}): it may still run", .{err});
             return;
         }
-        // glint-ignore: Z026 -- undelivered means ended or ending, as documented above; the term says how
-        reaper.target().kill(io, .terminate) catch {};
+        const asked = if (reaper.target().kill(io, .terminate)) true else |err| switch (err) {
+            // The walk could not hold the tree; the child itself was asked.
+            error.OutOfMemory => true,
+            error.PermissionDenied, error.Unsupported, error.Unexpected => false,
+        };
+        if (!asked) return reaper.kill(io, .fromRaw(0));
         reaper.group.concurrent(io, insist, .{ reaper, io, grace }) catch {
             // No task to wait out the grace on: insisting now is the one answer
             // that still ends the child.
@@ -355,12 +363,13 @@ pub const Reaper = struct {
         return if (reaper.lifetime.load(.acquire) == .ready) reaper.source else &reaper.child;
     }
 
-    fn insist(reaper: *Reaper, io: std.Io, grace: Duration) void {
-        // glint-ignore: Z026 -- canceled: the owner is done; any other error is an answer
+    fn insist(reaper: *Reaper, io: std.Io, grace: Duration) std.Io.Cancelable!void {
         const term = reaper.waitWithin(io, reaper.killing.current() orelse .after(io, grace)) catch |err| switch (err) {
-            // `stop` or `deinit`: the owner is done with this child.
-            error.Canceled => return,
-            // An answer, if an unhappy one: the child is no longer waited for.
+            // `stop` or `deinit`: the owner is done with this child, and the
+            // task ends canceled.
+            error.Canceled => return error.Canceled,
+            // An answer, if an unhappy one, which `wait` and `exit` report:
+            // the child is no longer waited for.
             else => return,
         };
         if (term == null) reaper.kill(io, .fromRaw(0));
@@ -400,14 +409,17 @@ pub const Reaper = struct {
     /// `Reaper` undefined. With enableSubreaper, `stop` should have succeeded
     /// first: the adoption scope is process-wide, and only `stop` can report
     /// what keeps it from ending. One that did not is ended here as far as it
-    /// can be, so that `deinit` is safe under an `errdefer`.
+    /// can be, so that `deinit` is safe under an `errdefer`; what keeps it from
+    /// ending goes to the program's log (`std.log`, scope `conduit`, at warn).
     pub fn deinit(reaper: *Reaper, io: std.Io) void {
         reaper.pin.check(reaper);
         reaper.joinTask(io);
         if (reaper.orphans) |orphans| {
             const gpa = orphans.gpa;
-            // glint-ignore: Z026 -- deinit has no error to return; `stop` is the call that reports what keeps the scope from ending
-            orphans.killAll(io, .fromRaw(0)) catch {};
+            // `stop` is the call that reports what keeps the scope from
+            // ending; `deinit` has no caller to tell, so the program's log is.
+            orphans.killAll(io, .fromRaw(0)) catch |err|
+                log.warn("the adoption scope's processes could not all be ended ({t}): some may still run", .{err});
             orphans.deinit();
             gpa.destroy(orphans);
         }
@@ -436,15 +448,15 @@ pub const Reaper = struct {
 
     /// Independent of root wait ownership: another task may hold that wait
     /// for the root's whole lifetime. This observer still reaps adopted exits.
-    fn observeAdoption(reaper: *Reaper, io: std.Io) void {
+    fn observeAdoption(reaper: *Reaper, io: std.Io) std.Io.Cancelable!void {
         if (builtin.target.os.tag != .linux) return;
         while (reaper.state.load(.acquire) == running) {
             reaper.lookOrphans(io) catch {
                 reaper.observation_failed.store(.failed, .release);
                 return;
             };
-            // glint-ignore: Z026 -- canceled: the observer ends with its task
-            io.sleep(adoption_interval, .awake) catch return;
+            // A cancel ends the observer with its task.
+            try io.sleep(adoption_interval, .awake);
         }
     }
 
@@ -533,12 +545,15 @@ pub const Reaper = struct {
         switch (contained.populated()) {
             .none => return,
             .others => {
-                // glint-ignore: Z026 -- a member the request misses is still ended by the kill once the grace has passed
-                _ = contained.signalMembers(.TERM, reaper.child.state.id, null) catch {};
-                switch (try reaper.treeGrace(io, .{ .contained = contained })) {
+                const asked = if (contained.signalMembers(.TERM, reaper.child.state.id, null)) |_| true else |err| switch (err) {
+                    // No list of the members, so none was asked and there is no
+                    // grace to give them: the kill below needs no list.
+                    error.OutOfMemory => false,
+                };
+                if (asked) switch (try reaper.treeGrace(io, .{ .contained = contained })) {
                     .empty => return,
                     .elapsed => {},
-                }
+                };
             },
             .unknown => {},
         }
@@ -793,7 +808,7 @@ test "Reaper deadlines keep spurious wakes on one answer event and spend the kil
     counted.reset();
     observed.state.event = null;
     start = clock.read(.awake);
-    reaper.insist(clock_io, .literal("40ms"));
+    try reaper.insist(clock_io, .literal("40ms"));
     try testing.expectEqual(@as(u64, 4), counted.count(.futexWait));
     try testing.expectEqual(@as(u64, 0), counted.count(.sleep));
     try testing.expectEqual(std.Io.Duration.fromMilliseconds(40), start.durationTo(clock.read(.awake)));

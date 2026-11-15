@@ -44,6 +44,7 @@ const Expect = @import("expect.zig").Expect;
 pub const InputWriter = input_writer.Writer(Child).InputWriter;
 const Pty = @import("pty.zig").Pty;
 const trace = @import("trace.zig");
+const log = std.log.scoped(.conduit);
 const handles = @import("handles.zig");
 const is_windows = builtin.target.os.tag == .windows;
 const win32 = @import("win32");
@@ -339,7 +340,8 @@ pub const Child = struct {
     /// open. The Child is undefined afterwards. A contained scope that
     /// `finish` has not confirmed is ended here as the end of a run nobody
     /// will finish is: `.kill` and the reap, with cancelation held off, and
-    /// with nothing reported. Call `finish` first to hear what that met.
+    /// with nothing returned: a failure goes to the program's log (`std.log`,
+    /// scope `conduit`, at warn). Call `finish` first to hear what that met.
     /// Join every task borrowing this Child first. A reaped survival-policy
     /// child leaves descendants alone. Linux cgroups with surviving members
     /// remain until empty and a later cleanup removes them.
@@ -1162,8 +1164,8 @@ pub const Child = struct {
     ///
     /// A `.terminate` that the operating system refuses is not an error here: on
     /// Windows a console control event fails for a child that shares no console
-    /// with this process, and the answer in that case is the `.kill` that follows
-    /// anyway.
+    /// with this process, and the answer in that case is the `.kill`, which
+    /// then follows at once: a request nobody received has no grace to use.
     ///
     /// **What the returned `Term` says differs by system, and by which of the two
     /// requests did it.** On POSIX a child that does not catch `SIGTERM` reports
@@ -1188,9 +1190,13 @@ pub const Child = struct {
         if (try child.tryWait(io)) |term| return term;
 
         if (!grace.eql(.fromRaw(0))) {
-            // glint-ignore: Z026 -- a `.terminate` that cannot be sent leaves the grace to run out, and the `.kill` after it reports
-            child.kill(io, .terminate) catch {};
-            if (try child.waitWithin(io, .after(io, grace))) |term| return term;
+            const asked = if (child.kill(io, .terminate)) true else |err| switch (err) {
+                // The walk could not hold the tree; the child itself was asked.
+                error.OutOfMemory => true,
+                // Refused: the `.kill` below goes now, and reports its own.
+                error.PermissionDenied, error.Unsupported, error.Unexpected => false,
+            };
+            if (asked) if (try child.waitWithin(io, .after(io, grace))) |term| return term;
         }
 
         // A walk too large to hold still killed the child itself, so it is
@@ -1648,8 +1654,10 @@ pub const Child = struct {
         if (is_windows) {
             if (state.job) |job| _ = win32.TerminateJobObject(job, 1);
         } else if (state.cgroup.active()) _ = state.cgroup.kill();
-        // glint-ignore: Z026 -- the run's own error is the one returned; a child that cannot be killed or reaped here has nowhere else to report
-        _ = child.killWait(io, .fromRaw(0)) catch {};
+        // The run's own error is the one returned, and `deinit` returns none:
+        // a child that cannot be killed or reaped here goes to the program's log.
+        _ = child.killWait(io, .fromRaw(0)) catch |err|
+            log.warn("an abandoned run's child could not be ended and reaped ({t}): it may still run", .{err});
     }
 
     /// `collectInto` with each stream read on a task of its own, into its
