@@ -401,7 +401,7 @@ pub const Child = struct {
     /// through delivery. A process that ended but is not reaped still has an id.
     pub fn processId(child: *const Child) ?Id {
         const state = child.state;
-        spin.lock(&state.identity);
+        state.identity.lock();
         defer state.identity.unlock();
         if (state.reaped.load(.acquire) == .reaped or state.identity_retired) return null;
         return state.process_id;
@@ -420,7 +420,7 @@ pub const Child = struct {
     pub fn memory(child: *const Child) MemoryError!Memory {
         const state = child.state;
         if (state.simulated != null) return error.Unsupported;
-        spin.lock(&state.identity);
+        state.identity.lock();
         defer state.identity.unlock();
         if (state.reaped.load(.acquire) == .reaped or state.identity_retired) return error.ProcessEnded;
         return memory_impl.of(if (is_windows) state.id else state.process_id);
@@ -462,7 +462,7 @@ pub const Child = struct {
     /// or Reaper: null before publication, or ReapedElsewhere after status loss.
     pub fn result(child: *const Child) TryWaitError!?Term {
         const state = child.state;
-        spin.lock(&state.identity);
+        state.identity.lock();
         defer state.identity.unlock();
         if (child.settled()) |term| return term;
         if (state.identity_retired) return error.ReapedElsewhere;
@@ -782,7 +782,7 @@ pub const Child = struct {
         if (child.state.simulated != null) return child.pollSimulated(io);
         switch (identity) {
             .look => if (!child.state.identity.tryLock()) return null,
-            .wait => spin.lock(&child.state.identity),
+            .wait => child.state.identity.lock(),
         }
         var published = false;
         defer {
@@ -976,7 +976,7 @@ pub const Child = struct {
         }
         // Never wait for an exit here. Whoever holds identity is only delivering
         // a signal or doing the final nonblocking reap, not waiting on the child.
-        spin.lock(&child.state.identity);
+        child.state.identity.lock();
         defer child.state.identity.unlock();
         if (child.settled() != null or child.state.identity_retired) return;
         if (!signal.valid()) return error.Unsupported;

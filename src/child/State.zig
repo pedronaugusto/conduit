@@ -6,6 +6,7 @@ const Child = @import("contract.zig");
 const windows = std.os.windows;
 const is_windows = builtin.target.os.tag == .windows;
 const tree = @import("../tree.zig");
+const spin = @import("../spin.zig");
 const cgroups = @import("../cgroup.zig");
 const reactor = @import("reactor");
 const Id = std.process.Child.Id;
@@ -115,13 +116,13 @@ reap_returned: aegis.Condition = .init(),
 /// nonblocking wait, handle closure and publication. Waiting for an exit
 /// never holds it, so a child being waited for can still be killed.
 ///
-/// Not an `aegis.Guarded`, and deliberately a raw lock (an OS boundary: it
-/// guards the use of an operating-system name, not one value). It is held
-/// across a descendant walk and signal delivery, which a spin guard's bounded
-/// sections do not allow; `tryWaitClaimed` must take it without waiting, which
-/// `Guarded` cannot; and its waiters yield rather than burn the walk's time.
-// glint-ignore: A007 -- design: an OS name's lock, held across a descendant walk and signal delivery, taken without waiting by tryWaitClaimed, its waiters yielding (above)
-identity: std.atomic.Mutex = .unlocked,
+/// Not an `aegis.Guarded`, but a `spin.Lock` on an aegis cell (an OS
+/// boundary: it guards the use of an operating-system name, not one value).
+/// It is held across a descendant walk and signal delivery, which a spin
+/// guard's bounded sections do not allow; `tryWaitClaimed` must take it
+/// without waiting, which `Guarded` cannot; and its waiters yield rather than
+/// burn the walk's time.
+identity: spin.Lock = .{},
 /// A child the simulated route started: `std.process`'s, on the route's
 /// `Io`, whose signals and waits go to the route. Null for the system's.
 // glint-ignore: A015 -- the route's record of the child, which the route updates in place: nothing to release

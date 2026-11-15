@@ -12,6 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `Orphans.SpinLock` is conduit's yielding spin lock on one aegis cell, with `lock`, `tryLock` and `unlock`: its word is the private `word`, an `aegis.Atomic` of a two-state enum, where it was the field `held`, a `std.atomic.Value(bool)`.
 - A file conduit is lent and never closes is an `aegis.own.Unowned(std.Io.File)`, where it was the `std.Io.File`: `Child.ChannelEnd.file`, `Child.Stream.file` (the `.file` arm), `Child.SpawnOptions.stderr_to`, `Proxy.Options.input`, `Proxy.Options.output`, and the pty's own handles `Pty.Master.read` and `Pty.Master.write`. Migration: wrap a file with `.of(file)` and read it with `.get()`.
 - `Child.takeStdout` and `Child.takeStderr` return the stream's owner, `?tty.OwnedFile` (an `aegis.own.OwnedIo`, released once by `deinit(io)`), where each returned a `?std.Io.File` the caller closed by hand.
 - `Expect.arrived` and `Expect.space` are `aegis.Pulse`s, where each was a `std.Io.Event`; `Expect.finished` and `Expect.lifetime` are `aegis.Atomic` cells, where each was a `std.atomic.Value`.
