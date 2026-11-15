@@ -60,8 +60,11 @@ pub fn findProgram(
     var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
     while (it.next()) |dir| {
         const prefix = if (dir.len == 0) "." else dir;
-        // glint-ignore: Z026 -- a path too long for the buffer is no candidate
-        const candidate = std.mem.print(&buffer, "{s}/{s}", .{ prefix, name }) catch continue;
+        const fits: ?[]u8 = std.mem.print(&buffer, "{s}/{s}", .{ prefix, name }) catch |err| switch (err) {
+            // A path too long for the buffer is no candidate.
+            error.NoSpaceLeft => null,
+        };
+        const candidate = fits orelse continue;
         if (runnable(io, candidate)) {
             const program = try gpa.dupe(u8, candidate);
             return program;

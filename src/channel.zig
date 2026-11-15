@@ -93,8 +93,8 @@ pub const Channel = struct {
     /// number, the descriptor on POSIX and the handle's value on Windows.
     pub fn valueOf(buffer: *[value_max]u8, handle: std.Io.File.Handle) []const u8 {
         const number: u64 = if (is_windows) @intFromPtr(handle) else @intCast(handle); // safe: the handle's value, written for the child to read, never dereferenced
-        // glint-ignore: Z026 -- `value_max` is the length of the longest number
-        return std.mem.print(buffer, "{d}", .{number}) catch unreachable;
+        // `value_max` is the length of the longest number, so it always fits.
+        return buffer[0..std.fmt.printInt(buffer, number, 10, .lower, .{})];
     }
 
     /// The longest value `valueOf` writes.

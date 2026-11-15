@@ -46,8 +46,15 @@ pub fn of(identity: if (builtin.target.os.tag == .windows) windows.HANDLE else p
 }
 
 fn linuxMemory(pid: posix.pid_t) Error!Memory {
-    var path_buffer: [64]u8 = undefined;
-    const path = std.mem.printSentinel(&path_buffer, "/proc/{d}/status", .{pid}, 0) catch unreachable; // glint-ignore: Z026 -- a pid prints in 64 bytes
+    // `/proc/<pid>/status`, built from the pid: the buffer holds the longest.
+    const prefix = "/proc/";
+    const suffix = "/status";
+    var path_buffer: [prefix.len + std.fmt.count("{d}", .{std.math.minInt(posix.pid_t)}) + suffix.len + 1]u8 = undefined;
+    path_buffer[0..prefix.len].* = prefix.*;
+    const end = prefix.len + std.fmt.printInt(path_buffer[prefix.len..], pid, 10, .lower, .{});
+    path_buffer[end..][0..suffix.len].* = suffix.*;
+    path_buffer[end + suffix.len] = 0;
+    const path = path_buffer[0 .. end + suffix.len :0];
     const fd = c.open(path, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return switch (c.errno(fd)) {
         .NOENT, .SRCH => error.ProcessEnded,

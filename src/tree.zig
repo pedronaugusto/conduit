@@ -73,6 +73,32 @@ pub const Dirents = struct {
     }
 };
 
+/// The process id a name in `/proc` spells, or null: `cgroup.zig`'s, which
+/// reads the same names in `cgroup.procs`.
+pub const pidOf = cgroups.pidOf;
+
+const children_name = "/children";
+
+/// How long `childrenPath` makes a path at most: the longest pid, sign and
+/// all, and the file's name.
+pub const children_path_max = std.fmt.count("{d}", .{std.math.minInt(posix.pid_t)}) + children_name.len;
+
+/// `<id>/children`, the file of a process's `task` directory that lists what
+/// thread `id` started, with its terminating zero: built from the id, so it
+/// always fits the buffer.
+pub fn childrenPath(buffer: *[children_path_max + 1]u8, id: posix.pid_t) [:0]const u8 {
+    const digits = std.fmt.printInt(buffer, id, 10, .lower, .{});
+    buffer[digits..][0..children_name.len].* = children_name.*;
+    buffer[digits + children_name.len] = 0;
+    return buffer[0 .. digits + children_name.len :0];
+}
+
+test "a thread's children file is named from its id" {
+    var buffer: [children_path_max + 1]u8 = undefined;
+    try std.testing.expectEqualStrings("4012/children", childrenPath(&buffer, 4012));
+    try std.testing.expectEqualStrings("-2147483648/children", childrenPath(&buffer, std.math.minInt(posix.pid_t)));
+}
+
 test "a getdents64 record that would run past what was read, or holds no name, ends the walk" {
     const endian = builtin.target.cpu.arch.endian();
     var bytes: [64]u8 = @splat(0);
@@ -350,8 +376,7 @@ const ProcTable = struct {
     fn next(table: *ProcTable) ?TableRecord {
         while (true) {
             while (table.names.next()) |name| {
-                // glint-ignore: Z026 -- an entry that is no process id is no process
-                const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+                const pid = pidOf(name) orelse continue;
                 const relation = processRelationLinux(pid) orelse continue;
                 return .{ .pid = pid, .ppid = relation.ppid, .pgrp = relation.pgrp };
             }
@@ -849,8 +874,7 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
         if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
-            // glint-ignore: Z026 -- an entry that is no process id is no process
-            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const pid = pidOf(name) orelse continue;
             if (pid <= 1 or pid == leader or pid == c.getpid()) continue;
             var process = LinuxProcess.capture(pid) orelse continue;
             defer process.deinit();
@@ -1325,13 +1349,12 @@ pub fn hasChildren(pid: posix.pid_t) bool {
         if (rc == 0) break;
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
-            // glint-ignore: Z026 -- an entry that is no thread id is no thread
-            const tid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const tid = pidOf(name) orelse continue;
             threads += 1;
             // Read above.
             if (tid == pid) continue;
-            var file_buffer: [32]u8 = undefined;
-            const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch return true;
+            var file_buffer: [children_path_max + 1]u8 = undefined;
+            const file = childrenPath(&file_buffer, tid);
             const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
             if (fd < 0) return true;
             var byte: [1]u8 = undefined;
@@ -1567,8 +1590,7 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
-            // glint-ignore: Z026 -- an entry that is no process id is no process
-            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const pid = pidOf(name) orelse continue;
             if (pid == leader) continue;
             const relation = processRelationLinux(pid) orelse continue;
             // `Z` has ended and waits for its parent; `X` is being torn down.

@@ -865,11 +865,9 @@ pub const Orphans = struct {
             if (rc == 0) return;
             var names: tree.Dirents = .{ .bytes = entries[0..rc] };
             while (names.next()) |name| {
-                // glint-ignore: Z026 -- an entry of /proc that is no process id is no process
-                _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
-                var file_buffer: [32]u8 = undefined;
-                // glint-ignore: Z026 -- a name too long for the path names no process to read
-                const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch continue;
+                const tid = tree.pidOf(name) orelse continue;
+                var file_buffer: [tree.children_path_max + 1]u8 = undefined;
+                const file = tree.childrenPath(&file_buffer, tid);
                 const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
                 if (fd < 0) continue;
                 defer _ = c.close(fd);
