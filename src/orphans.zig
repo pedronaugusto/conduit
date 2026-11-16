@@ -100,6 +100,8 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const tree = @import("tree.zig");
+const trace = @import("trace.zig");
+const log = std.log.scoped(.conduit);
 const reactor = @import("reactor");
 const Deadline = @import("conduit.tty").Deadline;
 const Duration = @import("conduit.tty").Duration;
@@ -217,8 +219,11 @@ pub const Orphans = struct {
 
         orphans.was_subreaper = subreaper();
         if (!orphans.was_subreaper) try setSubreaper(true);
-        // glint-ignore: Z026 -- start reports its own error; a flag that cannot be put back only leaves orphans reparenting to this process, and the next start reads the flag again
-        errdefer if (!orphans.was_subreaper) setSubreaper(false) catch {};
+        // `start` returns its own error. A flag that cannot be put back leaves
+        // orphans reparenting to this process, with nothing to reap them, and
+        // goes to the program's log; the next start reads the flag again.
+        errdefer if (!orphans.was_subreaper) setSubreaper(false) catch |err|
+            log.warn("the subreaper flag could not be put back ({t}): orphans still come to this process", .{err});
 
         // Whatever this process has now was started before the contract: it is
         // somebody's, and not an orphan's.
@@ -395,8 +400,9 @@ pub const Orphans = struct {
     /// what keeps it from ending. One that was not, or whose `stop` failed,
     /// is ended here as far as it can be, so that `deinit` is safe under an
     /// `errdefer`: the process attribute is put back, the adoptees' pidfds
-    /// are closed and the lists are freed. Where orphans are unsupported,
-    /// none was ever started.
+    /// are closed and the lists are freed. An attribute the system will not
+    /// put back goes to the program's log (`std.log`, scope `conduit`, at
+    /// warn). Where orphans are unsupported, none was ever started.
     pub fn deinit(orphans: *Orphans) void {
         orphans.pin.check(orphans);
         if ((comptime supported) and orphans.running) {
@@ -404,8 +410,10 @@ pub const Orphans = struct {
             defer gate.unlock();
             orphans.lock.lock();
             defer orphans.lock.unlock();
-            // glint-ignore: Z026 -- deinit has no error to return; `stop` is the call that reports a scope that would not end
-            if (!orphans.was_subreaper) setSubreaper(false) catch {};
+            // `stop` is the call that reports a scope that would not end;
+            // `deinit` has no caller to tell, so the program's log is.
+            if (!orphans.was_subreaper) setSubreaper(false) catch |err|
+                log.warn("the subreaper flag could not be put back ({t}): orphans still come to this process", .{err});
             orphans.release();
         }
         orphans.* = undefined;
@@ -442,8 +450,9 @@ pub const Orphans = struct {
         const orphans = current orelse return;
         orphans.lock.lock();
         defer orphans.lock.unlock();
-        // glint-ignore: Z026 -- an event has no caller to tell; what this look missed the next one, or `count` or `killAll`, finds
-        orphans.look(io) catch {};
+        // An event has no caller to tell, and what this look missed the next
+        // one, or `count` or `killAll`, finds and reports: the trace says so.
+        orphans.look(io) catch |err| trace.print("orphans: a look after an event failed ({t}); the next one looks again", .{err});
         orphans.reapEnded();
     }
 
@@ -526,61 +535,62 @@ pub const Orphans = struct {
 
     /// A mutex that spins, yielding. Every section it guards is a handful of
     /// system calls, but for `killAll`'s, which is the end of a program.
-    pub const SpinLock = struct {
-        // glint-ignore: A007 -- design: a spin mutex held across a whole look that reads procfs, past a spin guard's bounded sections (Orphans' locks)
-        held: std.atomic.Value(bool) = .init(false),
-
-        fn lock(spin_lock: *SpinLock) void {
-            while (spin_lock.held.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
-                spin.yield();
-            }
-        }
-
-        fn unlock(spin_lock: *SpinLock) void {
-            aegis.assert.invariant(spin_lock.held.load(.monotonic), "spin_lock.held.load(.monotonic)");
-            spin_lock.held.store(false, .release);
-        }
-    };
+    pub const SpinLock = spin.Lock;
 
     /// Many spawns or one look. A look that is waiting keeps new spawns out, so
     /// a stream of spawns cannot hold a look off forever; the spawns in flight
     /// are each a `fork` long.
     const GateLock = struct {
-        // glint-ignore: A007 -- design: the gate's word: readers, a waiting look and a writing look in one, set by compare-and-swap (Orphans' locks)
-        state: std.atomic.Value(u32) = .init(0),
+        /// Private: the gate's word, an aegis cell.
+        state: aegis.Atomic(Word) = .init(.open),
+
+        /// Readers, a waiting look and a writing look in one: the count of
+        /// spawns in its low bits, `waiting` and `writing` above them.
+        const Word = enum(u32) { open = 0, _ };
 
         const writing: u32 = 1 << 31;
         const waiting: u32 = 1 << 30;
         const readers: u32 = waiting - 1;
 
+        fn bitsOf(word: Word) u32 {
+            return @backingInt(word);
+        }
+
+        fn wordOf(bits: u32) Word {
+            return @fromBackingInt(bits);
+        }
+
         fn lockShared(gate_lock: *GateLock) void {
             while (true) {
-                const state = gate_lock.state.load(.monotonic);
+                const state = bitsOf(gate_lock.state.load(.monotonic));
                 if (state & (writing | waiting) == 0 and
-                    gate_lock.state.cmpxchgWeak(state, state + 1, .acquire, .monotonic) == null) return;
+                    gate_lock.state.cmpxchgWeak(wordOf(state), wordOf(state + 1), .acquire, .monotonic) == null) return;
                 spin.yield();
             }
         }
 
         fn unlockShared(gate_lock: *GateLock) void {
-            const before = gate_lock.state.fetchSub(1, .release);
-            // A spawn was counted in, and no look can hold the gate meanwhile.
-            aegis.assert.invariant(before & readers != 0, "before & readers != 0");
-            aegis.assert.invariant(before & writing == 0, "before & writing == 0");
+            var before = gate_lock.state.load(.monotonic);
+            while (true) {
+                // A spawn was counted in, and no look can hold the gate meanwhile.
+                aegis.assert.invariant(bitsOf(before) & readers != 0, "bitsOf(before) & readers != 0");
+                aegis.assert.invariant(bitsOf(before) & writing == 0, "bitsOf(before) & writing == 0");
+                before = gate_lock.state.cmpxchgWeak(before, wordOf(bitsOf(before) - 1), .release, .monotonic) orelse return;
+            }
         }
 
         fn lock(gate_lock: *GateLock) void {
             while (true) {
-                const state = gate_lock.state.load(.monotonic);
+                const state = bitsOf(gate_lock.state.load(.monotonic));
                 if (state & writing == 0) {
                     if (state & readers == 0) {
                         // `waiting` is dropped with the taking; another look still
                         // waiting sets it again.
-                        if (gate_lock.state.cmpxchgWeak(state, writing, .acquire, .monotonic) == null) return;
+                        if (gate_lock.state.cmpxchgWeak(wordOf(state), wordOf(writing), .acquire, .monotonic) == null) return;
                         continue;
                     }
                     if (state & waiting == 0) {
-                        _ = gate_lock.state.cmpxchgWeak(state, state | waiting, .monotonic, .monotonic);
+                        _ = gate_lock.state.cmpxchgWeak(wordOf(state), wordOf(state | waiting), .monotonic, .monotonic);
                     }
                 }
                 spin.yield();
@@ -588,10 +598,13 @@ pub const Orphans = struct {
         }
 
         fn unlock(gate_lock: *GateLock) void {
-            const before = gate_lock.state.fetchAnd(~writing, .release);
-            // The look held the gate, and no spawn got in while it did.
-            aegis.assert.invariant(before & writing != 0, "before & writing != 0");
-            aegis.assert.invariant(before & readers == 0, "before & readers == 0");
+            var before = gate_lock.state.load(.monotonic);
+            while (true) {
+                // The look held the gate, and no spawn got in while it did.
+                aegis.assert.invariant(bitsOf(before) & writing != 0, "bitsOf(before) & writing != 0");
+                aegis.assert.invariant(bitsOf(before) & readers == 0, "bitsOf(before) & readers == 0");
+                before = gate_lock.state.cmpxchgWeak(before, wordOf(bitsOf(before) & ~writing), .release, .monotonic) orelse return;
+            }
         }
     };
 
@@ -865,11 +878,9 @@ pub const Orphans = struct {
             if (rc == 0) return;
             var names: tree.Dirents = .{ .bytes = entries[0..rc] };
             while (names.next()) |name| {
-                // glint-ignore: Z026 -- an entry of /proc that is no process id is no process
-                _ = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
-                var file_buffer: [32]u8 = undefined;
-                // glint-ignore: Z026 -- a name too long for the path names no process to read
-                const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch continue;
+                const tid = tree.pidOf(name) orelse continue;
+                var file_buffer: [tree.children_path_max + 1]u8 = undefined;
+                const file = tree.childrenPath(&file_buffer, tid);
                 const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
                 if (fd < 0) continue;
                 defer _ = c.close(fd);

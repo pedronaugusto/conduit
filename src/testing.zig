@@ -71,7 +71,7 @@ fn programsOf(ctx: *anyopaque) *shakedown.Sim.Programs {
 
 fn terminal(ctx: *anyopaque, size: seam.Size) seam.TerminalError!seam.Terminal {
     const t = try programsOf(ctx).terminal(.{ .rows = size.rows, .cols = size.cols });
-    return .{ .master = t.master, .slave = t.slave };
+    return .{ .master = .init(t.master), .slave = .init(t.slave) };
 }
 
 fn windowSize(ctx: *anyopaque, file: Io.File) seam.WindowError!seam.Size {

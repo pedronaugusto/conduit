@@ -73,6 +73,32 @@ pub const Dirents = struct {
     }
 };
 
+/// The process id a name in `/proc` spells, or null: `cgroup.zig`'s, which
+/// reads the same names in `cgroup.procs`.
+pub const pidOf = cgroups.pidOf;
+
+const children_name = "/children";
+
+/// How long `childrenPath` makes a path at most: the longest pid, sign and
+/// all, and the file's name.
+pub const children_path_max = std.fmt.count("{d}", .{std.math.minInt(posix.pid_t)}) + children_name.len;
+
+/// `<id>/children`, the file of a process's `task` directory that lists what
+/// thread `id` started, with its terminating zero: built from the id, so it
+/// always fits the buffer.
+pub fn childrenPath(buffer: *[children_path_max + 1]u8, id: posix.pid_t) [:0]const u8 {
+    const digits = std.fmt.printInt(buffer, id, 10, .lower, .{});
+    buffer[digits..][0..children_name.len].* = children_name.*;
+    buffer[digits + children_name.len] = 0;
+    return buffer[0 .. digits + children_name.len :0];
+}
+
+test "a thread's children file is named from its id" {
+    var buffer: [children_path_max + 1]u8 = undefined;
+    try std.testing.expectEqualStrings("4012/children", childrenPath(&buffer, 4012));
+    try std.testing.expectEqualStrings("-2147483648/children", childrenPath(&buffer, std.math.minInt(posix.pid_t)));
+}
+
 test "a getdents64 record that would run past what was read, or holds no name, ends the walk" {
     const endian = builtin.target.cpu.arch.endian();
     var bytes: [64]u8 = @splat(0);
@@ -350,8 +376,7 @@ const ProcTable = struct {
     fn next(table: *ProcTable) ?TableRecord {
         while (true) {
             while (table.names.next()) |name| {
-                // glint-ignore: Z026 -- an entry that is no process id is no process
-                const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+                const pid = pidOf(name) orelse continue;
                 const relation = processRelationLinux(pid) orelse continue;
                 return .{ .pid = pid, .ppid = relation.ppid, .pgrp = relation.pgrp };
             }
@@ -849,8 +874,7 @@ fn signalGroupSinceImpl(group: posix.pid_t, leader: posix.pid_t, since: u64, sig
         if (std.os.linux.errno(rc) != .SUCCESS or rc == 0) break;
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
-            // glint-ignore: Z026 -- an entry that is no process id is no process
-            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const pid = pidOf(name) orelse continue;
             if (pid <= 1 or pid == leader or pid == c.getpid()) continue;
             var process = LinuxProcess.capture(pid) orelse continue;
             defer process.deinit();
@@ -995,7 +1019,7 @@ pub const DarwinProcess = struct {
         var info: ProcUniqueInfo = undefined;
         const written = proc_pidinfo(pid, proc_pid_unique_info, 0, &info, @sizeOf(ProcUniqueInfo));
         if (written != @sizeOf(ProcUniqueInfo)) return null;
-        return .{ .pid = pid, .unique_id = info.unique_id };
+        return .{ .pid = pid, .unique_id = info.unique_id.raw() };
     }
 
     /// The process at `pid` if it started at `since`, from one lookup that
@@ -1006,7 +1030,7 @@ pub const DarwinProcess = struct {
         if (written != @sizeOf(BsdInfoWithUniqueId)) return null;
         if (info.bsd.status == proc_status_zombie) return null;
         if (darwinStart(info.bsd.start_tvsec, info.bsd.start_tvusec) != since) return null;
-        return .{ .pid = pid, .unique_id = info.unique.unique_id };
+        return .{ .pid = pid, .unique_id = info.unique.unique_id.raw() };
     }
 
     /// A lineage edge proved by kernel unique ids, even after reparenting.
@@ -1014,7 +1038,7 @@ pub const DarwinProcess = struct {
     pub fn childOf(process: *const DarwinProcess, parent: *const DarwinProcess) bool {
         var child: ProcUniqueInfo = undefined;
         return proc_pidinfo(process.pid, proc_pid_unique_info, 0, &child, @sizeOf(ProcUniqueInfo)) == @sizeOf(ProcUniqueInfo) and
-            child.unique_id == process.unique_id and child.parent_unique_id == parent.unique_id;
+            child.unique_id.raw() == process.unique_id and child.parent_unique_id.raw() == parent.unique_id;
     }
 
     /// The kernel refuses signal 0 through a token (`EINVAL`), so `alive`
@@ -1102,7 +1126,7 @@ pub const DarwinProcess = struct {
         var info: BsdInfoWithUniqueId = undefined;
         const written = proc_pidinfo(process.pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId) or
-            info.unique.unique_id != process.unique_id or info.bsd.status == proc_status_zombie) return null;
+            info.unique.unique_id.raw() != process.unique_id or info.bsd.status == proc_status_zombie) return null;
         return info;
     }
 
@@ -1129,12 +1153,17 @@ comptime {
     aegis.assert.invariant(@sizeOf(BsdInfoWithUniqueId) == 192, "@sizeOf(BsdInfoWithUniqueId) == 192");
 }
 
-/// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`.
+/// A process's unique id on Darwin: unlike its pid, never given to another
+/// process while the system runs.
+const UniqueId = aegis.id.Id(DarwinProcess, u64);
+
+/// `struct proc_uniqidentifierinfo` from `<sys/proc_info.h>`: the process's
+/// unique id and its parent's, each an id of one domain, laid out as the
+/// `uint64_t` the header gives.
 const ProcUniqueInfo = extern struct {
     executable_uuid: [16]u8,
-    unique_id: u64,
-    // glint-ignore: P008 -- boundary: the process's and its parent's unique ids as `<sys/proc_info.h>` lays them out
-    parent_unique_id: u64,
+    unique_id: UniqueId,
+    parent_unique_id: UniqueId,
     id_version: i32,
     reserved2: u32,
     reserved3: u64,
@@ -1325,13 +1354,12 @@ pub fn hasChildren(pid: posix.pid_t) bool {
         if (rc == 0) break;
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
-            // glint-ignore: Z026 -- an entry that is no thread id is no thread
-            const tid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const tid = pidOf(name) orelse continue;
             threads += 1;
             // Read above.
             if (tid == pid) continue;
-            var file_buffer: [32]u8 = undefined;
-            const file = std.mem.printSentinel(&file_buffer, "{s}/children", .{name}, 0) catch return true;
+            var file_buffer: [children_path_max + 1]u8 = undefined;
+            const file = childrenPath(&file_buffer, tid);
             const fd = c.openat(dir, file, .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
             if (fd < 0) return true;
             var byte: [1]u8 = undefined;
@@ -1567,8 +1595,7 @@ fn membersLinux(pgid: posix.pid_t, leader: posix.pid_t) Members {
 
         var names: Dirents = .{ .bytes = entries[0..rc] };
         while (names.next()) |name| {
-            // glint-ignore: Z026 -- an entry that is no process id is no process
-            const pid = std.fmt.parseInt(posix.pid_t, name, 10) catch continue;
+            const pid = pidOf(name) orelse continue;
             if (pid == leader) continue;
             const relation = processRelationLinux(pid) orelse continue;
             // `Z` has ended and waits for its parent; `X` is being torn down.

@@ -101,7 +101,7 @@ pub fn spawn(io: std.Io, options: contract.SpawnOptions, state: *State) contract
             .pty => |pty| pty.master(),
             else => null,
         },
-        .simulated = child,
+        .simulated = .of(child),
     };
     return state;
 }

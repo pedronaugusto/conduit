@@ -245,8 +245,11 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
     var last: ?tty.Size = null;
 
     while (true) {
-        // glint-ignore: Z026 -- a source that is not a terminal, or is gone, has no size to forward, and no caller of `run` could act on it
-        if (tty.winSize(resize.source)) |now| {
+        const size: ?tty.Size = tty.winSize(resize.source) catch |err| switch (err) {
+            // A source that is not a terminal, or is gone, has no size to forward.
+            error.NotATerminal, error.Unexpected => null,
+        };
+        if (size) |now| {
             if (last == null or !std.meta.eql(last.?, now)) {
                 resize.pty.resize(io, now) catch |err| switch (err) {
                     error.Canceled => return error.Canceled,
@@ -255,7 +258,7 @@ fn forwardSize(io: std.Io, resize: Resize) std.Io.Cancelable!void {
                 };
                 last = now;
             }
-        } else |_| {}
+        }
 
         try waitResize(io, resize);
     }

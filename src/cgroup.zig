@@ -67,6 +67,26 @@ pub const Cgroup = if (supported) LinuxCgroup else NoCgroup;
 /// How a wait for a cgroup to empty ended.
 pub const Emptied = enum { empty, timeout, woken };
 
+/// The process id a name in `/proc`, or a word of a cgroup's `cgroup.procs`,
+/// spells: null for one that spells none (`self`, `net`, a number too large
+/// for a pid), which names no process. A thread's directory is named by its
+/// id the same way.
+pub fn pidOf(name: []const u8) ?posix.pid_t {
+    // Unsigned: no name of a process carries a sign.
+    const id = std.fmt.parseUnsigned(u31, name, 10) catch |err| switch (err) {
+        error.InvalidCharacter, error.Overflow => return null,
+    };
+    return id;
+}
+
+test "a /proc name is a process id or none" {
+    try std.testing.expectEqual(@as(?posix.pid_t, 4012), pidOf("4012"));
+    try std.testing.expectEqual(@as(?posix.pid_t, null), pidOf("self"));
+    try std.testing.expectEqual(@as(?posix.pid_t, null), pidOf(""));
+    try std.testing.expectEqual(@as(?posix.pid_t, null), pidOf("99999999999999999999"));
+    try std.testing.expectEqual(@as(?posix.pid_t, null), pidOf("-1"));
+}
+
 /// The boot that gives a recorded directory inode its meaning.
 /// A complete UUID is required; a partial read never becomes an identity.
 pub fn bootIdentity() ?[36]u8 {
@@ -960,8 +980,7 @@ const MemberOps = struct {
             const complete = if (last) |at| at + 1 else if (n == 0) held else 0;
             var numbers = std.mem.tokenizeAny(u8, window[0..complete], "\n ");
             while (numbers.next()) |word| {
-                // glint-ignore: Z026 -- a word that is not a process id names no process
-                const pid = std.fmt.parseInt(posix.pid_t, word, 10) catch continue;
+                const pid = pidOf(word) orelse continue;
                 try into.append(gpa, pid);
             }
             aegis.assert.invariant(complete <= held, "complete <= held");

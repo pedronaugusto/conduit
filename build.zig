@@ -73,6 +73,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/seam.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "aegis", .module = aegis_module }},
     });
 
     const module = b.addModule("conduit", .{

@@ -12,6 +12,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `Orphans.SpinLock` is conduit's yielding spin lock on one aegis cell, with `lock`, `tryLock` and `unlock`: its word is the private `word`, an `aegis.Atomic` of a two-state enum, where it was the field `held`, a `std.atomic.Value(bool)`.
 - A file conduit is lent and never closes is an `aegis.own.Unowned(std.Io.File)`, where it was the `std.Io.File`: `Child.ChannelEnd.file`, `Child.Stream.file` (the `.file` arm), `Child.SpawnOptions.stderr_to`, `Proxy.Options.input`, `Proxy.Options.output`, and the pty's own handles `Pty.Master.read` and `Pty.Master.write`. Migration: wrap a file with `.of(file)` and read it with `.get()`.
 - `Child.takeStdout` and `Child.takeStderr` return the stream's owner, `?tty.OwnedFile` (an `aegis.own.OwnedIo`, released once by `deinit(io)`), where each returned a `?std.Io.File` the caller closed by hand.
 - `Expect.arrived` and `Expect.space` are `aegis.Pulse`s, where each was a `std.Io.Event`; `Expect.finished` and `Expect.lifetime` are `aegis.Atomic` cells, where each was a `std.atomic.Value`.
@@ -35,6 +36,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Child.killWait` and `Reaper.kill` send the `.kill` at once when the system refuses the `.terminate` (Windows: a child that shares no console with this process), where they waited out the whole grace for a request nobody received. A walk too large to hold still asked the child itself, and its grace stands.
+- A failure nothing can return goes to the program's log (`std.log`, scope `conduit`, at warn), where it was dropped: the `.kill` and reap of a run that `Child.deinit` or a failed `output` or `exchange` abandons, a `.kill` that `Reaper.kill` sends, the adoption scope `Reaper.deinit` ends, and the subreaper flag that `Orphans.deinit` or a failed `Orphans.start` puts back. A look after a reap or a spawn that fails is a line of conduit's trace (`CONDUIT_TRACE`); the next look, `count` or `killAll` reports it.
+- `Reaper.kill` with a grace, on a cgroup whose members cannot be listed for the `.terminate` (no memory), gives them no grace: none was asked, and the cgroup's kill needs no list.
 - Pins aegis dc3ed602, still 0.2.4, and shakedown ed5a873; development on preflight's ci-standard e3f74a6, glint 0.8. The CI caller is generated again for that preflight.
 - Pins aegis c8982a8, still 0.2.4: six additive commits after 3c0b13e (the role declarations a linter reads, `lint_rules`), the aegis the development build's preflight selects. Nothing conduit calls changed.
 - aegis 0.3: the input writer waits on its guard (`held.wait(&condition, io, .none)`). Pins aegis breaking-0.3 (7bdb587), reactor and shakedown on it.

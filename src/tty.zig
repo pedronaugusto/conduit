@@ -459,16 +459,24 @@ pub fn openControlling(io: std.Io) tty.OpenControllingError!Controlling {
 /// it is the same terminal. Null when no standard stream is on it.
 fn deviceOf(ctty: Handle, buf: []u8) ?[]const u8 {
     const group = foregroundGroupPosix(ctty) catch return null;
-    for ([_]Handle{ 0, 1, 2 }) |fd| {
-        // glint-ignore: Z026 -- a stream with no foreground group is not on the terminal
-        const theirs = foregroundGroupPosix(fd) catch continue;
-        if (theirs != group) continue;
-        // glint-ignore: Z026 -- a stream with no terminal name is not the device
-        const path = ttyNamePosix(fd, buf) catch continue;
-        if (!std.mem.startsWith(u8, path, "/dev/") or std.mem.eql(u8, path, "/dev/tty")) continue;
-        return path;
-    }
+    for ([_]Handle{ 0, 1, 2 }) |fd| if (streamDevice(fd, group, buf)) |path| return path;
     return null;
+}
+
+/// The device standard stream `fd` is open on, when it is a terminal whose
+/// foreground group is `group`; null when it is not on that terminal.
+fn streamDevice(fd: Handle, group: posix.pid_t, buf: []u8) ?[]const u8 {
+    const theirs = foregroundGroupPosix(fd) catch |err| switch (err) {
+        // No terminal, or one nobody controls: not the terminal.
+        error.NotATerminal, error.NoForegroundGroup, error.Unexpected => return null,
+    };
+    if (theirs != group) return null;
+    const path = ttyNamePosix(fd, buf) catch |err| switch (err) {
+        // A stream with no terminal name is not the device.
+        error.NotATerminal, error.NameTooLong, error.Unexpected => return null,
+    };
+    if (!std.mem.startsWith(u8, path, "/dev/") or std.mem.eql(u8, path, "/dev/tty")) return null;
+    return path;
 }
 
 /// One half of the console, by its device name.
@@ -515,9 +523,13 @@ fn ttyNamePosix(handle: Handle, buffer: []u8) TtyNameError![]const u8 {
     if (is_linux) {
         // The kernel names the device a descriptor is open on in /proc,
         // which is what the C library's ttyname reads too.
-        var path_buf: [32]u8 = undefined;
-        // glint-ignore: Z026 -- 14 bytes of prefix, at most 11 for an i32 and the NUL fit in 32
-        const path = std.mem.printSentinel(&path_buf, "/proc/self/fd/{d}", .{handle}, 0) catch unreachable;
+        // `/proc/self/fd/<handle>`, built from the handle: the buffer holds the longest.
+        const prefix = "/proc/self/fd/";
+        var path_buf: [prefix.len + std.fmt.count("{d}", .{std.math.minInt(Handle)}) + 1]u8 = undefined;
+        path_buf[0..prefix.len].* = prefix.*;
+        const end = prefix.len + std.fmt.printInt(path_buf[prefix.len..], handle, 10, .lower, .{});
+        path_buf[end] = 0;
+        const path = path_buf[0..end :0];
         const rc = system.readlink(path.ptr, buffer.ptr, buffer.len);
         switch (posix.errno(rc)) {
             .SUCCESS => {},
