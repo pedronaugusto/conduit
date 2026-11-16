@@ -51,6 +51,17 @@ fn channel(init: std.process.Init, variable: []const u8) !void {
 fn hold(io: std.Io, mib: usize) !void {
     const block = try std.heap.page_allocator.alloc(u8, mib << 20);
     @memset(block, 0xa5);
+    // FreeBSD keeps no peak as pages are touched: its statistics clock
+    // samples the resident set of the process running at each tick, so a
+    // block touched and freed between two ticks never reaches `ru_maxrss`.
+    // Keep running over the whole block until this process's own peak holds
+    // it, the event the parent's reading waits for, never a length of time.
+    if (builtin.target.os.tag == .freebsd) {
+        var pass: u8 = 0;
+        while (std.posix.getrusage(std.c.rusage.SELF).maxrss < @as(c_long, @intCast(mib << 10))) : (pass +%= 1) {
+            @memset(block, pass);
+        }
+    }
     std.mem.doNotOptimizeAway(block.ptr);
     std.heap.page_allocator.free(block);
     try std.Io.File.stdout().writeStreamingAll(io, "held\n");
