@@ -22,6 +22,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/held.zig",
         "src/serial_allocator.zig",
         "src/child/windows/search.zig",
+        "src/freebsd.zig",
     } },
     .{ .name = "platform handles", .patterns = &.{
         "src/cgroup.zig",
@@ -44,8 +45,6 @@ pub const layers: []const gantry.rules.Layer = &.{
     .{ .name = "process policy", .patterns = &.{
         "src/process_exists.zig",
         "src/host_name.zig",
-        "src/freebsd.zig",
-        "src/freebsd.zig",
         "src/memory.zig",
         "src/child/output.zig",
         "src/child/stdio_plan.zig",
