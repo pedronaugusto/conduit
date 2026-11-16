@@ -37,6 +37,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Development: pins reactor main 9eaa9f4 (from 60e8f45), shakedown main b99b768 (from b168f3a) and preflight ci-standard b7bb2bb (from f991816), each on aegis f52eabe; CI regenerated (bay generate).
 - `Child.killWait` and `Reaper.kill` send the `.kill` at once when the system refuses the `.terminate` (Windows: a child that shares no console with this process), where they waited out the whole grace for a request nobody received. A walk too large to hold still asked the child itself, and its grace stands.
 - A failure nothing can return goes to the program's log (`std.log`, scope `conduit`, at warn), where it was dropped: the `.kill` and reap of a run that `Child.deinit` or a failed `output` or `exchange` abandons, a `.kill` that `Reaper.kill` sends, the adoption scope `Reaper.deinit` ends, and the subreaper flag that `Orphans.deinit` or a failed `Orphans.start` puts back. A look after a reap or a spawn that fails is a line of conduit's trace (`CONDUIT_TRACE`); the next look, `count` or `killAll` reports it.
 - `Reaper.kill` with a grace, on a cgroup whose members cannot be listed for the `.terminate` (no memory), gives them no grace: none was asked, and the cgroup's kill needs no list.
