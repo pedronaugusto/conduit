@@ -45,6 +45,7 @@ const reactor = @import("reactor");
 const adoption_record = @import("orphans/adoption_record.zig");
 const SupervisorRecord = @import("child/contract.zig").SupervisorRecord;
 const cgroups = @import("cgroup.zig");
+const freebsd = @import("freebsd.zig");
 
 // A recycled entry in a process-table snapshot, before it is signalled.
 var snapshot_witness: if (builtin.is_test) aegis.Atomic(Witness) else void = if (builtin.is_test) .init(.none) else {};
@@ -524,12 +525,16 @@ pub fn adoptionRecord(pid: posix.pid_t) ?adoption_record.Record {
 /// The unit is the system's own and only equality means anything. **Linux**:
 /// field 22 of `/proc/<pid>/stat`, clock ticks after boot. **Darwin**:
 /// `proc_pidinfo`'s `PROC_PIDTBSDINFO`, microseconds since the epoch.
+/// **FreeBSD** (64-bit): `ki_start` of the process's `kinfo_proc`
+/// (`sysctl kern.proc`), microseconds since the epoch; the kernel adds its
+/// boot time to the start it keeps, so a step of the system clock moves it.
 ///
 /// `null` when there is no such process, or it has ended and waits to be
 /// reaped: a zombie runs nothing. `error.Unsupported` on every other system,
 /// where there is no cheap way to ask.
 pub const StartTimeError = error{
-    /// The system has no cheap way to ask: everywhere but Linux and Darwin.
+    /// The system has no cheap way to ask: everywhere but Linux, Darwin and
+    /// 64-bit FreeBSD.
     Unsupported,
 };
 
@@ -547,6 +552,12 @@ pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
             if (written != @sizeOf(ProcBsdInfo)) return null;
             if (info.status == proc_status_zombie) return null;
             return darwinStart(info.start_tvsec, info.start_tvusec);
+        },
+        .freebsd => {
+            if (!freebsd.supported) return error.Unsupported;
+            const entry = freebsd.process(pid) orelse return null;
+            if (entry.zombie) return null;
+            return darwinStart(entry.start_seconds, entry.start_microseconds);
         },
         else => return error.Unsupported,
     }

@@ -27,6 +27,7 @@ test {
     _ = @import("input_writer_test.zig");
     _ = @import("child/exchange_test.zig");
     _ = @import("child/memory_test.zig");
+    _ = @import("freebsd.zig");
     _ = @import("memory.zig");
     _ = @import("host_name_test.zig");
     _ = @import("child/output.zig");

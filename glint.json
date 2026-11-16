@@ -93,6 +93,13 @@
       "reason": "a Windows console's input records"
     },
     {
+      "file": "src/freebsd.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "FreeBSD's process table, asked of the kernel through sysctl kern.proc"
+    },
+    {
       "file": "src/memory.zig",
       "rules": [
         "P007"

@@ -7,6 +7,7 @@ const c = std.c;
 const posix = std.posix;
 const windows = std.os.windows;
 const win32 = @import("win32");
+const freebsd = @import("freebsd.zig");
 
 /// What a process holds now and the most it has held since it started, in
 /// bytes, each system's own measure of it:
@@ -17,6 +18,8 @@ const win32 = @import("win32");
 ///   `proc_pid_rusage`. Darwin keeps no peak resident size it will tell
 ///   another process, so both figures are footprints: the dirty and compressed
 ///   pages the process owns, not the clean pages of its program file.
+/// - **FreeBSD** (64-bit): the resident set, `ki_rssize` of the process's
+///   `kinfo_proc` in pages, and its peak, `ru_maxrss` of its rusage there.
 /// - **Windows**: the working set, `WorkingSetSize` and `PeakWorkingSetSize`
 ///   of `GetProcessMemoryInfo`.
 ///
@@ -35,12 +38,13 @@ pub const Error = error{
     Unexpected,
 };
 
-/// Linux and Darwin take the process id, Windows the process handle.
+/// Linux, Darwin and FreeBSD take the process id, Windows the process handle.
 pub fn of(identity: if (builtin.target.os.tag == .windows) windows.HANDLE else posix.pid_t) Error!Memory {
     switch (builtin.target.os.tag) {
         .linux => return linuxMemory(identity),
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => return darwinMemory(identity),
         .windows => return windowsMemory(identity),
+        .freebsd => return if (freebsd.supported) freebsdMemory(identity) else error.Unsupported,
         else => return error.Unsupported,
     }
 }
@@ -145,6 +149,14 @@ fn darwinMemory(pid: posix.pid_t) Error!Memory {
     // A zombie keeps its counters but no memory: its footprint reads zero.
     if (info.proc_exit_abstime != 0) return error.ProcessEnded;
     return .{ .current = info.phys_footprint, .peak = @max(info.lifetime_max_phys_footprint, info.phys_footprint) };
+}
+
+fn freebsdMemory(pid: posix.pid_t) Error!Memory {
+    const entry = freebsd.process(pid) orelse return error.ProcessEnded;
+    if (entry.zombie) return error.ProcessEnded;
+    const current = std.math.mul(u64, entry.resident_pages, std.heap.pageSize()) catch return error.Unexpected;
+    const peak = std.math.mul(u64, entry.max_resident_kib, 1024) catch return error.Unexpected;
+    return .{ .current = current, .peak = @max(peak, current) };
 }
 
 fn windowsMemory(process: windows.HANDLE) Error!Memory {
