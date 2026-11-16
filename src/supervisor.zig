@@ -292,7 +292,7 @@ pub fn runFreeBsd(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepa
     if (failed) ending = true;
     var root_ended = false;
     var empty_looks: u8 = 0;
-    const brief: c.timespec = .{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+    const brief = aegis.units.Duration(.millisecond, u32).fromRaw(5).toTimespec(c.timespec);
     while (true) {
         var command: ?posix.SIG = null;
         var cgroup_signalled = false;

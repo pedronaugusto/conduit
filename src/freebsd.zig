@@ -266,7 +266,7 @@ pub fn bootIdentity() ?[36]u8 {
     const sec = std.math.cast(u64, boot.sec) orelse return null;
     const usec = std.math.cast(u64, boot.usec) orelse return null;
     var text: [36]u8 = undefined;
-    _ = std.fmt.bufPrint(&text, "{d:0>20}-{d:0>15}", .{ sec, usec }) catch return null;
+    _ = std.mem.print(&text, "{d:0>20}-{d:0>15}", .{ sec, usec }) catch return null;
     return text;
 }
 

@@ -1096,7 +1096,7 @@ pub const DarwinProcess = struct {
     pub fn childOf(process: *const DarwinProcess, parent: *const DarwinProcess) bool {
         var child: ProcUniqueInfo = undefined;
         return proc_pidinfo(process.pid, proc_pid_unique_info, 0, &child, @sizeOf(ProcUniqueInfo)) == @sizeOf(ProcUniqueInfo) and
-            child.unique_id.raw() == process.unique_id and child.parent_unique_id.raw() == parent.unique_id;
+            child.unique_id.eql(.fromRaw(process.unique_id)) and child.parent_unique_id.eql(.fromRaw(parent.unique_id));
     }
 
     /// The kernel refuses signal 0 through a token (`EINVAL`), so `alive`
@@ -1184,7 +1184,7 @@ pub const DarwinProcess = struct {
         var info: BsdInfoWithUniqueId = undefined;
         const written = proc_pidinfo(process.pid, proc_pidt_bsdinfowithuniqid, 0, &info, @sizeOf(BsdInfoWithUniqueId));
         if (written != @sizeOf(BsdInfoWithUniqueId) or
-            info.unique.unique_id.raw() != process.unique_id or info.bsd.status == proc_status_zombie) return null;
+            !info.unique.unique_id.eql(.fromRaw(process.unique_id)) or info.bsd.status == proc_status_zombie) return null;
         return info;
     }
 
