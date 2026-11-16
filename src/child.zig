@@ -357,7 +357,7 @@ pub const Child = struct {
             if (state.handles_open) child.closeHandles();
             child.closeJob(io);
         } else {
-            if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| owner.close();
+            if (comptime State.supervised) if (state.supervisor) |owner| owner.close();
             if (state.lineage) |tracker| tracker.destroy(io);
             state.forks.close();
             if (state.exit_watch) |*watch| watch.close(io);
@@ -448,7 +448,7 @@ pub const Child = struct {
     pub fn containment(child: *const Child, buffer: []u8) ContainmentError!Containment {
         const state = child.state;
         var record: Containment = .{ .group = state.pgid };
-        if (comptime builtin.target.os.tag == .linux) if (state.supervisor) |owner| {
+        if (comptime State.supervised) if (state.supervisor) |owner| {
             record.supervisor = owner.record;
         };
         if (comptime !is_windows) if (state.cgroup.active()) {
@@ -801,7 +801,7 @@ pub const Child = struct {
             return term;
         }
 
-        const supervised = if (builtin.target.os.tag == .linux) child.state.supervisor != null else false;
+        const supervised = if (State.supervised) child.state.supervisor != null else false;
         if (!supervised and (child.state.force_tree or child.state.end_descendants or child.state.descendants == .contain)) {
             // Normal containment and every termination request share this
             // final force. Once waitid observes the root ended, its last fork
@@ -827,7 +827,7 @@ pub const Child = struct {
             const rc = c.waitpid(child.state.id, &status, c.W.NOHANG);
             if (rc == 0) return null;
             if (rc > 0) {
-                const root_status = if (builtin.target.os.tag == .linux) if (child.state.supervisor) |owner| owner.result() catch |err| {
+                const root_status = if (State.supervised) if (child.state.supervisor) |owner| owner.result() catch |err| {
                     child.state.identity_retired = true;
                     return err;
                 } else @as(u32, @bitCast(status)) else @as(u32, @bitCast(status));
@@ -990,7 +990,7 @@ pub const Child = struct {
         if (is_windows) return child.killWindows(signal);
         const sig = signal.toPosix();
 
-        if (comptime builtin.target.os.tag == .linux) if (child.state.supervisor) |owner| {
+        if (comptime State.supervised) if (child.state.supervisor) |owner| {
             if (sig == .KILL and child.state.cgroup.active()) _ = child.state.cgroup.kill();
             var cgroup_signalled = false;
             if (sig != .KILL and child.state.cgroup.active())

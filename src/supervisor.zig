@@ -1,6 +1,14 @@
-//! A private Linux adoption owner. Runs only raw system calls after fork,
-//! owns one root and its adoptees, and exits only when that scope is empty.
-//! The caller waits for this process but receives the root's exact wait status.
+//! A private adoption owner, on Linux and 64-bit FreeBSD. Runs only raw
+//! system calls after fork, owns one root and its adoptees, and exits only
+//! when that scope is empty. The caller waits for this process but receives
+//! the root's exact wait status.
+//!
+//! Linux makes it a child subreaper and lists its children from `/proc`.
+//! FreeBSD makes it a reaper (`procctl(PROC_REAP_ACQUIRE)`): every process
+//! the root starts stays in its tree however it is reparented, the kernel
+//! ends the whole tree at once (`PROC_REAP_KILL`) and counts it
+//! (`PROC_REAP_STATUS`), and one kqueue wakes it for its channel and its
+//! signals, where Linux has signalfd.
 const std = @import("std");
 const aegis = @import("aegis");
 const c = std.c;
@@ -8,6 +16,10 @@ const posix = std.posix;
 const linux = std.os.linux;
 const Child = @import("child/contract.zig");
 const builtin = @import("builtin");
+const freebsd = @import("freebsd.zig");
+
+/// Whether a contained child is started under a supervisor here.
+pub const supported = builtin.target.os.tag == .linux or freebsd.supported;
 
 pub const testing_hook = struct {
     pub var request: aegis.Atomic(Request) = .init(.normal);
@@ -22,6 +34,14 @@ pub const Supervisor = struct {
     pub fn request(self: Supervisor, sig: posix.SIG, cgroup_signalled: bool) Child.KillError!void {
         if (builtin.is_test and testing_hook.request.load(.monotonic) == .fail) return error.Unexpected;
         const byte: u8 = @as(u8, @intCast(@backingInt(sig))) | (if (cgroup_signalled) @as(u8, 128) else 0);
+        if (comptime builtin.target.os.tag != .linux) while (true) {
+            if (c.send(self.channel, std.mem.asBytes(&byte).ptr, 1, c.MSG.NOSIGNAL | c.MSG.DONTWAIT) >= 0) return;
+            switch (c.errno(@as(c_int, -1))) {
+                .PIPE, .CONNRESET => return,
+                .INTR => continue,
+                else => return error.Unexpected,
+            }
+        };
         while (true) {
             const rc = linux.sendto(self.channel, std.mem.asBytes(&byte).ptr, 1, linux.MSG.NOSIGNAL | linux.MSG.DONTWAIT, null, 0);
             switch (linux.errno(rc)) {
@@ -56,6 +76,15 @@ pub const Result = extern struct { status: u32, failed: u32 };
 
 pub fn channel() Child.SpawnError![2]posix.fd_t {
     var ends: [2]posix.fd_t = undefined;
+    if (comptime builtin.target.os.tag != .linux) {
+        if (c.socketpair(c.AF.UNIX, c.SOCK.STREAM | c.SOCK.CLOEXEC, 0, &ends) == 0) return ends;
+        return switch (c.errno(@as(c_int, -1))) {
+            .MFILE => error.ProcessFdQuotaExceeded,
+            .NFILE => error.SystemFdQuotaExceeded,
+            .NOMEM, .NOBUFS => error.SystemResources,
+            else => error.Unexpected,
+        };
+    }
     const rc = linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &ends);
     return switch (linux.errno(rc)) {
         .SUCCESS => ends,
@@ -193,6 +222,149 @@ pub fn run(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Pr
     const answer: Result = .{ .status = @bitCast(status), .failed = @intFromBool(failed) };
     _ = linux.sendto(commands, std.mem.asBytes(&answer).ptr, @sizeOf(Result), linux.MSG.NOSIGNAL, null, 0);
     c._exit(0);
+}
+
+/// FreeBSD's `prepare`: the session, the mask and handlers as on Linux, then
+/// the reaper, and a kqueue that every catchable signal wakes (SIGCHLD among
+/// them): a kqueue records a signal sent to a process that blocks it. The
+/// kqueue is `signals`; FreeBSD has no `children` file.
+pub fn prepareFreeBsd() Preparation {
+    if (c.setsid() < 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+    var mask = posix.sigfillset();
+    inline for (.{ posix.SIG.KILL, posix.SIG.STOP, posix.SIG.CONT, posix.SIG.WINCH, posix.SIG.URG }) |sig| posix.sigdelset(&mask, sig);
+    if (c.sigprocmask(c.SIG.SETMASK, &mask, null) != 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+    var number: u32 = 1;
+    while (number < 128) : (number += 1) {
+        const sig: posix.SIG = @fromBackingInt(@intCast(number));
+        if (sig == .KILL or sig == .STOP) continue;
+        const action: posix.Sigaction = .{ .handler = .{ .handler = posix.SIG.DFL }, .mask = posix.sigemptyset(), .flags = 0 };
+        _ = c.sigaction(sig, &action, null);
+    }
+    const reaper_error = freebsd.acquireReaper();
+    if (reaper_error != .SUCCESS) return .{ .failed = reaper_error };
+    const queue = c.kqueue();
+    if (queue < 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+    var changes: [31]c.Kevent = undefined;
+    var count: usize = 0;
+    number = 1;
+    while (number < 32) : (number += 1) {
+        const sig: posix.SIG = @fromBackingInt(@intCast(number));
+        if (sig == .KILL or sig == .STOP or sig == .CONT or sig == .WINCH or sig == .URG) continue;
+        changes[count] = .{ .ident = number, .filter = c.EVFILT.SIGNAL, .flags = c.EV.ADD | c.EV.ENABLE, .fflags = 0, .data = 0, .udata = 0 };
+        count += 1;
+    }
+    var none: [0]c.Kevent = undefined;
+    if (c.kevent(queue, &changes, @intCast(count), &none, 0, null) < 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+    if (c.fcntl(queue, c.F.SETFD, @as(c_int, c.FD_CLOEXEC)) < 0) return .{ .failed = c.errno(@as(c_int, -1)) };
+    return .{ .ready = .{ .signals = queue, .children = -1 } };
+}
+
+extern "c" fn close_range(lowfd: c_uint, highfd: c_uint, flags: c_int) c_int;
+
+/// FreeBSD's `isolate`: only the channel and the kqueue stay open.
+fn isolateFreeBsd(commands: posix.fd_t, queue: posix.fd_t) void {
+    const low: posix.fd_t = @min(commands, queue);
+    const high: posix.fd_t = @max(commands, queue);
+    var closed = true;
+    if (low > 0 and close_range(0, @intCast(low - 1), 0) != 0) closed = false;
+    if (high > low + 1 and close_range(@intCast(low + 1), @intCast(high - 1), 0) != 0) closed = false;
+    if (close_range(@intCast(high + 1), std.math.maxInt(c_uint), 0) != 0) closed = false;
+    if (closed) return;
+    var limit: posix.rlimit = undefined;
+    const ceiling: posix.fd_t = if (c.getrlimit(.NOFILE, &limit) == 0) std.math.lossyCast(posix.fd_t, limit.cur) else 4096;
+    var fd: posix.fd_t = 0;
+    while (fd < ceiling) : (fd += 1) if (fd != commands and fd != queue) {
+        _ = c.close(fd);
+    };
+}
+
+/// FreeBSD's `run`: as Linux's, with the kernel's reaper tree for the
+/// scope. The root, its direct child, stays unreaped through the last signal
+/// and is reaped last; adoptees are reaped as they end. When the scope ends,
+/// one `PROC_REAP_KILL` reaches every process left in the tree.
+pub fn runFreeBsd(root: posix.pid_t, commands: posix.fd_t, detached: bool, prepared: Prepared) noreturn {
+    const queue = prepared.signals;
+    isolateFreeBsd(commands, queue);
+    var none: [0]c.Kevent = undefined;
+    const watch = [_]c.Kevent{.{ .ident = @intCast(commands), .filter = c.EVFILT.READ, .flags = c.EV.ADD | c.EV.ENABLE, .fflags = 0, .data = 0, .udata = 0 }};
+    var ending = false;
+    var failed = c.kevent(queue, &watch, watch.len, &none, 0, null) < 0;
+    if (failed) ending = true;
+    var root_ended = false;
+    var empty_looks: u8 = 0;
+    const brief: c.timespec = .{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+    while (true) {
+        var command: ?posix.SIG = null;
+        var cgroup_signalled = false;
+        var events: [8]c.Kevent = undefined;
+        const ready = c.kevent(queue, &none, 0, &events, events.len, if (ending) &brief else null);
+        if (ready < 0 and c.errno(@as(c_int, -1)) != .INTR) {
+            failed = true;
+            ending = true;
+        }
+        for (events[0..@intCast(@max(ready, 0))]) |event| {
+            if (event.filter == c.EVFILT.SIGNAL) {
+                if (event.ident != @backingInt(posix.SIG.CHLD)) ending = true;
+            } else if (event.filter == c.EVFILT.READ) {
+                var byte: u8 = 0;
+                const n = c.read(commands, std.mem.asBytes(&byte).ptr, 1);
+                if (n == 0) ending = true else if (n == 1) {
+                    command = @fromBackingInt(@intCast(byte & 127));
+                    cgroup_signalled = byte & 128 != 0;
+                    if (command.? == .KILL) ending = true;
+                }
+            }
+        }
+        // An unreaped root is a zombie in the table: ended, its pid and group
+        // still its own. Only this process reaps it, after every adoptee.
+        if (!root_ended) {
+            const entry = freebsd.process(root);
+            if (entry == null or entry.?.zombie) {
+                root_ended = true;
+                ending = true;
+            }
+        }
+        if (!root_ended) if (if (ending) @as(?posix.SIG, .KILL) else command) |sig| {
+            if (c.kill(if (detached) -root else root, sig) < 0 and c.errno(@as(c_int, -1)) != .SRCH) failed = true;
+        };
+        if (ending and !freebsd.reaperKill(.KILL)) failed = true;
+        const adopted_signal = if (ending) null else if (cgroup_signalled) null else command;
+        const left = visitTree(root, adopted_signal, if (detached and !root_ended and !ending) root else null) catch {
+            failed = true;
+            ending = true;
+            continue;
+        };
+        if (root_ended and left == 0) {
+            empty_looks += 1;
+            if (empty_looks == 2) break;
+        } else empty_looks = 0;
+    }
+    var status: c_int = 0;
+    while (c.waitpid(root, &status, 0) < 0) {
+        if (c.errno(@as(c_int, -1)) == .INTR) continue;
+        failed = true;
+        break;
+    }
+    const answer: Result = .{ .status = @bitCast(status), .failed = @intFromBool(failed) };
+    _ = c.send(commands, std.mem.asBytes(&answer).ptr, @sizeOf(Result), c.MSG.NOSIGNAL);
+    c._exit(0);
+}
+
+/// One pass over the reaper's own children but the root: each is signalled
+/// (unless the group signal reached it) and reaped once it has ended. Answers
+/// how many processes are left in the tree besides the root, which stays
+/// unreaped until the end. The kernel copies up to 64 children a pass;
+/// a larger tree is visited over the passes that follow.
+fn visitTree(root: posix.pid_t, signal: ?posix.SIG, signalled_group: ?posix.pid_t) error{Unexpected}!usize {
+    var entries: [64]freebsd.ReaperPid = undefined;
+    const pids = freebsd.reaperPids(&entries) orelse return error.Unexpected;
+    for (pids) |entry| {
+        if (entry.flags & freebsd.ReaperPid.valid == 0 or entry.flags & freebsd.ReaperPid.child == 0) continue;
+        if (entry.pid == root or entry.pid <= 1) continue;
+        _ = try visit(entry.pid, signal, signalled_group);
+    }
+    const status = freebsd.reaperStatus() orelse return error.Unexpected;
+    return @as(usize, status.descendants) -| 1;
 }
 
 /// This supervisor has exactly one thread and one reap owner. A listed direct

@@ -100,7 +100,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     // How the fork child reports a failure that happens after the fork. The
     // write end is close-on-exec, so a successful `execve` closes it and the
     // parent's read below returns end of file instead of a record.
-    const supervised = builtin.target.os.tag == .linux and options.descendants == .contain;
+    const supervised = supervisor.supported and options.descendants == .contain;
     var channel_ends: ?[2]posix.fd_t = if (supervised) try supervisor.channel() else null;
     errdefer if (channel_ends) |ends| {
         _ = c.close(ends[0]);
@@ -161,7 +161,7 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     contained = null;
     const child = started(state, pid, watched.forks, watched.exit_watch, kept, &plan, options);
     state.lineage = watched.tracker;
-    if (comptime builtin.target.os.tag == .linux) if (channel_ends) |ends| {
+    if (comptime supervisor.supported) if (channel_ends) |ends| {
         state.supervisor = .{ .channel = ends[0], .record = watched.record.? };
         state.process_id = outcome.root_pid;
         state.pgid = if (options.detach) outcome.root_pid else null;
@@ -184,7 +184,8 @@ const ForkEnds = struct {
     /// The writing end of the report pipe.
     report: posix.fd_t,
     go: ?[2]posix.fd_t,
-    /// The supervisor's command channel, for a contained child on Linux.
+    /// The supervisor's command channel, for a contained child on Linux and
+    /// 64-bit FreeBSD.
     channel: ?[2]posix.fd_t,
     scope_kill: ?posix.fd_t,
     /// The cgroup to join, or -1.
@@ -194,7 +195,7 @@ const ForkEnds = struct {
 /// Forks, and runs `childMain` in the child. Returns the child's pid in the
 /// parent; the pipes are the caller's to close if this fails.
 fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) SpawnError!posix.pid_t {
-    aegis.assert.invariant(ends.channel == null or builtin.target.os.tag == .linux, "ends.channel == null or builtin.target.os.tag == .linux");
+    aegis.assert.invariant(ends.channel == null or supervisor.supported, "ends.channel == null or supervisor.supported");
     // Who the child's parent is before the fork: the child compares it with
     // its own parent once its death signal is set, to catch a parent that
     // was gone before it.
@@ -215,7 +216,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
 fn forkRunning(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds, parent: posix.pid_t) posix.pid_t {
     const pid = c.fork();
     if (pid == 0) {
-        const root_parent = if (comptime builtin.target.os.tag == .linux) if (ends.channel) |channel|
+        const root_parent = if (comptime supervisor.supported) if (ends.channel) |channel|
             superviseFromForkChild(channel, ends.report, options.detach, ends.scope_kill)
         else
             parent else parent;
@@ -349,7 +350,7 @@ fn spawnWithoutFork(
     return started(state, child.pid, child.forks, child.exit_watch, kept, plan, options);
 }
 
-/// In the fork child of a contained spawn on Linux: becomes the supervisor
+/// In the fork child of a contained spawn on Linux or 64-bit FreeBSD: becomes the supervisor
 /// of the scope, and returns only in the root it forks, with the pid the
 /// root sees as its parent.
 fn superviseFromForkChild(
@@ -360,7 +361,7 @@ fn superviseFromForkChild(
 ) posix.pid_t {
     _ = c.close(ends[0]);
     clearSignals();
-    const prepared = switch (supervisor.prepare()) {
+    const prepared = switch (if (comptime builtin.target.os.tag == .linux) supervisor.prepare() else supervisor.prepareFreeBsd()) {
         .ready => |prepared| prepared,
         .failed => |errno| {
             const record: Failure = .{ .stage = .supervisor, .errno = @backingInt(errno) };
@@ -374,11 +375,12 @@ fn superviseFromForkChild(
     if (root != 0) {
         const root_record: Failure = .{ .stage = .supervisor_root, .errno = @intCast(root) };
         _ = c.write(report, std.mem.asBytes(&root_record), @sizeOf(Failure));
-        supervisor.run(root, ends[1], detach, prepared, scope_kill);
+        if (comptime builtin.target.os.tag == .linux) supervisor.run(root, ends[1], detach, prepared, scope_kill);
+        supervisor.runFreeBsd(root, ends[1], detach, prepared);
     }
     _ = c.close(ends[1]);
     _ = c.close(prepared.signals);
-    _ = c.close(prepared.children);
+    if (prepared.children >= 0) _ = c.close(prepared.children);
     if (scope_kill) |fd| _ = c.close(fd);
     return root_parent;
 }

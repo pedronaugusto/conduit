@@ -287,8 +287,8 @@ fn captured(io: std.Io) !void {
     defer child.deinit(io);
     defer reap(&child, io);
     const pid = child.processId().?;
-    // Holding a process by its start is Linux's and Darwin's; elsewhere
-    // conduit answers `Unsupported`.
+    // Holding a process by its start is Linux's, Darwin's and 64-bit
+    // FreeBSD's; elsewhere conduit answers `Unsupported`.
     const since = (conduit.startTime(pid) catch |err| switch (err) {
         error.Unsupported => return error.SkipZigTest,
     }) orelse return error.SkipZigTest;

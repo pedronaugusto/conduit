@@ -306,6 +306,9 @@ pub const Descendants = enum {
     /// Linux uses a private subreaper supervisor per contained child,
     /// with or without a writable cgroup. It reaps the root and every
     /// adoptee before completion, preserving the root's exact status.
+    /// 64-bit FreeBSD uses the same supervisor as a reaper
+    /// (`procctl(PROC_REAP_ACQUIRE)`), whose tree keeps every descendant
+    /// however it is reparented and which the kernel ends at once.
     contain,
 };
 

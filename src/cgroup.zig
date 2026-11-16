@@ -90,6 +90,8 @@ test "a /proc name is a process id or none" {
 /// The boot that gives a recorded directory inode its meaning.
 /// A complete UUID is required; a partial read never becomes an identity.
 pub fn bootIdentity() ?[36]u8 {
+    // FreeBSD has no boot id: its boot time, the same until the next boot.
+    if (comptime @import("freebsd.zig").supported) return @import("freebsd.zig").bootIdentity();
     if (comptime !supported) return null;
     const fd = c.open("/proc/sys/kernel/random/boot_id", .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
     if (fd < 0) return null;

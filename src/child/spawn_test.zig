@@ -1157,10 +1157,10 @@ test "killWait reaches a grandchild that put itself in a process group of its ow
     // whatever it does with console groups, and the test above already asserts
     // that.
     if (is_windows) return error.SkipZigTest;
-    // Reach past the process group is Linux's and Darwin's: elsewhere conduit
-    // has no cheap way to list a process's children, and the group is the
-    // whole of the reach (`tree.childrenOf`).
-    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+    // Reach past the process group is Linux's, Darwin's and 64-bit FreeBSD's:
+    // elsewhere conduit has no cheap way to list a process's children, and
+    // the group is the whole of the reach (`tree.childrenOf`).
+    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin() and !(builtin.target.os.tag == .freebsd and @sizeOf(usize) == 8)) return error.SkipZigTest;
 
     // `set -m` turns job control on, and a shell with job control puts each
     // background job in a process group of its own. So the grandchild here is
@@ -1270,10 +1270,10 @@ test "a child on a terminal opens it as one poll can wait on" {
 
 test "a grandchild started at once, out of reach of the signal, still ends with the child" {
     if (is_windows) return error.SkipZigTest;
-    // Reach past the process group is Linux's and Darwin's: elsewhere conduit
-    // has no cheap way to list a process's children, and the group is the
-    // whole of the reach (`tree.childrenOf`).
-    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+    // Reach past the process group is Linux's, Darwin's and 64-bit FreeBSD's:
+    // elsewhere conduit has no cheap way to list a process's children, and
+    // the group is the whole of the reach (`tree.childrenOf`).
+    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin() and !(builtin.target.os.tag == .freebsd and @sizeOf(usize) == 8)) return error.SkipZigTest;
 
     // The watch on the child's forks is registered late on purpose: long
     // after a child that was not being held would have started its shell,

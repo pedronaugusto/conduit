@@ -515,7 +515,7 @@ pub const Reaper = struct {
         // Ended, and not yet reaped: the group's id is still the child's, and
         // what is left in the group can be addressed by it. A child in a cgroup
         // of its own has what it left in there, wherever its group went.
-        const supervised = if (builtin.target.os.tag == .linux) reaper.child.state.supervisor != null else false;
+        const supervised = if (@import("child/State.zig").supervised) reaper.child.state.supervisor != null else false;
         if (!supervised and (reaper.options.end_tree or reaper.killing.remaining(io) != null)) {
             if (reaper.child.state.cgroup.active()) {
                 try reaper.endContained(io);

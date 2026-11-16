@@ -94,9 +94,12 @@ pub fn process(pid: posix.pid_t) ?Process {
 pub const ListError = std.mem.Allocator.Error || error{Unexpected};
 
 /// Every process (`group` null), or every process of the group `group`,
-/// appended to `into`. The table can grow between the size asked and the
-/// copy, so the copy is asked again, larger, until it fits.
-pub fn list(gpa: std.mem.Allocator, group: ?posix.pid_t, into: *std.ArrayList(Process)) ListError!void {
+/// appended to `into` from `gpa`. The kernel's copy of the table, 1088 bytes
+/// an entry, is held in `raw` only while it is read, so a caller with a small
+/// bounded workspace for the answer gives the copy an allocator of its own.
+/// The table can grow between the size asked and the copy, so the copy is
+/// asked again, larger, until it fits.
+pub fn list(raw: std.mem.Allocator, gpa: std.mem.Allocator, group: ?posix.pid_t, into: *std.ArrayList(Process)) ListError!void {
     comptime std.debug.assert(supported);
     const name_all = [_]c_int{ ctl_kern, kern_proc, kern_proc_proc, 0 };
     const name_group = [_]c_int{ ctl_kern, kern_proc, kern_proc_pgrp, group orelse 0 };
@@ -107,8 +110,8 @@ pub fn list(gpa: std.mem.Allocator, group: ?posix.pid_t, into: *std.ArrayList(Pr
         if (c.sysctl(name.ptr, @intCast(name.len), null, &len, null, 0) != 0) return error.Unexpected;
         // Room for the processes started while the copy is made.
         len += len / 4 + kinfo_size * 8;
-        const bytes = try gpa.alignedAlloc(u8, .of(u64), len);
-        defer gpa.free(bytes);
+        const bytes = try raw.alignedAlloc(u8, .of(u64), len);
+        defer raw.free(bytes);
         if (c.sysctl(name.ptr, @intCast(name.len), bytes.ptr, &len, null, 0) != 0) {
             if (c.errno(@as(c_int, -1)) == .NOMEM) continue;
             return error.Unexpected;
@@ -123,6 +126,166 @@ pub fn list(gpa: std.mem.Allocator, group: ?posix.pid_t, into: *std.ArrayList(Pr
         return;
     }
     return error.Unexpected;
+}
+
+/// What `othersInGroup` can say of a process group.
+pub const Others = enum { others, none, unknown };
+
+/// Whether a process other than `leader`, and not ended, is in group `group`,
+/// from one copy of the group's entries into this frame: room for a leader
+/// and seven more. A copy that does not fit is cut at what fits (`ENOMEM`),
+/// and what it holds still answers `others`; with nobody else in it, the rest
+/// is `unknown`.
+pub fn othersInGroup(group: posix.pid_t, leader: posix.pid_t) Others {
+    comptime std.debug.assert(supported);
+    if (group <= 0) return .unknown;
+    var entries: [8 * kinfo_size]u8 align(8) = undefined;
+    var len: usize = entries.len;
+    const name = [_]c_int{ ctl_kern, kern_proc, kern_proc_pgrp, group };
+    const cut = c.sysctl(&name, name.len, &entries, &len, null, 0) != 0;
+    if (cut and c.errno(@as(c_int, -1)) != .NOMEM) return .unknown;
+    if (len % kinfo_size != 0) return .unknown;
+    var offset: usize = 0;
+    while (offset < len) : (offset += kinfo_size) {
+        const found = Process.read(entries[offset..][0..kinfo_size]) orelse return .unknown;
+        if (found.pid != leader and found.group == group and !found.zombie) return .others;
+    }
+    return if (cut) .unknown else .none;
+}
+
+//======================================================================
+// The reaper (`procctl(2)`, `<sys/procctl.h>`).
+//======================================================================
+
+/// `P_PID` of `idtype_t`.
+const p_pid = 0;
+const proc_reap_acquire = 2;
+const proc_reap_status = 4;
+const proc_reap_getpids = 5;
+const proc_reap_kill = 6;
+
+extern "c" fn procctl(idtype: c_int, id: i64, cmd: c_int, data: ?*anyopaque) c_int;
+
+/// `struct procctl_reaper_status`.
+pub const ReaperStatus = extern struct {
+    flags: c_uint,
+    children: c_uint,
+    /// Every process in the reaper's tree, ended ones not yet reaped among them.
+    descendants: c_uint,
+    reaper: posix.pid_t,
+    pid: posix.pid_t,
+    pad: [15]c_uint,
+};
+
+/// `struct procctl_reaper_pidinfo`.
+pub const ReaperPid = extern struct {
+    pid: posix.pid_t,
+    subtree: posix.pid_t,
+    flags: c_uint,
+    pad: [15]c_uint,
+
+    /// `REAPER_PIDINFO_VALID`: the entry was written.
+    pub const valid: c_uint = 0x1;
+    /// `REAPER_PIDINFO_CHILD`: the reaper's own child, which it reaps.
+    pub const child: c_uint = 0x2;
+};
+
+/// `struct procctl_reaper_pids`.
+const ReaperPids = extern struct {
+    count: c_uint,
+    pad: [15]c_uint,
+    pids: [*]ReaperPid,
+};
+
+/// `struct procctl_reaper_kill`.
+const ReaperKill = extern struct {
+    sig: c_int,
+    flags: c_uint,
+    subtree: posix.pid_t,
+    killed: c_uint,
+    first_failed: posix.pid_t,
+    pad: [15]c_uint,
+};
+
+comptime {
+    if (supported) {
+        std.debug.assert(@sizeOf(ReaperStatus) == 80);
+        std.debug.assert(@sizeOf(ReaperPid) == 72);
+        std.debug.assert(@sizeOf(ReaperPids) == 72);
+        std.debug.assert(@sizeOf(ReaperKill) == 80);
+    }
+}
+
+/// Makes this process the reaper of what it starts: a descendant whose parent
+/// ends comes to it, never to init, and stays in its tree until it reaps it.
+/// The one request a process makes only of itself.
+pub fn acquireReaper() posix.E {
+    comptime std.debug.assert(supported);
+    if (procctl(p_pid, c.getpid(), proc_reap_acquire, null) == 0) return .SUCCESS;
+    return c.errno(@as(c_int, -1));
+}
+
+/// This reaper's tree, counted. Null where the kernel does not answer.
+pub fn reaperStatus() ?ReaperStatus {
+    comptime std.debug.assert(supported);
+    var status = std.mem.zeroes(ReaperStatus);
+    if (procctl(p_pid, c.getpid(), proc_reap_status, &status) != 0) return null;
+    return status;
+}
+
+/// This reaper's tree, up to `into.len` of its processes. Null where the
+/// kernel does not answer.
+pub fn reaperPids(into: []ReaperPid) ?[]ReaperPid {
+    comptime std.debug.assert(supported);
+    @memset(into, std.mem.zeroes(ReaperPid));
+    var request: ReaperPids = .{ .count = std.math.cast(c_uint, into.len) orelse return null, .pad = @splat(0), .pids = into.ptr };
+    if (procctl(p_pid, c.getpid(), proc_reap_getpids, &request) != 0) return null;
+    return into;
+}
+
+/// Sends `sig` to every process of this reaper's tree, at once, in the
+/// kernel: nothing the tree forks meanwhile escapes it. True when the tree
+/// was reached or was already empty.
+pub fn reaperKill(sig: posix.SIG) bool {
+    comptime std.debug.assert(supported);
+    var request = std.mem.zeroes(ReaperKill);
+    request.sig = @intCast(@backingInt(sig));
+    if (procctl(p_pid, c.getpid(), proc_reap_kill, &request) == 0) return true;
+    return c.errno(@as(c_int, -1)) == .SRCH;
+}
+
+/// `kern.boottime` as 36 characters, the width of a Linux boot id: the
+/// seconds and microseconds of this boot, the same until the next.
+pub fn bootIdentity() ?[36]u8 {
+    comptime std.debug.assert(supported);
+    const kern_boottime = 21;
+    var boot: extern struct { sec: i64, usec: i64 } = undefined;
+    var len: usize = @sizeOf(@TypeOf(boot));
+    const name = [_]c_int{ ctl_kern, kern_boottime };
+    if (c.sysctl(&name, name.len, &boot, &len, null, 0) != 0 or len != @sizeOf(@TypeOf(boot))) return null;
+    const sec = std.math.cast(u64, boot.sec) orelse return null;
+    const usec = std.math.cast(u64, boot.usec) orelse return null;
+    var text: [36]u8 = undefined;
+    _ = std.fmt.bufPrint(&text, "{d:0>20}-{d:0>15}", .{ sec, usec }) catch return null;
+    return text;
+}
+
+test "this process becomes a reaper of an empty tree, and the boot it runs in has one identity" {
+    if (!supported) return error.SkipZigTest;
+    // In a child of its own, so the test runner is never made a reaper.
+    const pid = c.fork();
+    if (pid < 0) return error.SkipZigTest;
+    if (pid == 0) {
+        const ok = acquireReaper() == .SUCCESS and
+            (if (reaperStatus()) |status| status.descendants == 0 and status.reaper == c.getpid() else false) and
+            reaperKill(.TERM);
+        c._exit(if (ok) 0 else 1);
+    }
+    var status: c_int = 0;
+    while (c.waitpid(pid, &status, 0) < 0 and c.errno(@as(c_int, -1)) == .INTR) {}
+    try std.testing.expect(posix.W.IFEXITED(@bitCast(status)) and posix.W.EXITSTATUS(@bitCast(status)) == 0);
+    const boot = bootIdentity() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(&boot, &(bootIdentity() orelse return error.TestUnexpectedResult));
 }
 
 test "the table's entry for this process names it, its parent, group and session, and when it started" {
@@ -147,11 +310,11 @@ test "the whole table holds this process, and its group's holds it too" {
     const gpa = std.testing.allocator;
     var all: std.ArrayList(Process) = .empty;
     defer all.deinit(gpa);
-    try list(gpa, null, &all);
+    try list(gpa, gpa, null, &all);
     var group: std.ArrayList(Process) = .empty;
     defer group.deinit(gpa);
     const me = process(c.getpid()) orelse return error.TestUnexpectedResult;
-    try list(gpa, me.group, &group);
+    try list(gpa, gpa, me.group, &group);
     const self = c.getpid();
     var in_all = false;
     for (all.items) |p| in_all = in_all or p.pid == self;
@@ -161,4 +324,8 @@ test "the whole table holds this process, and its group's holds it too" {
         in_group = in_group or p.pid == self;
     }
     try std.testing.expect(in_all and in_group);
+    // This process leads no group of its own here, or leads one alone: either
+    // way, asked as the leader of its group, the answer is not `unknown`.
+    try std.testing.expect(othersInGroup(me.group, self) != .unknown);
+    try std.testing.expectEqual(Others.unknown, othersInGroup(0, self));
 }

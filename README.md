@@ -216,8 +216,9 @@ refuses to release a scope that still owns a direct child or adoptee.
 Otherwise POSIX has no container for a tree, so `kill` reaches three things:
 the child, the child's process group when `detach` made one, and every
 descendant the system will name — one `/proc` process-table pass on Linux,
-`proc_listchildpids` on Darwin, and on the BSDs and illumos neither, where the
-process group is the whole of the reach. Descendants are signalled deepest
+`proc_listchildpids` on Darwin, one `sysctl kern.proc` copy of the table on
+64-bit FreeBSD, and on the other BSDs and illumos none, where the process group
+is the whole of the reach. Descendants are signalled deepest
 first and before the child, because a process signalled before the ones below
 it leaves them orphaned and an orphan is related to nothing. A descendant that
 gave itself a process group with `setsid` or `setpgid` is reached, and for
@@ -365,7 +366,7 @@ to read while a wait or Reaper runs.
 | `child.result()` | The synchronized result without reaping: `null` before publication, the term afterwards, or `ReapedElsewhere` if the status was taken outside conduit. |
 | `child.tryWait(io)` | Never blocks. `null` while the child runs. |
 | `child.finish(io)` | Ends an unfinished contained scope and confirms it ended, reporting what the cleanup met. The child stays valid either way, so a failed call can be made again, and `deinit` is still owed. |
-| `child.containment(buffer)` | Copies the detached group, private Linux supervisor identity and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
+| `child.containment(buffer)` | Copies the detached group, private supervisor identity (Linux, 64-bit FreeBSD) and optional cgroup path, inode and boot id. The path borrows your buffer; the record owns no handles and survives retirement and deinit. |
 | `child.holdReap()` | The right to reap the child, taken and held — `null` if another task has it — for a caller that waits for the end its own way and reaps afterwards, as `Reaper` does. `HeldReap.wait(io)` reaps; `release()` gives it back. |
 | `child.waitTimeout(io, ms)` | Reaps it if it ends in time; `null` if it does not, and it is still running. Waits on a handle the system makes ready the moment the child ends — a `pidfd`, a kqueue registration — and asks again on a growing interval where there is neither. |
 | `child.kill(io, signal)` | `.interrupt`, `.terminate` or `.kill`, aimed at what the child started and not only at the child: on POSIX the process group of a detached child and a walk of its descendants; on Windows a console control event to a detached child's group, and for `.kill` — or `.terminate` with no group — the job object. On Windows, `.interrupt` without a group is `error.Unsupported`, there being nothing to fall back to that would mean the same thing. On POSIX any other signal goes the same way: `.hangup`, `.quit`, `.user1`, `.user2`, `.stop`, `.@"continue"`, `.window_change`, or `.{ .posix = .ALRM }` for one by number. Only the first three end the tree with the child; the rest leave it to `descendants`. Windows refuses each of the others with `error.Unsupported`, as POSIX does a number it does not define. |
@@ -427,6 +428,7 @@ including `output` and `Reaper`, follows the same policy.
 | Linux without a writable cgroup | A private supervisor is the subreaper of this child alone. Normal exit, force and loss of the caller end and reap its tree, including detached orphans. |
 | macOS | Observation of lineage, without kernel enforcement. Ends the private group and observed descendants before reaping. The measured fork/registration window can let a fork followed by parent exit escape: 0/100 escapes with no added delay and 100/100 with a 20 ms observer delay in one run; counts depend on scheduling. |
 | Windows | The Job Object retains descendants across separate consoles and intermediate exits; every contained wait ends its members and confirms zero active processes and the Job termination notification before returning the root status. |
+| FreeBSD (64-bit) | A private supervisor is the reaper of this child's tree (`procctl(PROC_REAP_ACQUIRE)`): every descendant stays in that tree however it is reparented, and the kernel ends the whole of it at once (`PROC_REAP_KILL`) before the root's status is returned. |
 | Other POSIX systems | Ends the private group before reaping; descendants that leave it can escape. |
 
 On Linux, each contained child has a private supervisor process. It becomes a
@@ -438,6 +440,14 @@ cannot stop it; a catchable stop sent directly to it ends its scope. The
 supervisor holds the root unreaped while ending and reaping
 all adoptees, including each new generation adopted during cleanup. It uses
 signalfd and the caller's command socket while idle, without a polling timer.
+
+On 64-bit FreeBSD the supervisor is the same process with the kernel's reaper
+for its scope: `procctl(PROC_REAP_ACQUIRE)` before the root starts, so a
+descendant whose parent ends comes to the supervisor and never leaves its
+tree; `PROC_REAP_KILL` signals that tree in one call, nothing it forks
+meanwhile escaping; `PROC_REAP_STATUS` counts what is left. FreeBSD has no
+signalfd, so one kqueue wakes it for the command socket and for every
+catchable signal, which it blocks.
 All cleanup descriptors are reserved before the root runs; cleanup allocates
 nothing. Startup failure refuses the spawn. Lost supervisor status is
 `Unexpected`, never an invented root exit.
@@ -859,12 +869,16 @@ library; `conduit` itself imports it.
 | Linux (musl) | the same | `ubuntu-latest`, built for `x86_64-linux-musl` against Zig's own musl |
 | macOS | the same | `macos-latest` |
 | Windows | `CreatePseudoConsole` and `CreateProcessW` | `windows-latest` |
-| FreeBSD, NetBSD | as Linux | cross-compiled only |
+| FreeBSD (amd64) | as Linux, but the cgroup: a private reaper supervisor per contained child (`procctl`), and a process's start time, memory and children from `sysctl kern.proc` | `x86_64-freebsd` on its kernel under KVM (release tier) |
+| NetBSD | as Linux | cross-compiled only |
 
 Windows 10 version 1809 is the floor: `CreatePseudoConsole` is imported
-statically rather than looked up. FreeBSD and NetBSD are compiled and never
-run, so what holds there is what the sources say and not what a suite has
-shown.
+statically rather than looked up. NetBSD is compiled and never run, so what
+holds there is what the sources say and not what a suite has shown. FreeBSD's
+suite runs on FreeBSD's own kernel under KVM in the release tier; the limits
+it keeps are its own defaults (a soft resource limit above the hard one is
+lowered, not refused; a host name may be empty; `/dev/fd` lists three
+descriptors without fdescfs).
 
 Windows runs nowhere but the `windows-latest` runner: there is no local
 Windows or emulator run. What only Windows can answer — which directory on

@@ -13,6 +13,8 @@ const Id = std.process.Child.Id;
 const Pty = @import("../pty.zig").Pty;
 const OwnedFile = @import("conduit.tty").OwnedFile;
 const Supervisor = @import("../supervisor.zig").Supervisor;
+/// Whether a contained child runs under a private supervisor here.
+pub const supervised = @import("../supervisor.zig").supported;
 const Tracker = @import("../lineage.zig").Tracker;
 const ProcessGroupId = Child.ProcessGroupId;
 const Term = Child.Term;
@@ -80,8 +82,9 @@ exit_watch: if (is_windows) void else ?reactor.Process,
 /// ends the whole of it. Elsewhere, and where none could be made, it is
 /// none, and `kill` walks. `deinit` removes it.
 cgroup: if (is_windows) void else cgroups.Cgroup,
-/// Linux: private adoption owner, with its root status returned on the channel.
-supervisor: if (builtin.target.os.tag == .linux) ?Supervisor else void = if (builtin.target.os.tag == .linux) null else {},
+/// Linux and 64-bit FreeBSD: private adoption owner, with its root status
+/// returned on the channel.
+supervisor: if (supervised) ?Supervisor else void = if (supervised) null else {},
 /// Darwin: lineage observer, started before the root is released to exec.
 lineage: if (is_windows) void else ?*Tracker = if (is_windows) {} else null,
 /// How the child ended, once it has been reaped. While this is `null` the

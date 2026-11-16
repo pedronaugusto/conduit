@@ -296,6 +296,7 @@ fn parentOf(pid: posix.pid_t) ?posix.pid_t {
         if (proc_pidinfo(pid, proc_pidtbsdinfo, 0, &info, @sizeOf(ProcBsdInfo)) != @sizeOf(ProcBsdInfo)) return null;
         return @intCast(info.ppid);
     }
+    if (comptime freebsd.supported) return (freebsd.process(pid) orelse return null).parent;
     return null;
 }
 
@@ -311,6 +312,9 @@ fn collect(
     if (comptime builtin.target.os.tag == .linux) {
         return collectLinux(gpa, root, in_group, into);
     }
+    if (comptime freebsd.supported) {
+        return collectFreeBsd(gpa, root, in_group, into);
+    }
 
     var descendants: std.ArrayList(posix.pid_t) = .empty;
     defer descendants.deinit(gpa);
@@ -319,6 +323,39 @@ fn collect(
     var expanded: usize = 0;
     while (expanded < descendants.items.len) : (expanded += 1) {
         try captureChildren(gpa, descendants.items[expanded], in_group, &descendants, into);
+    }
+}
+
+/// FreeBSD answers the whole table in one `sysctl kern.proc`: the parent and
+/// group of every process from one copy, walked a level at a time below
+/// `root`. The kernel's copy is held apart from `gpa`, the caller's bounded
+/// workspace, which keeps only the table's fields and what is captured.
+fn collectFreeBsd(
+    gpa: std.mem.Allocator,
+    root: posix.pid_t,
+    in_group: ?posix.pid_t,
+    into: *std.ArrayList(Process),
+) std.mem.Allocator.Error!void {
+    var table: std.ArrayList(freebsd.Process) = .empty;
+    defer table.deinit(gpa);
+    freebsd.list(std.heap.page_allocator, gpa, null, &table) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // A table that cannot be read reaches nothing past the group.
+        error.Unexpected => return,
+    };
+    var parents: std.ArrayList(posix.pid_t) = .empty;
+    defer parents.deinit(gpa);
+    try parents.append(gpa, root);
+    var next: usize = 0;
+    while (next < parents.items.len) : (next += 1) {
+        const parent = parents.items[next];
+        for (table.items) |entry| {
+            if (entry.parent != parent or entry.pid == parent or entry.pid <= 1 or entry.zombie) continue;
+            try parents.append(gpa, entry.pid);
+            // The group signal already reaches a member; only an escapee is held.
+            if (in_group) |pgid| if (entry.group == pgid) continue;
+            try into.append(gpa, FreeBsdProcess.held(entry) orelse continue);
+        }
     }
 }
 
@@ -564,7 +601,8 @@ pub fn startTime(pid: posix.pid_t) StartTimeError!?u64 {
 }
 
 /// A process held by a kernel identity rather than by its number: a pidfd on
-/// Linux, a unique process id on Darwin. `signal` reaches that process or
+/// Linux, a unique process id on Darwin, its start to the microsecond on 64-bit
+/// FreeBSD (checked again before each signal). `signal` reaches that process or
 /// nothing — once it has ended, never a process given the same pid since.
 /// `alive` says whether it has ended (a zombie has); ask it rather than
 /// sending signal 0, which Darwin refuses through a token. `processId()` is the
@@ -633,9 +671,12 @@ pub const CapturedPid = struct {
 /// never taken for the captured one's. **Darwin**: one `proc_pidinfo` call
 /// answers the start time and stable unique process id together. Delivery
 /// refreshes the audit version only while that unique id matches, so exec
-/// preserves the capture and PID reuse cannot authorize a signal. `error.Unsupported` elsewhere.
+/// preserves the capture and PID reuse cannot authorize a signal. **64-bit
+/// FreeBSD**: the process's number and its start to the microsecond, read
+/// again before each signal (see `FreeBsdProcess`). `error.Unsupported`
+/// elsewhere.
 pub const CaptureError = error{
-    /// Everywhere but Linux and Darwin.
+    /// Everywhere but Linux, Darwin and 64-bit FreeBSD.
     Unsupported,
 };
 
@@ -647,6 +688,7 @@ pub fn captureStarted(pid: posix.pid_t, since: u64) CaptureError!?CapturedPid {
 fn captureStartedProcess(pid: posix.pid_t, since: u64) error{Unsupported}!?Process {
     if (pid <= 1 or since == 0) return switch (builtin.target.os.tag) {
         .linux, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => null,
+        .freebsd => if (freebsd.supported) null else error.Unsupported,
         else => error.Unsupported,
     };
     switch (builtin.target.os.tag) {
@@ -660,6 +702,10 @@ fn captureStartedProcess(pid: posix.pid_t, since: u64) error{Unsupported}!?Proce
         },
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => {
             return DarwinProcess.captureStarted(pid, since);
+        },
+        .freebsd => {
+            if (!freebsd.supported) return error.Unsupported;
+            return FreeBsdProcess.captureStarted(pid, since);
         },
         else => return error.Unsupported,
     }
@@ -681,7 +727,7 @@ pub const RecordedOptions = struct {
 /// What `killRecorded` can meet.
 pub const KillRecordedError = error{
     /// The record names something this system cannot end by proof: a
-    /// supervisor off Linux, or a group on Darwin.
+    /// supervisor off Linux and 64-bit FreeBSD, or a group on Darwin.
     Unsupported,
     /// Something in the recorded group could not be proven to descend from
     /// the recorded root, and was left alone.
@@ -709,7 +755,7 @@ pub const KillRecordedError = error{
 pub fn killRecorded(io: std.Io, options: RecordedOptions) KillRecordedError!bool {
     if (builtin.target.os.tag == .windows) @compileError("killRecorded is POSIX-only");
     if (options.supervisor) |record| {
-        if (builtin.target.os.tag != .linux) return error.Unsupported;
+        if (comptime !@import("supervisor.zig").supported) return error.Unsupported;
         const boot = cgroups.bootIdentity() orelse return error.Unproven;
         if (!std.mem.eql(u8, &boot, &record.boot)) return error.Unproven;
         var ended = false;
@@ -974,6 +1020,7 @@ fn captureChildren(
 const Process = switch (builtin.target.os.tag) {
     .linux => LinuxProcess,
     .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => DarwinProcess,
+    .freebsd => if (freebsd.supported) FreeBsdProcess else NoProcess,
     else => NoProcess,
 };
 
@@ -1179,6 +1226,91 @@ const ProcUniqueInfo = extern struct {
     reserved2: u32,
     reserved3: u64,
     reserved4: u64,
+};
+
+/// FreeBSD: a process held by its number and its start to the microsecond
+/// (`kinfo_proc`'s `ki_start`). FreeBSD gives no descriptor for a process
+/// this one did not `pdfork`, so each use reads the entry again and goes on
+/// only while it is the same start and not ended: a signal goes by number
+/// just after that look, and a number given to a new process between the two,
+/// started within the same microsecond, is the window left.
+const FreeBsdProcess = struct {
+    pid: posix.pid_t,
+    start: u64,
+
+    fn capture(pid: posix.pid_t) ?FreeBsdProcess {
+        return held(freebsd.process(pid) orelse return null);
+    }
+
+    fn held(entry: freebsd.Process) ?FreeBsdProcess {
+        if (entry.zombie or entry.pid <= 0) return null;
+        return .{ .pid = entry.pid, .start = darwinStart(entry.start_seconds, entry.start_microseconds) orelse return null };
+    }
+
+    fn captureStarted(pid: posix.pid_t, since: u64) ?FreeBsdProcess {
+        const process = capture(pid) orelse return null;
+        return if (process.start == since) process else null;
+    }
+
+    pub fn signal(process: *const FreeBsdProcess, sig: posix.SIG) bool {
+        if (!process.alive()) return false;
+        return c.kill(process.pid, sig) == 0;
+    }
+
+    pub fn signalDescendants(process: *const FreeBsdProcess, sig: posix.SIG, in_group: ?posix.pid_t) std.mem.Allocator.Error!usize {
+        return signalDescendantsGuarded(process.pid, process, sig, in_group);
+    }
+
+    /// As on Darwin: a session this leader made cannot be joined from outside
+    /// it, so every later member of its group is reached; an ordinary group
+    /// in an older session is `error.Unsupported`.
+    pub fn signalGroupSince(process: *const FreeBsdProcess, group: posix.pid_t, since: u64, sig: posix.SIG) error{ Unsupported, OutOfMemory }!usize {
+        if (group <= 1 or process.pid != group or !process.alive()) return 0;
+        const entry = freebsd.process(process.pid) orelse return 0;
+        if (entry.session != process.pid or entry.group != group or process.start != since) return error.Unsupported;
+
+        var storage: [32 * 1024]u8 = undefined;
+        var scratch = std.heap.FixedBufferAllocator.init(&storage);
+        const gpa = scratch.allocator();
+        var table: std.ArrayList(freebsd.Process) = .empty;
+        defer table.deinit(gpa);
+        // The kernel's copy, 1088 bytes an entry, is held apart from the
+        // members kept, which this frame bounds.
+        freebsd.list(std.heap.page_allocator, gpa, group, &table) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Unexpected => return error.Unsupported,
+        };
+        var members_held: std.ArrayList(FreeBsdProcess) = .empty;
+        defer members_held.deinit(gpa);
+        for (table.items) |member| {
+            if (member.pid <= 1 or member.pid == process.pid or member.pid == c.getpid()) continue;
+            if (member.group != group or member.session != process.pid) continue;
+            const one = held(member) orelse continue;
+            if (one.start < since) continue;
+            try members_held.append(gpa, one);
+        }
+        // The group and session are given again only once the leader has
+        // gone: it is checked after the copy and before the first signal.
+        if (!process.alive()) return 0;
+        var reached: usize = 0;
+        for (members_held.items) |*member| {
+            if (member.signal(sig)) reached += 1;
+        }
+        return reached;
+    }
+
+    pub fn wait(process: *const FreeBsdProcess, io: std.Io, timeout: std.Io.Timeout) std.Io.Cancelable!bool {
+        return waitCaptured(io, process, .of(io, timeout));
+    }
+
+    pub fn alive(process: *const FreeBsdProcess) bool {
+        const now = held(freebsd.process(process.pid) orelse return false) orelse return false;
+        return now.start == process.start;
+    }
+
+    pub fn deinit(process: *FreeBsdProcess) void {
+        process.* = undefined;
+    }
 };
 
 const NoProcess = struct {
@@ -1583,12 +1715,19 @@ pub const Members = enum {
 /// while this is asked. Linux answers from one `/proc` pass, leaving out a
 /// process that has ended; Darwin from `proc_listpgrppids`, which names the
 /// group's processes and not their state, so a member that has ended and
-/// whose parent has not yet reaped it is counted until it is. The BSDs and
-/// illumos answer `unknown`.
+/// whose parent has not yet reaped it is counted until it is; 64-bit FreeBSD
+/// from one `sysctl kern.proc` copy of the group, leaving out a process that
+/// has ended, `unknown` past eight members with none but the leader among
+/// them. The other BSDs and illumos answer `unknown`.
 pub fn members(pgid: posix.pid_t, leader: posix.pid_t) Members {
     return switch (builtin.target.os.tag) {
         .linux => membersLinux(pgid, leader),
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => membersDarwin(pgid, leader),
+        .freebsd => if (freebsd.supported) switch (freebsd.othersInGroup(pgid, leader)) {
+            .others => .others,
+            .none => .none,
+            .unknown => .unknown,
+        } else .unknown,
         else => .unknown,
     };
 }
@@ -1645,10 +1784,10 @@ extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
 extern "c" fn pause() c_int;
 
 test "a descendant that escaped the process group is still killed" {
-    // Reach past the process group is Linux's and Darwin's: elsewhere conduit
-    // has no cheap way to list a process's children, and the group is the
-    // whole of the reach (`childrenOf`).
-    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+    // Reach past the process group is Linux's, Darwin's and 64-bit FreeBSD's:
+    // elsewhere conduit has no cheap way to list a process's children, and
+    // the group is the whole of the reach (`childrenOf`).
+    if (builtin.target.os.tag != .linux and !builtin.target.os.tag.isDarwin() and !(builtin.target.os.tag == .freebsd and @sizeOf(usize) == 8)) return error.SkipZigTest;
     // A correctness test only: there is deliberately no clock or latency
     // assertion in it. The first child makes a group, its child leaves that
     // group and session, and the same two-part signal `Child.kill` uses must

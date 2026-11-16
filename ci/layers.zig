@@ -46,7 +46,7 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/host_name.zig",
         "src/freebsd.zig",
         "src/freebsd.zig",
-    "src/memory.zig",
+        "src/memory.zig",
         "src/child/output.zig",
         "src/child/stdio_plan.zig",
         "src/tree.zig",
