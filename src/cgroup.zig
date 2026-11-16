@@ -132,6 +132,10 @@ test "a boot identity is a whole UUID and nothing else" {
     try std.testing.expect(parseBootIdentity("0f6c1c1e-8a3b-4d2e-9f10-2b7a5c4d3e2g") == null);
     if (comptime supported) {
         if (bootIdentity()) |boot| try std.testing.expect(parseBootIdentity(&boot) != null);
+    } else if (comptime @import("freebsd.zig").supported) {
+        // FreeBSD's is its boot time, not a UUID: always there, and one per boot.
+        const boot = bootIdentity() orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(&boot, &(bootIdentity() orelse return error.TestUnexpectedResult));
     } else try std.testing.expect(bootIdentity() == null);
 }
 

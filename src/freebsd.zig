@@ -288,13 +288,23 @@ test "this process becomes a reaper of an empty tree, and the boot it runs in ha
     try std.testing.expectEqualStrings(&boot, &(bootIdentity() orelse return error.TestUnexpectedResult));
 }
 
+/// What a test compares the table with; std declares neither.
+const own = struct {
+    extern "c" fn getpgrp() posix.pid_t;
+    extern "c" fn getsid(pid: posix.pid_t) posix.pid_t;
+};
+
 test "the table's entry for this process names it, its parent, group and session, and when it started" {
     if (!supported) return error.SkipZigTest;
     const self = c.getpid();
     const me = process(self) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(self, me.pid);
     try std.testing.expectEqual(c.getppid(), me.parent);
-    try std.testing.expect(me.group > 0 and me.session > 0);
+    // The group and session the kernel answers for this process itself. Not
+    // "above zero": a process whose ancestry never called setsid, as under a
+    // first process that is not FreeBSD's init, is in session 0, proc0's.
+    try std.testing.expectEqual(own.getpgrp(), me.group);
+    try std.testing.expectEqual(own.getsid(0), me.session);
     try std.testing.expect(!me.zombie);
     try std.testing.expect(me.start_seconds > 0 and me.start_microseconds < 1_000_000);
     try std.testing.expect(me.resident_pages > 0 and me.max_resident_kib > 0);

@@ -24,9 +24,11 @@ const script = if (is_windows) struct {
     const read_then_exit_5 = [_][]const u8{ "/bin/sh", "-c", "read line; exit 5" };
     const sleep_forever = [_][]const u8{ "/bin/sh", "-c", "sleep 30" };
     const emit_both = [_][]const u8{
-        "/bin/sh",                                                "-c",
+        "/bin/sh", "-c",
         // More than a pipe holds on each stream, so neither can be left for after the other.
-        "head -c 300000 /dev/zero; head -c 200000 /dev/zero >&2",
+        // The shell's builtins alone: FreeBSD's runtime image has no head.
+        "k=$(printf '%01000d' 0); i=0; while [ $i -lt 300 ]; do printf %s \"$k\"; i=$((i+1)); done; " ++
+            "i=0; while [ $i -lt 200 ]; do printf %s \"$k\" >&2; i=$((i+1)); done",
     };
 };
 
