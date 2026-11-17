@@ -129,6 +129,9 @@ pub extern "kernel32" fn IsProcessInJob(
     Result: *windows.BOOL,
 ) callconv(.winapi) windows.BOOL;
 
+/// The id of the process `Process` is a handle to.
+pub extern "kernel32" fn GetProcessId(Process: windows.HANDLE) callconv(.winapi) windows.DWORD;
+
 /// Ends every process in the job, each with `uExitCode`.
 pub extern "kernel32" fn TerminateJobObject(
     hJob: windows.HANDLE,
@@ -172,7 +175,7 @@ pub const job_object_basic_process_id_list: c_int = 3;
 pub const JobObjectBasicProcessIdList = extern struct {
     NumberOfAssignedProcesses: windows.DWORD,
     NumberOfProcessIdsInList: windows.DWORD,
-    ProcessIdList: [16]windows.ULONG_PTR,
+    ProcessIdList: [64]windows.ULONG_PTR,
 };
 
 /// `JobObjectExtendedLimitInformation` in `JOBOBJECTINFOCLASS`.

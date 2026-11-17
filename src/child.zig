@@ -1275,6 +1275,16 @@ pub const Child = struct {
         return contained.waitEmpty(io, timeout);
     }
 
+    /// Windows: the tree has ended when the job is empty by its accounting and
+    /// every member held is signaled on its own handle, under one deadline. The
+    /// reap holds the members the job lists before it ends the job and after,
+    /// and each one the job reports joining, since the job's accounting and its
+    /// message that it holds no process both drop a process before its handle
+    /// is signaled. One case is left to the accounting alone: a member that
+    /// joined after the last listing, whose joining report was dropped (a
+    /// completion port short of quota), which this answer may outrun by the
+    /// moment between its leaving the job and its handle being signaled; and,
+    /// past `State.Members.capacity` members, the rest.
     fn waitTreeWindows(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTreeError!bool {
         if (child.state.tree_ended) return true;
         const events = &(child.state.job_events orelse return false);
@@ -1288,6 +1298,17 @@ pub const Child = struct {
             // waiting on an empty job (conduit's release run 44106153440, a port
             // short of quota on windows-latest).
             if (try child.jobEmpty()) {
+                // Empty by its accounting, which drops a process before its
+                // handle is signaled: each member held is waited for too.
+                if (child.liveMember()) |member| {
+                    reactor.wait(io, .{ .object = member }, until) catch |err| switch (err) {
+                        error.Timeout => return false,
+                        error.Canceled => return error.Canceled,
+                        error.Unsupported => unreachable, // unreachable: reactor waits on a process on every `Io`
+                        error.Unexpected => return error.Unexpected,
+                    };
+                    continue;
+                }
                 child.state.tree_ended = true;
                 return true;
             }
@@ -1315,17 +1336,14 @@ pub const Child = struct {
                 error.Canceled => return error.Canceled,
                 // The reports overflowed and some were dropped, the last one
                 // perhaps: what the job holds says whether it was.
-                error.SystemResources => if (try child.jobEmpty()) {
-                    child.state.tree_ended = true;
-                    return true;
-                } else continue,
+                error.SystemResources => continue,
                 error.Unexpected => return error.Unexpected,
             };
-            // A process started, a process exited, a limit was reached: only one
-            // of them is the answer, and the rest are taken and dropped.
-            if (message == .active_process_zero) {
-                child.state.tree_ended = true;
-                return true;
+            // A process that joined is held, to wait for its end; the job's
+            // other reports say only to look again.
+            switch (message) {
+                .new_process => |id| child.holdMember(id),
+                else => {},
             }
         }
     }
@@ -2089,6 +2107,8 @@ pub const Child = struct {
             events.detach(io);
             child.state.job_events = null;
         }
+        for (child.state.members.slice()) |member| windows.CloseHandle(member);
+        child.state.members.len = 0;
         const job = child.state.job orelse return;
         child.state.job = null;
         log.debug("child: closing the job", .{});
@@ -2123,6 +2143,47 @@ pub const Child = struct {
         if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
             return win32.unexpected(windows.GetLastError());
         return counts.ActiveProcesses == 0;
+    }
+
+    /// Holds every process the job lists now, as `holdMember` holds one.
+    fn holdMembers(child: *Child) std.Io.UnexpectedError!void {
+        const job = child.state.job orelse return error.Unexpected;
+        var list: win32.JobObjectBasicProcessIdList = undefined;
+        if (win32.QueryInformationJobObject(job, win32.job_object_basic_process_id_list, &list, @sizeOf(@TypeOf(list)), null) == .FALSE) switch (windows.GetLastError()) {
+            // More than the list holds: the first ones are listed.
+            .MORE_DATA => {},
+            else => |err| return win32.unexpected(err),
+        };
+        for (list.ProcessIdList[0..@min(list.NumberOfProcessIdsInList, list.ProcessIdList.len)]) |listed| {
+            child.holdMember(std.math.cast(windows.DWORD, listed) orelse continue);
+        }
+    }
+
+    /// Opens the process `id` to wait for its end, if it is in the job and not
+    /// held already. One that has gone, or that this process may not open, is
+    /// left to the job's accounting; an id that ended and was given to a
+    /// process outside the job is not held (`IsProcessInJob`).
+    fn holdMember(child: *Child, id: windows.DWORD) void {
+        const job = child.state.job orelse return;
+        const members = &child.state.members;
+        for (members.slice()) |member| if (win32.GetProcessId(member) == id) return;
+        if (members.len == State.Members.capacity) return;
+        const handle = win32.OpenProcess(win32.synchronize | win32.process_query_limited_information, .FALSE, id) orelse return;
+        var in_job: windows.BOOL = .FALSE;
+        if (win32.IsProcessInJob(handle, job, &in_job) == .FALSE or in_job == .FALSE) {
+            windows.CloseHandle(handle);
+            return;
+        }
+        members.handles[members.len] = handle;
+        members.len += 1;
+    }
+
+    /// A held member whose handle is not yet signaled: one that has not ended.
+    fn liveMember(child: *Child) ?windows.HANDLE {
+        for (child.state.members.slice()) |member| {
+            if (win32.WaitForSingleObject(member, 0) != win32.wait_object_0) return member;
+        }
+        return null;
     }
 
     /// What `jobMember` found of the job's processes.
@@ -2192,11 +2253,15 @@ pub const Child = struct {
         }
         pub fn end(child: *Child) Child.TryWaitError!void {
             const job = child.state.job orelse return error.Unexpected;
+            // Every member is held before the job is ended and after, so that
+            // its end is read from its handle, not the job's accounting.
+            try child.holdMembers();
             if (win32.TerminateJobObject(job, 1) == .FALSE)
                 return win32.unexpected(windows.GetLastError());
+            try child.holdMembers();
         }
         pub fn empty(child: *Child) Child.TryWaitError!bool {
-            return child.jobEmpty();
+            return try child.jobEmpty() and child.liveMember() == null;
         }
         /// Whether the job has reported that it holds nothing. Never blocks, and
         /// is not a cancelation point: a cancel stays pending for the next one.
@@ -2212,15 +2277,21 @@ pub const Child = struct {
                     error.Canceled => unreachable, // unreachable: cancelation is blocked above
                     // The reports overflowed and some were dropped, the last one
                     // perhaps: what the job holds says whether it was.
-                    error.SystemResources => if (try child.jobEmpty()) {
+                    error.SystemResources => if (try empty(child)) {
                         state.tree_ended = true;
                         return true;
                     } else continue,
                     error.Unexpected => return error.Unexpected,
                 };
-                if (message == .active_process_zero) {
-                    state.tree_ended = true;
-                    return true;
+                switch (message) {
+                    .new_process => |id| child.holdMember(id),
+                    // Said before the last member's handle is signaled: what
+                    // is held says whether it has ended.
+                    .active_process_zero => if (child.liveMember() == null) {
+                        state.tree_ended = true;
+                        return true;
+                    } else return false,
+                    else => {},
                 }
             }
         }
@@ -2270,7 +2341,13 @@ pub const Child = struct {
         // applied to the whole set, and the exit code is the same 1.
         if (child.state.job) |job| {
             log.debug("child: TerminateJobObject", .{});
-            if (win32.TerminateJobObject(job, 1) != .FALSE) return;
+            // Held before and after, as the reap holds them: `waitTree`
+            // answers from their handles.
+            child.holdMembers() catch {};
+            if (win32.TerminateJobObject(job, 1) != .FALSE) {
+                child.holdMembers() catch {};
+                return;
+            }
         }
         if (win32.TerminateProcess(child.state.id, 1) != .FALSE) return;
         return switch (windows.GetLastError()) {

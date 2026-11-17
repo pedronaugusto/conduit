@@ -65,6 +65,14 @@ job_events: if (is_windows) ?reactor.Job else void,
 /// and answers from it thereafter: the message is posted once and taking it
 /// off the job's reports consumes it.
 tree_ended: if (is_windows) bool else void,
+/// Windows only: the job's members, each opened to wait for its end. The
+/// job's accounting, and the message saying it holds no process, drop a
+/// process before its handle is signaled, so only the handle says it has
+/// ended: the tree has ended when the job is empty and every one of these is
+/// signaled. Held from the job's process list before and after it is ended,
+/// and from each process the job reports joining. Closed with the job.
+members: if (is_windows) Members else void = if (is_windows) .{} else {},
+
 /// The child's process group, when `detach` asked for one. `null` means the
 /// child is in the process group it inherited, and a signal is addressed to
 /// the child alone.
@@ -141,3 +149,17 @@ identity_retired: bool = false,
 
 /// Whether `term` has been written: `reaped` publishes it.
 pub const Reaped = enum(u8) { running, reaped };
+
+/// The handles of the job's members, as many as it holds.
+pub const Members = struct {
+    handles: [capacity]windows.HANDLE = undefined,
+    len: usize = 0,
+
+    /// Past this many members, the rest are answered by the job's
+    /// accounting alone.
+    pub const capacity = 64;
+
+    pub fn slice(m: *const Members) []const windows.HANDLE {
+        return m.handles[0..m.len];
+    }
+};
