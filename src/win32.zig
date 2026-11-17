@@ -164,6 +164,17 @@ pub const JobObjectBasicAccountingInformation = extern struct {
     TotalTerminatedProcesses: windows.DWORD,
 };
 
+/// `JobObjectBasicProcessIdList` in `JOBOBJECTINFOCLASS`.
+pub const job_object_basic_process_id_list: c_int = 3;
+
+/// The ids of the processes in a job, as many as the list holds: a job with
+/// more answers `ERROR_MORE_DATA` with this many filled in.
+pub const JobObjectBasicProcessIdList = extern struct {
+    NumberOfAssignedProcesses: windows.DWORD,
+    NumberOfProcessIdsInList: windows.DWORD,
+    ProcessIdList: [16]windows.ULONG_PTR,
+};
+
 /// `JobObjectExtendedLimitInformation` in `JOBOBJECTINFOCLASS`.
 pub const job_object_extended_limit_information: c_int = 9;
 

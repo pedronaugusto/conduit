@@ -1279,10 +1279,38 @@ pub const Child = struct {
     fn waitTreeWindows(child: *Child, io: std.Io, timeout: std.Io.Timeout) WaitTreeError!bool {
         if (child.state.tree_ended) return true;
         const events = &(child.state.job_events orelse return false);
-        // A job reports more than the one thing, and each message that is not
-        // the answer starts nothing over: the timeout is one deadline.
+        // Each look and each message that is not the answer starts nothing
+        // over: the timeout is one deadline.
         const until = Deadline.of(io, timeout).toTimeout();
         while (true) {
+            // What the job holds is the answer. Its messages say when to look
+            // again, and Windows does not promise to deliver them, the one that
+            // says it holds no process among them: a lost one left this wait
+            // waiting on an empty job (conduit's release run 44106153440, a port
+            // short of quota on windows-latest).
+            if (try child.jobEmpty()) {
+                child.state.tree_ended = true;
+                return true;
+            }
+            // A process's end is signalled on its handle, which Windows does
+            // promise: one member's end is waited for, then the job looked at.
+            switch (try child.jobMember()) {
+                .held => |member| {
+                    defer windows.CloseHandle(member);
+                    reactor.wait(io, .{ .object = member }, until) catch |err| switch (err) {
+                        error.Timeout => return false,
+                        error.Canceled => return error.Canceled,
+                        error.Unsupported => unreachable, // unreachable: reactor waits on a process on every `Io`
+                        error.Unexpected => return error.Unexpected,
+                    };
+                    continue;
+                },
+                // Ended between the list and the open: the job is looked at again.
+                .gone => continue,
+                // Listed and not to be held (a process this one may not open):
+                // its end is the job's message to say.
+                .unopenable => {},
+            }
             const message = events.next(io, until) catch |err| switch (err) {
                 error.Timeout => return false,
                 error.Canceled => return error.Canceled,
@@ -2096,6 +2124,67 @@ pub const Child = struct {
         if (win32.QueryInformationJobObject(job, win32.job_object_basic_accounting_information, &counts, @sizeOf(@TypeOf(counts)), null) == .FALSE)
             return win32.unexpected(windows.GetLastError());
         return counts.ActiveProcesses == 0;
+    }
+
+    /// What `jobMember` found of the job's processes.
+    const JobMember = union(enum) {
+        /// One of them, opened to be waited for; the caller closes it.
+        held: windows.HANDLE,
+        /// Each listed one had ended by the time it was opened.
+        gone,
+        /// One is listed that this process may not open.
+        unopenable,
+    };
+
+    /// One process the job holds now, opened to wait for its end. An id the
+    /// list names may have ended, and been given to a process outside the
+    /// job, by the time it is opened: what is opened is held only if it is
+    /// in this job (`IsProcessInJob`).
+    fn jobMember(child: *Child) std.Io.UnexpectedError!JobMember {
+        const job = child.state.job orelse return error.Unexpected;
+        var list: win32.JobObjectBasicProcessIdList = undefined;
+        if (win32.QueryInformationJobObject(job, win32.job_object_basic_process_id_list, &list, @sizeOf(@TypeOf(list)), null) == .FALSE) switch (windows.GetLastError()) {
+            // More than the list holds: the first ones are listed.
+            .MORE_DATA => {},
+            else => |err| return win32.unexpected(err),
+        };
+        var unopenable = false;
+        for (list.ProcessIdList[0..@min(list.NumberOfProcessIdsInList, list.ProcessIdList.len)]) |listed| {
+            const id = std.math.cast(windows.DWORD, listed) orelse continue;
+            const handle = win32.OpenProcess(win32.synchronize | win32.process_query_limited_information, .FALSE, id) orelse {
+                switch (windows.GetLastError()) {
+                    // No process has the id any more.
+                    .INVALID_PARAMETER => {},
+                    else => unopenable = true,
+                }
+                continue;
+            };
+            var in_job: windows.BOOL = .FALSE;
+            if (win32.IsProcessInJob(handle, job, &in_job) != .FALSE and in_job != .FALSE) return .{ .held = handle };
+            windows.CloseHandle(handle);
+        }
+        return if (unopenable) .unopenable else .gone;
+    }
+
+    test "a job whose messages never came is still seen to hold nothing" {
+        if (!is_windows) return error.SkipZigTest;
+        const io = std.testing.io;
+        var child = try Child.spawn(std.testing.allocator, io, .{
+            .argv = &.{ "cmd.exe", "/c", "exit 0" },
+            .stdio = .ignore,
+        });
+        defer child.deinit(io);
+        // The root's end, on its own handle, with nothing read of the job.
+        try reactor.wait(io, .{ .object = child.state.id }, .none);
+        // Every message the job sent is taken and dropped, as a port short of
+        // quota drops them: the one saying it holds no process among them.
+        const events = &(child.state.job_events orelse return error.TestNoJob);
+        while (true) _ = events.next(io, Deadline.within(.zero)) catch |err| switch (err) {
+            error.Timeout => break,
+            else => |e| return e,
+        };
+        try std.testing.expect(try child.waitTree(io, .none));
+        _ = try child.wait(io);
     }
 
     const WindowsCompletion = struct {
