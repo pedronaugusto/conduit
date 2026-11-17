@@ -13,7 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
-- `Child.JobLimits.process_memory` and `Child.JobLimits.job_memory` are `?aegis.units.Bytes(usize)`, where `process_memory_bytes` and `job_memory_bytes` were `?usize`: the unit is the type's.
+- `Child.JobLimits.process_memory` and `Child.JobLimits.job_memory` are `?aegis.units.Bytes(usize)`, where `Child.JobLimits.process_memory_bytes` and `Child.JobLimits.job_memory_bytes` were `?usize`: the unit is the type's.
 - `CONDUIT_TRACE` is gone: a library reads no environment. What it printed (the spawn path, the job's and the pseudoconsole's closes, a look of `Orphans` that failed) is logged through `std.log` at the debug level under the `conduit` scope, which a program shows or silences by its own level for that scope (`std_options.log_scope_levels`).
 - `CapturedPid.process`, the held identity the struct documents as private, is a FreeBSD process held by its start on 64-bit FreeBSD, where it was one that holds nothing (`captureStarted` was `Unsupported` there).
 - `Orphans.SpinLock` is conduit's yielding spin lock on one aegis cell, with `lock`, `tryLock` and `unlock`: its word is the private `word`, an `aegis.Atomic` of a two-state enum, where it was the field `held`, a `std.atomic.Value(bool)`.
