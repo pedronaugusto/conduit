@@ -43,7 +43,6 @@ const Allocator = std.mem.Allocator;
 const Expect = @import("expect.zig").Expect;
 pub const InputWriter = input_writer.Writer(Child).InputWriter;
 const Pty = @import("pty.zig").Pty;
-const trace = @import("trace.zig");
 const log = std.log.scoped(.conduit);
 const handles = @import("handles.zig");
 const is_windows = builtin.target.os.tag == .windows;
@@ -2092,9 +2091,9 @@ pub const Child = struct {
         }
         const job = child.state.job orelse return;
         child.state.job = null;
-        trace.print("child: closing the job", .{});
+        log.debug("child: closing the job", .{});
         windows.CloseHandle(job);
-        trace.print("child: job closed", .{});
+        log.debug("child: job closed", .{});
     }
 
     fn tryWaitWindows(child: *Child, io: std.Io) TryWaitError!?Term {
@@ -2270,7 +2269,7 @@ pub const Child = struct {
         // `TerminateJobObject` is the same uncatchable end as `TerminateProcess`,
         // applied to the whole set, and the exit code is the same 1.
         if (child.state.job) |job| {
-            trace.print("child: TerminateJobObject", .{});
+            log.debug("child: TerminateJobObject", .{});
             if (win32.TerminateJobObject(job, 1) != .FALSE) return;
         }
         if (win32.TerminateProcess(child.state.id, 1) != .FALSE) return;
@@ -2450,9 +2449,9 @@ pub const Child = struct {
         if (!ended.stdout_truncated or took.nanoseconds < std.Io.Duration.fromMilliseconds(20).nanoseconds or
             took.nanoseconds >= std.Io.Duration.fromSeconds(5).nanoseconds)
         {
-            std.debug.print("drain: stdout truncated {}, took {d} ms, {d} bytes read, the writer {s}\n", .{
+            std.debug.print("drain: stdout truncated {}, took {f}, {d} bytes read, the writer {s}\n", .{
                 ended.stdout_truncated,
-                took.toMilliseconds(),
+                took,
                 collecting.out.written().len,
                 if (try writer.tryWait(io)) |_| "ended" else "running",
             });

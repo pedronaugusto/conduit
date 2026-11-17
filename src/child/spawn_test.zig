@@ -34,7 +34,7 @@ const child_exit = @import("../exit.zig");
 const reactor = @import("reactor");
 const tree = @import("../tree.zig");
 const cgroup = @import("../cgroup.zig");
-const trace = @import("../trace.zig");
+const log = std.log.scoped(.conduit);
 const Watchdog = @import("../testing/support.zig").Watchdog;
 const FaultIo = @import("shakedown").FaultIo;
 
@@ -164,9 +164,9 @@ const Sink = struct {
     /// issued again at once unless the task itself was cancelled.
     fn deinit(sink: *Sink) void {
         sink.stopping.store(true, .release);
-        trace.print("sink: cancelling the reader", .{});
+        log.debug("sink: cancelling the reader", .{});
         sink.group.cancel(io);
-        trace.print("sink: reader joined", .{});
+        log.debug("sink: reader joined", .{});
         sink.bytes.deinit(gpa);
         sink.* = undefined;
     }
@@ -2591,7 +2591,7 @@ test "what a child writes to its terminal reaches the master" {
     // because closing a pseudoconsole waits for its client; `Pty.close` reads
     // the master itself while it does.
 
-    trace.print("master: opening a pair", .{});
+    log.debug("master: opening a pair", .{});
     var pty = try Pty.open(std.testing.allocator, std.testing.io, .{ .rows = 24, .cols = 80 });
     defer pty.close(io);
 
@@ -2602,7 +2602,7 @@ test "what a child writes to its terminal reaches the master" {
     });
     defer child.deinit(io);
     defer reap(&child, io);
-    if (trace.enabled()) trace.print("master: child started, id={d}", .{childId(child)});
+    if (std.log.logEnabled(.debug, .conduit)) log.debug("master: child started, id={d}", .{childId(child)});
     // The one place the two systems want different timing, and the reason
     // `Pty.closeSlave` documents it at length.
     if (!is_windows) pty.closeSlave(io);
@@ -2610,13 +2610,13 @@ test "what a child writes to its terminal reaches the master" {
     var sink: Sink = .{};
     defer sink.deinit();
     try sink.start(pty.readFile());
-    trace.print("master: reading the master", .{});
+    log.debug("master: reading the master", .{});
 
     try sink.expect("on the terminal");
-    trace.print("master: the child said what it was asked to", .{});
+    log.debug("master: the child said what it was asked to", .{});
 
     _ = try child.killWait(io, kill_budget);
-    trace.print("master: reaped", .{});
+    log.debug("master: reaped", .{});
 }
 
 test "a cursor shape the child wrote reaches the master where passthrough was granted" {
@@ -3519,27 +3519,27 @@ test "spawnShell starts the user's shell on a pair" {
     // shell's own `deinit` is what closes the pair, so the sink is declared
     // after it and stopped before it.
 
-    trace.print("shell: opening a pair and starting the shell", .{});
+    log.debug("shell: opening a pair and starting the shell", .{});
     var shell = try conduit.spawnShell(gpa, io, .{
         .args = &script.shell_arguments,
         .size = .{ .rows = 40, .cols = 132 },
     });
     defer shell.deinit(io);
     defer reap(shell.child(), io);
-    if (trace.enabled()) trace.print("shell: started, id={d}", .{childId(shell.child().*)});
+    if (std.log.logEnabled(.debug, .conduit)) log.debug("shell: started, id={d}", .{childId(shell.child().*)});
 
     try testing.expectEqual(@as(u16, 40), (try shell.pty().size(std.testing.io)).rows);
 
     var sink: Sink = .{};
     defer sink.deinit();
     try sink.start(shell.pty().readFile());
-    trace.print("shell: reading the master", .{});
+    log.debug("shell: reading the master", .{});
 
     try sink.expect("hi");
-    trace.print("shell: the shell said what it was asked to", .{});
+    log.debug("shell: the shell said what it was asked to", .{});
 
     _ = try shell.child().killWait(io, kill_budget);
-    trace.print("shell: reaped", .{});
+    log.debug("shell: reaped", .{});
 }
 
 /// The child's operating-system name as a number, for a trace line that has to

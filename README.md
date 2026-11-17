@@ -599,10 +599,10 @@ for a child it is handing on. POSIX only: either on Windows is
 `error.Unsupported`. Supplementary groups stay the parent's, since `setgroups`
 needs the group database a fork child may not read.
 
-`job_limits` is the Windows answer, and a different one: `process_memory_bytes`,
-`job_memory_bytes`, `active_processes` and `cpu_rate` go on the job object
-every child there already has, so they bound the child *and everything it
-starts* rather than the one process. Windows only; anywhere else it is
+`job_limits` is the Windows answer, and a different one: `process_memory`,
+`job_memory` (each an `aegis.units.Bytes`), `active_processes` and `cpu_rate`
+go on the job object every child there already has, so they bound the child
+*and everything it starts* rather than the one process. Windows only; anywhere else it is
 `error.Unsupported`. `cpu_rate` is hundredths of a percent of the whole
 machine's processor time, from 1 through 10,000; an out-of-range value is
 `error.InvalidJobLimit`.
@@ -995,10 +995,11 @@ defer routed.destroy();
 The suite runs conduit's own children, terminals, signals, timed waits and
 `Reaper` this way too, and checks that one seed makes one run.
 
-`bay unit` is the suite without the examples, `-Dtest-filter` runs part
-of it, and `CONDUIT_TRACE` in the environment logs what this package asked
-the operating system for, through `std.log` at the info level under the
-`conduit` scope, which the suite prints.
+`bay unit` is the suite without the examples, and `-Dtest-filter` runs part
+of it. What this package asks the operating system for is logged through
+`std.log` at the debug level under the `conduit` scope: a program sees it by
+its own log level for that scope (`std_options.log_scope_levels`), and a
+library reads no environment to decide.
 
 ## Licence
 

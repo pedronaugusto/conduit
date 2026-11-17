@@ -14,7 +14,7 @@ const Child = @import("contract.zig");
 const State = @import("State.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
-const trace = @import("../trace.zig");
+const log = std.log.scoped(.conduit);
 const tty = @import("conduit.tty");
 const win32 = @import("win32");
 const windows_search = @import("windows/search.zig");
@@ -234,8 +234,8 @@ fn describeChild(
             // the list it hands over every inheritable handle this process
             // holds.
             if (inheritable) |handles| try list.setHandleList(handles);
-            if (trace.enabled()) {
-                trace.print("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)}); // safe: printed, never dereferenced
+            if (std.log.logEnabled(.debug, .conduit)) {
+                log.debug("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)}); // safe: printed, never dereferenced
             }
             attributes.* = list;
             startup.StartupInfo.cb = @sizeOf(win32.StartupInfoExW);
@@ -432,8 +432,8 @@ fn traceSpawn(
     flags: windows.CreateProcessFlags,
     inherit_handles: windows.BOOL,
 ) void {
-    if (trace.enabled()) {
-        trace.print(
+    if (std.log.logEnabled(.debug, .conduit)) {
+        log.debug(
             "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
             .{
                 @tagName(options.stdio),
@@ -456,13 +456,13 @@ fn traceSpawn(
         for (inherited, 0..) |slot, index| {
             const name = ([3][]const u8{ "stdin", "stdout", "stderr" })[index];
             if (slot) |handle| {
-                trace.print("spawn: parent {s}=0x{x}, console: {s}", .{
+                log.debug("spawn: parent {s}=0x{x}, console: {s}", .{
                     name,
                     @intFromPtr(handle), // safe: printed, never dereferenced
                     if (isConsole(handle)) "yes" else "no",
                 });
             } else {
-                trace.print("spawn: parent {s} is not there", .{name});
+                log.debug("spawn: parent {s} is not there", .{name});
             }
         }
     }
@@ -520,13 +520,13 @@ fn createJob(io: std.Io, limits: Child.JobLimits) SpawnError!Job {
         flags |= win32.job_object_limit_active_process;
         extended.BasicLimitInformation.ActiveProcessLimit = most;
     }
-    if (limits.process_memory_bytes) |bytes| {
+    if (limits.process_memory) |bytes| {
         flags |= win32.job_object_limit_process_memory;
-        extended.ProcessMemoryLimit = bytes;
+        extended.ProcessMemoryLimit = bytes.raw();
     }
-    if (limits.job_memory_bytes) |bytes| {
+    if (limits.job_memory) |bytes| {
         flags |= win32.job_object_limit_job_memory;
-        extended.JobMemoryLimit = bytes;
+        extended.JobMemoryLimit = bytes.raw();
     }
     extended.BasicLimitInformation.LimitFlags = flags;
     if (win32.SetInformationJobObject(

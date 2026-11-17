@@ -35,7 +35,7 @@ const aegis = @import("aegis");
 const posix = std.posix;
 const c = std.c;
 const windows = std.os.windows;
-const trace = @import("trace.zig");
+const log = std.log.scoped(.conduit);
 const handles = @import("handles.zig");
 const tty = @import("conduit.tty");
 
@@ -373,17 +373,17 @@ pub const Pty = struct {
             // way the host's last write can fail rather than wait, and a `std.Io`
             // with no concurrency to offer would have nowhere to put a reader
             // either.
-            trace.print("pty: no task to drain with; closing the master first", .{});
+            log.debug("pty: no task to drain with; closing the master first", .{});
             pty.closeMaster(io);
             pty.closeSlave(io);
             return;
         };
-        trace.print("pty: draining the master across the close", .{});
+        log.debug("pty: draining the master across the close", .{});
         pty.closeSlave(io);
         // The host has gone, so its end of the pipe is closed and the drain has
         // finished; this joins it.
         drain.cancel(io);
-        trace.print("pty: drain joined", .{});
+        log.debug("pty: drain joined", .{});
         pty.closeMaster(io);
     }
 
@@ -398,7 +398,7 @@ pub const Pty = struct {
                 error.Canceled => return error.Canceled,
                 // The host has gone and its end with it: nothing is left to drain.
                 error.EndOfStream => return,
-                else => return trace.print("pty: the drain stopped at {t}", .{err}),
+                else => return log.debug("pty: the drain stopped at {t}", .{err}),
             };
         }
     }
@@ -435,11 +435,11 @@ pub const Pty = struct {
         const slave = pty.slave orelse return;
         pty.slave = null;
         if (is_windows) {
-            if (trace.enabled()) {
-                trace.print("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)}); // safe: printed, never dereferenced
+            if (std.log.logEnabled(.debug, .conduit)) {
+                log.debug("pty: ClosePseudoConsole(0x{x})", .{@intFromPtr(slave)}); // safe: printed, never dereferenced
             }
             win32.ClosePseudoConsole(slave);
-            trace.print("pty: ClosePseudoConsole returned", .{});
+            log.debug("pty: ClosePseudoConsole returned", .{});
             return;
         }
         held.close(io, slave);
@@ -471,8 +471,8 @@ pub const Pty = struct {
     /// console host goes, so no reader of the caller's has to stay for it.
     pub fn closeMaster(pty: *Pty, io: std.Io) void {
         defer if (is_windows) pty.releaseGeometry();
-        trace.print("pty: closing the master ends", .{});
-        defer trace.print("pty: master ends closed", .{});
+        log.debug("pty: closing the master ends", .{});
+        defer log.debug("pty: master ends closed", .{});
         // The same handle twice on POSIX, so it is closed once.
         const same = pty.read != null and pty.write != null and pty.read.? == pty.write.?;
         if (pty.read) |handle| {
@@ -679,7 +679,7 @@ pub const Pty = struct {
                     } else if (granted.resize_quirk) {
                         granted.resize_quirk = false;
                     } else return error.Unexpected;
-                    trace.print("pty: CreatePseudoConsole refused a console option; asking again", .{});
+                    log.debug("pty: CreatePseudoConsole refused a console option; asking again", .{});
                 },
                 // `HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY)`. Every other
                 // failure here is a bug in this package's arguments rather than a
@@ -689,8 +689,8 @@ pub const Pty = struct {
             }
         }
 
-        if (trace.enabled()) {
-            trace.print("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}, flags=0x{x}", .{
+        if (std.log.logEnabled(.debug, .conduit)) {
+            log.debug("pty: CreatePseudoConsole gave hpcon=0x{x}, {d}x{d}, flags=0x{x}", .{
                 @intFromPtr(console), // safe: printed, never dereferenced
                 geometry.rows,
                 geometry.cols,

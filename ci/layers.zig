@@ -30,9 +30,6 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/channel.zig",
         "src/exit.zig",
     } },
-    .{ .name = "tracing", .patterns = &.{
-        "src/trace.zig",
-    } },
     .{ .name = "terminals", .patterns = &.{
         "src/pty.zig",
     } },
@@ -122,7 +119,6 @@ pub const required = [_][]const u8{
     "src/channel.zig",
     "src/exit.zig",
     "src/win32.zig",
-    "src/trace.zig",
     "src/pty.zig",
     "src/expect.zig",
     "src/child/contract.zig",

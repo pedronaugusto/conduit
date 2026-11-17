@@ -100,7 +100,6 @@ const c = std.c;
 const Allocator = std.mem.Allocator;
 
 const tree = @import("tree.zig");
-const trace = @import("trace.zig");
 const log = std.log.scoped(.conduit);
 const reactor = @import("reactor");
 const Deadline = @import("conduit.tty").Deadline;
@@ -452,7 +451,7 @@ pub const Orphans = struct {
         defer orphans.lock.unlock();
         // An event has no caller to tell, and what this look missed the next
         // one, or `count` or `killAll`, finds and reports: the trace says so.
-        orphans.look(io) catch |err| trace.print("orphans: a look after an event failed ({t}); the next one looks again", .{err});
+        orphans.look(io) catch |err| log.debug("orphans: a look after an event failed ({t}); the next one looks again", .{err});
         orphans.reapEnded();
     }
 

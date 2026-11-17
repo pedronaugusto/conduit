@@ -328,12 +328,12 @@ pub const Descendants = enum {
 /// A `JobLimits` with anything set is `error.Unsupported` on POSIX, where
 /// `resource_limits` is the option that exists.
 pub const JobLimits = struct {
-    /// The most memory any one process in the job may commit, in bytes.
+    /// The most memory any one process in the job may commit.
     /// `JOB_OBJECT_LIMIT_PROCESS_MEMORY`.
-    process_memory_bytes: ?usize = null,
-    /// The most memory every process in the job may commit between them, in
-    /// bytes. `JOB_OBJECT_LIMIT_JOB_MEMORY`.
-    job_memory_bytes: ?usize = null,
+    process_memory: ?aegis.units.Bytes(usize) = null,
+    /// The most memory every process in the job may commit between them.
+    /// `JOB_OBJECT_LIMIT_JOB_MEMORY`.
+    job_memory: ?aegis.units.Bytes(usize) = null,
     /// The most processes the job may hold at once, the child itself
     /// included. `JOB_OBJECT_LIMIT_ACTIVE_PROCESS`: a process the job is
     /// already full for does not start, so a child given 1 cannot start
@@ -349,8 +349,8 @@ pub const JobLimits = struct {
     /// Whether any of them asks for a limit. `spawn` sets nothing at all when
     /// this is false, which is what keeps the default free.
     pub fn any(limits: JobLimits) bool {
-        return limits.process_memory_bytes != null or
-            limits.job_memory_bytes != null or
+        return limits.process_memory != null or
+            limits.job_memory != null or
             limits.active_processes != null or
             limits.cpu_rate != null;
     }

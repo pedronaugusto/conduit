@@ -295,7 +295,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .optimize = optimize,
             .link_libc = link_libc,
         },
-        // What `CONDUIT_TRACE` prints is at the info level.
+        // conduit's own lines at the info level print in the suite's output.
         .test_log_level = .info,
     });
     const containment = preflight.addCheck(b, p, "check-containment", "ci/containment.zig");
