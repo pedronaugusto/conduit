@@ -2339,10 +2339,12 @@ pub const Child = struct {
         // applied to the whole set, and the exit code is the same 1.
         if (child.state.job) |job| {
             // Held before and after, as the reap holds them: `waitTree`
-            // answers from their handles.
-            child.holdMembers() catch {};
+            // answers from their handles. A list that cannot be read is told,
+            // and the kill goes on: a member not held is still ended with the
+            // job, though a wait may then answer before its handle is signaled.
+            child.holdMembers() catch |err| log.warn("the job's members could not be listed before its end ({t})", .{err});
             if (win32.TerminateJobObject(job, 1) != .FALSE) {
-                child.holdMembers() catch {};
+                child.holdMembers() catch |err| log.warn("the job's members could not be listed after its end ({t})", .{err});
                 return;
             }
         }
