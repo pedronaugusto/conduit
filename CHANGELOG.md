@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `findProgram` returns the named `FindProgramError` (`OutOfMemory`, `Canceled`, `SystemResources`), where it returned `Allocator.Error`: a cancel during the search, and the system out of memory or descriptors, are returned, where they read as a program that is not there.
 - The build option `fork-spawn` is no longer the package's: a consumer's `conduit` always hands a spawn that needs nothing between the fork and the exec to `posix_spawn` where the platform has it. `bay test -Dfork-spawn` still runs the suite down the fork-and-exec path, an option of the development build alone. A library's option is a second instance of it for every distinct argument set. Migration: drop `.@"fork-spawn"` from `b.dependency("conduit", ...)`.
 - `Child.JobLimits.process_memory` and `Child.JobLimits.job_memory` are `?aegis.units.Bytes(usize)`, where `Child.JobLimits.process_memory_bytes` and `Child.JobLimits.job_memory_bytes` were `?usize`: the unit is the type's.
 - `CONDUIT_TRACE` is gone, and what it printed with it (the spawn path, the job's and the pseudoconsole's closes): a library reads no environment, and prints no debug lines into a program's Debug build. A look of `Orphans` that failed is logged through `std.log` at the debug level under the `conduit` scope, as an error nothing can return.
@@ -52,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A spawn on Windows that searches a custom environment's PATH runs the search with cancelation blocked: a cancel waits for the caller's next cancelation point, where it read as a directory that could not be had and was left out of the search.
 - On Windows, a wait for everything a child started (`Child.waitTree`, and the reap of a child whose job is ended: `wait`, a `Reaper`) answers from what the job holds, where it waited for the job's message that it holds no process. Windows does not promise to deliver a job's messages, and a lost one left the wait waiting on an empty job with no deadline: a `Reaper` ending a child that ignored the request hung (release run 44106153440, windows-latest, a port short of quota). The wait now looks at the job's own count, and while it holds a process waits on that process's handle, whose end Windows does signal; a process this one may not open still leaves it to the job's message.
 - The tests hold to each system's own defaults, where on FreeBSD they asked for another's: FreeBSD lowers a soft limit above the hard one rather than refusing it; a system may have no host name; and the descriptor listing a child is judged by needs a `/dev/fd` that lists them (fdescfs on FreeBSD). Tests only.
 - On macOS, a process's children are listed into a buffer whose size `proc_listchildpids` takes as a `c_int`: a count past what that holds is `SystemResources`, as the group's listing already refused it, where the cast trapped.

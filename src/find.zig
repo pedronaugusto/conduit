@@ -14,6 +14,9 @@ const is_windows = builtin.target.os.tag == .windows;
 const windows_search = @import("child/windows/search.zig");
 const child_windows = @import("child/windows.zig");
 
+/// What `findProgram` fails with.
+pub const FindProgramError = Allocator.Error || std.Io.Cancelable || error{SystemResources};
+
 /// Where `name` resolves for a child given `environ`, by the rules
 /// `Child.spawn` uses with `path_search = .child_environ`, or `null` when it
 /// names nothing that could be run.
@@ -30,13 +33,17 @@ const child_windows = @import("child/windows.zig");
 /// extension; a name with a separator or a drive is itself if it is a file.
 /// Batch scripts are refused here as they are by spawn.
 ///
-/// The path is allocated with `gpa` and is the caller's.
+/// The path is allocated with `gpa` and is the caller's. A candidate that
+/// cannot be looked at (missing, not a directory on the way, denied, a link
+/// loop, a name the system refuses) is passed over, as `execvp` passes it
+/// over; a cancel is returned, and so is the system running out of memory or
+/// descriptors (`SystemResources`), which says nothing about the candidate.
 pub fn findProgram(
     gpa: Allocator,
     io: std.Io,
     environ: *const std.process.Environ.Map,
     name: []const u8,
-) Allocator.Error!?[]u8 {
+) FindProgramError!?[]u8 {
     if (name.len == 0) return null;
     if (is_windows) {
         var arena_state: std.heap.ArenaAllocator = .init(gpa);
@@ -51,7 +58,7 @@ pub fn findProgram(
     }
 
     if (std.mem.findScalar(u8, name, '/') != null) {
-        return if (runnable(io, name)) try gpa.dupe(u8, name) else null;
+        return if (try runnable(io, name)) try gpa.dupe(u8, name) else null;
     }
     // As `spawn`'s own search: what `confstr(_CS_PATH)` reports on the
     // systems this package supports.
@@ -65,7 +72,7 @@ pub fn findProgram(
             error.NoSpaceLeft => null,
         };
         const candidate = fits orelse continue;
-        if (runnable(io, candidate)) {
+        if (try runnable(io, candidate)) {
             const program = try gpa.dupe(u8, candidate);
             return program;
         }
@@ -75,9 +82,13 @@ pub fn findProgram(
 
 /// A program that already names a Windows path still has to be a file.
 /// This check uses the Io filesystem, so it is exercised on every host.
-fn directWindowsProgram(gpa: Allocator, io: std.Io, name: []const u8) Allocator.Error!?[]u8 {
+fn directWindowsProgram(gpa: Allocator, io: std.Io, name: []const u8) FindProgramError!?[]u8 {
     if (windows_search.isBatchFile(name)) return null;
-    const stat = std.Io.Dir.cwd().statFile(io, name, .{}) catch return null;
+    const stat = std.Io.Dir.cwd().statFile(io, name, .{}) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        error.SystemResources, error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded => return error.SystemResources,
+        else => return null,
+    };
     if (stat.kind == .directory) return null;
     const program = try gpa.dupe(u8, name);
     return program;
@@ -88,13 +99,36 @@ fn directWindowsProgram(gpa: Allocator, io: std.Io, name: []const u8) Allocator.
 /// about, and runs nothing; and a privileged process passes `access` on a
 /// file with no execute bit at all on some file systems, where `execve`
 /// would still refuse it.
-fn runnable(io: std.Io, path: []const u8) bool {
+fn runnable(io: std.Io, path: []const u8) FindProgramError!bool {
     const cwd = std.Io.Dir.cwd();
-    const st = cwd.statFile(io, path, .{}) catch return false;
+    const st = cwd.statFile(io, path, .{}) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        error.SystemResources, error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded => return error.SystemResources,
+        else => return false,
+    };
     if (st.kind == .directory) return false;
     if (st.permissions.toMode() & 0o111 == 0) return false;
-    cwd.access(io, path, .{ .execute = true }) catch return false;
+    cwd.access(io, path, .{ .execute = true }) catch |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        error.SystemResources => return error.SystemResources,
+        else => return false,
+    };
     return true;
+}
+
+test "a cancel during the search is returned, never read as a program that is not there" {
+    if (is_windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const FaultIo = @import("shakedown").FaultIo;
+    var environ: std.process.Environ.Map = .init(testing.allocator);
+    defer environ.deinit();
+    try environ.put("PATH", "/usr/bin:/bin");
+    const faults = try FaultIo.init(testing.allocator, testing.io, .{ .plan = &.{.{
+        .at = .{ .nth = .{ .call = .dirStatFile, .n = 1 } },
+        .fault = .cancel,
+    }} });
+    defer faults.deinit();
+    try testing.expectError(error.Canceled, findProgram(testing.allocator, faults.io(), &environ, "sh"));
 }
 
 test "a program on PATH is found where the search finds it, and a missing one is not" {

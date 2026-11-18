@@ -334,7 +334,16 @@ fn applicationName(
     // A name with no UTF-16 spelling is refused as such, not as a file that
     // could not be found.
     _ = try std.unicode.wtf8ToWtf16LeAllocZ(arena, program);
-    const found = try findBare(arena, io, program, environment) orelse return error.FileNotFound;
+    const found = found: {
+        // A spawn is no cancelation point: the search runs with cancelation
+        // blocked, and a cancel waits for the caller's next point.
+        const protection = io.swapCancelProtection(.blocked);
+        defer _ = io.swapCancelProtection(protection);
+        break :found findBare(arena, io, program, environment) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Canceled => aegis.assert.never("the search runs with cancelation blocked"),
+        };
+    } orelse return error.FileNotFound;
     return (try std.unicode.wtf8ToWtf16LeAllocZ(arena, found)).ptr;
 }
 
@@ -347,16 +356,21 @@ pub fn findBare(
     io: std.Io,
     program: []const u8,
     environment: *const std.process.Environ.Map,
-) Allocator.Error!?[]const u8 {
+) (Allocator.Error || std.Io.Cancelable)!?[]const u8 {
     var path_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    // A directory that cannot be had is left out of the search; a cancel is returned.
     const executable_dir: ?[]const u8 = if (std.process.executableDirPath(io, &path_buffer)) |len|
         try arena.dupe(u8, path_buffer[0..len])
-    else |_|
-        null;
+    else |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => null,
+    };
     const current_dir: ?[]const u8 = if (std.process.currentPath(io, &path_buffer)) |len|
         try arena.dupe(u8, path_buffer[0..len])
-    else |_|
-        null;
+    else |err| switch (err) {
+        error.Canceled => return error.Canceled,
+        else => null,
+    };
     const system = std.unicode.wtf16LeToWtf8Alloc(arena, windows.getSystemDirectoryWtf16Le()) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
