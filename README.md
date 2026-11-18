@@ -996,10 +996,7 @@ The suite runs conduit's own children, terminals, signals, timed waits and
 `Reaper` this way too, and checks that one seed makes one run.
 
 `bay unit` is the suite without the examples, and `-Dtest-filter` runs part
-of it. What this package asks the operating system for is logged through
-`std.log` at the debug level under the `conduit` scope: a program sees it by
-its own log level for that scope (`std_options.log_scope_levels`), and a
-library reads no environment to decide.
+of it.
 
 ## Licence
 

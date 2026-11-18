@@ -14,7 +14,6 @@ const Child = @import("contract.zig");
 const State = @import("State.zig");
 const command_line = @import("command_line.zig");
 const stdio_plan = @import("stdio_plan.zig");
-const log = std.log.scoped(.conduit);
 const tty = @import("conduit.tty");
 const win32 = @import("win32");
 const windows_search = @import("windows/search.zig");
@@ -74,8 +73,6 @@ pub fn spawn(gpa: Allocator, io: std.Io, options: SpawnOptions, state: *State) S
     try describeChild(arena, options, given, extras.handles, &startup, &flags, &attributes);
 
     const inherit_handles = inheritHandles(options, given, extras.duplicates);
-
-    traceSpawn(options, &startup, flags, inherit_handles);
 
     // The child is started suspended and put in its job before it runs, so
     // there is no moment in which it exists outside one -- a child that got as
@@ -234,9 +231,6 @@ fn describeChild(
             // the list it hands over every inheritable handle this process
             // holds.
             if (inheritable) |handles| try list.setHandleList(handles);
-            if (std.log.logEnabled(.debug, .conduit)) {
-                log.debug("spawn: pseudoconsole attribute set, hpcon=0x{x}", .{@intFromPtr(console)}); // safe: printed, never dereferenced
-            }
             attributes.* = list;
             startup.StartupInfo.cb = @sizeOf(win32.StartupInfoExW);
             startup.lpAttributeList = list.raw;
@@ -422,50 +416,6 @@ fn refuseWhatWindowsCannotDo(options: SpawnOptions) SpawnError!void {
     // `SpawnOptions.job_limits` is the option that reaches it. Accepting the
     // POSIX list and setting nothing would be the worst of both.
     if (options.resource_limits.len != 0) return error.Unsupported;
-}
-
-/// What this package asked the operating system for, when `CONDUIT_TRACE` says
-/// to print it.
-fn traceSpawn(
-    options: SpawnOptions,
-    startup: *const win32.StartupInfoExW,
-    flags: windows.CreateProcessFlags,
-    inherit_handles: windows.BOOL,
-) void {
-    if (std.log.logEnabled(.debug, .conduit)) {
-        log.debug(
-            "spawn: child_windows.spawn, stdio={s}, cb={d}, flags=0x{x:0>8}, si_flags=0x{x:0>8}, inherit={s}, attributes={s}",
-            .{
-                @tagName(options.stdio),
-                startup.StartupInfo.cb,
-                @as(u32, @bitCast(flags)),
-                startup.StartupInfo.dwFlags,
-                // Not `@tagName`. A Windows `BOOL` names only `FALSE`; every
-                // other value, `TRUE` included, is an unnamed one of a
-                // non-exhaustive enum, and asking for the name of one of those
-                // ends the process.
-                if (inherit_handles.toBool()) "TRUE" else "FALSE",
-                if (startup.lpAttributeList == null) "none" else "present",
-            },
-        );
-        // Whether this process has a console of its own is the question behind
-        // "where did the child's output go": a console child with no console
-        // flags and no pseudoconsole inherits its parent's, and one whose
-        // parent has none gets a new one nobody can see.
-        const inherited = inheritedHandles();
-        for (inherited, 0..) |slot, index| {
-            const name = ([3][]const u8{ "stdin", "stdout", "stderr" })[index];
-            if (slot) |handle| {
-                log.debug("spawn: parent {s}=0x{x}, console: {s}", .{
-                    name,
-                    @intFromPtr(handle), // safe: printed, never dereferenced
-                    if (isConsole(handle)) "yes" else "no",
-                });
-            } else {
-                log.debug("spawn: parent {s} is not there", .{name});
-            }
-        }
-    }
 }
 
 //======================================================================

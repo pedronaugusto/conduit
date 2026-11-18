@@ -2111,9 +2111,7 @@ pub const Child = struct {
         child.state.members.len = 0;
         const job = child.state.job orelse return;
         child.state.job = null;
-        log.debug("child: closing the job", .{});
         windows.CloseHandle(job);
-        log.debug("child: job closed", .{});
     }
 
     fn tryWaitWindows(child: *Child, io: std.Io) TryWaitError!?Term {
@@ -2340,7 +2338,6 @@ pub const Child = struct {
         // `TerminateJobObject` is the same uncatchable end as `TerminateProcess`,
         // applied to the whole set, and the exit code is the same 1.
         if (child.state.job) |job| {
-            log.debug("child: TerminateJobObject", .{});
             // Held before and after, as the reap holds them: `waitTree`
             // answers from their handles.
             child.holdMembers() catch {};
