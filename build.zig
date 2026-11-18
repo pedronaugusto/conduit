@@ -1,8 +1,9 @@
 const std = @import("std");
 
-/// What a project that depends on conduit builds: the `conduit` module, the
-/// `conduit.tty` module, and the build-time option `fork-spawn`. The tests, the
-/// examples and the gate are `dev`'s.
+/// What a project that depends on conduit builds: the `conduit` module and
+/// the `conduit.tty` module, with no build options (a library's option is a
+/// second instance of it for every distinct argument set). The tests, the
+/// examples, the gate and the `fork-spawn` path the tests take are `dev`'s.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -24,18 +25,11 @@ pub fn build(b: *std.Build) void {
     // The module.
     //=====================================================================
 
-    // The one build-time decision this package has. `Child.spawn` hands a
-    // spawn that needs nothing done between the fork and the exec to
-    // `posix_spawn`, which is a second implementation of the same contract;
-    // this turns it off, so that CI can run the whole suite down both paths
-    // and prove they produce the same child.
-    const fork_spawn = b.option(
-        bool,
-        "fork-spawn",
-        "Always fork and exec, never posix_spawn",
-    ) orelse false;
-    const conduit_options = b.addOptions();
-    conduit_options.addOption(bool, "force_fork_spawn", fork_spawn);
+    // `Child.spawn` hands a spawn that needs nothing done between the fork
+    // and the exec to `posix_spawn` where the platform has it. Always so for
+    // a consumer; only `dev`'s tests take the fork-and-exec path in its place
+    // (`-Dfork-spawn`), so that CI runs the whole suite down both paths.
+    const conduit_options = forkSpawnOptions(b, false);
 
     // The terminal primitives -- raw mode, the window size, the terminal's
     // name and its foreground group -- as a module of their own, for a
@@ -98,11 +92,13 @@ pub fn dev(b: *std.Build, tools: type) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const link_libc = target.result.os.tag != .windows;
-    // See `build`: the one build-time option of the package, passed through.
-    forked = b.option(
+    // The suite's second path: every spawn forks and execs, never
+    // posix_spawn, so CI proves both produce the same child. The tests'
+    // own module takes it; the package a consumer gets never does.
+    const fork_spawn = b.option(
         bool,
         "fork-spawn",
-        "Always fork and exec, never posix_spawn",
+        "Run the tests always forking and executing, never through posix_spawn",
     ) orelse false;
     const package = conduitPackage(b, target, optimize);
     const p = package.builder;
@@ -142,7 +138,7 @@ pub fn dev(b: *std.Build, tools: type) void {
             .{ .name = "conduit.tty", .module = tty_module },
             .{ .name = "seam", .module = module.import_table.get("seam").? },
             .{ .name = "win32", .module = module.import_table.get("win32").? },
-            .{ .name = "conduit_options", .module = module.import_table.get("conduit_options").? },
+            .{ .name = "conduit_options", .module = forkSpawnOptions(b, fork_spawn).createModule() },
         },
     });
     // The tests' clocks, fault plans and counts, and the simulated route: the
@@ -315,12 +311,16 @@ const example_sources = [_][]const u8{
     "examples/usage.zig",
 };
 
-/// `-Dfork-spawn`, as `dev` read it, for the benchmarks' imports.
-var forked: bool = false;
+/// The options file spawn.zig reads: whether every spawn forks and execs.
+fn forkSpawnOptions(b: *std.Build, fork_spawn: bool) *std.Build.Step.Options {
+    const options = b.addOptions();
+    options.addOption(bool, "force_fork_spawn", fork_spawn);
+    return options;
+}
 
-/// conduit as the development build has it: the package, with the option passed on.
+/// conduit as a consumer gets it, with its default options.
 fn conduitPackage(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize) *std.Build.Dependency {
-    return b.dependency("conduit", .{ .target = target, .optimize = optimize, .@"fork-spawn" = forked });
+    return b.dependency("conduit", .{ .target = target, .optimize = optimize });
 }
 
 /// Build each benchmark's imports in its own optimization mode.
