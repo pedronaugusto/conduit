@@ -28,12 +28,9 @@ pub const Terminal = struct {
     slave: OwnedFile,
 };
 
-/// A file its one owner closes, with `deinit(io)`, or takes out with `take`.
-pub const OwnedFile = aegis.own.OwnedIo(Io.File, closeFile);
-
-fn closeFile(file: *Io.File, io: Io) void {
-    file.close(io);
-}
+/// A file its one owner closes, with `deinit(io)`, or takes out with `take`:
+/// aegis's `own.File`, the type `held.OwnedFile` is too.
+pub const OwnedFile = aegis.own.File;
 
 /// How a child ended, as `std.process` reports it.
 pub const Term = std.process.Child.Term;

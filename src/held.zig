@@ -10,12 +10,10 @@ const std = @import("std");
 const aegis = @import("aegis");
 
 /// A file its owner closes, once: `deinit(io)` closes it, `move` hands it on
-/// to a new owner, and `borrow` lends the file to read or write.
-pub const OwnedFile = aegis.own.OwnedIo(std.Io.File, closeFile);
-
-fn closeFile(file: *std.Io.File, io: std.Io) void {
-    file.close(io);
-}
+/// to a new owner, and `borrow` lends the file to read or write. aegis's
+/// `own.File`, the one owner type of an open file, so a file conduit hands
+/// back passes to any package as the same type.
+pub const OwnedFile = aegis.own.File;
 
 /// A raw handle this process opened, owned from here.
 pub fn own(handle: std.Io.File.Handle) OwnedFile {
