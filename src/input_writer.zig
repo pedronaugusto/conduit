@@ -235,7 +235,7 @@ pub const State = struct {
             queue.tail = null;
             queue.ending = true;
             queue.finished = true;
-            state.closed.set(io, {}) catch aegis.assert.never("the writer closes once");
+            aegis.assert.invariant(state.closed.set(io, {}), "the writer closes once");
         }
         while (true) {
             const node = (state.next(io) catch |err| {

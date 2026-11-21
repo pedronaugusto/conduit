@@ -463,7 +463,7 @@ pub const Reaper = struct {
     fn run(reaper: *Reaper, io: std.Io) void {
         const result = reaper.reapOwned(io);
         reaper.state.store(if (result) |term| encode(term) else |err| encodeError(err), .release);
-        reaper.answered.set(io, {}) catch aegis.assert.never("a child is answered once");
+        aegis.assert.invariant(reaper.answered.set(io, {}), "a child is answered once");
     }
 
     /// Adoption is process-wide, so its one owner cleans it after every reap

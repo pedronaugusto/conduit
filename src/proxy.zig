@@ -218,7 +218,7 @@ fn pumpTask(
         .output => completion.output_error = pump_error,
     }
     if (completion.winner.cmpxchgStrong(.none, direction, .release, .monotonic) == null) {
-        completion.arrived.set(io, {}) catch aegis.assert.never("a completion arrives once");
+        aegis.assert.invariant(completion.arrived.set(io, {}), "a completion arrives once");
     }
 }
 
