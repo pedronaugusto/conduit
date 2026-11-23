@@ -1942,8 +1942,9 @@ pub const Child = struct {
     ) std.Io.Cancelable!bool {
         var spare: [64 * 1024]u8 = undefined;
         // What the cap leaves once the kept bytes are taken from it: none past it.
-        const room = (max_bytes.sub(.fromRaw(into.kept)) catch aegis.units.Bytes(usize).fromRaw(0)).raw();
-        var landing: Landing = if (room == 0 or into.failure.load(.acquire) == .write_failed)
+        const none: aegis.units.Bytes(usize) = .fromRaw(0);
+        const room = max_bytes.sub(.fromRaw(into.kept)) catch none;
+        var landing: Landing = if (room.eql(none) or into.failure.load(.acquire) == .write_failed)
             .dropped
         else if (into.sink.buffer.len == 0) .copied else .direct;
         var buffer: []u8 = &spare;
@@ -1957,7 +1958,7 @@ pub const Child = struct {
                 landing = .dropped;
             }
         }
-        if (landing != .dropped) buffer = buffer[0..@min(room, buffer.len)];
+        if (landing != .dropped and room.compare(.fromRaw(buffer.len)) == .lt) buffer = buffer[0..room.raw()];
 
         const n = handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
             error.Canceled => return error.Canceled,
