@@ -107,6 +107,13 @@
       "reason": "a process's memory, asked of the operating system"
     },
     {
+      "file": "src/channel.zig",
+      "rules": [
+        "A009"
+      ],
+      "reason": "a channel's ends: a reader over a pipe end, where another process's bytes enter"
+    },
+    {
       "file": "src/handles.zig",
       "rules": [
         "P007",
