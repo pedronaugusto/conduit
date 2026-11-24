@@ -8,6 +8,7 @@ pub const layers: []const gantry.rules.Layer = &.{
     } },
     .{ .name = "Windows calls", .patterns = &.{
         "src/win32.zig",
+        "src/win_pipe.zig",
     } },
     .{ .name = "primitives", .patterns = &.{
         "src/orphans/**",
@@ -20,7 +21,6 @@ pub const layers: []const gantry.rules.Layer = &.{
         "src/environ.zig",
         "src/handles.zig",
         "src/held.zig",
-        "src/serial_allocator.zig",
         "src/child/windows/search.zig",
         "src/freebsd.zig",
     } },
@@ -112,13 +112,13 @@ pub const required = [_][]const u8{
     "src/environ.zig",
     "src/handles.zig",
     "src/held.zig",
-    "src/serial_allocator.zig",
     "src/child/windows/search.zig",
     "src/cgroup.zig",
     "src/tty.zig",
     "src/channel.zig",
     "src/exit.zig",
     "src/win32.zig",
+    "src/win_pipe.zig",
     "src/pty.zig",
     "src/expect.zig",
     "src/child/contract.zig",
@@ -157,7 +157,7 @@ pub const owned: []const gantry.rules.TokenRule = &.{
     .{ .name = "cgroup owner", .kind = .string, .tokens = &.{"/sys/fs/cgroup*"}, .owners = &.{"src/cgroup.zig"} },
     // A test double is a shakedown `Clock`, `FaultIo` or `Layer`, never a
     // copied `Io` vtable with a slot replaced: such a copy keeps its state in
-    // globals and cannot be stacked. The one vtable here is an allocator's,
-    // and the seam reads the slot its layer replaces, as airlock's does.
-    .{ .name = "test doubles on shakedown", .tokens = &.{ "vtable", "VTable" }, .owners = &.{ "src/serial_allocator.zig", "src/seam.zig" } },
+    // globals and cannot be stacked. The seam reads the slot its layer
+    // replaces, as airlock's does.
+    .{ .name = "test doubles on shakedown", .tokens = &.{ "vtable", "VTable" }, .owners = &.{"src/seam.zig"} },
 };

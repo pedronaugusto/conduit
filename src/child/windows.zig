@@ -704,12 +704,30 @@ const PipeDirection = enum { to_child, from_child };
 
 /// A pipe whose child end is inheritable and whose parent end is not.
 ///
-/// Windows has no per-handle `O_CLOEXEC`: inheritance is a flag on the handle
-/// and `CreateProcessW` takes every inheritable handle at once. So both ends
-/// are created inheritable — there is no other way to ask — and the end this
+/// A stream the child writes is a pipe on the named-pipe device whose end
+/// here is for overlapped reads, so `Child.output` waits on both streams and
+/// the exit from one task, and the child's end for synchronous calls, as a
+/// program expects of its standard streams (`win32.pipe`). Each end's
+/// inheritance is set as it is made.
+///
+/// Standard input is `CreatePipe`'s, written synchronously. Windows has no
+/// per-handle `O_CLOEXEC`: inheritance is a flag on the handle and
+/// `CreateProcessW` takes every inheritable handle at once. So both ends are
+/// created inheritable — there is no other way to ask — and the end this
 /// process keeps has the flag cleared again immediately, which is what stops a
 /// later, unrelated spawn from handing it to someone else.
 fn makePipe(direction: PipeDirection) SpawnError!stdio_plan.Pipe {
+    if (direction == .from_child) {
+        const ends = win32.pipe.create(.{
+            .server = .{ .overlapped = true },
+            .client = .{ .inherit = true, .overlapped = false },
+            .inbound = true,
+        }) catch |err| switch (err) {
+            error.SystemResources => return error.SystemResources,
+            error.Unexpected => return error.Unexpected,
+        };
+        return .{ .child = ends[1], .parent = ends[0], .parent_overlapped = true };
+    }
     var security: windows.SECURITY_ATTRIBUTES = .{
         .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
         .lpSecurityDescriptor = null,

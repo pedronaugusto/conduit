@@ -23,6 +23,13 @@
       "reason": "the Windows calls conduit makes that std.os.windows does not declare"
     },
     {
+      "file": "src/win_pipe.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a Windows named pipe pair, made with the native calls that choose each end's overlapped mode"
+    },
+    {
       "file": "src/supervisor.zig",
       "rules": [
         "P007"

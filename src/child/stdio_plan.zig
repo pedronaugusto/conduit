@@ -28,6 +28,9 @@ pub const Pipe = struct {
     child: Handle,
     /// The end this process keeps.
     parent: Handle,
+    /// The kept end is for overlapped calls (Windows: a stream the child
+    /// writes, which `Child.output` reads beside the other and the exit).
+    parent_overlapped: bool = false,
 };
 
 /// What the child gets for one of its three standard streams.
@@ -103,7 +106,7 @@ pub fn Plan(comptime system: type) type {
                             const ends = try system.openPipe(slot == 0);
                             plan.child[slot] = .{ .place = ends.child };
                             plan.owned[slot] = ends.child;
-                            plan.parent[slot] = held.own(ends.parent);
+                            plan.parent[slot] = .init(.{ .handle = ends.parent, .flags = .{ .nonblocking = ends.parent_overlapped } });
                         },
                         .stdout => {
                             if (slot != 2) return error.Unsupported;

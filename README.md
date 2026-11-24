@@ -85,7 +85,7 @@ is a `std.Io.Duration`. Each function that allocates takes the allocator as
 | | |
 |---|---|
 | `Pty.open(gpa, io, options)` | A new pair; a simulated one over `conduit.testing`'s `Io`. `options`: `rows`, `cols`, `x_pixel`, `y_pixel`, and on Windows `console`. |
-| `pty.readHandle()`, `pty.writeHandle()` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows. `null` once closed. |
+| `pty.readHandle()`, `pty.writeHandle()` | The master, as two handles: the same descriptor twice on POSIX, the two pipes of a pseudoconsole on Windows, the one read for overlapped reads. `null` once closed. |
 | `pty.readFile()`, `pty.writeFile()`, `pty.master()` | Either end, or both, lent as the `std.Io.File`, sharing the handle rather than duplicating it. The `Pty` closes them. |
 | `pty.slaveHandle()` | The terminal end: a descriptor on POSIX, an `HPCON` on Windows. `pty.slaveFile()` is POSIX only. |
 | `pty.resize(io, size)`, `pty.size(io)` | The window size. `size` borrows the pair; it and `resize` share the Windows geometry owner and are safe while another task reads or writes. |
@@ -104,7 +104,7 @@ to read while a wait or Reaper runs.
 |---|---|
 | `Child.spawn(gpa, io, options)` | Start it. `gpa` owns the lifecycle until `deinit` and must outlive the child. |
 | `child.processId()` | A numeric process id on either platform, or `null` after retirement. A snapshot; `kill` holds the identity through signalling. |
-| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Lent `std.Io.File`s: the pipes, or for input and output the master of a child on a pair. The `Child` keeps owning its pipes, and the `Pty` its master. |
+| `child.stdinFile()`, `child.stdoutFile()`, `child.stderrFile()` | Lent `std.Io.File`s: the pipes, or for input and output the master of a child on a pair. The `Child` keeps owning its pipes, and the `Pty` its master. On Windows the output pipes are for overlapped reads, as std's are, and the files say so. |
 | `child.takeStdin()`, `child.takeStdout()`, `child.takeStderr()` | Transfer a created pipe to the caller as an `OwnedFile`, closed with `deinit(io)`; the `Child` no longer closes it. A pair has no pipe to transfer. |
 | `conduit.readAvailable(io, file, buffer)` | What a taken pipe holds now, without waiting for more; 0 once nothing is left at this moment. After the child ends, reading until 0 takes the rest of what it wrote, even while something it started still holds the pipe open. |
 | `child.closeStdin(io)` | Half-close: the child reading to end of file stops waiting on you. |
@@ -112,7 +112,7 @@ to read while a wait or Reaper runs.
 | `child.terminalMaster()` | The master, for a child spawned on a pair. Borrowed from the `Pty`. |
 | `child.stdinWriter(io, buf)`, `child.stdoutReader(io, buf)` | The same, as `std.Io` reader and writer interfaces. |
 | `child.expect(buf)` | An `Expect` over both directions, or `null` if this process holds only one. |
-| `child.output(gpa, io, options)` | Run to the end and collect it: a cap (`max_bytes`, an `aegis.units.Bytes(usize)`), a timeout, a bounded drain, both streams read on their own tasks. |
+| `child.output(gpa, io, options)` | Run to the end and collect it: a cap (`max_bytes`, an `aegis.units.Bytes(usize)`), a timeout, a bounded drain, both streams and the child's end waited on together from the calling task, on any `std.Io`. |
 | `child.exchange(gpa, io, input, options)` | `output` with `input` written alongside and then closed, under one deadline over the input, the run, the reap and the drain. `input` is borrowed and never copied; input the child does not read is not an error; the allocator need not be thread-safe. |
 | `child.exchangeInto(io, input, sinks, options)` | `exchange` with the streams written into the caller's two `*std.Io.Writer`s (`Sinks`), each read straight into its writer's buffer, and how the run ended (`Ended`) returned; `exchange` is this into growing writers. A writer over storage wiped when let go keeps a secret the child prints out of any other memory. Each writer takes at most `max_bytes` and is flushed at the end; one that fails is not written again, its stream is still read to the end, and `error.WriteFailed` follows the run. |
 | `child.wait(io)` | Blocks on the child's exit handle, then reaps when signalling has let go of its identity. |

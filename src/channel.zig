@@ -259,83 +259,18 @@ fn fromValuePosix(value: []const u8) Channel.InheritedError!held.OwnedFile {
 // Windows
 //======================================================================
 
-/// What each direction of a Windows channel holds before a write waits.
-const pipe_quota = 64 * 1024;
-
 fn openWindows() Channel.OpenError!Channel {
-    const device = try namedPipeDevice();
-    defer windows.CloseHandle(device);
-
-    var server: windows.HANDLE = undefined;
-    var status_block: windows.IO_STATUS_BLOCK = undefined;
-    // 120 s in NT's 100 ns units, negative for a time relative to now.
-    const timeout: windows.LARGE_INTEGER = -1_200_000_000;
-    switch (windows.ntdll.NtCreateNamedPipeFile(
-        &server,
-        .{
-            .SPECIFIC = .{ .FILE_PIPE = .{ .READ_DATA = true, .WRITE_DATA = true, .WRITE_ATTRIBUTES = true } },
-            .STANDARD = .{ .SYNCHRONIZE = true },
-        },
-        &.{ .RootDirectory = device, .Attributes = .{ .INHERIT = false } },
-        &status_block,
-        .{ .READ = true, .WRITE = true },
-        .CREATE,
-        .{ .IO = .ASYNCHRONOUS },
-        .{ .TYPE = .BYTE_STREAM },
-        .{ .MODE = .BYTE_STREAM },
-        .{ .OPERATION = .QUEUE },
-        1,
-        pipe_quota,
-        pipe_quota,
-        &timeout,
-    )) {
-        .SUCCESS => {},
-        .INSUFFICIENT_RESOURCES => return error.SystemResources,
-        else => |status| return windows.unexpectedStatus(status),
-    }
-    errdefer windows.CloseHandle(server);
-
-    var client: windows.HANDLE = undefined;
-    switch (windows.ntdll.NtOpenFile(
-        &client,
-        .{
-            .SPECIFIC = .{ .FILE_PIPE = .{ .READ_DATA = true, .WRITE_DATA = true, .WRITE_ATTRIBUTES = true } },
-            .STANDARD = .{ .SYNCHRONIZE = true },
-        },
-        &.{ .RootDirectory = server, .Attributes = .{ .INHERIT = false } },
-        &status_block,
-        .{ .READ = true, .WRITE = true },
-        .{ .IO = .ASYNCHRONOUS },
-    )) {
-        .SUCCESS => {},
-        .INSUFFICIENT_RESOURCES => return error.SystemResources,
-        else => |status| return windows.unexpectedStatus(status),
-    }
+    // Both ends overlapped, as each side of a channel reads while it may write.
+    const ends = try win32.pipe.create(.{
+        .server = .{ .overlapped = true },
+        .client = .{ .overlapped = true },
+        .inbound = true,
+        .outbound = true,
+    });
     return .{
-        .parent = .init(.{ .handle = server, .flags = .{ .nonblocking = true } }),
-        .child = .init(.{ .handle = client, .flags = .{ .nonblocking = true } }),
+        .parent = .init(.{ .handle = ends[0], .flags = .{ .nonblocking = true } }),
+        .child = .init(.{ .handle = ends[1], .flags = .{ .nonblocking = true } }),
     };
-}
-
-/// The named-pipe device, `\Device\NamedPipe\`, which a pipe with no name is
-/// made relative to.
-fn namedPipeDevice() Channel.OpenError!windows.HANDLE {
-    var device: windows.HANDLE = undefined;
-    var status_block: windows.IO_STATUS_BLOCK = undefined;
-    const name = std.unicode.wtf8ToWtf16LeStringLiteral("\\Device\\NamedPipe\\");
-    var object_name = windows.UNICODE_STRING.init(name);
-    switch (windows.ntdll.NtOpenFile(
-        &device,
-        .{ .STANDARD = .{ .SYNCHRONIZE = true } },
-        &.{ .ObjectName = &object_name },
-        &status_block,
-        .VALID_FLAGS,
-        .{ .IO = .SYNCHRONOUS_NONALERT },
-    )) {
-        .SUCCESS => return device,
-        .INSUFFICIENT_RESOURCES => return error.SystemResources,
-        else => |status| return windows.unexpectedStatus(status),
-    }
 }
 
 fn fromValueWindows(value: []const u8) Channel.InheritedError!held.OwnedFile {

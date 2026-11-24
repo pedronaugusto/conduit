@@ -55,7 +55,6 @@ const orphans = @import("orphans.zig").Orphans;
 const Deadline = @import("conduit.tty").Deadline;
 const OwnedFile = @import("conduit.tty").OwnedFile;
 const Duration = @import("conduit.tty").Duration;
-const SerialAllocator = @import("serial_allocator.zig").SerialAllocator;
 const input_writer = @import("input_writer.zig");
 const completion = @import("child/windows/completion.zig");
 const contract = @import("child/contract.zig");
@@ -1463,12 +1462,11 @@ pub const Child = struct {
     /// Both streams are read as either has bytes, because a child that fills
     /// one pipe while the parent is reading the other deadlocks, and because a
     /// timeout that a blocked read can defeat is not a timeout: from one task
-    /// that polls the pipes and the child's exit together where the system has
-    /// a handle for the exit, and on reader tasks elsewhere (Windows).
+    /// that waits on both streams and the child's exit together, on every
+    /// system and on any `std.Io`, one with no concurrency to offer too.
     ///
-    /// `gpa` need not be safe to use from several threads: where the
-    /// streams are read on tasks, their allocations are serialized. The
-    /// returned `Output` is freed with `gpa`.
+    /// The returned `Output` is freed with `gpa`, which only the calling task
+    /// uses.
     ///
     /// The child is reaped when this returns, whether it ended on its own or was
     /// killed, so `wait` afterwards answers from the same term. That holds for a
@@ -1483,7 +1481,7 @@ pub const Child = struct {
         options: OutputOptions,
     ) OutputError!Output {
         var collecting: Collecting = undefined;
-        collecting.init(gpa, io);
+        collecting.init(gpa);
         defer collecting.deinit();
         const ended = child.collectInto(io, collecting.sinks(), options, null) catch |failure| switch (failure) {
             // An allocating writer fails only for want of memory.
@@ -1493,19 +1491,16 @@ pub const Child = struct {
         return collecting.output(gpa, ended);
     }
 
-    /// The writers `output` and `exchange` collect into: growing on `gpa`, and
-    /// where the streams are read on tasks both grow at once, so their
-    /// allocations are made one at a time and the caller's allocator need not
-    /// be safe to share. Stays where it is while it is used.
+    /// The writers `output` and `exchange` collect into, growing on `gpa`
+    /// from the one task that reads the streams. Stays where it is while it is
+    /// used.
     const Collecting = struct {
-        serial: SerialAllocator,
         out: std.Io.Writer.Allocating,
         err: std.Io.Writer.Allocating,
 
-        fn init(collecting: *Collecting, gpa: Allocator, io: std.Io) void {
-            collecting.serial = SerialAllocator.init(gpa, io);
-            collecting.out = std.Io.Writer.Allocating.init(collecting.serial.allocator());
-            collecting.err = std.Io.Writer.Allocating.init(collecting.serial.allocator());
+        fn init(collecting: *Collecting, gpa: Allocator) void {
+            collecting.out = std.Io.Writer.Allocating.init(gpa);
+            collecting.err = std.Io.Writer.Allocating.init(gpa);
         }
 
         fn sinks(collecting: *Collecting) Sinks {
@@ -1546,18 +1541,26 @@ pub const Child = struct {
         until: ?Deadline,
     ) CollectError!Ended {
         errdefer child.abandon(io);
-        // On a system with a handle that becomes readable when the child ends,
-        // the two pipes and that handle are watched together from this task, so
-        // no task is started and no thread is woken to read a pipe. Windows, and
-        // a system with nothing to watch, keep the readers on tasks.
+        // The two streams and the child's end are waited on together from this
+        // task, so no task is started and no thread is woken to read a stream:
+        // any `std.Io` runs it. The end is the watch on the child, or on Windows
+        // its process.
         const published = try child.result();
-        if (!is_windows) {
-            // A published term needs only stream draining. Never register an OS
-            // watch on the retired number, which may already name a stranger.
-            if (published != null) return child.outputPolled(io, sinks, options, until, null, published);
-            if (child.exitWatch()) |watch| return child.outputPolled(io, sinks, options, until, watch, null);
-        }
-        return child.outputOnTasks(io, sinks, options, until);
+        // A published term needs only stream draining. Never register an OS
+        // watch on the retired number, which may already name a stranger.
+        if (published != null) return child.outputPolled(io, sinks, options, until, null, published);
+        if (is_windows) return child.outputPolled(io, sinks, options, until, .{ .object = child.state.id }, null);
+        if (child.exitWatch()) |watch| return child.outputPolled(io, sinks, options, until, .{ .process = watch }, null);
+        // No watch was had when it was spawned: one is opened now, as a wait
+        // opens one (`exit.wait`).
+        var opened = reactor.Process.open(io, child.state.id) catch |err| switch (err) {
+            // Reaped already, or about to be, by a task holding its reap: it
+            // has ended, and its term is read as the streams are drained.
+            error.ProcessNotFound => return child.outputPolled(io, sinks, options, until, null, null),
+            error.SystemResources, error.Unexpected => return error.Unexpected,
+        };
+        defer opened.close(io);
+        return child.outputPolled(io, sinks, options, until, .{ .process = &opened }, null);
     }
 
     pub const ExchangeOptions = contract.ExchangeOptions;
@@ -1565,8 +1568,7 @@ pub const Child = struct {
     pub const ExchangeError = contract.ExchangeError;
 
     /// `exchangeInto`, collecting what the child wrote: the bytes grow on
-    /// `gpa`, which need not be safe to use from several threads, since every
-    /// allocation of the call is serialized. The returned `Output` is freed
+    /// `gpa`, which only the calling task uses. The returned `Output` is freed
     /// with `gpa`. A writer that fails here is memory that ran out, so
     /// `error.OutOfMemory`.
     pub fn exchange(
@@ -1577,7 +1579,7 @@ pub const Child = struct {
         options: ExchangeOptions,
     ) ExchangeError!Output {
         var collecting: Collecting = undefined;
-        collecting.init(gpa, io);
+        collecting.init(gpa);
         defer collecting.deinit();
         const ended = child.exchangeInto(io, input, collecting.sinks(), options) catch |failure| switch (failure) {
             // An allocating writer fails only for want of memory.
@@ -1692,138 +1694,45 @@ pub const Child = struct {
             log.warn("an abandoned run's child could not be ended and reaped ({t}): it may still run", .{err});
     }
 
-    /// `collectInto` with each stream read on a task of its own, into its
-    /// writer from that task.
-    fn outputOnTasks(
-        child: *Child,
-        io: std.Io,
-        sinks: Sinks,
-        options: OutputOptions,
-        until: ?Deadline,
-    ) CollectError!Ended {
-        var out = Collector.init(sinks.stdout);
-        var err = Collector.init(sinks.stderr);
-
-        // The readers, the wait for the child and the drain's end are tasks of
-        // one select, and this task takes whichever finishes first: a reader
-        // that fails is noticed the moment it does, not at the next look, and
-        // the drain ends when its readers do or its time is up.
-        var finished: [4]Finished = undefined;
-        var select: std.Io.Select(Finished) = .init(io, &finished);
-        // Unconditional: the select owns resources as soon as one task starts,
-        // and a reader blocked on a stream that never ends is exactly what the
-        // bounded drain below is for.
-        defer select.cancelDiscard();
-
-        // A stream this process does not hold -- an inherited one, or the standard
-        // error of a child on a pseudo-terminal, which has none -- is finished
-        // before it starts. Saying so here is what keeps the drain below from
-        // waiting out its budget and then calling an empty stream truncated.
-        if (child.stdoutFile()) |f| {
-            try select.concurrent(.out, collect, .{ io, f, options.max_bytes, &out });
-        } else out.done.store(.done, .release);
-        if (child.stderrFile()) |f| {
-            try select.concurrent(.err, collect, .{ io, f, options.max_bytes, &err });
-        } else err.done.store(.done, .release);
-        try select.concurrent(.ended, waitWithin, .{ child, io, runDeadline(io, options, until) orelse Deadline.never });
-
-        var timed_out = false;
-        // A reader that cannot continue leaves a pipe the child may fill and
-        // block on: the child is ended, and the read failure reported after both
-        // readers have joined. A kill too large to walk the whole tree still
-        // killed the child; its error waits for the reap.
-        var kill_failure: ?KillError = null;
-        const term = term: while (true) switch (try select.await()) {
-            .out, .err => |read| {
-                try read;
-                if (kill_failure == null and (out.readFailed() or err.readFailed())) {
-                    child.kill(io, .kill) catch |failure| switch (failure) {
-                        error.OutOfMemory => kill_failure = failure,
-                        else => return failure,
-                    };
-                }
-            },
-            .ended => |ended| {
-                if (try ended) |term| break :term term;
-                timed_out = true;
-                break :term try child.killWait(io, options.grace);
-            },
-            .drained => unreachable, // unreachable: the drain starts once the child has ended
-        };
-        if (kill_failure) |failure| return failure;
-
-        // The child is gone, so its ends of the pipes are closed and the readers
-        // are finishing. Anything still holding a stream open is not the child,
-        // and is not what this call promised to wait for.
-        if (!((out.done.load(.acquire) == .done) and (err.done.load(.acquire) == .done))) {
-            try select.concurrent(.drained, Deadline.sleep, .{ drainDeadline(io, options, until), io });
-            while (!((out.done.load(.acquire) == .done) and (err.done.load(.acquire) == .done))) switch (try select.await()) {
-                .out, .err => |read| try read,
-                .drained => |slept| {
-                    try slept;
-                    break;
-                },
-                .ended => unreachable, // unreachable: the wait for the child has finished
-            };
-        }
-        // Joins the tasks, so the writers below are this task's alone again.
-        select.cancelDiscard();
-
-        return Collector.ended(&out, &err, term, timed_out);
-    }
-
-    /// What finishes in `outputOnTasks`' select: a reader, the wait for the
-    /// child, and the drain's time.
-    const Finished = union(enum) {
-        out: std.Io.Cancelable!void,
-        err: std.Io.Cancelable!void,
-        ended: WaitTimeoutError!?Term,
-        drained: std.Io.Cancelable!void,
-    };
-
-    /// One stream on its way into its writer, shared between the task reading
-    /// it and the task that started it. `done` is the handshake, and `failure`
-    /// is read by both; everything else is read only after the select has
-    /// joined.
+    /// One stream on its way into its writer, read from the one task that
+    /// runs the collection.
     const Collector = struct {
         sink: *std.Io.Writer,
         /// What the writer has been given, which `max_bytes` bounds.
         kept: usize,
         truncated: bool,
-        failure: aegis.Atomic(Failure),
-        done: aegis.Atomic(Progress),
+        failure: Failure,
+        /// The stream has ended, failed, or was never this process's to read.
+        done: bool,
 
         const Failure = enum(u8) { none, read_failed, write_failed };
-        const Progress = enum(u8) { reading, done };
 
         fn init(sink: *std.Io.Writer) Collector {
             return .{
                 .sink = sink,
                 .kept = 0,
                 .truncated = false,
-                .failure = .init(.none),
-                .done = .init(.reading),
+                .failure = .none,
+                .done = false,
             };
         }
 
         fn readFailed(collector: *const Collector) bool {
-            return collector.failure.load(.acquire) == .read_failed;
+            return collector.failure == .read_failed;
         }
 
         /// How a run that ended with `term` ended, its writers flushed: or
         /// the first failure either collector met.
         fn ended(out: *Collector, err: *Collector, term: Term, timed_out: bool) CollectError!Ended {
-            const out_failure = out.failure.load(.acquire);
-            const err_failure = err.failure.load(.acquire);
-            if (out_failure == .read_failed or err_failure == .read_failed) return error.ReadFailed;
-            if (out_failure == .write_failed or err_failure == .write_failed) return error.WriteFailed;
+            if (out.failure == .read_failed or err.failure == .read_failed) return error.ReadFailed;
+            if (out.failure == .write_failed or err.failure == .write_failed) return error.WriteFailed;
             try out.sink.flush();
             try err.sink.flush();
             return .{
                 .term = term,
                 .timed_out = timed_out,
-                .stdout_truncated = out.truncated or out.done.load(.acquire) != .done,
-                .stderr_truncated = err.truncated or err.done.load(.acquire) != .done,
+                .stdout_truncated = out.truncated or !out.done,
+                .stderr_truncated = err.truncated or !err.done,
             };
         }
     };
@@ -1838,30 +1747,37 @@ pub const Child = struct {
 
         const exit = 2;
 
-        /// A stream whose descriptor is not one is not something that is
-        /// waited on: it is read here, directly, so that the read says what
-        /// is wrong. The stream `first` names leads the set, which is how a
-        /// wait that reports the lowest ready member still serves both
-        /// streams in turn.
+        /// A stream is a member as the system waits on one: on POSIX its
+        /// descriptor, readable, and on Windows its read outstanding, started
+        /// here when none is (`Reads`). A POSIX stream whose descriptor is not
+        /// one is not something that is waited on: it is read here, directly,
+        /// so that the read says what is wrong. The stream `first` names leads
+        /// the set, which is how a wait that reports the lowest ready member
+        /// still serves both streams in turn.
         fn init(
             io: std.Io,
             streams: [2]?std.Io.File,
             collectors: [2]*Collector,
+            reads: *Reads,
             max_bytes: aegis.units.Bytes(usize),
             first: u1,
-            ending: ?*const reactor.Process,
+            ending: ?reactor.Waitable,
         ) std.Io.Cancelable!PollSet {
             var set: PollSet = .{ .members = undefined, .which = undefined, .count = 0 };
             for (0..2) |turn| {
                 const i = turn ^ first;
-                if (collectors[i].done.load(.acquire) == .done) continue;
+                if (collectors[i].done) continue;
+                if (is_windows) {
+                    if (reads.start(i, streams[i].?, max_bytes, collectors[i])) |call| set.add(.{ .overlapped = call }, @intCast(i));
+                    continue;
+                }
                 if (streams[i].?.handle < 0) {
                     _ = try collectOnce(io, streams[i].?, max_bytes, collectors[i]);
                     continue;
                 }
                 set.add(.{ .readable = streams[i].?.handle }, @intCast(i));
             }
-            if (ending) |process| set.add(.{ .process = process }, exit);
+            if (ending) |exit_member| set.add(exit_member, exit);
             return set;
         }
 
@@ -1895,29 +1811,58 @@ pub const Child = struct {
     /// not on this interval.
     const output_wait_slice_ms: u32 = 10;
 
-    fn collect(
-        io: std.Io,
-        f: std.Io.File,
-        max_bytes: aegis.units.Bytes(usize),
-        into: *Collector,
-    ) std.Io.Cancelable!void {
-        while (true) {
-            // Each read waits on reactor for the stream first, whose wait takes a
-            // cancel on any `Io`: one aimed at a read blocked in the kernel was
-            // lost now and then, and left a drain waiting for its reader forever. A descriptor that cannot
-            // be waited on is read at once, and the read says what is wrong with it.
-            if (!is_windows) reactor.wait(io, .{ .readable = f.handle }, .none) catch |err| switch (err) {
-                error.Canceled => return error.Canceled,
-                error.Timeout, error.Unsupported, error.Unexpected => {},
-            };
-            if (try collectOnce(io, f, max_bytes, into)) return;
-        }
-    }
-
     /// Where one read of a stream lands: in its writer's buffer, in a buffer
     /// of the reader's copied to a writer that has none, or nowhere, past
     /// `max_bytes` or once the writer has failed.
     const Landing = enum { direct, copied, dropped };
+
+    /// Where the next read of a stream lands, and what it reads into: the
+    /// writer's own buffer, so what the child writes is never copied on its
+    /// way, or `spare`, copied to a writer with none and dropped past
+    /// `max_bytes`.
+    fn prepare(into: *Collector, max_bytes: aegis.units.Bytes(usize), spare: []u8) struct { Landing, []u8 } {
+        // What the cap leaves once the kept bytes are taken from it: none past it.
+        const none: aegis.units.Bytes(usize) = .fromRaw(0);
+        const room = max_bytes.sub(.fromRaw(into.kept)) catch none;
+        var landing: Landing = if (room.eql(none) or into.failure == .write_failed)
+            .dropped
+        else if (into.sink.buffer.len == 0) .copied else .direct;
+        var buffer: []u8 = spare;
+        if (landing == .direct) {
+            // The read lands in the writer's buffer itself: no copy follows it,
+            // and a writer that grows its buffer grows it geometrically.
+            if (into.sink.writableSliceGreedy(1)) |slice| {
+                buffer = slice;
+            } else |_| {
+                into.failure = .write_failed;
+                landing = .dropped;
+            }
+        }
+        if (landing != .dropped and room.compare(.fromRaw(buffer.len)) == .lt) buffer = buffer[0..room.raw()];
+        return .{ landing, buffer };
+    }
+
+    /// The `n` bytes a read brought into `buffer`, given to the writer as
+    /// `prepare` said they land.
+    fn land(into: *Collector, landing: Landing, buffer: []u8, n: usize) void {
+        if (n == 0) return;
+        switch (landing) {
+            .direct => into.sink.advance(n),
+            .copied => into.sink.writeAll(buffer[0..n]) catch {
+                into.failure = .write_failed;
+                into.truncated = true;
+                return;
+            },
+            .dropped => {
+                // Past the cap, or the writer failed; either way reading goes
+                // on until the child exits, or it can fill this pipe and make
+                // the wait deadlock.
+                into.truncated = true;
+                return;
+            },
+        }
+        into.kept += n;
+    }
 
     /// One read of a stream into its writer. True once the stream is finished,
     /// by its end or by a failure the collector now records; `done` is set then.
@@ -1928,69 +1873,131 @@ pub const Child = struct {
         into: *Collector,
     ) std.Io.Cancelable!bool {
         var spare: [64 * 1024]u8 = undefined;
-        // What the cap leaves once the kept bytes are taken from it: none past it.
-        const none: aegis.units.Bytes(usize) = .fromRaw(0);
-        const room = max_bytes.sub(.fromRaw(into.kept)) catch none;
-        var landing: Landing = if (room.eql(none) or into.failure.load(.acquire) == .write_failed)
-            .dropped
-        else if (into.sink.buffer.len == 0) .copied else .direct;
-        var buffer: []u8 = &spare;
-        if (landing == .direct) {
-            // The read lands in the writer's buffer itself: no copy follows it,
-            // and a writer that grows its buffer grows it geometrically.
-            if (into.sink.writableSliceGreedy(1)) |slice| {
-                buffer = slice;
-            } else |_| {
-                into.failure.store(.write_failed, .release);
-                landing = .dropped;
-            }
-        }
-        if (landing != .dropped and room.compare(.fromRaw(buffer.len)) == .lt) buffer = buffer[0..room.raw()];
-
+        const landing, const buffer = prepare(into, max_bytes, &spare);
         const n = handles.readStreaming(io, f, &.{buffer}) catch |e| switch (e) {
             error.Canceled => return error.Canceled,
             else => {
-                if (!handles.finished(e)) into.failure.store(.read_failed, .release);
-                into.done.store(.done, .release);
+                if (!handles.finished(e)) into.failure = .read_failed;
+                into.done = true;
                 return true;
             },
         };
-        switch (landing) {
-            .direct => into.sink.advance(n),
-            .copied => into.sink.writeAll(buffer[0..n]) catch {
-                into.failure.store(.write_failed, .release);
-                into.truncated = true;
-                return false;
-            },
-            .dropped => {
-                // Past the cap, or the writer failed; either way reading goes
-                // on until the child exits, or it can fill this pipe and make
-                // the wait deadlock.
-                into.truncated = true;
-                return false;
-            },
-        }
-        into.kept += n;
+        land(into, landing, buffer, n);
         return false;
     }
 
-    /// `output` on one task: the pipes and the child's end are waited on together.
+    /// The streams' reads on Windows: one overlapped call per stream,
+    /// outstanding across the waits of `outputPolled` and waited on beside
+    /// the exit, each into its writer's buffer or a spare of its own, which
+    /// the kernel holds until the call ends. Off Windows, nothing: a stream is
+    /// waited on as readable and read once it is.
+    const Reads = if (is_windows) struct {
+        calls: [2]reactor.kernel.Overlapped,
+        spares: [2][64 * 1024]u8,
+        landings: [2]Landing,
+        buffers: [2][]u8,
+
+        fn init(reads: *Reads) error{SystemResources}!void {
+            reads.calls[0] = try .init();
+            errdefer reads.calls[0].deinit();
+            reads.calls[1] = try .init();
+        }
+
+        fn deinit(reads: *Reads) void {
+            for (&reads.calls) |*call| call.deinit();
+        }
+
+        /// The call outstanding for stream `i`, started here when none is: or
+        /// null once the stream is finished, by its end or a failure, which
+        /// reads that end at once (bytes already in the pipe) find first.
+        fn start(reads: *Reads, i: usize, f: std.Io.File, max_bytes: aegis.units.Bytes(usize), into: *Collector) ?*const reactor.kernel.Overlapped {
+            const call = &reads.calls[i];
+            while (!call.outstanding) {
+                reads.landings[i], reads.buffers[i] = prepare(into, max_bytes, &reads.spares[i]);
+                const at_once = call.start(beginRead, f.handle, ReadCall{ .handle = f.handle, .buffer = reads.buffers[i] }) orelse break;
+                if (reads.finish(i, at_once, into)) return null;
+            }
+            return call;
+        }
+
+        /// What the call for stream `i` ended with, given to its writer. True
+        /// once the stream is finished; `done` is set then.
+        fn finish(reads: *Reads, i: usize, ended: windows.IO_STATUS_BLOCK, into: *Collector) bool {
+            switch (ended.u.Status) {
+                .SUCCESS => {
+                    land(into, reads.landings[i], reads.buffers[i], ended.Information);
+                    return false;
+                },
+                // The writing end is closed: the stream's end. A cancel is
+                // only ever this collection's own, once it has stopped reading.
+                .END_OF_FILE, .PIPE_BROKEN, .PIPE_DISCONNECTED, .PIPE_CLOSING, .CANCELLED => {},
+                else => into.failure = .read_failed,
+            }
+            into.done = true;
+            return true;
+        }
+
+        /// The call `waitAny` reported for stream `i`, taken and given to its
+        /// writer.
+        fn took(reads: *Reads, i: usize, into: *Collector) void {
+            _ = reads.finish(i, reads.calls[i].take(), into);
+        }
+
+        /// Ends every call still outstanding and waits for it, before the
+        /// writers are flushed or the buffers go: the kernel writes into them
+        /// until a call has ended. Not on `io`, as a canceled task stops here
+        /// too, and a canceled pipe read ends at once.
+        fn stop(reads: *Reads) void {
+            for (&reads.calls) |*call| {
+                if (!call.outstanding) continue;
+                call.cancel();
+                while (!call.ended()) _ = win32.WaitForSingleObject(call.event, win32.infinite);
+                _ = call.take();
+            }
+        }
+    } else struct {
+        fn init(_: *Reads) error{SystemResources}!void {}
+        fn deinit(_: *Reads) void {}
+        fn stop(_: *Reads) void {}
+    };
+
+    /// What an overlapped read of a stream is issued with.
+    const ReadCall = struct { handle: std.Io.File.Handle, buffer: []u8 };
+
+    fn beginRead(call: ReadCall, iosb: *windows.IO_STATUS_BLOCK, signal: reactor.kernel.Completion) windows.NTSTATUS {
+        return windows.ntdll.NtReadFile(
+            call.handle,
+            signal.event,
+            null,
+            signal.context,
+            iosb,
+            call.buffer.ptr,
+            std.math.lossyCast(windows.ULONG, call.buffer.len),
+            null,
+            null,
+        );
+    }
+
+    /// `output` on one task: the streams and the child's end are waited on
+    /// together, on every system and on any `Io`, one with no concurrency to
+    /// offer too.
     ///
-    /// The promises are the same as the task-based path's. Two streams are read
-    /// as either has bytes, so a child that fills one while the other is being
-    /// read is never blocked; a timeout is a bound on the wait and not on a read
-    /// that may never return; after the child ends the streams are drained for
-    /// `drain` and no longer, because whatever still holds them open is not
-    /// the child.
+    /// Two streams are read as either has bytes, so a child that fills one
+    /// while the other is being read is never blocked; a timeout is a bound on
+    /// the wait and not on a read that may never return; after the child ends
+    /// the streams are drained for `drain` and no longer, because whatever
+    /// still holds them open is not the child.
     ///
-    /// `process` is the watch on the child, null once its term is `published`.
+    /// `exit` is the child's end as a wait member (the watch on it, or on
+    /// Windows its process): null once its term is `published`, and, with no
+    /// term, once it has ended with no watch to be had.
     fn outputPolled(
         child: *Child,
         io: std.Io,
         sinks: Sinks,
         options: OutputOptions,
         until: ?Deadline,
-        process: ?*const reactor.Process,
+        exit: ?reactor.Waitable,
         published: ?Term,
     ) CollectError!Ended {
         var out = Collector.init(sinks.stdout);
@@ -2003,20 +2010,24 @@ pub const Child = struct {
         const collectors = [2]*Collector{ &out, &err };
         // A stream this process does not hold is finished before it starts.
         for (streams, collectors) |stream, collector| {
-            if (stream == null) collector.done.store(.done, .release);
+            if (stream == null) collector.done = true;
         }
+        var reads: Reads = undefined;
+        // No event for a read to signal is a stream that cannot be read.
+        reads.init() catch return error.ReadFailed;
+        defer reads.deinit();
+        // Runs first: no call is outstanding into a buffer that goes.
+        defer reads.stop();
 
         var timed_out = false;
         const deadline = runDeadline(io, options, until);
         var term = published;
         var drain: ?Deadline = if (published != null) drainDeadline(io, options, until) else null;
-        var ended = false;
+        var ended = exit == null and published == null;
         var first: u1 = 0;
         var lag_ms: u32 = 1;
         while (true) {
             try std.Io.checkCancel(io);
-            const out_done = out.done.load(.acquire) == .done;
-            const err_done = err.done.load(.acquire) == .done;
             if (term == null) {
                 // A reader that cannot continue leaves a pipe the child may fill
                 // and block on: end the child now and report the failure once
@@ -2033,9 +2044,9 @@ pub const Child = struct {
                 }
                 if (term != null) drain = drainDeadline(io, options, until);
             }
-            if (term != null and ((out_done and err_done) or drain.?.remainingMs(io) == 0)) break;
+            if (term != null and ((out.done and err.done) or drain.?.remainingMs(io) == 0)) break;
 
-            var set = try PollSet.init(io, streams, collectors, options.max_bytes, first, if (term == null and !ended) process.? else null);
+            var set = try PollSet.init(io, streams, collectors, &reads, options.max_bytes, first, if (term == null and !ended) exit.? else null);
             const members = set.members[0..set.count];
             // A stream read directly, above, may be the one that failed.
             if (out.readFailed() or err.readFailed()) continue;
@@ -2068,11 +2079,18 @@ pub const Child = struct {
                 ended = true;
                 continue;
             }
-            _ = try collectOnce(io, streams[which].?, options.max_bytes, collectors[which]);
+            if (is_windows) {
+                reads.took(which, collectors[which]);
+            } else {
+                _ = try collectOnce(io, streams[which].?, options.max_bytes, collectors[which]);
+            }
             first = @intCast(which ^ 1); // safe: `which` is a stream here, 0 or 1
             lag_ms = 1;
         }
 
+        // The writers are flushed next, and on Windows a read may still be
+        // outstanding into one of their buffers.
+        reads.stop();
         return Collector.ended(&out, &err, term.?, timed_out);
     }
 
@@ -2424,6 +2442,32 @@ pub const Child = struct {
         }
     } else struct {};
 
+    test "output reads both streams on one task, on an Io with no concurrency to offer" {
+        const testing = std.testing;
+        var threaded: std.Io.Threaded = .init(testing.allocator, .{ .concurrent_limit = .nothing });
+        defer threaded.deinit();
+        const io = threaded.io();
+        // More than a pipe holds on each stream, standard error first: the
+        // child blocks on it until it is read, while standard output waits, so
+        // the run ends only if one task reads both as either fills.
+        const lines = 3000;
+        const argv: []const []const u8 = if (is_windows)
+            &.{ "cmd.exe", "/d", "/c", "(for /L %i in (1,1,3000) do @echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx 1>&2) & (for /L %i in (1,1,3000) do @echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy)" }
+        else
+            &.{ "/bin/sh", "-c", "i=0; while [ $i -lt 3000 ]; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx >&2; i=$((i+1)); done; i=0; while [ $i -lt 3000 ]; do echo yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy; i=$((i+1)); done" };
+        var child = try spawn(testing.allocator, io, .{
+            .argv = argv,
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .pipe } },
+        });
+        defer child.deinit(io);
+        defer @import("testing/support.zig").reap(&child, io);
+        var collected = try child.output(testing.allocator, io, .{});
+        defer collected.deinit();
+        try testing.expectEqual(@as(usize, lines * 40), std.mem.count(u8, collected.stdout(), "y"));
+        try testing.expectEqual(@as(usize, lines * 40), std.mem.count(u8, collected.stderr(), "x"));
+        try testing.expect(succeeded(collected.term()));
+    }
+
     test "output of an exited Darwin child needs no reader task" {
         if (is_windows) return error.SkipZigTest;
         if (!tree.Forks.supported) return error.SkipZigTest;
@@ -2454,7 +2498,7 @@ pub const Child = struct {
         try testing.expect(succeeded(collected.term()));
     }
 
-    test "output on tasks ends a child whose stream cannot be read" {
+    test "output ends a child whose stream cannot be read" {
         if (is_windows) return error.SkipZigTest;
         const testing = std.testing;
         const io = testing.io;
@@ -2467,13 +2511,13 @@ pub const Child = struct {
         @import("testing/support.zig").unreadableStdout(&child, io);
         defer @import("testing/support.zig").dropUnreadableStdout(&child);
         var collecting: Collecting = undefined;
-        collecting.init(testing.allocator, io);
+        collecting.init(testing.allocator);
         defer collecting.deinit();
-        try testing.expectError(error.ReadFailed, child.outputOnTasks(io, collecting.sinks(), .{}, null));
+        try testing.expectError(error.ReadFailed, child.collectInto(io, collecting.sinks(), .{}, null));
         try testing.expect((try child.tryWait(io)) != null);
     }
 
-    test "output on tasks ends the drain at its deadline, its reader canceled" {
+    test "output ends the drain at its deadline, beside a writer that holds the stream" {
         const testing = std.testing;
         const io = testing.io;
         const argv: []const []const u8 = if (is_windows) &.{ "cmd.exe", "/c", "set /p line=& exit 0" } else &.{ "/bin/sh", "-c", "read x" };
@@ -2497,15 +2541,14 @@ pub const Child = struct {
         child.state.stdout = writer.state.stdout;
         writer.state.stdout = null;
 
-        // The drain is one wait for its deadline beside the reader, which a live
-        // writer keeps waiting: the run ends at the deadline, and the reader's
-        // wait takes the cancel that ends it (one aimed at a read blocked in the
-        // kernel was lost now and then, and the run never ended).
+        // The drain is the stream's wait, bounded by its deadline, which a live
+        // writer keeps open: the run ends at the deadline, and on Windows the
+        // read still outstanding is ended and waited for before it returns.
         const start = std.Io.Clock.awake.now(io);
         var collecting: Collecting = undefined;
-        collecting.init(testing.allocator, io);
+        collecting.init(testing.allocator);
         defer collecting.deinit();
-        const ended = try child.outputOnTasks(io, collecting.sinks(), .{ .drain = .literal("20ms") }, null);
+        const ended = try child.collectInto(io, collecting.sinks(), .{ .drain = .literal("20ms") }, null);
         const took = start.durationTo(std.Io.Clock.awake.now(io));
         // Said whole on a failure: a drain that ended early, with the writer
         // gone, is the writer's doing, not the drain's (seen once on Windows

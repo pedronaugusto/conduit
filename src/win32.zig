@@ -11,7 +11,9 @@
 //! Nothing in it is public API: it is a module of its own (`win32`) that
 //! `conduit.tty` and `conduit` import and neither exports, so a binding both
 //! need is declared once, and it is the seam between `Pty`, `Child` and `tty`
-//! and the operating system. Nothing here is reached off Windows.
+//! and the operating system. Nothing here is reached off Windows. The one
+//! thing made of the calls rather than declaring them is `pipe`, the pipe
+//! `Channel`, `Child` and `Pty` each make, for the same reason.
 //!
 //! Windows' names, in Zig's casing: `JOBOBJECT_BASIC_LIMIT_INFORMATION` is
 //! `JobObjectBasicLimitInformation`, `WAIT_TIMEOUT` is `wait_timeout`, and the
@@ -28,6 +30,10 @@
 //! README.md.
 
 const std = @import("std");
+
+/// A pipe whose ends' modes are the caller's: the end this process reads
+/// with an overlapped call is opened for one. See `win_pipe.zig`.
+pub const pipe = @import("win_pipe.zig");
 const windows = std.os.windows;
 const log = std.log.scoped(.conduit);
 
@@ -402,6 +408,8 @@ pub extern "kernel32" fn GetExitCodeProcess(
 
 pub const wait_object_0: windows.DWORD = 0;
 pub const wait_timeout: windows.DWORD = 258;
+/// A wait with no time limit, `INFINITE`.
+pub const infinite: windows.DWORD = 0xFFFF_FFFF;
 pub extern "kernel32" fn WaitForSingleObject(
     hHandle: windows.HANDLE,
     dwMilliseconds: windows.DWORD,

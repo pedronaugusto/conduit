@@ -304,9 +304,14 @@ pub const Pty = struct {
         return .{ .read = .of(pty.readFile()), .write = .of(pty.writeFile()) };
     }
 
-    /// The end to read, lent. Asserts it is still open.
+    /// The end to read, lent. Asserts it is still open. On Windows a pseudo
+    /// console's is for overlapped reads, which the file says.
     pub fn readFile(pty: Pty) std.Io.File {
-        return held.lend(pty.read.?);
+        return pty.readEnd(pty.read.?);
+    }
+
+    fn readEnd(pty: Pty, handle: Handle) std.Io.File {
+        return .{ .handle = handle, .flags = .{ .nonblocking = is_windows and !pty.simulated } };
     }
 
     /// The end to write, lent. Asserts it is still open.
@@ -367,7 +372,7 @@ pub const Pty = struct {
         }
 
         var drain: std.Io.Group = .init;
-        drain.concurrent(io, drainMaster, .{ io, read_handle.? }) catch {
+        drain.concurrent(io, drainMaster, .{ io, pty.readEnd(read_handle.?) }) catch {
             // No task to be had. Dropping the master ends first is then the only
             // way the host's last write can fail rather than wait, and a `std.Io`
             // with no concurrency to offer would have nowhere to put a reader
@@ -385,8 +390,7 @@ pub const Pty = struct {
 
     /// Reads the master and throws it away, so the console host has somewhere to
     /// put what it flushes on its way out.
-    fn drainMaster(io: std.Io, handle: Handle) std.Io.Cancelable!void {
-        const f = held.lend(handle);
+    fn drainMaster(io: std.Io, f: std.Io.File) std.Io.Cancelable!void {
         var buffer: [4096]u8 = undefined;
         while (true) {
             _ = handles.readStreaming(io, f, &.{&buffer}) catch |err| switch (err) {
@@ -638,9 +642,21 @@ pub const Pty = struct {
         errdefer windows.CloseHandle(input_write);
         errdefer windows.CloseHandle(input_read);
 
-        var output_read: windows.HANDLE = undefined;
-        var output_write: windows.HANDLE = undefined;
-        if (win32.CreatePipe(&output_read, &output_write, null, pipe_bytes) == .FALSE) return lastError();
+        // The end this program reads is for overlapped reads, so a wait for
+        // the console's output can stand beside a wait for the child's exit on
+        // one task (`Child.output`); the console's end is for synchronous
+        // writes, as `CreatePipe` would make it.
+        const output = win32.pipe.create(.{
+            .server = .{ .overlapped = true },
+            .client = .{ .overlapped = false },
+            .inbound = true,
+            .quota = pipe_bytes,
+        }) catch |err| switch (err) {
+            error.SystemResources => return error.SystemResources,
+            error.Unexpected => return error.Unexpected,
+        };
+        const output_read = output[0];
+        const output_write = output[1];
         errdefer windows.CloseHandle(output_write);
         errdefer windows.CloseHandle(output_read);
 
