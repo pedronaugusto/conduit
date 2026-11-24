@@ -160,7 +160,7 @@ child itself exited with, including the system's control-exit status.
 
 `SpawnOptions`: `argv`, `cwd`, `environ` (a `*const std.process.Environ.Map`),
 `stdio`, `detach`, `stderr_to`, `path_search`, `credentials`,
-`resource_limits`, `fd_policy`, `extra_fds`, `channel`, `job_limits`, `parent_death_signal`, `descendants`.
+`resource_limits`, `extra_fds`, `channel`, `job_limits`, `parent_death_signal`, `descendants`.
 
 `descendants = .survive` is the default on every platform. Once the child
 exits normally and is reaped, `deinit` leaves what it started alone. This
@@ -304,12 +304,15 @@ it is `CREATE_NEW_PROCESS_GROUP`, which is what a console control event can be
 addressed to and nothing more — reaching the tree there is the job object's
 doing, not `detach`'s.
 
-`fd_policy` is what the child is given of the descriptors above 2 that this
-process holds: `.close_on_exec`, the default, which is whatever close-on-exec
-allows, or `.close_all`, which closes every one of them in the child whatever
-its flags say — `close_range` on Linux, a loop elsewhere. On Windows a child is
-given the handles named in an attribute list and nothing else, so both values
-mean the same thing there. Console handles are supplied through the shared
+A child receives its three standard streams and `extra_fds`, and no other
+descriptor of this process, whatever its close-on-exec flag says. On Darwin a
+socket or pipe anyone in the program opens has no flag for a moment after it
+is made, and a child started in that moment would keep it and keep its far
+end waiting; so the child is told what it gets rather than what it does not —
+`POSIX_SPAWN_CLOEXEC_DEFAULT` on Darwin, `posix_spawn_file_actions_addclosefrom_np`
+with glibc 2.34 and later, and `close_range` in a fork child on Linux. On
+Windows a child is given the handles named in an attribute list and nothing
+else, which comes to the same. Console handles are supplied through the shared
 console rather than named in the list; ordinary handles beside them remain
 restricted to the ones the child was given.
 
@@ -318,7 +321,7 @@ the first at descriptor 3, the next at 4 — a listening socket handed over
 the way a service manager hands one, or a pipe for a status protocol. They
 are borrowed, given whatever their close-on-exec flag, and placed correctly
 whatever numbers they already have, including the numbers they are placed
-at. `.close_all` closes what is above them. Windows
+at. Nothing else of this process's crosses. Windows
 numbers no descriptors: each file goes to the child as an inheritable
 duplicate named in the handle list, and in the table of inherited
 descriptors the Microsoft C runtime reads from the startup record

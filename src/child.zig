@@ -192,19 +192,6 @@ pub const Child = struct {
     /// `resource_limits` is the option that exists.
     pub const JobLimits = contract.JobLimits;
 
-    /// What a child is given of the descriptors above 2 that the parent holds.
-    ///
-    /// A descriptor is inherited unless something says otherwise, and on POSIX the
-    /// something is close-on-exec. Every descriptor this package opens for a spawn
-    /// has it, and so does every descriptor the standard library opens — but a
-    /// program that opened a socket, a log or a lock file with plain `open` is
-    /// handing a copy to every child it starts afterwards, and a child that keeps
-    /// one open keeps the far end of it waiting.
-    ///
-    /// On Windows there is no choice to make. A child is given the handles named
-    /// in an attribute list and nothing else, which is `close_all` already; both
-    /// values mean the same thing there.
-    pub const FdPolicy = contract.FdPolicy;
     /// A channel's end for a child, and the variable naming it there.
     pub const ChannelEnd = contract.ChannelEnd;
 

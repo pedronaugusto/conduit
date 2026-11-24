@@ -219,9 +219,6 @@ pub const SpawnOptions = struct {
     ///
     /// POSIX only: a non-empty list is `error.Unsupported` on Windows.
     resource_limits: []const ResourceLimit = &.{},
-    /// What the child does with the descriptors above 2 that this process
-    /// holds.
-    fd_policy: FdPolicy = .close_on_exec,
     /// Files the child is given beyond its standard three, in order: the
     /// first is its descriptor 3, the next 4, and so on. A listening socket
     /// handed over the way a service manager hands one (`LISTEN_FDS`), or a
@@ -232,7 +229,16 @@ pub const SpawnOptions = struct {
     /// returns. The child gets each whatever its close-on-exec flag says here,
     /// and whatever number it has here, including one of the numbers it is
     /// placed at: a file at 4 given first and a file at 3 given second cross
-    /// over correctly. `fd_policy = .close_all` closes what is above them.
+    /// over correctly.
+    ///
+    /// **They and the standard three are all a child receives.** No other
+    /// descriptor of this process crosses, whatever its close-on-exec flag
+    /// says: on Darwin a socket or pipe anyone in the program opens has no
+    /// flag for a moment after it is made, and a child started then would keep
+    /// it, and keep its far end waiting for a close that never comes. So a
+    /// file a child is to have is given here, and only here. On Windows a
+    /// child is given the handles named in an attribute list and nothing
+    /// else, which comes to the same.
     ///
     /// **Windows** numbers no descriptors; a child that inherits a handle has
     /// it at the same value. Each file goes to the child as a private
@@ -387,32 +393,6 @@ pub fn channelEnviron(
     try map.put(end.variable, value);
     return map;
 }
-
-/// What a child is given of the descriptors above 2 that the parent holds.
-///
-/// A descriptor is inherited unless something says otherwise, and on POSIX the
-/// something is close-on-exec. Every descriptor this package opens for a spawn
-/// has it, and so does every descriptor the standard library opens — but a
-/// program that opened a socket, a log or a lock file with plain `open` is
-/// handing a copy to every child it starts afterwards, and a child that keeps
-/// one open keeps the far end of it waiting.
-///
-/// On Windows there is no choice to make. A child is given the handles named
-/// in an attribute list and nothing else, which is `close_all` already; both
-/// values mean the same thing there.
-pub const FdPolicy = enum {
-    /// Inherit whatever close-on-exec allows. The default, and what a spawn is
-    /// without an opinion.
-    close_on_exec,
-    /// Close every descriptor above 2 in the child before the program starts,
-    /// whatever its flags say. The child gets its three standard streams,
-    /// what `extra_fds` gives it, and nothing else.
-    ///
-    /// `close_range` on Linux, which is one call; elsewhere a loop up to the
-    /// descriptor limit, which is thousands of calls that fail and is
-    /// therefore worth asking for rather than doing by default.
-    close_all,
-};
 
 /// The user, group and file-creation mask a child starts with. POSIX only.
 ///

@@ -2924,11 +2924,11 @@ test "standard error can share standard output's pipe" {
 }
 
 test "standard error shares standard output's pipe on the forked path too" {
-    // A working directory is what file actions cannot say, so this child is
-    // forked and its descriptors placed by hand.
+    // Forked, and its descriptors placed by hand.
+    const fork_path: ForkPath = .take();
+    defer fork_path.deinit();
     var child = try Child.spawn(gpa, io, .{
         .argv = &script.out_and_err,
-        .cwd = if (is_windows) null else "/",
         .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .stdout } },
     });
     defer child.deinit(io);
@@ -3465,10 +3465,11 @@ test "a program that is not there is an error, not a child that exits 127" {
         .stdio = .ignore,
     }));
     if (!is_windows) {
+        const fork_path: ForkPath = .take();
+        defer fork_path.deinit();
         try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
             .argv = &.{"conduit-no-such-program-anywhere"},
             .stdio = .ignore,
-            .fd_policy = .close_all,
         }));
     }
 }
@@ -3587,6 +3588,19 @@ const Forks = struct {
     }
 };
 
+/// Sends every spawn down the fork path until `deinit`, where it would take
+/// `posix_spawn`: the tests that are about the fork child.
+const ForkPath = struct {
+    fn take() ForkPath {
+        spawn_path.testing_hook.fork.store(true, .monotonic);
+        return .{};
+    }
+
+    fn deinit(_: ForkPath) void {
+        spawn_path.testing_hook.fork.store(false, .monotonic);
+    }
+};
+
 test "both spawn paths start the same child" {
     if (is_windows or !fast_path) return error.SkipZigTest;
     // A child in a cgroup of its own is always forked, so this is about the
@@ -3594,14 +3608,12 @@ test "both spawn paths start the same child" {
     cgroup.testing_hook.cgroups.store(.off, .monotonic);
     defer cgroup.testing_hook.cgroups.store(.on, .monotonic);
 
-    // The same spawn twice, once down each path. `cwd` is what sends the
-    // second one back to the fork -- there is no file action for a working
-    // directory that means the same thing on both systems -- and `/` is a
-    // directory every one of them has.
-    for ([_]?[]const u8{ null, "/" }) |cwd| {
+    // The same spawn twice, once down each path.
+    for ([_]bool{ false, true }) |fork| {
+        spawn_path.testing_hook.fork.store(fork, .monotonic);
+        defer spawn_path.testing_hook.fork.store(false, .monotonic);
         var child = try Child.spawn(gpa, io, .{
             .argv = &.{ "/bin/sh", "-c", "printf 'out'; printf 'err' 1>&2; exit 3" },
-            .cwd = cwd,
             .stdio = .{ .pipes = .{ .stdin = false } },
             .detach = true,
         });
@@ -3662,67 +3674,112 @@ test "a spawn expressible by file actions makes no fork call" {
     try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&child));
     try testing.expectEqual(@as(usize, 0), Forks.seen());
 
-    // cwd cannot be expressed by this implementation's file actions.
-    var forked = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
-    defer forked.deinit(io);
-    defer reap(&forked, io);
-    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&forked));
-    try testing.expectEqual(@as(usize, 1), Forks.seen());
+    // A working directory is a file action on Darwin, and the fork on Linux,
+    // where glibc's has a history.
+    var elsewhere = try Child.spawn(gpa, io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" }, .cwd = "/", .stdio = .ignore });
+    defer elsewhere.deinit(io);
+    defer reap(&elsewhere, io);
+    try testing.expectEqual(Child.Term{ .exited = 0 }, try waitWithin(&elsewhere));
+    try testing.expectEqual(@as(usize, if (spawn_path.chdir_action) 0 else 1), Forks.seen());
 }
 
 //======================================================================
 // Descriptor hygiene.
 //======================================================================
 
-test "fd_policy close_all leaves the child its three streams and nothing else" {
+test "a child receives its three streams and extra_fds, and no descriptor without close-on-exec, down every path" {
     // POSIX only: a Windows child is given the handles named in an attribute
-    // list and nothing else, so `.close_all` is what it already does.
+    // list and nothing else.
     if (is_windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cgroups = cgroup.testing_hook.cgroups.swap(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(cgroups, .monotonic);
 
-    // A descriptor this process opened without close-on-exec, which every
-    // child it starts is otherwise handed a copy of. Put out of the way above
-    // 16, where the listing program's own descriptors cannot be confused with
-    // it.
+    // A descriptor this process holds without close-on-exec, put out of the
+    // way above 16, where the listing program's own descriptors cannot be
+    // confused with it: what a socket on Darwin is between `socket` or
+    // `accept` and the `fcntl` that marks it, when another thread's spawn can
+    // land. `F_DUPFD` never copies the flag.
     const opened = c.open("/dev/null", .{ .ACCMODE = .RDWR, .CLOEXEC = true });
     try testing.expect(opened >= 0);
     defer _ = c.close(opened);
-    const inheritable = c.fcntl(opened, c.F.DUPFD, @as(c_int, 16));
-    try testing.expect(inheritable >= 16 and inheritable < 64);
-    defer _ = c.close(inheritable);
+    const unmarked = c.fcntl(opened, c.F.DUPFD, @as(c_int, 16));
+    try testing.expect(unmarked >= 16 and unmarked < 64);
+    defer _ = c.close(unmarked);
+    try testing.expect(c.fcntl(unmarked, c.F.GETFD) & c.FD_CLOEXEC == 0);
     // `ls /dev/fd` shows a process's descriptors past 2 only where /dev/fd is
     // a file system of them. FreeBSD's is devfs's three unless fdescfs is
     // mounted, as it is not by default; where the listing cannot show this
     // process's own descriptor, it cannot judge a child's.
     var seen_path: [32]u8 = undefined;
-    if (c.access(try std.mem.printSentinel(&seen_path, "/dev/fd/{d}", .{inheritable}, 0), 0) != 0) return error.SkipZigTest;
+    if (c.access(try std.mem.printSentinel(&seen_path, "/dev/fd/{d}", .{unmarked}, 0), 0) != 0) return error.SkipZigTest;
 
+    var given = try tmp.dir.createFile(io, "given", .{});
+    defer given.close(io);
     const streams: Child.Stdio = .{ .streams = .{
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .ignore,
     } };
+    // File actions as they are, with a working directory (a file action on
+    // Darwin, the fork on Linux), and the fork.
+    const Way = enum { file_actions, cwd, fork };
+    for ([_]Way{ .file_actions, .cwd, .fork }) |way| {
+        if (way == .fork) spawn_path.testing_hook.fork.store(true, .monotonic);
+        defer spawn_path.testing_hook.fork.store(false, .monotonic);
+        try Forks.start();
+        var child = try Child.spawn(gpa, io, .{
+            .argv = &list_descriptors,
+            .cwd = if (way == .cwd) "/" else null,
+            .stdio = streams,
+            .extra_fds = &.{given},
+        });
+        defer child.deinit(io);
+        errdefer reap(&child, io);
+        var listed = try child.output(gpa, io, .{ .timeout = within_budget });
+        defer listed.deinit();
+        const set = descriptorSet(listed.stdout());
+        errdefer std.debug.print("{t}: {s}\n", .{ way, listed.stdout() });
+        try testing.expect(set & (@as(u64, 1) << @intCast(unmarked)) == 0);
+        try testing.expect(set & (1 << 3) != 0);
+        // Each way is the one it says.
+        if (fast_path) {
+            const forked = way == .fork or (way == .cwd and !spawn_path.chdir_action) or !spawn_path.suits(.{ .argv = &list_descriptors });
+            try testing.expectEqual(@intFromBool(forked), Forks.seen());
+        }
+    }
+}
 
-    var without = try Child.spawn(gpa, io, .{ .argv = &list_descriptors, .stdio = streams });
-    defer without.deinit(io);
-    errdefer reap(&without, io);
-    var inherited = try without.output(gpa, io, .{ .timeout = within_budget });
-    defer inherited.deinit();
-
-    var with = try Child.spawn(gpa, io, .{
-        .argv = &list_descriptors,
-        .stdio = streams,
-        .fd_policy = .close_all,
-    });
-    defer with.deinit(io);
-    errdefer reap(&with, io);
-    var closed = try with.output(gpa, io, .{ .timeout = within_budget });
-    defer closed.deinit();
-
-    // The default hands it on, whichever path started the child; the policy
-    // does not.
-    const mask = @as(u64, 1) << @intCast(inheritable);
-    try testing.expect(descriptorSet(inherited.stdout()) & mask != 0);
-    try testing.expect(descriptorSet(closed.stdout()) & mask == 0);
+test "an inherited standard stream reaches the child, down both paths" {
+    // POSIX: the stream is the descriptor itself. A child told which
+    // descriptors it gets must be told this one too.
+    if (is_windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cgroups = cgroup.testing_hook.cgroups.swap(.off, .monotonic);
+    defer cgroup.testing_hook.cgroups.store(cgroups, .monotonic);
+    for ([_]bool{ false, true }) |fork| {
+        spawn_path.testing_hook.fork.store(fork, .monotonic);
+        defer spawn_path.testing_hook.fork.store(false, .monotonic);
+        const name = if (fork) "forked" else "spawned";
+        var file = try tmp.dir.createFile(io, name, .{});
+        defer file.close(io);
+        // Standard error, which this process's own output does not need
+        // while the child runs, is the file.
+        var stderr: BorrowedDescriptor = try .take(2, file);
+        defer stderr.restore();
+        var child = try Child.spawn(gpa, io, .{
+            .argv = &.{ "/bin/sh", "-c", "printf inherited 1>&2" },
+            .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .ignore, .stderr = .inherit } },
+        });
+        defer child.deinit(io);
+        errdefer reap(&child, io);
+        const term = try waitWithin(&child);
+        stderr.restore();
+        try testing.expectEqual(Child.Term{ .exited = 0 }, term);
+        try expectSaid(tmp.dir, name, "inherited");
+    }
 }
 
 test "a caller's handle is as inheritable after a spawn as it was before" {
@@ -4194,9 +4251,10 @@ test "extra files arrive at descriptor 3 and up, in order" {
         cgroup.testing_hook.cgroups.store(.on, .monotonic);
     };
 
-    // The default policy, which takes posix_spawn where it can, and
-    // `.close_all`, which forks and closes everything above the extras.
-    for ([_]Child.FdPolicy{ .close_on_exec, .close_all }) |policy| {
+    // `posix_spawn` where it can, and the fork.
+    for ([_]bool{ false, true }) |fork| {
+        if (!is_windows) spawn_path.testing_hook.fork.store(fork, .monotonic);
+        defer if (!is_windows) spawn_path.testing_hook.fork.store(false, .monotonic);
         const names = [_][]const u8{ "three", "four", "five" };
         var files: [names.len]std.Io.File = undefined;
         for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
@@ -4206,7 +4264,6 @@ test "extra files arrive at descriptor 3 and up, in order" {
         var child = try Child.spawn(gpa, io, .{
             .argv = &.{ inherited_fixture, "inherited", "3" },
             .stdio = .ignore,
-            .fd_policy = policy,
             .extra_fds = &files,
         });
         defer child.deinit(io);
@@ -4217,8 +4274,8 @@ test "extra files arrive at descriptor 3 and up, in order" {
         try expectSaid(tmp.dir, "four", "fd 4\n");
         try expectSaid(tmp.dir, "five", "fd 5\n");
         // Every source above the slots: file actions say it, with no fork,
-        // unless the policy or the build asks for the fork.
-        if (!is_windows and fast_path and policy == .close_on_exec) {
+        // unless the test or the build asks for the fork.
+        if (!is_windows and fast_path and !fork) {
             const all_above = for (files) |f| {
                 if (f.handle < 6) break false;
             } else true;
@@ -4243,7 +4300,9 @@ test "extra files cross over correctly, however their numbers fall" {
     const count = 64;
     const names = [_][]const u8{ "file0", "file1", "file2", "file3", "file4", "file5", "file6", "file7" };
     for ([_]bool{ false, true }) |at_zero| {
-        for ([_]Child.FdPolicy{ .close_on_exec, .close_all }) |policy| {
+        for ([_]bool{ false, true }) |fork| {
+            spawn_path.testing_hook.fork.store(fork, .monotonic);
+            defer spawn_path.testing_hook.fork.store(false, .monotonic);
             var files: [names.len]std.Io.File = undefined;
             for (names, &files) |name, *f| f.* = try tmp.dir.createFile(io, name, .{});
             defer for (files) |f| f.close(io);
@@ -4259,7 +4318,6 @@ test "extra files cross over correctly, however their numbers fall" {
             var child = try Child.spawn(gpa, io, .{
                 .argv = &.{ inherited_fixture, "inherited", std.fmt.comptimePrint("{d}", .{count}) },
                 .stdio = .ignore,
-                .fd_policy = policy,
                 .extra_fds = &extras,
             });
             defer child.deinit(io);
@@ -4290,10 +4348,11 @@ test "a program that cannot run is still reported when extra files cover the rep
     // among these slots. Placed over, the report would go into the file and
     // the spawn would come back as a child exiting 127.
     const extras: [64]std.Io.File = @splat(f);
+    const fork_path: ForkPath = .take();
+    defer fork_path.deinit();
     try testing.expectError(error.FileNotFound, Child.spawn(gpa, io, .{
         .argv = &.{"/nonexistent/conduit-no-such-program"},
         .stdio = .ignore,
-        .fd_policy = .close_all,
         .extra_fds = &extras,
     }));
     try expectSaid(tmp.dir, "out", "");
@@ -4480,9 +4539,10 @@ test "a fork spawn resets an ignored real-time signal in the child" {
     };
     posix.sigaction(signal, &ignored, &saved);
     defer posix.sigaction(signal, &saved, null);
+    const fork_path: ForkPath = .take();
+    defer fork_path.deinit();
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sleep", "30" },
-        .cwd = ".", // takes the fork path
         .stdio = .ignore,
     });
     defer child.deinit(io);
@@ -4506,9 +4566,10 @@ test "a fork spawn reports exec failure even when all standard descriptors were 
     _ = c.close(0);
     _ = c.close(1);
     _ = c.close(2);
+    const fork_path: ForkPath = .take();
+    defer fork_path.deinit();
     const spawn_error: ?Child.SpawnError = if (Child.spawn(gpa, io, .{
         .argv = &.{"/conduit-test/no-such-executable"},
-        .cwd = ".", // takes the fork path
         .stdio = .ignore,
     })) |started| ended: {
         var child = started;
@@ -4859,11 +4920,12 @@ test "a pty master in a standard slot cannot close the child's replacement strea
     // including on a failed spawn or assertion.
     defer pair.closeMaster(io);
 
+    const fork_path: ForkPath = .take();
+    defer fork_path.deinit();
     var child = try Child.spawn(gpa, io, .{
         .argv = &.{ "/bin/sh", "-c", "read value && test \"$value\" = answer" },
         .stdio = .{ .pty = &pair },
         .detach = true,
-        .cwd = ".", // Both platforms use the fork implementation here.
     });
     defer child.deinit(io);
     defer reap(&child, io);
