@@ -21,8 +21,9 @@
 //!   the file actions run, and Linux gives a session leader with no
 //!   controlling terminal the first terminal it opens;
 //! * `credentials` and `resource_limits`, which a process sets on itself;
-//! * `cwd`, because the file action for it is `_np` on both systems, arrived
-//!   late on each, and has a history of not working;
+//! * `cwd` on Linux, because glibc's file action for it arrived late and has
+//!   a history of not working. Darwin's `posix_spawn_file_actions_addchdir_np`
+//!   (macOS 10.15) is the file action used there;
 //! * `Stream.close`, because a file action that closes a descriptor the parent
 //!   does not have is a failed spawn on some systems and a no-op on others,
 //!   and this package promises the second;
@@ -34,9 +35,28 @@
 //!   it would already have written over, which the fork child moves out of
 //!   the way first and a file action cannot.
 //!
+//! * on Linux, a C library without `posix_spawn_file_actions_addclosefrom_np`
+//!   (glibc before 2.34, and musl): see the next section.
+//!
 //! Everything else — pipes, the null device, inherited streams, `stderr_to`,
 //! an environment, a search path, `detach` — is expressible, and the child
 //! this path produces is the same child in every way a caller can observe.
+//!
+//! # The descriptors a child gets
+//!
+//! Its three standard streams and `extra_fds`, and nothing else of this
+//! process's, whatever a descriptor's close-on-exec flag says. A flag cannot
+//! be trusted to be there: Darwin has no `SOCK_CLOEXEC`, `accept4` or
+//! `pipe2`, so a socket or pipe opened there by anyone in the program, the
+//! standard library included, has no flag between the call that makes it and
+//! the `fcntl` that marks it, and a child started in that moment would keep
+//! it — and keep its far end waiting for a close that never comes. So the
+//! child is told which descriptors it gets rather than which it does not:
+//! `POSIX_SPAWN_CLOEXEC_DEFAULT` on Darwin, which closes every descriptor no
+//! file action names, with `posix_spawn_file_actions_addinherit_np` for an
+//! inherited standard stream; `posix_spawn_file_actions_addclosefrom_np`
+//! above the extras with glibc 2.34 and later. The fork path does the same by
+//! its own means (`Replacement` on Darwin, `close_range` on Linux).
 //!
 //! # A cgroup of the child's own
 //!
@@ -71,6 +91,14 @@ const aegis = @import("aegis");
 const SpawnError = Child.SpawnError;
 const SpawnOptions = Child.SpawnOptions;
 
+const is_darwin = builtin.target.os.tag.isDarwin();
+
+/// What the tests set to send a spawn down the fork path that would otherwise
+/// take this one.
+pub const testing_hook = if (builtin.is_test) struct {
+    pub var fork: std.atomic.Value(bool) = .init(false);
+} else struct {};
+
 /// Whether this system has the `posix_spawn` interface this file uses, with
 /// the attribute flags spelled the way it spells them.
 pub const available = !options_for_build.force_fork_spawn and switch (builtin.target.os.tag) {
@@ -92,6 +120,17 @@ pub const available = !options_for_build.force_fork_spawn and switch (builtin.ta
 pub const into_cgroup = available and builtin.target.os.tag == .linux and builtin.target.abi.isGnu() and
     builtin.target.os.version_range.linux.glibc.order(.{ .major = 2, .minor = 39, .patch = 0 }) != .lt;
 
+/// Whether a file action closes every descriptor from a number up: glibc 2.34
+/// and later, `posix_spawn_file_actions_addclosefrom_np`. Darwin says the same
+/// with `POSIX_SPAWN_CLOEXEC_DEFAULT`; a Linux C library without it sends
+/// every spawn to the fork, which closes them with `close_range`.
+pub const close_from_action = available and builtin.target.os.tag == .linux and builtin.target.abi.isGnu() and
+    builtin.target.os.version_range.linux.glibc.order(.{ .major = 2, .minor = 34, .patch = 0 }) != .lt;
+
+/// Whether a file action changes the child's working directory where it can
+/// be trusted: Darwin's `posix_spawn_file_actions_addchdir_np`.
+pub const chdir_action = available and is_darwin;
+
 /// Whether the options ask for anything that has to happen between a fork and
 /// an exec.
 ///
@@ -99,16 +138,17 @@ pub const into_cgroup = available and builtin.target.os.tag == .linux and builti
 /// `spawn`, which has the plan.
 pub fn suits(options: SpawnOptions) bool {
     if (!available) return false;
+    if (builtin.is_test and testing_hook.fork.load(.monotonic)) return false;
+    if (builtin.target.os.tag == .linux and !close_from_action) return false;
     if (builtin.target.os.tag == .linux and options.descendants == .contain) return false;
     if (tree.Forks.supported and options.descendants == .contain) return false;
     // A terminal of the child's own session only where opening it makes it
     // the controlling one; an attached child is handed the terminal as it
     // is handed any stream.
     if (options.stdio == .pty and options.detach and !session_terminal) return false;
-    if (options.cwd != null) return false;
+    if (options.cwd != null and !chdir_action) return false;
     if (options.credentials.any()) return false;
     if (options.resource_limits.len != 0) return false;
-    if (options.fd_policy != .close_on_exec) return false;
     // set between the fork and the exec, which file actions cannot say
     if (options.parent_death_signal != null) return false;
     return true;
@@ -154,9 +194,11 @@ pub fn spawn(
     candidates: []const [*:0]const u8,
     argv: [*:null]const ?[*:0]const u8,
     envp: [*:null]const ?[*:0]const u8,
+    cwd: ?[*:0]const u8,
     options: SpawnOptions,
     into: ?posix.fd_t,
 ) SpawnError!?Started {
+    aegis.assert.invariant(cwd == null or chdir_action, "cwd == null or chdir_action");
     aegis.assert.invariant(into == null or into_cgroup, "into == null or into_cgroup");
     var actions: FileActions = undefined;
     if (posix_spawn_file_actions_init(&actions) != 0) return error.SystemResources;
@@ -207,40 +249,25 @@ pub fn spawn(
         if (fd < 3 + extras.len) return null;
         if (posix_spawn_file_actions_adddup2(&actions, fd, @intCast(slot)) != 0) return error.SystemResources;
     }
+    // Nothing else of this process's: see "The descriptors a child gets".
+    // Darwin closes every descriptor no action names, so an inherited
+    // standard stream is named; one this process does not have open is left
+    // out, and the child does not have it either, as a fork child would not.
+    if (comptime is_darwin) {
+        for (plan, 0..) |target, slot| if (target == .inherit and isOpen(@intCast(slot))) {
+            if (posix_spawn_file_actions_addinherit_np(&actions, @intCast(slot)) != 0) return error.SystemResources;
+        };
+        if (cwd) |dir| if (posix_spawn_file_actions_addchdir_np(&actions, dir) != 0) return error.SystemResources;
+    }
+    if (comptime close_from_action) {
+        if (posix_spawn_file_actions_addclosefrom_np(&actions, @intCast(3 + extras.len)) != 0) return error.SystemResources;
+    }
 
     var attr: Attr = undefined;
     if (posix_spawnattr_init(&attr) != 0) return error.SystemResources;
     defer _ = posix_spawnattr_destroy(&attr);
 
-    var flags: Flags = .{ .setsigdef = true, .setsigmask = true };
-    flags.set(.start_suspended, tree.Forks.supported);
-    if (session) {
-        // A session is a group as well, whose leader is the child: asking
-        // for a group besides would fail, a leader cannot change its group.
-        flags.set(.setsid, true);
-    } else if (options.detach) {
-        flags.setpgroup = true;
-        // Zero is "a new group whose leader is the child", which is what
-        // `setpgid(0, 0)` says in the fork child.
-        if (posix_spawnattr_setpgroup(&attr, 0) != 0) return error.Unexpected;
-    }
-    if (comptime into_cgroup) if (into) |cgroup| {
-        flags.setcgroup = true;
-        if (posix_spawnattr_setcgroup_np(&attr, cgroup) != 0) return error.Unexpected;
-    };
-    if (posix_spawnattr_setflags(&attr, flags) != 0) return error.Unexpected;
-
-    // The same clean slate the fork child is given, said as two attributes.
-    // Every signal back at its default action rather than only the ignored
-    // ones, which comes to the same thing: `execve` resets a signal the parent
-    // had a handler for, and leaves an ignored one ignored. The two that
-    // cannot be caught cannot be reset either.
-    var defaults = posix.sigfillset();
-    posix.sigdelset(&defaults, .KILL);
-    posix.sigdelset(&defaults, .STOP);
-    if (posix_spawnattr_setsigdefault(&attr, &defaults) != 0) return error.Unexpected;
-    const unblocked = posix.sigemptyset();
-    if (posix_spawnattr_setsigmask(&attr, &unblocked) != 0) return error.Unexpected;
+    try describe(&attr, options, session, into);
 
     // Every candidate in turn, and the error worth reporting is the one from
     // the last attempt that got past "no such file" -- the same rule the fork
@@ -250,7 +277,9 @@ pub fn spawn(
     // call, and a search path names many directories without the program.
     var best: posix.E = .NOENT;
     for (candidates) |candidate| {
-        if (absent(candidate)) continue;
+        // A relative candidate is looked for in the child's working
+        // directory, which the file actions change: left to `posix_spawn`.
+        if ((cwd == null or candidate[0] == '/') and absent(candidate)) continue;
         var pid: posix.pid_t = undefined;
         const rc = posix_spawn(&pid, candidate, &actions, &attr, argv, envp);
         if (rc == 0) {
@@ -265,8 +294,141 @@ pub fn spawn(
             },
         }
     }
+    // A working directory the file action could not enter fails the spawn
+    // as a missing program does, where the fork child reports its own stage:
+    // told apart by whether it is a directory this process can enter.
+    if (cwd) |dir| if (chdirError(dir)) |err| return err;
     return spawnError(best);
 }
+
+/// The attributes of the child `spawn` starts: its group or session, its
+/// cgroup, the descriptors it keeps, and its signals.
+fn describe(attr: *Attr, options: SpawnOptions, session: bool, into: ?posix.fd_t) SpawnError!void {
+    var flags: Flags = .{ .setsigdef = true, .setsigmask = true, .cloexec_default = is_darwin };
+    flags.set(.start_suspended, tree.Forks.supported);
+    if (session) {
+        // A session is a group as well, whose leader is the child: asking
+        // for a group besides would fail, a leader cannot change its group.
+        flags.set(.setsid, true);
+    } else if (options.detach) {
+        flags.setpgroup = true;
+        // Zero is "a new group whose leader is the child", which is what
+        // `setpgid(0, 0)` says in the fork child.
+        if (posix_spawnattr_setpgroup(attr, 0) != 0) return error.Unexpected;
+    }
+    if (comptime into_cgroup) if (into) |cgroup| {
+        flags.setcgroup = true;
+        if (posix_spawnattr_setcgroup_np(attr, cgroup) != 0) return error.Unexpected;
+    };
+    if (posix_spawnattr_setflags(attr, flags) != 0) return error.Unexpected;
+
+    // The same clean slate the fork child is given, said as two attributes.
+    // Every signal back at its default action rather than only the ignored
+    // ones, which comes to the same thing: `execve` resets a signal the parent
+    // had a handler for, and leaves an ignored one ignored. The two that
+    // cannot be caught cannot be reset either.
+    var defaults = posix.sigfillset();
+    posix.sigdelset(&defaults, .KILL);
+    posix.sigdelset(&defaults, .STOP);
+    if (posix_spawnattr_setsigdefault(attr, &defaults) != 0) return error.Unexpected;
+    const unblocked = posix.sigemptyset();
+    if (posix_spawnattr_setsigmask(attr, &unblocked) != 0) return error.Unexpected;
+}
+
+/// What the fork child's `chdir` into `path` would have failed with, as the
+/// fork path reports it, or `null` where it would have gone in. Asked after a
+/// `posix_spawn` with a working directory failed, which reports a directory
+/// it could not enter as it reports a program it could not find.
+fn chdirError(path: [*:0]const u8) ?SpawnError {
+    if (c.access(path, posix.X_OK) == 0) {
+        // There and searchable: a directory, or a file `chdir` refuses.
+        var probe: [std.Io.Dir.max_path_bytes:0]u8 = undefined;
+        const name = std.mem.span(path);
+        if (name.len + 2 >= probe.len) return error.NameTooLong;
+        @memcpy(probe[0..name.len], name);
+        probe[name.len] = '/';
+        probe[name.len + 1] = '.';
+        probe[name.len + 2] = 0;
+        if (c.access(probe[0 .. name.len + 2 :0], posix.F_OK) == 0) return null;
+        return error.BadWorkingDirectory;
+    }
+    return switch (c.errno(@as(c_int, -1))) {
+        .ACCES => error.AccessDenied,
+        .NOENT, .NOTDIR => error.BadWorkingDirectory,
+        .NAMETOOLONG => error.NameTooLong,
+        .LOOP => error.SymLinkLoop,
+        else => null,
+    };
+}
+
+/// Whether this process has a descriptor open at `fd`.
+fn isOpen(fd: posix.fd_t) bool {
+    return c.fcntl(fd, c.F.GETFD) != -1;
+}
+
+/// What the fork child on Darwin becomes the program with, in place of
+/// `execve`: `posix_spawn` with `POSIX_SPAWN_SETEXEC`, which replaces the
+/// calling process as `execve` does, and `POSIX_SPAWN_CLOEXEC_DEFAULT`, which
+/// closes every descriptor no file action names. The child is handed the
+/// descriptors it was meant to have and no others, with no loop over every
+/// number a process may hold, which on Darwin can be millions.
+///
+/// Made in the parent, before the fork: the attribute and the actions are
+/// allocated by the C library, which a fork child of a threaded process may
+/// not do. The child only reads them.
+pub const Replacement = struct {
+    actions: FileActions,
+    attr: Attr,
+
+    /// Whether the fork child replaces itself this way: Darwin.
+    pub const used = is_darwin;
+
+    /// The descriptors the child keeps: each of its first three that `plan`
+    /// gives it -- an inherited one only where this process has it open --
+    /// and `extras` more from 3 up. The fork child has put them there by the
+    /// time it calls `exec`.
+    pub fn init(r: *Replacement, plan: [3]PlanTarget, extras: usize) SpawnError!void {
+        if (comptime !used) @compileError("Replacement is Darwin's");
+        if (posix_spawn_file_actions_init(&r.actions) != 0) return error.SystemResources;
+        errdefer _ = posix_spawn_file_actions_destroy(&r.actions);
+        for (plan, 0..) |target, slot| {
+            const kept = switch (target) {
+                .inherit => isOpen(@intCast(slot)),
+                .close => false,
+                .place, .stdout => true,
+            };
+            if (kept and posix_spawn_file_actions_addinherit_np(&r.actions, @intCast(slot)) != 0) return error.SystemResources;
+        }
+        for (3..3 + extras) |slot| {
+            if (posix_spawn_file_actions_addinherit_np(&r.actions, @intCast(slot)) != 0) return error.SystemResources;
+        }
+        if (posix_spawnattr_init(&r.attr) != 0) return error.SystemResources;
+        errdefer _ = posix_spawnattr_destroy(&r.attr);
+        // The fork child has already put its signals where a new program
+        // starts; these flags leave them as they are.
+        if (posix_spawnattr_setflags(&r.attr, .{ .setexec = true, .cloexec_default = true }) != 0) return error.Unexpected;
+    }
+
+    pub fn deinit(r: *Replacement) void {
+        _ = posix_spawnattr_destroy(&r.attr);
+        _ = posix_spawn_file_actions_destroy(&r.actions);
+        r.* = undefined;
+    }
+
+    /// In the fork child: becomes the program at `path`, and returns only
+    /// with why it could not.
+    pub fn exec(
+        r: *const Replacement,
+        path: [*:0]const u8,
+        argv: [*:null]const ?[*:0]const u8,
+        envp: [*:null]const ?[*:0]const u8,
+    ) posix.E {
+        var pid: posix.pid_t = undefined;
+        const rc = posix_spawn(&pid, path, &r.actions, &r.attr, argv, envp);
+        aegis.assert.invariant(rc != 0, "rc != 0");
+        return @fromBackingInt(@intCast(rc));
+    }
+};
 
 /// Whether nothing is at `path` for an `execve` to find: what it would
 /// fail with as "no such file", asked without starting a child. Anything
@@ -336,14 +498,22 @@ const Flags = packed struct(c_short) {
     setpgroup: bool = false,
     setsigdef: bool = false,
     setsigmask: bool = false,
-    _unused: u3 = 0,
+    _unused: u2 = 0,
+    /// `POSIX_SPAWN_SETEXEC`, Darwin's: the calling process becomes the
+    /// program, as `execve` makes it. glibc's bit here is `USEVFORK`, which it
+    /// ignores; it is set only on Darwin.
+    setexec: bool = false,
     /// `POSIX_SPAWN_START_SUSPENDED` on Darwin and `POSIX_SPAWN_SETSID` in
     /// glibc and musl, which number the one bit each their own way: read
     /// through `start_suspended` and `setsid`, each set only on its system.
     bit7: bool = false,
     /// `POSIX_SPAWN_SETCGROUP`, glibc 2.39.
     setcgroup: bool = false,
-    _rest: u7 = 0,
+    _rest: u5 = 0,
+    /// `POSIX_SPAWN_CLOEXEC_DEFAULT`, Darwin's: every descriptor no file
+    /// action names is closed in the child. Set only on Darwin.
+    cloexec_default: bool = false,
+    _last: u1 = 0,
 
     fn set(f: *Flags, comptime field: enum { start_suspended, setsid }, on: bool) void {
         const here = switch (field) {
@@ -380,6 +550,12 @@ extern "c" fn posix_spawn_file_actions_adddup2(
     filedes: posix.fd_t,
     newfiledes: posix.fd_t,
 ) c_int;
+/// Darwin; referenced only there.
+extern "c" fn posix_spawn_file_actions_addinherit_np(actions: *FileActions, filedes: posix.fd_t) c_int;
+/// Darwin, macOS 10.15; referenced only there.
+extern "c" fn posix_spawn_file_actions_addchdir_np(actions: *FileActions, path: [*:0]const u8) c_int;
+/// glibc 2.34; referenced only where `close_from_action` holds.
+extern "c" fn posix_spawn_file_actions_addclosefrom_np(actions: *FileActions, from: posix.fd_t) c_int;
 
 extern "c" fn posix_spawn(
     pid: *posix.pid_t,

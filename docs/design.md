@@ -184,9 +184,11 @@ that needs nothing done between the fork and the exec is handed to
 `posix_spawn`, which does not copy the parent's page tables.
 Everything that can only be done in a fork child sends the spawn back to the
 fork — `credentials` and `resource_limits`, which a process sets on itself;
-`cwd`, `Stream.close`, a caller's file at descriptor 0, 1 or 2, an
-`extra_fds` file at a number one of them is placed at, and `fd_policy =
-.close_all`. A detached child on a pseudo-terminal takes `posix_spawn` on
+`cwd` on Linux (Darwin's `posix_spawn_file_actions_addchdir_np` is a file
+action that can be trusted, glibc's has a history), `Stream.close`, a
+caller's file at descriptor 0, 1 or 2, an `extra_fds` file at a number one of
+them is placed at, and on Linux a C library without
+`posix_spawn_file_actions_addclosefrom_np` (glibc before 2.34, musl). A detached child on a pseudo-terminal takes `posix_spawn` on
 Linux: `POSIX_SPAWN_SETSID` makes the session, and the terminal's name opened
 without `O_NOCTTY` in that session makes it the controlling one, as a session
 leader's first terminal open does there. On macOS and the BSDs it keeps the
@@ -212,9 +214,21 @@ nothing to do with it; on Darwin, which has no `pipe2`, this package's own
 spawns and its own pipe-making are held apart so that they cannot overlap. A
 `fork` elsewhere in the program still can. `Pty.open` passes `O_CLOEXEC` to
 `posix_openpt`, which glibc, musl, Darwin and FreeBSD take, and marks the
-master in a second call only where the system refuses it. A descriptor the
-*caller* opened without the flag is the caller's, and `fd_policy` is how to
-say the child should not have it.
+master in a second call only where the system refuses it.
+
+**A child receives its three standard streams and `extra_fds`, and nothing
+else**, whatever a descriptor's flag says, because the flag is not always
+there: the standard library's own sockets on Darwin are made with `socket` or
+`accept` and marked with a second call, and no lock of this package's reaches
+that gap. The child is told which descriptors it gets. `posix_spawn` on Darwin
+takes `POSIX_SPAWN_CLOEXEC_DEFAULT`, with `addinherit_np` naming an inherited
+standard stream; with glibc 2.34 and later, `addclosefrom_np` closes everything
+above the extras. A fork child on Linux closes them with `close_range`, one
+call; one on Darwin does not `execve` but calls `posix_spawn` with
+`POSIX_SPAWN_SETEXEC` and `POSIX_SPAWN_CLOEXEC_DEFAULT`, the attribute and
+actions made in the parent before the fork, so no loop over every number a
+process may hold is run on either system. The BSDs, cross-compiled here, use
+`closefrom`.
 
 **Allocation.** `Child.spawn` and `spawnShell` take an allocator and retain the
 child's lifecycle until `deinit`; that allocator must outlive the child. The

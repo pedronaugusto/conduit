@@ -33,8 +33,10 @@ pub const opening_is_two_calls = !is_windows and @TypeOf(system.pipe2) == void;
 /// in the program is still free to land in the gap, and nothing a library can
 /// hold would stop it. The other windows are smaller and are written down
 /// where they are: `Pty.open` marks the master in a second call on a system
-/// whose `posix_openpt` refuses the flag, and a descriptor the caller opened
-/// without the flag is the caller's to close with `SpawnOptions.fd_policy`.
+/// whose `posix_openpt` refuses the flag. A spawn hands its child no
+/// descriptor but the three standard streams and `extra_fds`, whatever their
+/// flags say, so a descriptor caught in the gap reaches no child of conduit's
+/// either way.
 /// A program that opens a descriptor of its own in two calls keeps conduit's
 /// spawns out of that gap by doing it inside `hold`.
 ///

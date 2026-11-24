@@ -202,7 +202,12 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
     const parent = c.getpid();
 
     if (builtin.is_test) _ = testing_hook.forks.fetchAdd(1, .monotonic);
-    const pid = tty.ForkGap.hold(forkRunning, .{ options, plan, exec, ends, parent });
+    // What the child on Darwin becomes the program with, made here because
+    // making it allocates (see `posix_spawn.Replacement`).
+    var replacement: posix_spawn.Replacement = undefined;
+    if (comptime posix_spawn.Replacement.used) try replacement.init(plan.child, exec.extras.len);
+    defer if (comptime posix_spawn.Replacement.used) replacement.deinit();
+    const pid = tty.ForkGap.hold(forkRunning, .{ options, plan, exec, ends, parent, &replacement });
     if (pid > 0) return pid;
     return switch (c.errno(@as(c_int, -1))) {
         .AGAIN => error.ResourceLimitReached,
@@ -213,7 +218,7 @@ fn forkChild(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds) Spaw
 
 /// `fork`, and `childMain` in the child, which never returns: only the parent
 /// comes back from here, with what `fork` said.
-fn forkRunning(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds, parent: posix.pid_t) posix.pid_t {
+fn forkRunning(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds, parent: posix.pid_t, replacement: *const posix_spawn.Replacement) posix.pid_t {
     const pid = c.fork();
     if (pid == 0) {
         const root_parent = if (comptime supervisor.supported) if (ends.channel) |channel|
@@ -222,7 +227,7 @@ fn forkRunning(options: SpawnOptions, plan: Plan, exec: Exec, ends: ForkEnds, pa
             parent else parent;
         // The child inherits the lock as held, and the only thing it does with
         // it is not touch it: it runs a handful of system calls and execs.
-        childMain(options, plan, exec, ends.report, root_parent, ends.go, ends.join);
+        childMain(options, plan, exec, ends.report, root_parent, ends.go, ends.join, replacement);
     }
     return pid;
 }
@@ -334,7 +339,7 @@ fn spawnWithoutFork(
     contained: ?*cgroup.Pending,
 ) SpawnError!?*State {
     const into: ?posix.fd_t = if (!posix_spawn.into_cgroup) null else if (contained) |pending| pending.intoDescriptor() else null;
-    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ io, plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, options, into }) orelse return null;
+    const child = try tty.ForkGap.hold(posix_spawn.spawn, .{ io, plan.child, exec.extras, exec.candidates, exec.argv, exec.envp, exec.cwd, options, into }) orelse return null;
     adoption.started(child.pid) catch |err| {
         var forks = child.forks;
         forks.close();
@@ -567,6 +572,7 @@ fn childMain(
     parent: posix.pid_t,
     go: ?[2]posix.fd_t,
     join: posix.fd_t,
+    replacement: *const posix_spawn.Replacement,
 ) noreturn {
     // The first number nothing is placed at. The report pipe goes there or
     // above when it is below, so placing an extra descriptor over it cannot
@@ -623,13 +629,17 @@ fn childMain(
         else => {},
     }
 
-    if (options.fd_policy == .close_all) closeFromExcept(first_free, report);
+    // Nothing above the child's own crosses, whatever its flag says (see
+    // "The descriptors a child gets" in posix/spawn.zig): closed here after
+    // the placements, so the descriptors being placed are still there to
+    // place, or on Darwin left to the `Replacement` the program starts with.
+    if (comptime !posix_spawn.Replacement.used) report = closeAbove(first_free, report);
 
     limitAndLower(options, report);
 
     if (exec.cwd) |dir| if (c.chdir(dir) != 0) bail(report, .chdir);
 
-    execCandidates(exec, report);
+    execCandidates(exec, report, replacement);
 }
 
 /// The signal a contained child or one given `parent_death_signal` gets when
@@ -690,11 +700,15 @@ fn limitAndLower(options: SpawnOptions, report: posix.fd_t) void {
 /// Every candidate is tried in turn, and the error worth reporting is the
 /// one from the last attempt that got past "no such file": a program found
 /// but not executable is more informative than the missing entry after it.
-fn execCandidates(exec: Exec, report: posix.fd_t) noreturn {
+fn execCandidates(exec: Exec, report: posix.fd_t, replacement: *const posix_spawn.Replacement) noreturn {
     var best: posix.E = .NOENT;
     for (exec.candidates) |candidate| {
-        _ = c.execve(candidate, exec.argv, exec.envp);
-        const err = c.errno(@as(c_int, -1));
+        const err = if (comptime posix_spawn.Replacement.used)
+            replacement.exec(candidate, exec.argv, exec.envp)
+        else err: {
+            _ = c.execve(candidate, exec.argv, exec.envp);
+            break :err c.errno(@as(c_int, -1));
+        };
         switch (err) {
             .NOENT, .NOTDIR => {},
             else => best = err,
@@ -807,30 +821,40 @@ fn moveAbove(fd: posix.fd_t, lowest: c_int) ?posix.fd_t {
     return @intCast(moved);
 }
 
-/// Closes every descriptor from `first` upwards except `kept`, in the fork
-/// child.
+/// Closes every descriptor from `first` upwards but the report pipe, in the
+/// fork child, and answers where the report pipe is now.
 ///
 /// `kept` is the close-on-exec report pipe. It has to survive long enough to
 /// report a failure below, while a successful exec still closes it and gives
 /// the parent end of file.
 ///
-/// `close_range` is one system call and has been in Linux since 5.9; the
-/// fallback is a loop to the soft descriptor limit, which is what a program
-/// may have open rather than what it does have. Both are async-signal-safe,
-/// which is what the fork child needs; neither can fail in a way that means
-/// anything here, because a descriptor that was not there is a descriptor the
-/// child does not have.
-fn closeFromExcept(first: posix.fd_t, kept: posix.fd_t) void {
+/// `close_range` is one system call and has been in Linux since 5.9. The BSDs
+/// have `closefrom`, which takes no exception, so the report pipe is moved
+/// down to `first`, which nothing is placed at, and everything above it goes
+/// in one call. The fallback, for a Linux older than 5.9, is a loop to the
+/// soft descriptor limit. All are async-signal-safe, which is what the fork
+/// child needs; none can fail in a way that means anything here, because a
+/// descriptor that was not there is a descriptor the child does not have.
+/// Darwin never comes here: its child starts with `posix_spawn.Replacement`.
+fn closeAbove(first: posix.fd_t, kept: posix.fd_t) posix.fd_t {
+    aegis.assert.invariant(kept >= first, "kept >= first");
     if (builtin.target.os.tag == .linux) {
         const before = if (kept > first)
             std.os.linux.close_range(first, @intCast(kept - 1), .{ .UNSHARE = false, .CLOEXEC = false })
         else
             0;
-        const after = std.os.linux.close_range(@intCast(@max(kept + 1, first)), std.math.maxInt(i32), .{
+        const after = std.os.linux.close_range(@intCast(kept + 1), std.math.maxInt(i32), .{
             .UNSHARE = false,
             .CLOEXEC = false,
         });
-        if (std.os.linux.errno(before) == .SUCCESS and std.os.linux.errno(after) == .SUCCESS) return;
+        if (std.os.linux.errno(before) == .SUCCESS and std.os.linux.errno(after) == .SUCCESS) return kept;
+    } else if (comptime has_closefrom) {
+        const moved = kept == first or
+            (c.dup2(kept, first) == first and c.fcntl(first, c.F.SETFD, @as(c_int, c.FD_CLOEXEC)) != -1);
+        if (moved) {
+            _ = closefrom(first + 1);
+            return first;
+        }
     }
     var limit: posix.rlimit = undefined;
     const ceiling: posix.fd_t = if (c.getrlimit(.NOFILE, &limit) == 0)
@@ -841,7 +865,17 @@ fn closeFromExcept(first: posix.fd_t, kept: posix.fd_t) void {
     while (fd < ceiling) : (fd += 1) {
         if (fd != kept) _ = c.close(fd);
     }
+    return kept;
 }
+
+/// The systems with `closefrom(2)`.
+const has_closefrom = switch (builtin.target.os.tag) {
+    .freebsd, .openbsd, .netbsd, .dragonfly => true,
+    else => false,
+};
+/// Returns `void` on FreeBSD and DragonFly and `int` on the others; the
+/// answer is never read, so the wider declaration serves all four.
+extern "c" fn closefrom(lowfd: c_int) c_int;
 
 /// Makes `fd` the child's descriptor number `target`, clearing close-on-exec so
 /// it survives the `execve`.
