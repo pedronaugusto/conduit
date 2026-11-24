@@ -763,9 +763,6 @@ pub const OutputOptions = struct {
 pub const RunError = error{
     /// A stream could not be read, for a reason other than ending.
     ReadFailed,
-    /// The `std.Io` implementation cannot run the readers alongside the wait.
-    /// Two streams have to be read at once or a full pipe deadlocks the child.
-    ConcurrencyUnavailable,
 } || WaitError || TryWaitError || WaitTimeoutError || KillError || std.Io.Cancelable;
 
 pub const OutputError = error{OutOfMemory} || RunError;
@@ -793,12 +790,15 @@ pub const ExchangeError = OutputError || error{
     /// There is input to give and the child's standard input is not a pipe
     /// this `Child` holds.
     NoStdinPipe,
+    /// There is input to give, and the `std.Io` implementation cannot write it
+    /// on a task beside the run: the child would block on a full input pipe
+    /// while its output waited to be read.
+    ConcurrencyUnavailable,
 } || std.Io.File.Writer.Error;
 
 /// Where `Child.exchangeInto` writes what the child writes: each read lands in
 /// the writer's buffer, and each writer is flushed once its stream is done.
-/// The two are written from different tasks where the streams are read on
-/// tasks, so storage they share must be safe to use from both.
+/// Both are written from the calling task alone.
 pub const Sinks = struct {
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
@@ -819,6 +819,8 @@ pub const ExchangeIntoError = CollectError || error{
     /// There is input to give and the child's standard input is not a pipe
     /// this `Child` holds.
     NoStdinPipe,
+    /// As `ExchangeError.ConcurrencyUnavailable`.
+    ConcurrencyUnavailable,
 } || std.Io.File.Writer.Error;
 
 /// What an `execve` that failed means, as one of `SpawnError`.
