@@ -41,6 +41,16 @@ fn prompt(init: std.process.Init) !void {
     try out.writeStreamingAll(init.io, try std.mem.print(&said, "you said {s}", .{line}));
 }
 
+/// Fills standard error past what a simulated pipe holds before it writes
+/// a word to standard output: a reader that waits on one stream alone
+/// leaves it blocked on the other.
+fn loud(init: std.process.Init) !void {
+    var line: [256]u8 = undefined;
+    @memset(&line, 'e');
+    for (0..400) |_| try Io.File.stderr().writeStreamingAll(init.io, &line);
+    try Io.File.stdout().writeStreamingAll(init.io, "out");
+}
+
 /// Never ends on its own.
 fn forever(init: std.process.Init) !void {
     while (true) try init.io.sleep(.fromSeconds(1), .awake);
@@ -52,6 +62,7 @@ fn simulation(seed: u64) !*Sim {
     try sim.programs().register("shout", shout, .{});
     try sim.programs().register("prompt", prompt, .{});
     try sim.programs().register("forever", forever, .{});
+    try sim.programs().register("loud", loud, .{});
     return sim;
 }
 
@@ -86,6 +97,16 @@ const Cases = struct {
         try testing.expectEqualStrings("QUIET WORDS", out.stdout());
         try testing.expectEqualStrings("done\n", out.stderr());
         try testing.expectEqual(@as(?u32, 3), Child.exitCode(out.term()));
+    }
+
+    fn stderrFirst(io: Io) !void {
+        var child = try Child.spawn(testing.allocator, io, .{ .argv = &.{"loud"}, .stdio = .{ .streams = .{ .stdin = .ignore, .stdout = .pipe, .stderr = .pipe } } });
+        defer child.deinit(io);
+        var out = try child.output(testing.allocator, io, .{});
+        defer out.deinit();
+        try testing.expectEqualStrings("out", out.stdout());
+        try testing.expectEqual(@as(usize, 400 * 256), out.stderr().len);
+        try testing.expect(Child.succeeded(out.term()));
     }
 
     fn terminal(io: Io) !void {
@@ -160,6 +181,10 @@ const Cases = struct {
 
 test "simulated: a child on pipes, its output collected and its exit code reported" {
     _ = try runIn(1, Cases.pipes);
+}
+
+test "simulated: a child that fills standard error before it writes standard output is collected whole" {
+    _ = try runIn(5, Cases.stderrFirst);
 }
 
 test "simulated: a child on a terminal sees one, and the master reads it to the end" {
