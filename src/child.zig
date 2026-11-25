@@ -1546,6 +1546,9 @@ pub const Child = struct {
         // any `std.Io` runs it. The end is the watch on the child, or on Windows
         // its process.
         const published = try child.result();
+        // A simulated child's streams and end are the simulation's: no
+        // system call is made for them.
+        if (child.state.simulated != null) return child.outputSimulated(io, sinks, options, until, published);
         // A published term needs only stream draining. Never register an OS
         // watch on the retired number, which may already name a stranger.
         if (published != null) return child.outputPolled(io, sinks, options, until, null, published);
@@ -2091,6 +2094,102 @@ pub const Child = struct {
         // The writers are flushed next, and on Windows a read may still be
         // outstanding into one of their buffers.
         reads.stop();
+        return Collector.ended(&out, &err, term.?, timed_out);
+    }
+
+    /// `output` for a child the simulated route started (`conduit.testing`):
+    /// both streams read through `io` as one batch, so a child that fills
+    /// one while the other is empty is never blocked, and the child's end
+    /// asked of the route. No call here is the system's: a simulation's
+    /// handles and process numbers are its own, and a native read or wait
+    /// on one reaches whatever the system holds under that value.
+    ///
+    /// While the child runs the route is asked again on a short slice of the
+    /// simulation's clock, as `outputPolled` asks a child a moment from
+    /// being waitable: what still holds a stream once the child has ended
+    /// need not be the child, and the drain after its end is bounded.
+    fn outputSimulated(
+        child: *Child,
+        io: std.Io,
+        sinks: Sinks,
+        options: OutputOptions,
+        until: ?Deadline,
+        published: ?Term,
+    ) CollectError!Ended {
+        var out = Collector.init(sinks.stdout);
+        var err = Collector.init(sinks.stderr);
+        const streams = [2]?std.Io.File{ child.stdoutFile(), child.stderrFile() };
+        const collectors = [2]*Collector{ &out, &err };
+        for (streams, collectors) |stream, collector| {
+            if (stream == null) collector.done = true;
+        }
+        // Each stream's read, outstanding in the batch until it completes:
+        // what it reads into and where that lands.
+        var storage: [2]std.Io.Operation.Storage = undefined;
+        var batch: std.Io.Batch = .init(&storage);
+        defer batch.cancel(io);
+        var spares: [2][16 * 1024]u8 = undefined;
+        var landings: [2]Landing = undefined;
+        var buffers: [2][1][]u8 = undefined;
+        var armed: [2]bool = @splat(false);
+
+        var timed_out = false;
+        const deadline = runDeadline(io, options, until);
+        var term = published;
+        var drain: ?Deadline = if (published != null) drainDeadline(io, options, until) else null;
+        var lag_ms: u32 = 1;
+        while (true) {
+            try std.Io.checkCancel(io);
+            if (term == null) {
+                if (out.readFailed() or err.readFailed()) {
+                    term = try child.killWait(io, .fromRaw(0));
+                } else if (deadline != null and deadline.?.remainingMs(io) == 0) {
+                    timed_out = true;
+                    term = try child.killWait(io, options.grace);
+                } else {
+                    term = try child.tryWait(io);
+                }
+                if (term != null) drain = drainDeadline(io, options, until);
+            }
+            if (term != null and ((out.done and err.done) or drain.?.remainingMs(io) == 0)) break;
+            if (out.done and err.done) {
+                // The streams are finished: only the child's end is waited for.
+                if (try child.waitWithin(io, deadline orelse .never)) |finished| {
+                    term = finished;
+                    drain = drainDeadline(io, options, until);
+                }
+                continue;
+            }
+            for (streams, collectors, 0..) |stream, collector, i| {
+                if (collector.done or armed[i]) continue;
+                landings[i], buffers[i][0] = prepare(collector, options.max_bytes, &spares[i]);
+                batch.addAt(@intCast(i), .{ .file_read_streaming = .{ .file = stream.?, .data = &buffers[i] } });
+                armed[i] = true;
+            }
+            const limit = if (term == null)
+                earlier(deadline, Deadline.in(io, aegis.units.Duration(.millisecond, u32).fromRaw(lag_ms).toIoDuration()))
+            else
+                drain;
+            lag_ms = @min(lag_ms * 2, output_wait_slice_ms);
+            batch.awaitConcurrent(io, if (limit) |at| at.toTimeout() else .none) catch |failure| switch (failure) {
+                error.Timeout => continue,
+                error.Canceled => return error.Canceled,
+                // A route whose `Io` cannot wait on two reads at once cannot
+                // read these streams.
+                error.ConcurrencyUnavailable => return error.ReadFailed,
+            };
+            while (batch.next()) |read| {
+                const i = read.index;
+                armed[i] = false;
+                const n = read.result.file_read_streaming catch |e| {
+                    if (!handles.finished(e)) collectors[i].failure = .read_failed;
+                    collectors[i].done = true;
+                    continue;
+                };
+                land(collectors[i], landings[i], buffers[i][0], n);
+                lag_ms = 1;
+            }
+        }
         return Collector.ended(&out, &err, term.?, timed_out);
     }
 
